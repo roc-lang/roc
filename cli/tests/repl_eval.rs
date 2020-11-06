@@ -112,10 +112,7 @@ mod repl_eval {
 
     #[test]
     fn str_count_graphemes() {
-        expect_success(
-            "Str.concat \"å🤔\"",
-            "2 : Int",
-        );
+        expect_success("Str.concat \"å🤔\"", "2 : Int");
     }
 
     #[test]

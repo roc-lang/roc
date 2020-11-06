@@ -1,4 +1,4 @@
-use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope, call_bitcode_fn};
+use crate::llvm::build::{call_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
