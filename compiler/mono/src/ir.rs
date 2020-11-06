@@ -592,6 +592,7 @@ impl<'a> Procs<'a> {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
                         // closure. We only specialize functions, storing this value with a closure
                         // layout will give trouble.
+                        dbg!(symbol, &layout);
                         self.specialized.insert((symbol, layout), Done(proc));
                     }
                     Err(error) => {
@@ -1359,6 +1360,7 @@ pub fn specialize_all<'a>(
             partial_proc,
         ) {
             Ok((proc, layout)) => {
+                dbg!(name, &layout);
                 procs.specialized.insert((name, layout), Done(proc));
             }
             Err(error) => {
@@ -1415,8 +1417,19 @@ pub fn specialize_all<'a>(
                 ) {
                     Ok((proc, layout)) => {
                         debug_assert_eq!(outside_layout, layout);
-                        procs.specialized.remove(&(name, outside_layout));
-                        procs.specialized.insert((name, layout), Done(proc));
+                        //                        procs.specialized.remove(&(name, outside_layout));
+                        //                        dbg!(name, &layout);
+                        //                        procs.specialized.insert((name, layout), Done(proc));
+
+                        if let Layout::Closure(args, closure, ret) = layout {
+                            procs.specialized.remove(&(name, outside_layout));
+                            let layout = ClosureLayout::extend_function_layout(
+                                env.arena, args, closure, ret,
+                            );
+                            procs.specialized.insert((name, layout), Done(proc));
+                        } else {
+                            procs.specialized.insert((name, layout), Done(proc));
+                        }
                     }
                     Err(error) => {
                         let error_msg = env.arena.alloc(format!(
@@ -1433,62 +1446,6 @@ pub fn specialize_all<'a>(
     }
 
     procs
-}
-
-fn hacky_hacky_hack_hack<'a>(
-    env: &mut Env<'a, '_>,
-    fn_var: Variable,
-    body: roc_can::expr::Expr,
-    arg_symbols: &[Symbol],
-) -> roc_can::expr::Expr {
-    match env.subs.get(fn_var).content {
-        Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
-            let temp = env.unique_symbol();
-
-            let pattern = roc_can::pattern::Pattern::Identifier(temp);
-            let mut pattern_vars = SendMap::default();
-            pattern_vars.insert(temp, fn_var);
-            let def = roc_can::def::Def {
-                loc_pattern: Located::at_zero(pattern),
-                loc_expr: Located::at_zero(body),
-                expr_var: fn_var,
-                pattern_vars,
-                annotation: None,
-            };
-
-            let mut arguments: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)> =
-                std::vec::Vec::new();
-
-            for (symbol, var) in arg_symbols.iter().zip(args.iter()) {
-                arguments.push((*var, Located::at_zero(roc_can::expr::Expr::Var(*symbol))));
-            }
-
-            use roc_module::operator::CalledVia;
-            // Box<(Variable, Located<Expr>, Variable, Variable)>,
-            let boxed = (
-                fn_var,
-                Located::at_zero(roc_can::expr::Expr::Var(temp)),
-                closure_var,
-                ret_var,
-            );
-            let call_temp = roc_can::expr::Expr::Call(Box::new(boxed), arguments, CalledVia::Space);
-
-            roc_can::expr::Expr::LetNonRec(
-                Box::new(def),
-                Box::new(Located::at_zero(call_temp)),
-                ret_var,
-            )
-        }
-        Content::Alias(_, _, actual) => hacky_hacky_hack_hack(env, actual, body, arg_symbols),
-        Content::Structure(FlatType::TagUnion(tags, _)) => {
-            let mut it = tags.iter();
-            let (_, args) = it.next().unwrap();
-            let mut it = args.iter();
-            let var = it.next().unwrap();
-            hacky_hacky_hack_hack(env, *var, body, arg_symbols)
-        }
-        other => unreachable!("{:?}", other),
-    }
 }
 
 fn specialize_external<'a>(
@@ -1530,66 +1487,8 @@ fn specialize_external<'a>(
         build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
 
     match spec_proc {
-        SpecializedLayout::EmptyClosure(arg_layouts, ret_layout) => {
-            let mut arg_symbols = Vec::new_in(env.arena);
-            for _ in arg_layouts.iter() {
-                arg_symbols.push(env.unique_symbol());
-            }
-
-            let new_body = hacky_hacky_hack_hack(env, fn_var, body, &arg_symbols);
-
-            let specialized_body = from_can(env, fn_var, new_body, procs, layout_cache);
-            // determine the layout of aliases/rigids exposed to the host
-            let host_exposed_layouts = if host_exposed_variables.is_empty() {
-                HostExposedLayouts::NotHostExposed
-            } else {
-                let mut aliases = MutMap::default();
-
-                for (symbol, variable) in host_exposed_variables {
-                    let layout = layout_cache
-                        .from_var(env.arena, *variable, env.subs)
-                        .unwrap();
-                    aliases.insert(*symbol, layout);
-                }
-
-                HostExposedLayouts::HostExposed {
-                    rigids: MutMap::default(),
-                    aliases,
-                }
-            };
-
-            // reset subs, so we don't get type errors when specializing for a different signature
-            layout_cache.rollback_to(cache_snapshot);
-            env.subs.rollback_to(snapshot);
-
-            let recursivity = if is_self_recursive {
-                SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
-            } else {
-                SelfRecursive::NotSelfRecursive
-            };
-
-            let closure_data_layout = None;
-
-            let proc_args = Vec::from_iter_in(
-                arg_symbols
-                    .iter()
-                    .zip(arg_layouts.into_iter())
-                    .map(|(s, l)| (l.clone(), *s)),
-                env.arena,
-            );
-            let proc_args = proc_args.into_bump_slice();
-
-            let proc = Proc {
-                name: proc_name,
-                args: proc_args,
-                body: specialized_body,
-                closure_data_layout,
-                ret_layout,
-                is_self_recursive: recursivity,
-                host_exposed_layouts,
-            };
-
-            Ok(proc)
+        SpecializedLayout::EmptyClosure(_arg_layouts, _ret_layout) => {
+            panic!("I don't think this should happen if things went well")
         }
         SpecializedLayout::Normal(proc_args, opt_closure_layout, ret_layout) => {
             let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
@@ -1659,6 +1558,7 @@ fn specialize_external<'a>(
                 None => None,
             };
 
+            dbg!(proc_name, &proc_args, &ret_layout);
             let proc = Proc {
                 name: proc_name,
                 args: proc_args,
@@ -4799,6 +4699,7 @@ fn call_by_name<'a>(
 
                                         procs.specialized.remove(&(proc_name, full_layout));
 
+                                        dbg!(proc_name, &function_layout.full);
                                         procs.specialized.insert(
                                             (proc_name, function_layout.full.clone()),
                                             Done(proc),

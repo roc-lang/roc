@@ -115,7 +115,7 @@ pub fn gen_from_mono_module(
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
         } else {
-            fn_val.print_to_stderr();
+            // fn_val.print_to_stderr();
             // env.module.print_to_stderr();
             // NOTE: If this fails, uncomment the above println to debug.
             panic!(

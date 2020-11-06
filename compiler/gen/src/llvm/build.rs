@@ -3434,7 +3434,7 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
                 foreign_symbol.as_str(),
                 context
                     .struct_type(&[], false)
-                    .fn_type(&[context.struct_type(&[], false).into()], false),
+                    .fn_type(&[context.i64_type().into()], false),
                 Some(Linkage::External),
             );
             foreign_function.set_call_conventions(C_CALL_CONV);

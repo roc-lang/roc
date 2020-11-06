@@ -2128,17 +2128,20 @@ fn fabricate_host_exposed_def<'a>(
 
     let mut arguments: Vec<(Variable, Located<Pattern>)> = Vec::new();
     let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
+    let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
 
     match annotation.typ.shallow_dealias() {
         Type::Function(args, _, _) => {
             for _ in 0..args.len() {
-                let ident_id = ident_ids.gen_unique();
+                // let ident_id = ident_ids.gen_unique();
+                let ident_id = ident_ids.get_or_insert(&"mything".into());
                 module_id.register_debug_idents(&ident_ids);
                 let arg_symbol = Symbol::new(module_id, ident_id);
                 let arg_var = var_store.fresh();
 
                 arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
 
+                captured_symbols.push((arg_symbol, arg_var));
                 linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
             }
         }
@@ -2170,7 +2173,7 @@ fn fabricate_host_exposed_def<'a>(
         closure_ext_var: var_store.fresh(),
         return_type: var_store.fresh(),
         name: effect_closure_symbol,
-        captured_symbols: std::vec::Vec::new(),
+        captured_symbols,
         recursive: Recursive::NotRecursive,
         arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
         loc_body: Box::new(Located::at_zero(low_level_call)),
