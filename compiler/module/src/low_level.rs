@@ -13,6 +13,7 @@ pub enum LowLevel {
     ListRepeat,
     ListReverse,
     ListConcat,
+    ListContains,
     ListAppend,
     ListPrepend,
     ListJoin,

@@ -1,8 +1,8 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
-    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe,
-    list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, list_walk_right,
+    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
+    list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
+    list_reverse, list_set, list_single, list_walk_right,
 };
 use crate::llvm::build_str::{str_concat, str_len, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
@@ -2600,6 +2600,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             let inplace = get_inplace_from_layout(layout);
 
             list_keep_if(env, inplace, parent, func, func_layout, list, list_layout)
+        }
+        ListContains => {
+            // List.contains : List elem, elem -> Bool
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_contains(env, parent, elem, elem_layout, list, list_layout)
         }
         ListWalkRight => {
             // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum

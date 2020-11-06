@@ -59,6 +59,11 @@ fn jit_to_ast_help<'a>(
     content: &Content,
 ) -> Expr<'a> {
     match layout {
+        Layout::Builtin(Builtin::Int1) => {
+            // TODO this will not handle the case where this bool was really
+            // a 1-element recored, e.g. { x: True }, correctly
+            run_jit_function!(lib, main_fn_name, bool, |num| i1_to_ast(num))
+        }
         Layout::Builtin(Builtin::Int64) => {
             run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
                 env,
@@ -431,6 +436,15 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 /// e.g. adding underscores for large numbers
 fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
+}
+
+/// This is centralized in case we want to format it differently later,
+/// e.g. adding underscores for large numbers
+fn i1_to_ast<'a>(num: bool) -> Expr<'a> {
+    match num {
+        true => Expr::GlobalTag(&"True"),
+        false => Expr::GlobalTag(&"False"),
+    }
 }
 
 /// This is centralized in case we want to format it differently later,
