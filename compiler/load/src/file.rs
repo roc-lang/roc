@@ -265,6 +265,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 // so other modules can populate them as they load.
                 module_ids: Arc::clone(&state.arc_modules),
                 ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                mode: state.stdlib.mode,
             }
         }
         Phase::Parse => {
@@ -715,6 +716,7 @@ enum BuildTask<'a> {
         module_name: ModuleName,
         module_ids: Arc<Mutex<ModuleIds>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        mode: Mode,
     },
     Parse {
         header: ModuleHeader<'a>,
@@ -810,7 +812,7 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
 
     match load(
         arena,
@@ -834,7 +836,7 @@ pub fn load_and_monomorphize<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
 
     match load(
         arena,
@@ -859,7 +861,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, src)?;
+    let load_start = LoadStart::from_str(arena, filename, src, stdlib.mode)?;
 
     match load(
         arena,
@@ -882,7 +884,11 @@ struct LoadStart<'a> {
 }
 
 impl<'a> LoadStart<'a> {
-    pub fn from_path(arena: &'a Bump, filename: PathBuf) -> Result<Self, LoadingProblem> {
+    pub fn from_path(
+        arena: &'a Bump,
+        filename: PathBuf,
+        mode: Mode,
+    ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -897,6 +903,7 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
+                mode,
             )?
         };
 
@@ -912,6 +919,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         src: &'a str,
+        mode: Mode,
     ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -928,6 +936,7 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
+                mode,
             )?
         };
 
@@ -1701,6 +1710,7 @@ fn load_module<'a>(
     module_name: ModuleName,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let module_start_time = SystemTime::now();
     let mut filename = PathBuf::new();
@@ -1721,6 +1731,7 @@ fn load_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_start_time,
+        mode,
     )
 }
 
@@ -1756,6 +1767,7 @@ fn parse_header<'a>(
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
     src_bytes: &'a [u8],
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
@@ -1791,19 +1803,14 @@ fn parse_header<'a>(
             ident_ids_by_module,
             module_timing,
         )),
-        Ok((ast::Module::Platform { header }, _parse_state)) => {
-            // TODO don't hardcode the mode
-            let mode = Mode::Standard;
-
-            fabricate_effects_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                mode,
-                header,
-                module_timing,
-            )
-        }
+        Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+            arena,
+            module_ids,
+            ident_ids_by_module,
+            mode,
+            header,
+            module_timing,
+        ),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }
@@ -1815,6 +1822,7 @@ fn load_filename<'a>(
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
@@ -1827,6 +1835,7 @@ fn load_filename<'a>(
             filename,
             module_ids,
             ident_ids_by_module,
+            mode,
             arena.alloc(bytes),
             module_start_time,
         ),
@@ -1846,6 +1855,7 @@ fn load_from_str<'a>(
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
     let file_io_duration = file_io_start.elapsed().unwrap();
@@ -1856,6 +1866,7 @@ fn load_from_str<'a>(
         filename,
         module_ids,
         ident_ids_by_module,
+        mode,
         src.as_bytes(),
         module_start_time,
     )
@@ -3134,8 +3145,16 @@ fn run_task<'a>(
             module_name,
             module_ids,
             ident_ids_by_module,
-        } => load_module(arena, src_dir, module_name, module_ids, ident_ids_by_module)
-            .map(|(_, msg)| msg),
+            mode,
+        } => load_module(
+            arena,
+            src_dir,
+            module_name,
+            module_ids,
+            ident_ids_by_module,
+            mode,
+        )
+        .map(|(_, msg)| msg),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
