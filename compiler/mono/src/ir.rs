@@ -444,7 +444,7 @@ impl<'a> Procs<'a> {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout.clone(), pending);
 
-                            debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", symbol);
+                            debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! The same PartialProc should never be added twice", symbol);
 
                             self.partial_procs.insert(
                                 symbol,
@@ -1336,10 +1336,26 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
+    dbg!(&procs.externals_others_need);
     let it = procs.externals_others_need.specs.clone();
     let it = it
         .into_iter()
-        .map(|(symbol, solved_types)| solved_types.into_iter().map(move |s| (symbol, s)))
+        .map(|(symbol, solved_types)| {
+            let mut as_vec: std::vec::Vec<_> = solved_types.into_iter().collect();
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let hash_the_thing = |x: &SolvedType| {
+                let mut hasher = DefaultHasher::new();
+                x.hash(&mut hasher);
+                (hasher.finish());
+            };
+
+            as_vec.sort_by_key(|x| hash_the_thing(x));
+            as_vec.dedup_by_key(|x| hash_the_thing(x));
+
+            as_vec.into_iter().map(move |s| (symbol, s))
+        })
         .flatten();
     for (name, solved_type) in it.into_iter() {
         let partial_proc = match procs.partial_procs.get(&name) {

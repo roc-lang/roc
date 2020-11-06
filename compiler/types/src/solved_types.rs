@@ -5,6 +5,7 @@ use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use std::hash::{Hash, Hasher};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -25,8 +26,114 @@ impl<T> Solved<T> {
     }
 }
 
+impl Hash for SolvedType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_solved_type_help(self, &mut Vec::new(), state);
+    }
+}
+
+fn hash_solved_type_help<H: Hasher>(
+    solved_type: &SolvedType,
+    flex_vars: &mut Vec<VarId>,
+    state: &mut H,
+) {
+    use SolvedType::*;
+
+    match solved_type {
+        Flex(var_id) => {
+            var_id_hash_help(*var_id, flex_vars, state);
+        }
+        Wildcard => "wildcard".hash(state),
+        EmptyRecord => "empty_record".hash(state),
+        EmptyTagUnion => "empty_tag_union".hash(state),
+        Error => "error".hash(state),
+        Func(arguments, closure, result) => {
+            for x in arguments {
+                hash_solved_type_help(x, flex_vars, state);
+            }
+
+            hash_solved_type_help(closure, flex_vars, state);
+            hash_solved_type_help(result, flex_vars, state);
+        }
+        Apply(name, arguments) => {
+            name.hash(state);
+            for x in arguments {
+                hash_solved_type_help(x, flex_vars, state);
+            }
+        }
+        Rigid(name) => name.hash(state),
+        Erroneous(problem) => problem.hash(state),
+        Boolean(solved_bool) => solved_bool.hash(state),
+
+        Record { fields, ext } => {
+            for (name, x) in fields {
+                name.hash(state);
+                "record_field".hash(state);
+                hash_solved_type_help(x.as_inner(), flex_vars, state);
+            }
+            hash_solved_type_help(ext, flex_vars, state);
+        }
+
+        TagUnion(tags, ext) => {
+            for (name, arguments) in tags {
+                name.hash(state);
+                for x in arguments {
+                    hash_solved_type_help(x, flex_vars, state);
+                }
+            }
+            hash_solved_type_help(ext, flex_vars, state);
+        }
+
+        RecursiveTagUnion(rec, tags, ext) => {
+            var_id_hash_help(*rec, flex_vars, state);
+            for (name, arguments) in tags {
+                name.hash(state);
+                for x in arguments {
+                    hash_solved_type_help(x, flex_vars, state);
+                }
+            }
+            hash_solved_type_help(ext, flex_vars, state);
+        }
+
+        Alias(name, arguments, actual) => {
+            name.hash(state);
+            for (name, x) in arguments {
+                name.hash(state);
+                hash_solved_type_help(x, flex_vars, state);
+            }
+            hash_solved_type_help(actual, flex_vars, state);
+        }
+
+        HostExposedAlias {
+            name,
+            arguments,
+            actual,
+            actual_var,
+        } => {
+            name.hash(state);
+            for (name, x) in arguments {
+                name.hash(state);
+                hash_solved_type_help(x, flex_vars, state);
+            }
+            hash_solved_type_help(actual, flex_vars, state);
+            var_id_hash_help(*actual_var, flex_vars, state);
+        }
+    }
+}
+
+fn var_id_hash_help<H: Hasher>(var_id: VarId, flex_vars: &mut Vec<VarId>, state: &mut H) {
+    let opt_index = flex_vars.iter().position(|x| *x == var_id);
+    match opt_index {
+        Some(index) => index.hash(state),
+        None => {
+            flex_vars.len().hash(state);
+            flex_vars.push(var_id);
+        }
+    }
+}
+
 /// This is a fully solved type, with no Variables remaining in it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
