@@ -179,6 +179,25 @@ pub fn can_problem<'b>(
                 alloc.reflow(" definitions from this record."),
             ]),
         ]),
+        Problem::InvalidOptionalValue {
+            field_name,
+            field_region,
+            record_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This record uses an optional value for the "),
+                alloc.record_field(field_name),
+                alloc.reflow(" field in an incorrect context!"),
+            ]),
+            alloc.region_all_the_things(
+                record_region,
+                field_region,
+                field_region,
+                Annotation::Error,
+            ),
+            alloc.reflow("You can only use optional values in record destructuring, for example in affectation:"),
+            alloc.reflow("{ answer ? 42, otherField } = myRecord").indent(4),
+        ]),
         Problem::DuplicateRecordFieldType {
             field_name,
             field_region,
@@ -534,6 +553,25 @@ fn pretty_runtime_error<'b>(
                 tip,
             ])
         }
+        RuntimeError::InvalidOptionalValue {
+            field_name,
+            field_region,
+            record_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This record uses an optional value for the "),
+                alloc.record_field(field_name),
+                alloc.reflow(" field in an incorrect context!"),
+            ]),
+            alloc.region_all_the_things(
+                record_region,
+                field_region,
+                field_region,
+                Annotation::Error,
+            ),
+            alloc.reflow("You can only use optional values in record destructuring, for exemple in affectation:"),
+            alloc.reflow("{ answer ? 42, otherField } = myRecord"),
+        ]),
         RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
             alloc.concat(vec![
                 alloc.reflow("This expression cannot be updated"),
