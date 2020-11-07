@@ -151,14 +151,12 @@ impl Dependencies {
             }
         }
 
-        let output = MutSet::default();
-
         //        // all the dependencies can be loaded
         //        for dep in dependencies {
         //            output.insert((*dep, LoadHeader));
         //        }
 
-        output
+        MutSet::default()
     }
 
     /// Propagate a notification, return (module, phase) pairs that can make progress
@@ -1761,6 +1759,7 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -2119,7 +2118,7 @@ fn run_solve<'a>(
     }
 }
 
-fn fabricate_effect_after<'a>(
+fn fabricate_effect_after(
     env: &mut roc_can::env::Env,
     scope: &mut roc_can::scope::Scope,
     effect_symbol: Symbol,

@@ -1358,7 +1358,7 @@ pub fn specialize_all<'a>(
             let hash_the_thing = |x: &SolvedType| {
                 let mut hasher = DefaultHasher::new();
                 x.hash(&mut hasher);
-                (hasher.finish());
+                hasher.finish()
             };
 
             as_vec.sort_by_key(|x| hash_the_thing(x));
@@ -1780,18 +1780,21 @@ fn build_specialized_proc<'a>(
             // make sure there is not arg_closure argument without a closure layout
             debug_assert!(pattern_symbols.last() != Some(&Symbol::ARG_CLOSURE));
 
-            let diff = pattern_layouts_len - pattern_symbols.len();
+            use std::cmp::Ordering;
+            match pattern_layouts_len.cmp(&pattern_symbols.len()) {
+                Ordering::Greater => {
+                    let proc_args = proc_args.into_bump_slice();
 
-            if diff == 0 {
-                let proc_args = proc_args.into_bump_slice();
-
-                Ok((proc_args, None, ret_layout))
-            } else if diff > 0 {
-                // so far, the problem when hitting this branch was always somewhere else
-                // I think this branch should not be reachable in a bugfree compiler
-                panic!("more arguments (according to the layout) than argument symbols")
-            } else {
-                panic!("more argument symbols than arguments (according to the layout)")
+                    Ok((proc_args, None, ret_layout))
+                }
+                Ordering::Less => {
+                    // so far, the problem when hitting this branch was always somewhere else
+                    // I think this branch should not be reachable in a bugfree compiler
+                    panic!("more arguments (according to the layout) than argument symbols")
+                }
+                Ordering::Equal => {
+                    panic!("more argument symbols than arguments (according to the layout)")
+                }
             }
         }
     }
