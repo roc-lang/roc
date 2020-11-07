@@ -52,7 +52,7 @@ pub struct AppHeader<'a> {
 pub struct PlatformHeader<'a> {
     pub name: Loc<PackageName<'a>>,
     pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub requires: Vec<'a, Loc<ExposesEntry<'a>>>,
+    pub requires: Vec<'a, Loc<TypedIdent<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
     pub effects: Effects<'a>,
 
@@ -72,23 +72,23 @@ pub struct Effects<'a> {
     pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
     pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
     pub type_name: &'a str,
-    pub entries: Vec<'a, Loc<EffectsEntry<'a>>>,
+    pub entries: Vec<'a, Loc<TypedIdent<'a>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum EffectsEntry<'a> {
+pub enum TypedIdent<'a> {
     /// e.g.
     ///
     /// printLine : Str -> Effect {}
-    Effect {
+    Entry {
         ident: Loc<&'a str>,
         spaces_before_colon: &'a [CommentOrNewline<'a>],
         ann: Loc<TypeAnnotation<'a>>,
     },
 
     // Spaces
-    SpaceBefore(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -628,12 +628,12 @@ impl<'a> Spaceable<'a> for ImportsEntry<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for EffectsEntry<'a> {
+impl<'a> Spaceable<'a> for TypedIdent<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        EffectsEntry::SpaceBefore(self, spaces)
+        TypedIdent::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        EffectsEntry::SpaceAfter(self, spaces)
+        TypedIdent::SpaceAfter(self, spaces)
     }
 }
 

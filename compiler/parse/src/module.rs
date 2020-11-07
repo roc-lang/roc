@@ -1,6 +1,6 @@
 use crate::ast::{
-    AppHeader, Attempting, CommentOrNewline, Def, Effects, EffectsEntry, ExposesEntry,
-    ImportsEntry, InterfaceHeader, Module, PlatformHeader,
+    AppHeader, Attempting, CommentOrNewline, Def, Effects, ExposesEntry, ImportsEntry,
+    InterfaceHeader, Module, PlatformHeader, TypedIdent,
 };
 use crate::blankspace::{space0, space0_around, space0_before, space1};
 use crate::expr::def;
@@ -268,16 +268,16 @@ fn requires<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a>>>,
+        Vec<'a, Located<TypedIdent<'a>>>,
     ),
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("requires")), space1(1)),
         collection!(
-            ascii_char(b'['),
-            loc!(exposes_entry()),
+            ascii_char(b'{'),
+            loc!(typed_ident()),
             ascii_char(b','),
-            ascii_char(b']'),
+            ascii_char(b'}'),
             1
         )
     )
@@ -333,7 +333,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
             and!(uppercase_ident(), space1(0)).parse(arena, state)?;
         let (entries, state) = collection!(
             ascii_char(b'{'),
-            loc!(effects_entry()),
+            loc!(typed_ident()),
             ascii_char(b','),
             ascii_char(b'}'),
             1
@@ -354,7 +354,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
 }
 
 #[inline(always)]
-fn effects_entry<'a>() -> impl Parser<'a, EffectsEntry<'a>> {
+fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
     move |arena, state| {
         // You must have a field name, e.g. "email"
         let (ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
@@ -372,7 +372,7 @@ fn effects_entry<'a>() -> impl Parser<'a, EffectsEntry<'a>> {
         // printLine : Str -> Effect {}
 
         Ok((
-            EffectsEntry::Effect {
+            TypedIdent::Entry {
                 ident,
                 spaces_before_colon,
                 ann,
@@ -397,10 +397,10 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             optional(skip_first!(
                 ascii_char(b'.'),
                 collection!(
-                    ascii_char(b'{'),
+                    ascii_char(b'['),
                     loc!(exposes_entry()),
                     ascii_char(b','),
-                    ascii_char(b'}'),
+                    ascii_char(b']'),
                     1
                 )
             ))
