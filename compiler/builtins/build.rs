@@ -12,16 +12,15 @@ where
 {
     let output_result = Command::new(OsStr::new(&command)).args(args).output();
     match output_result {
-        Ok(output) => match output.status.success() {
-            true => (),
-            false => {
+        Ok(output) => {
+            if !output.status.success() {
                 let error_str = match str::from_utf8(&output.stderr) {
                     Ok(stderr) => stderr.to_string(),
                     Err(_) => format!("Failed to run \"{}\"", command),
                 };
                 panic!("{} failed: {}", command, error_str);
             }
-        },
+        }
         Err(reason) => panic!("{} failed: {}", command, reason),
     }
 }
