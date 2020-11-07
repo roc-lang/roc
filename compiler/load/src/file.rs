@@ -127,7 +127,9 @@ impl Dependencies {
 
         // all the dependencies can be loaded
         for dep in dependencies {
-            output.insert((*dep, LoadHeader));
+            if !format!("{:?}", dep).contains("Effect") {
+                output.insert((*dep, LoadHeader));
+            }
         }
 
         output
