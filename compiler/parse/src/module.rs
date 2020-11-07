@@ -2,10 +2,10 @@ use crate::ast::{
     AppHeader, Attempting, CommentOrNewline, Def, EffectsEntry, ExposesEntry, ImportsEntry,
     InterfaceHeader, Module, PlatformHeader,
 };
-use crate::blankspace::{space0_around, space1};
+use crate::blankspace::{space0, space0_around, space0_before, space1};
 use crate::expr::def;
 use crate::header::{ModuleName, PackageName};
-use crate::ident::unqualified_ident;
+use crate::ident::{lowercase_ident, unqualified_ident};
 use crate::parser::{
     self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
     unexpected_eof, ParseResult, Parser, State,
@@ -350,13 +350,31 @@ fn effects<'a>() -> impl Parser<
 
 #[inline(always)]
 fn effects_entry<'a>() -> impl Parser<'a, EffectsEntry<'a>> {
-    // e.g.
-    //
-    // printLine : Str -> Effect {}
-    map!(
-        and!(loc(unqualified_ident()), type_annotation::located(0)),
-        |(ident, ann)| { EffectsEntry::Effect { ident, ann } }
-    )
+    move |arena, state| {
+        // You must have a field name, e.g. "email"
+        let (ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
+
+        let (spaces_before_colon, state) = space0(0).parse(arena, state)?;
+
+        let (ann, state) = skip_first!(
+            ascii_char(':'),
+            space0_before(type_annotation::located(0), 0)
+        )
+        .parse(arena, state)?;
+
+        // e.g.
+        //
+        // printLine : Str -> Effect {}
+
+        Ok((
+            EffectsEntry::Effect {
+                ident,
+                spaces_before_colon,
+                ann,
+            },
+            state,
+        ))
+    }
 }
 
 #[inline(always)]

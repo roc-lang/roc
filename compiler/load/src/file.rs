@@ -2454,7 +2454,11 @@ fn unpack_exposes_entries<'a>(
 
     while let Some(effects_entry) = stack.pop() {
         match effects_entry {
-            EffectsEntry::Effect { ident, ann } => {
+            EffectsEntry::Effect {
+                ident,
+                spaces_before_colon: _,
+                ann,
+            } => {
                 output.push((ident, ann));
             }
             EffectsEntry::SpaceAfter(nested, _) | EffectsEntry::SpaceBefore(nested, _) => {

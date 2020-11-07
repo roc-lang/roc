@@ -75,6 +75,7 @@ pub enum EffectsEntry<'a> {
     /// printLine : Str -> Effect {}
     Effect {
         ident: Loc<&'a str>,
+        spaces_before_colon: &'a [CommentOrNewline<'a>],
         ann: Loc<TypeAnnotation<'a>>,
     },
 
