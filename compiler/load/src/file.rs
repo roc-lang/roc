@@ -718,6 +718,11 @@ enum BuildTask<'a> {
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
         mode: Mode,
     },
+    LoadPkgConfig {
+        module_ids: Arc<Mutex<ModuleIds>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        mode: Mode,
+    },
     Parse {
         header: ModuleHeader<'a>,
     },
@@ -772,6 +777,7 @@ pub enum LoadingProblem {
         filename: PathBuf,
         fail: Fail,
     },
+    UnexpectedHeader(String),
     MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
@@ -1700,6 +1706,74 @@ fn finish<'a>(
         sources,
         timings: state.timings,
         documentation,
+    }
+}
+
+/// Load a PkgConfig.roc file
+fn load_pkg_config<'a>(
+    arena: &'a Bump,
+    src_dir: &Path,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
+) -> Result<Msg<'a>, LoadingProblem> {
+    let module_start_time = SystemTime::now();
+
+    let mut filename = PathBuf::from(src_dir);
+
+    filename.push("platform");
+    filename.push("Pkg-Config");
+
+    // End with .roc
+    filename.set_extension(ROC_FILE_EXTENSION);
+
+    let file_io_start = SystemTime::now();
+    let file = fs::read(&filename);
+    let file_io_duration = file_io_start.elapsed().unwrap();
+
+    match file {
+        Ok(bytes) => {
+            let parse_start = SystemTime::now();
+            let parse_state = parser::State::new(arena.alloc(bytes), Attempting::Module);
+            let parsed = roc_parse::module::header().parse(&arena, parse_state);
+            let parse_header_duration = parse_start.elapsed().unwrap();
+
+            // Insert the first entries for this module's timings
+            let mut module_timing = ModuleTiming::new(module_start_time);
+
+            module_timing.read_roc_file = file_io_duration;
+            module_timing.parse_header = parse_header_duration;
+
+            match parsed {
+                Ok((ast::Module::Interface { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got Interface with header\n{:?}",
+                        header
+                    )))
+                }
+                Ok((ast::Module::App { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got App with header\n{:?}",
+                        header
+                    )))
+                }
+                Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+                    arena,
+                    module_ids,
+                    ident_ids_by_module,
+                    mode,
+                    header,
+                    module_timing,
+                )
+                .map(|x| x.1),
+                Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+            }
+        }
+
+        Err(err) => Err(LoadingProblem::FileProblem {
+            filename,
+            error: err.kind(),
+        }),
     }
 }
 
@@ -3117,6 +3191,11 @@ fn run_task<'a>(
             mode,
         )
         .map(|(_, msg)| msg),
+        LoadPkgConfig {
+            module_ids,
+            ident_ids_by_module,
+            mode,
+        } => load_pkg_config(arena, src_dir, module_ids, ident_ids_by_module, mode),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
