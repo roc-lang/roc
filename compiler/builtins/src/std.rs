@@ -450,6 +450,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // contains : List elem, elem -> Bool
+    add_type(
+        Symbol::LIST_CONTAINS,
+        top_level_function(
+            vec![list_type(flex(TVAR1)), flex(TVAR1)],
+            Box::new(bool_type()),
+        ),
+    );
+
     // walkRight : List elem, (elem -> accum -> accum), accum -> accum
     add_type(
         Symbol::LIST_WALK_RIGHT,

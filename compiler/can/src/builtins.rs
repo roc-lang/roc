@@ -62,6 +62,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_REPEAT => list_repeat,
         Symbol::LIST_REVERSE => list_reverse,
         Symbol::LIST_CONCAT => list_concat,
+        Symbol::LIST_CONTAINS => list_contains,
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
@@ -1297,6 +1298,30 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+// List.contains : List elem, elem, -> Bool
+fn list_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let elem_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListContains,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (elem_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (elem_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        bool_var,
     )
 }
 
