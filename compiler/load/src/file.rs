@@ -43,6 +43,9 @@ use std::time::{Duration, SystemTime};
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
 
+/// Roc-Config file name
+const ROC_CONFIG_FILE_NAME: &str = "Pkg-Config";
+
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
@@ -1736,7 +1739,7 @@ fn load_pkg_config<'a>(
     let mut filename = PathBuf::from(src_dir);
 
     filename.push("platform");
-    filename.push("Pkg-Config");
+    filename.push(ROC_CONFIG_FILE_NAME);
 
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
@@ -1897,18 +1900,27 @@ fn parse_header<'a>(
                 module_timing,
             );
 
-            let load_pkg_config_msg = load_pkg_config(
-                arena,
-                &pkg_config_dir,
-                module_ids,
-                ident_ids_by_module,
-                mode,
-            )?;
+            let mut pkg_config_roc = pkg_config_dir.clone();
+            pkg_config_roc.push("platform");
+            pkg_config_roc.push(ROC_CONFIG_FILE_NAME);
+            pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
 
-            Ok((
-                module_id,
-                Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
-            ))
+            if pkg_config_roc.as_path().exists() {
+                let load_pkg_config_msg = load_pkg_config(
+                    arena,
+                    &pkg_config_dir,
+                    module_ids,
+                    ident_ids_by_module,
+                    mode,
+                )?;
+
+                Ok((
+                    module_id,
+                    Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
+                ))
+            } else {
+                Ok((module_id, app_module_header_msg))
+            }
         }
         Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
             arena,
