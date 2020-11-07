@@ -139,7 +139,7 @@ pub fn gen_from_mono_module(
 
     // Emit the .o file
 
-    let reloc = RelocMode::Default;
+    let reloc = RelocMode::PIC;
     let model = CodeModel::Default;
     let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
 

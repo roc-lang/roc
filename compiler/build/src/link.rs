@@ -1,5 +1,4 @@
 use crate::target;
-use crate::target::arch_str;
 use inkwell::module::Module;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
 use libloading::{Error, Library};
@@ -151,37 +150,12 @@ fn link_linux(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let libcrt_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
-        Path::new("/usr/lib/x86_64-linux-gnu")
-    } else {
-        Path::new("/usr/lib")
-    };
-
-    let libgcc_path = if Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
-        Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1")
-    } else if Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
-        Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")
-    } else {
-        Path::new("/usr/lib/libgcc_s.so.1")
-    };
-
-    let mut soname;
     let (base_args, output_path) = match link_type {
-        LinkType::Executable => (
-            // Presumably this S stands for Static, since if we include Scrt1.o
-            // in the linking for dynamic builds, linking fails.
-            vec![libcrt_path.join("Scrt1.o").to_str().unwrap().to_string()],
-            output_path,
-        ),
+        LinkType::Executable => (vec![], output_path),
         LinkType::Dylib => {
             // TODO: do we acually need the version number on this?
-            // Do we even need the "-soname" argument?
             //
             // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
-
-            soname = output_path.clone();
-            soname.set_extension("so.1");
-
             let mut output_path = output_path;
 
             output_path.set_extension("so.1.0");
@@ -189,51 +163,28 @@ fn link_linux(
             (
                 // TODO: find a way to avoid using a vec! here - should theoretically be
                 // able to do this somehow using &[] but the borrow checker isn't having it.
-                // Also find a way to have these be string slices instead of Strings.
-                vec![
-                    "-shared".to_string(),
-                    "-soname".to_string(),
-                    soname.as_path().to_str().unwrap().to_string(),
-                ],
+                vec!["-shared"],
                 output_path,
             )
         }
     };
 
-    // NOTE: order of arguments to `ld` matters here!
-    // The `-l` flags should go after the `.o` arguments
     let env_path = std::env::var("PATH").unwrap_or("".to_string());
     Ok((
-        Command::new("ld")
+        Command::new("clang++")
             // Don't allow LD_ env vars to affect this
             .env_clear()
             .env("PATH", &env_path)
             .args(&[
-                "-arch",
-                arch_str(target),
-                libcrt_path.join("crti.o").to_str().unwrap(),
-                libcrt_path.join("crtn.o").to_str().unwrap(),
-            ])
-            .args(&base_args)
-            .args(&["-dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
-            .args(input_paths)
-            .args(&[
-                // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
-                // for discussion and further references
-                "-lc",
-                "-lm",
-                "-lpthread",
-                "-ldl",
-                "-lrt",
-                "-lutil",
-                "-lc_nonshared",
-                "-lc++",
-                "-lunwind",
-                libgcc_path.to_str().unwrap(),
-                // Output
+                "-target",
+                &target.to_string(),
                 "-o",
                 output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
             ])
+            .args(base_args)
+            .args(input_paths)
+            .args(&["-fuse-ld=lld", "-stdlib=libc++"])
+            .args(&["-lpthread", "-ldl"])
             .spawn()?,
         output_path,
     ))
