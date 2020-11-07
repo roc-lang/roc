@@ -78,7 +78,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>> {
     map!(
         and!(
             parse_package_part,
-            skip_first!(ascii_char('/'), parse_package_part)
+            skip_first!(ascii_char(b'/'), parse_package_part)
         ),
         |(account, pkg)| { PackageName { account, pkg } }
     )
@@ -254,10 +254,10 @@ fn provides<'a>() -> impl Parser<
     and!(
         and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
         collection!(
-            ascii_char('['),
+            ascii_char(b'['),
             loc!(exposes_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b','),
+            ascii_char(b']'),
             1
         )
     )
@@ -274,10 +274,10 @@ fn requires<'a>() -> impl Parser<
     and!(
         and!(skip_second!(space1(1), ascii_string("requires")), space1(1)),
         collection!(
-            ascii_char('['),
+            ascii_char(b'['),
             loc!(exposes_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b','),
+            ascii_char(b']'),
             1
         )
     )
@@ -294,10 +294,10 @@ fn exposes<'a>() -> impl Parser<
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
         collection!(
-            ascii_char('['),
+            ascii_char(b'['),
             loc!(exposes_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b','),
+            ascii_char(b']'),
             1
         )
     )
@@ -314,10 +314,10 @@ fn imports<'a>() -> impl Parser<
     and!(
         and!(skip_second!(space1(1), ascii_string("imports")), space1(1)),
         collection!(
-            ascii_char('['),
+            ascii_char(b'['),
             loc!(imports_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b','),
+            ascii_char(b']'),
             1
         )
     )
@@ -332,10 +332,10 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
         let ((type_name, spaces_after_type_name), state) =
             and!(uppercase_ident(), space1(0)).parse(arena, state)?;
         let (entries, state) = collection!(
-            ascii_char('{'),
+            ascii_char(b'{'),
             loc!(effects_entry()),
-            ascii_char(','),
-            ascii_char('}'),
+            ascii_char(b','),
+            ascii_char(b'}'),
             1
         )
         .parse(arena, state)?;
@@ -362,7 +362,7 @@ fn effects_entry<'a>() -> impl Parser<'a, EffectsEntry<'a>> {
         let (spaces_before_colon, state) = space0(0).parse(arena, state)?;
 
         let (ann, state) = skip_first!(
-            ascii_char(':'),
+            ascii_char(b':'),
             space0_before(type_annotation::located(0), 0)
         )
         .parse(arena, state)?;
@@ -395,12 +395,12 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             module_name(),
             // e.g. `.{ Task, after}`
             optional(skip_first!(
-                ascii_char('.'),
+                ascii_char(b'.'),
                 collection!(
-                    ascii_char('{'),
+                    ascii_char(b'{'),
                     loc!(exposes_entry()),
-                    ascii_char(','),
-                    ascii_char('}'),
+                    ascii_char(b','),
+                    ascii_char(b'}'),
                     1
                 )
             ))
