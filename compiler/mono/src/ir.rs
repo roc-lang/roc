@@ -1782,17 +1782,17 @@ fn build_specialized_proc<'a>(
 
             use std::cmp::Ordering;
             match pattern_layouts_len.cmp(&pattern_symbols.len()) {
-                Ordering::Greater => {
+                Ordering::Equal => {
                     let proc_args = proc_args.into_bump_slice();
 
                     Ok((proc_args, None, ret_layout))
                 }
-                Ordering::Less => {
+                Ordering::Greater => {
                     // so far, the problem when hitting this branch was always somewhere else
                     // I think this branch should not be reachable in a bugfree compiler
                     panic!("more arguments (according to the layout) than argument symbols")
                 }
-                Ordering::Equal => {
+                Ordering::Less => {
                     panic!("more argument symbols than arguments (according to the layout)")
                 }
             }
