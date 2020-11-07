@@ -44,7 +44,7 @@ use std::time::{Duration, SystemTime};
 const ROC_FILE_EXTENSION: &str = "roc";
 
 /// Roc-Config file name
-const ROC_CONFIG_FILE_NAME: &str = "Pkg-Config";
+const PKG_CONFIG_FILE_NAME: &str = "Pkg-Config";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
@@ -130,6 +130,7 @@ impl Dependencies {
 
         // all the dependencies can be loaded
         for dep in dependencies {
+            // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
             if !format!("{:?}", dep).contains("Effect") {
                 output.insert((*dep, LoadHeader));
             }
@@ -1739,7 +1740,7 @@ fn load_pkg_config<'a>(
     let mut filename = PathBuf::from(src_dir);
 
     filename.push("platform");
-    filename.push(ROC_CONFIG_FILE_NAME);
+    filename.push(PKG_CONFIG_FILE_NAME);
 
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
@@ -1900,9 +1901,10 @@ fn parse_header<'a>(
                 module_timing,
             );
 
+            // check whether we can find a Pkg-Config.roc file
             let mut pkg_config_roc = pkg_config_dir.clone();
             pkg_config_roc.push("platform");
-            pkg_config_roc.push(ROC_CONFIG_FILE_NAME);
+            pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
             pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
 
             if pkg_config_roc.as_path().exists() {
