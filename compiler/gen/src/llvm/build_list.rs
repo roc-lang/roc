@@ -1,4 +1,5 @@
 use crate::llvm::build::{Env, InPlace};
+use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -819,6 +820,116 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
     builder.build_load(accum_alloca, "load_final_acum")
 }
 
+/// List.contains : List elem, elem -> Bool
+pub fn list_contains<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
+
+    let builder = env.builder;
+
+    let wrapper_struct = list.into_struct_value();
+    let list_elem_layout = match &list_layout {
+        // this pointer will never actually be dereferenced
+        Layout::Builtin(Builtin::EmptyList) => &Layout::Builtin(Builtin::Int64),
+        Layout::Builtin(Builtin::List(_, element_layout)) => element_layout,
+        _ => unreachable!("Invalid layout {:?} in List.contains", list_layout),
+    };
+
+    let list_elem_type =
+        basic_type_from_layout(env.arena, env.context, list_elem_layout, env.ptr_bytes);
+
+    let list_ptr = load_list_ptr(
+        builder,
+        wrapper_struct,
+        list_elem_type.ptr_type(AddressSpace::Generic),
+    );
+
+    let length = list_len(builder, list.into_struct_value());
+
+    list_contains_help(
+        env,
+        parent,
+        length,
+        list_ptr,
+        list_elem_layout,
+        elem,
+        elem_layout,
+    )
+}
+
+pub fn list_contains_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    length: IntValue<'ctx>,
+    source_ptr: PointerValue<'ctx>,
+    list_elem_layout: &Layout<'a>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let bool_alloca = builder.build_alloca(ctx.bool_type(), "bool_alloca");
+    let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
+    let next_free_index_alloca = builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
+
+    builder.build_store(bool_alloca, ctx.bool_type().const_zero());
+    builder.build_store(index_alloca, ctx.i64_type().const_zero());
+    builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
+
+    let condition_bb = ctx.append_basic_block(parent, "condition");
+    builder.build_unconditional_branch(condition_bb);
+    builder.position_at_end(condition_bb);
+
+    let index = builder.build_load(index_alloca, "index").into_int_value();
+
+    let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
+
+    let body_bb = ctx.append_basic_block(parent, "body");
+    let cont_bb = ctx.append_basic_block(parent, "cont");
+    builder.build_conditional_branch(condition, body_bb, cont_bb);
+
+    // loop body
+    builder.position_at_end(body_bb);
+
+    let current_elem_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
+
+    let current_elem = builder.build_load(current_elem_ptr, "load_elem");
+
+    let has_found = build_eq(env, current_elem, elem, list_elem_layout, elem_layout);
+
+    builder.build_store(bool_alloca, has_found.into_int_value());
+
+    let one = ctx.i64_type().const_int(1, false);
+
+    let next_free_index = builder
+        .build_load(next_free_index_alloca, "load_next_free")
+        .into_int_value();
+
+    builder.build_store(
+        next_free_index_alloca,
+        builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
+    );
+
+    builder.build_store(
+        index_alloca,
+        builder.build_int_add(index, one, "incremented_index"),
+    );
+
+    builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
+
+    // continuation
+    builder.position_at_end(cont_bb);
+
+    builder.build_load(bool_alloca, "answer")
+}
+
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -849,7 +960,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             elem_layout.clone(),
         ),
 
-        _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
+        _ => unreachable!("Invalid layout {:?} in List.keepIf", list_layout),
     };
 
     let list_type = basic_type_from_layout(env.arena, env.context, &list_layout, env.ptr_bytes);

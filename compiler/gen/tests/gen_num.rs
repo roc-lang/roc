@@ -557,7 +557,7 @@ mod gen_num {
             indoc!(
                 r#"
                     always42 : Num.Num Num.Integer -> Num.Num Num.Integer
-                    always42 = \num -> 42
+                    always42 = \_ -> 42
 
                     always42 5
                 "#
@@ -788,4 +788,30 @@ mod gen_num {
     //             f64
     //         );
     //     }
+
+    #[test]
+    fn num_max_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.maxInt
+                "#
+            ),
+            i64::MAX,
+            i64
+        );
+    }
+
+    #[test]
+    fn num_min_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.minInt
+                "#
+            ),
+            i64::MIN,
+            i64
+        );
+    }
 }

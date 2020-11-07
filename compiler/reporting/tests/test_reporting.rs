@@ -95,8 +95,13 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
             };
-            let _mono_expr =
-                Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
+            let _mono_expr = Stmt::new(
+                &mut mono_env,
+                loc_expr.value,
+                var,
+                &mut procs,
+                &mut layout_cache,
+            );
         }
 
         Ok((unify_problems, can_problems, mono_problems, home, interns))
@@ -3806,6 +3811,32 @@ mod test_reporting {
         )
     }
 
+    #[test]
+    fn incorrect_optional_field() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x: 5, y ? 42 }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This record uses an optional value for the `.y` field in an incorrect
+                context!
+
+                1│  { x: 5, y ? 42 }
+                            ^^^^^^
+
+                You can only use optional values in record destructuring, for example
+                in affectation:
+
+                    { answer ? 42, otherField } = myRecord
+                "#
+            ),
+        )
+    }
     #[test]
     fn first_wildcard_is_required() {
         report_problem_as(

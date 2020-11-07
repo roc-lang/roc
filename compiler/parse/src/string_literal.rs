@@ -1,8 +1,8 @@
 use crate::ast::{Attempting, EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::{
-    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof,
-    ParseResult, Parser, State,
+    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof, Fail,
+    FailReason, ParseResult, Parser, State,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -279,7 +279,16 @@ where
                             // lines.push(line);
 
                             // Ok((StrLiteral::Block(lines.into_bump_slice()), state))
-                            todo!("TODO parse this line in a block string: {:?}", line);
+                            Err((
+                                Fail {
+                                    attempting: state.attempting,
+                                    reason: FailReason::NotYetImplemented(format!(
+                                        "TODO parse this line in a block string: {:?}",
+                                        line
+                                    )),
+                                },
+                                state,
+                            ))
                         }
                         Err(reason) => state.fail(reason),
                     };

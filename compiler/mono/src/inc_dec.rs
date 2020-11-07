@@ -147,7 +147,7 @@ type LiveVarSet = MutSet<Symbol>;
 type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
 #[derive(Clone, Debug)]
-pub struct Context<'a> {
+struct Context<'a> {
     arena: &'a Bump,
     vars: VarMap,
     jp_live_vars: JPLiveVarMap,      // map: join point => live variables

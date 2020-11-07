@@ -1,5 +1,3 @@
-// This file was copied from file.rs and modified to expose information
-// required to auto-generate documentation
 use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
@@ -71,7 +69,7 @@ fn generate_module_doc<'a>(
                 // If there are comments before, attach to this definition
                 generate_module_doc(exposed_ident_ids, acc, before_comments_or_new_lines, sub_def);
 
-            // Comments after a definition are attached to the next defition
+            // Comments after a definition are attached to the next definition
             (new_acc, Some(comments_or_new_lines))
         }
 
@@ -98,9 +96,15 @@ fn generate_module_doc<'a>(
             name: _,
             vars: _,
             ann: _,
-        } => (acc, None),
+        } =>
+        // TODO
+        {
+            (acc, None)
+        }
 
         Body(_, _) | Nested(_) => (acc, None),
+
+        NotYetImplemented(s) => todo!("{}", s),
     }
 }
 
@@ -113,9 +117,11 @@ fn comments_or_new_lines_to_docs<'a>(
 
     for comment_or_new_line in comments_or_new_lines.iter() {
         match comment_or_new_line {
-            Newline => {}
-            LineComment(_) => {}
-            DocComment(doc_str) => docs.push_str(doc_str),
+            DocComment(doc_str) => {
+                docs.push_str(doc_str);
+                docs.push_str("\n");
+            }
+            Newline | LineComment(_) => {}
         }
     }
     if docs.is_empty() {

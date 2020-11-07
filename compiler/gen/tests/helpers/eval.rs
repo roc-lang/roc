@@ -50,14 +50,10 @@ pub fn helper<'a>(
         exposed_types,
     );
 
-    let loaded = loaded.expect("failed to load module");
+    let mut loaded = loaded.expect("failed to load module");
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        module_id: home,
-        can_problems,
-        type_problems,
-        mono_problems,
         mut procedures,
         interns,
         exposed_to_host,
@@ -76,47 +72,52 @@ pub fn helper<'a>(
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
-    // don't panic based on the errors here, so we can test that RuntimeError generates the correct code
-    let errors = can_problems
-        .into_iter()
-        .filter(|problem| {
-            use roc_problem::can::Problem::*;
+    let mut lines = Vec::new();
+    // errors whose reporting we delay (so we can see that code gen generates runtime errors)
+    let mut delayed_errors = Vec::new();
 
-            // Ignore "unused" problems
-            match problem {
-                UnusedDef(_, _) | UnusedArgument(_, _, _) | UnusedImport(_, _) => false,
-                _ => true,
-            }
-        })
-        .collect::<Vec<roc_problem::can::Problem>>();
+    for (home, (module_path, src)) in loaded.sources {
+        use roc_reporting::report::{
+            can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+        };
 
-    use roc_reporting::report::{
-        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
-    };
+        let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
-    let error_count = errors.len() + type_problems.len() + mono_problems.len();
-    let fatal_error_count = type_problems.len() + mono_problems.len();
+        let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
 
-    if error_count > 0 {
-        // There were problems; report them and return.
-        let src_lines: Vec<&str> = module_src.split('\n').collect();
+        if error_count == 0 {
+            continue;
+        }
 
-        // Used for reporting where an error came from.
-        //
-        // TODO: maybe Reporting should have this be an Option?
-        let path = PathBuf::new();
-
-        // Report problems
+        let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-        let mut lines = Vec::with_capacity(error_count);
-
-        let can_problems = errors.clone();
+        use roc_problem::can::Problem::*;
         for problem in can_problems.into_iter() {
-            let report = can_problem(&alloc, path.clone(), problem);
+            // Ignore "unused" problems
+            match problem {
+                UnusedDef(_, _) | UnusedArgument(_, _, _) | UnusedImport(_, _) => {
+                    delayed_errors.push(problem);
+                    continue;
+                }
+                _ => {
+                    let report = can_problem(&alloc, module_path.clone(), problem);
+                    let mut buf = String::new();
+
+                    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+                    lines.push(buf);
+                }
+            }
+        }
+
+        for problem in type_problems {
+            let report = type_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -124,31 +125,19 @@ pub fn helper<'a>(
             lines.push(buf);
         }
 
-        for problem in type_problems.into_iter() {
-            let report = type_problem(&alloc, path.clone(), problem);
+        for problem in mono_problems {
+            let report = mono_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
             lines.push(buf);
         }
+    }
 
-        for problem in mono_problems.into_iter() {
-            let report = mono_problem(&alloc, path.clone(), problem);
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            lines.push(buf);
-        }
-
-        println!("{}", (&lines).join("\n"));
-
-        // we want to continue onward only for canonical problems at the moment,
-        // to check that they codegen into runtime exceptions
-        if fatal_error_count > 0 {
-            assert_eq!(0, 1, "problems occured");
-        }
+    if !lines.is_empty() {
+        println!("{}", lines.join("\n"));
+        assert_eq!(0, 1, "Mistakes were made");
     }
 
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
@@ -261,7 +250,7 @@ pub fn helper<'a>(
     let lib = module_to_dylib(&env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
-    (main_fn_name, errors, lib)
+    (main_fn_name, delayed_errors, lib)
 }
 
 // TODO this is almost all code duplication with assert_llvm_evals_to

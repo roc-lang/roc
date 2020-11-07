@@ -1,8 +1,8 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
-    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe,
-    list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, list_walk_right,
+    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
+    list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
+    list_reverse, list_set, list_single, list_walk_right,
 };
 use crate::llvm::build_str::{str_concat, str_len, str_split, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
@@ -34,7 +34,7 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
-use roc_mono::layout::{Builtin, Layout, MemoryMode};
+use roc_mono::layout::{Builtin, ClosureLayout, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -1842,6 +1842,286 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
     builder.build_alloca(basic_type, name)
 }
 
+fn expose_function_to_host<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+) {
+    use inkwell::types::BasicType;
+
+    let roc_wrapper_function = make_exception_catching_wrapper(env, roc_function);
+
+    let roc_function_type = roc_wrapper_function.get_type();
+
+    // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}`
+    let mut argument_types = roc_function_type.get_param_types();
+    let return_type = roc_function_type.get_return_type().unwrap();
+    let output_type = return_type.ptr_type(AddressSpace::Generic);
+    argument_types.push(output_type.into());
+
+    let c_function_type = env.context.void_type().fn_type(&argument_types, false);
+    let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
+
+    let c_function = env.module.add_function(
+        c_function_name.as_str(),
+        c_function_type,
+        Some(Linkage::External),
+    );
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+
+    builder.position_at_end(entry);
+
+    // drop the final argument, which is the pointer we write the result into
+    let args = c_function.get_params();
+    let output_arg_index = args.len() - 1;
+    let args = &args[..args.len() - 1];
+
+    debug_assert_eq!(args.len(), roc_function.get_params().len());
+    debug_assert_eq!(args.len(), roc_wrapper_function.get_params().len());
+
+    let call_wrapped = builder.build_call(roc_wrapper_function, args, "call_wrapped_function");
+    call_wrapped.set_call_convention(FAST_CALL_CONV);
+
+    let call_result = call_wrapped.try_as_basic_value().left().unwrap();
+
+    let output_arg = c_function
+        .get_nth_param(output_arg_index as u32)
+        .unwrap()
+        .into_pointer_value();
+
+    builder.build_store(output_arg, call_result);
+
+    builder.build_return(None);
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_name: String = format!("{}_size", roc_function.get_name().to_str().unwrap());
+
+    let size_function = env.module.add_function(
+        size_function_name.as_str(),
+        size_function_type,
+        Some(Linkage::External),
+    );
+
+    let entry = context.append_basic_block(size_function, "entry");
+
+    builder.position_at_end(entry);
+
+    let size: BasicValueEnum = return_type.size_of().unwrap().into();
+    builder.build_return(Some(&size));
+}
+
+fn invoke_and_catch<'a, 'ctx, 'env, F, T>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    function: F,
+    arguments: &[BasicValueEnum<'ctx>],
+    return_type: T,
+) -> BasicValueEnum<'ctx>
+where
+    F: Into<either::Either<FunctionValue<'ctx>, PointerValue<'ctx>>>,
+    T: inkwell::types::BasicType<'ctx>,
+{
+    let context = env.context;
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let call_result_type = context.struct_type(
+        &[context.i64_type().into(), return_type.as_basic_type_enum()],
+        false,
+    );
+
+    let then_block = context.append_basic_block(parent, "then_block");
+    let catch_block = context.append_basic_block(parent, "catch_block");
+    let cont_block = context.append_basic_block(parent, "cont_block");
+
+    let result_alloca = builder.build_alloca(call_result_type, "result");
+
+    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
+    let call_result = {
+        let call = builder.build_invoke(
+            function,
+            &arguments,
+            then_block,
+            catch_block,
+            "call_roc_function",
+        );
+        call.set_call_convention(FAST_CALL_CONV);
+        call.try_as_basic_value().left().unwrap()
+    };
+
+    // exception handling
+    {
+        builder.position_at_end(catch_block);
+
+        let landing_pad_type = {
+            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
+            let selector_value = context.i32_type().into();
+
+            context.struct_type(&[exception_ptr, selector_value], false)
+        };
+
+        let info = builder
+            .build_catch_all_landing_pad(
+                &landing_pad_type,
+                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+                context.i8_type().ptr_type(AddressSpace::Generic),
+                "main_landing_pad",
+            )
+            .into_struct_value();
+
+        let exception_ptr = builder
+            .build_extract_value(info, 0, "exception_ptr")
+            .unwrap();
+
+        let thrown = cxa_begin_catch(env, exception_ptr);
+
+        let error_msg = {
+            let exception_type = u8_ptr;
+            let ptr = builder.build_bitcast(
+                thrown,
+                exception_type.ptr_type(AddressSpace::Generic),
+                "cast",
+            );
+
+            builder.build_load(ptr.into_pointer_value(), "error_msg")
+        };
+
+        let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
+
+        let return_value = {
+            let v1 = return_type.const_zero();
+
+            // flag is non-zero, indicating failure
+            let flag = context.i64_type().const_int(1, false);
+
+            let v2 = builder
+                .build_insert_value(v1, flag, 0, "set_error")
+                .unwrap();
+
+            let v3 = builder
+                .build_insert_value(v2, error_msg, 1, "set_exception")
+                .unwrap();
+
+            v3
+        };
+
+        // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
+        let result_alloca_bitcast = builder
+            .build_bitcast(
+                result_alloca,
+                return_type.ptr_type(AddressSpace::Generic),
+                "result_alloca_bitcast",
+            )
+            .into_pointer_value();
+
+        // store our return value
+        builder.build_store(result_alloca_bitcast, return_value);
+
+        cxa_end_catch(env);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    {
+        builder.position_at_end(then_block);
+
+        let return_value = {
+            let v1 = call_result_type.const_zero();
+
+            let v2 = builder
+                .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
+                .unwrap();
+            let v3 = builder
+                .build_insert_value(v2, call_result, 1, "set_call_result")
+                .unwrap();
+
+            v3
+        };
+
+        let ptr = builder.build_bitcast(
+            result_alloca,
+            call_result_type.ptr_type(AddressSpace::Generic),
+            "name",
+        );
+        builder.build_store(ptr.into_pointer_value(), return_value);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    builder.position_at_end(cont_block);
+
+    let result = builder.build_load(result_alloca, "result");
+
+    // MUST set the personality at the very end;
+    // doing it earlier can cause the personality to be ignored
+    let personality_func = get_gxx_personality_v0(env);
+    parent.set_personality_function(personality_func);
+
+    result
+}
+
+fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+) -> FunctionValue<'ctx> {
+    // build the C calling convention wrapper
+
+    let context = env.context;
+    let builder = env.builder;
+
+    let roc_function_type = roc_function.get_type();
+    let argument_types = roc_function_type.get_param_types();
+
+    let wrapper_function_name = format!("{}_catcher", roc_function.get_name().to_str().unwrap());
+
+    let wrapper_return_type = context.struct_type(
+        &[
+            context.i64_type().into(),
+            roc_function_type.get_return_type().unwrap(),
+        ],
+        false,
+    );
+
+    let wrapper_function_type = wrapper_return_type.fn_type(&argument_types, false);
+
+    // Add main to the module.
+    let wrapper_function =
+        env.module
+            .add_function(&wrapper_function_name, wrapper_function_type, None);
+
+    // our exposed main function adheres to the C calling convention
+    wrapper_function.set_call_conventions(FAST_CALL_CONV);
+
+    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
+    let arguments = wrapper_function.get_params();
+
+    let basic_block = context.append_basic_block(wrapper_function, "entry");
+    builder.position_at_end(basic_block);
+
+    let result = invoke_and_catch(
+        env,
+        wrapper_function,
+        roc_function,
+        &arguments,
+        roc_function_type.get_return_type().unwrap(),
+    );
+
+    builder.build_return(Some(&result));
+
+    // MUST set the personality at the very end;
+    // doing it earlier can cause the personality to be ignored
+    let personality_func = get_gxx_personality_v0(env);
+    wrapper_function.set_personality_function(personality_func);
+
+    wrapper_function
+}
+
 pub fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1852,6 +2132,32 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let args = proc.args;
     let arena = env.arena;
     let context = &env.context;
+
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    use roc_mono::ir::HostExposedLayouts;
+    match &proc.host_exposed_layouts {
+        HostExposedLayouts::NotHostExposed => {}
+        HostExposedLayouts::HostExposed { rigids: _, aliases } => {
+            for (name, layout) in aliases {
+                match layout {
+                    Layout::Closure(arguments, closure, result) => {
+                        build_closure_caller(env, &fn_name, *name, arguments, closure, result)
+                    }
+                    Layout::FunctionPointer(_arguments, _result) => {
+                        // TODO should this be considered a closure of size 0?
+                        // or do we let the host call it directly?
+                        // then we have no RocCallResult wrapping though
+                    }
+                    _ => {
+                        // TODO
+                    }
+                }
+            }
+        }
+    }
 
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
@@ -1864,24 +2170,197 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
 
-    let fn_name = layout_ids
-        .get(symbol, layout)
-        .to_symbol_string(symbol, &env.interns);
     let fn_val = env
         .module
         .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
 
+    fn_val.set_call_conventions(FAST_CALL_CONV);
+
     if env.exposed_to_host.contains(&symbol) {
-        // If this is an external-facing function, it'll use the C calling convention
-        // and external linkage.
-        fn_val.set_linkage(Linkage::External);
-        fn_val.set_call_conventions(C_CALL_CONV);
-    } else {
-        // If it's an internal-only function, it should use the fast calling conention.
-        fn_val.set_call_conventions(FAST_CALL_CONV);
+        expose_function_to_host(env, fn_val);
     }
 
     fn_val
+}
+
+pub fn build_closure_caller<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    def_name: &str,
+    alias_symbol: Symbol,
+    arguments: &[Layout<'a>],
+    closure: &ClosureLayout<'a>,
+    result: &Layout<'a>,
+) {
+    use inkwell::types::BasicType;
+
+    let arena = env.arena;
+    let context = &env.context;
+    let builder = env.builder;
+
+    // STEP 1: build function header
+
+    let function_name = format!(
+        "{}_{}_caller",
+        def_name,
+        alias_symbol.ident_string(&env.interns)
+    );
+
+    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
+
+    for layout in arguments {
+        argument_types.push(basic_type_from_layout(
+            arena,
+            context,
+            layout,
+            env.ptr_bytes,
+        ));
+    }
+
+    let function_pointer_type = {
+        let function_layout =
+            ClosureLayout::extend_function_layout(arena, arguments, closure.clone(), result);
+
+        // this is already a (function) pointer type
+        basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
+    };
+    argument_types.push(function_pointer_type);
+
+    let closure_argument_type = {
+        let basic_type = basic_type_from_layout(
+            arena,
+            context,
+            &closure.as_block_of_memory_layout(),
+            env.ptr_bytes,
+        );
+
+        basic_type.ptr_type(AddressSpace::Generic)
+    };
+    argument_types.push(closure_argument_type.into());
+
+    let result_type = basic_type_from_layout(arena, context, result, env.ptr_bytes);
+
+    let roc_call_result_type =
+        context.struct_type(&[context.i64_type().into(), result_type], false);
+
+    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
+    argument_types.push(output_type.into());
+
+    let function_type = context.void_type().fn_type(&argument_types, false);
+
+    let function_value = env.module.add_function(
+        function_name.as_str(),
+        function_type,
+        Some(Linkage::External),
+    );
+
+    function_value.set_call_conventions(C_CALL_CONV);
+
+    // STEP 2: build function body
+
+    let entry = context.append_basic_block(function_value, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut parameters = function_value.get_params();
+    let output = parameters.pop().unwrap().into_pointer_value();
+    let closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
+    let function_ptr = parameters.pop().unwrap().into_pointer_value();
+
+    let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
+
+    let mut arguments = parameters;
+    arguments.push(closure_data);
+
+    let result = invoke_and_catch(env, function_value, function_ptr, &arguments, result_type);
+
+    builder.build_store(output, result);
+
+    builder.build_return(None);
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_name: String = format!(
+        "{}_{}_size",
+        def_name,
+        alias_symbol.ident_string(&env.interns)
+    );
+
+    let size_function = env.module.add_function(
+        size_function_name.as_str(),
+        size_function_type,
+        Some(Linkage::External),
+    );
+
+    let entry = context.append_basic_block(size_function, "entry");
+
+    builder.position_at_end(entry);
+
+    let size: BasicValueEnum = roc_call_result_type.size_of().unwrap().into();
+    builder.build_return(Some(&size));
+}
+
+#[allow(dead_code)]
+pub fn build_closure_caller_old<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    closure_function: FunctionValue<'ctx>,
+) {
+    let context = env.context;
+    let builder = env.builder;
+    // asuming the closure has type `a, b, closure_data -> c`
+    // change that into `a, b, *const closure_data, *mut output -> ()`
+
+    // a function `a, b, closure_data -> RocCallResult<c>`
+    let wrapped_function = make_exception_catching_wrapper(env, closure_function);
+
+    let closure_function_type = closure_function.get_type();
+    let wrapped_function_type = wrapped_function.get_type();
+
+    let mut arguments = closure_function_type.get_param_types();
+
+    // require that the closure data is passed by reference
+    let closure_data_type = arguments.pop().unwrap();
+    let closure_data_ptr_type = get_ptr_type(&closure_data_type, AddressSpace::Generic);
+    arguments.push(closure_data_ptr_type.into());
+
+    // require that a pointer is passed in to write the result into
+    let output_type = get_ptr_type(
+        &wrapped_function_type.get_return_type().unwrap(),
+        AddressSpace::Generic,
+    );
+    arguments.push(output_type.into());
+
+    let caller_function_type = env.context.void_type().fn_type(&arguments, false);
+    let caller_function_name: String =
+        format!("{}_caller", closure_function.get_name().to_str().unwrap());
+
+    let caller_function = env.module.add_function(
+        caller_function_name.as_str(),
+        caller_function_type,
+        Some(Linkage::External),
+    );
+
+    caller_function.set_call_conventions(C_CALL_CONV);
+
+    let entry = context.append_basic_block(caller_function, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut parameters = caller_function.get_params();
+    let output = parameters.pop().unwrap();
+    let closure_data_ptr = parameters.pop().unwrap();
+
+    let closure_data =
+        builder.build_load(closure_data_ptr.into_pointer_value(), "load_closure_data");
+    parameters.push(closure_data);
+
+    let call = builder.build_call(wrapped_function, &parameters, "call_wrapped_function");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    let result = call.try_as_basic_value().left().unwrap();
+
+    builder.build_store(output.into_pointer_value(), result);
+
+    builder.build_return(None);
 }
 
 pub fn build_proc<'a, 'ctx, 'env>(
@@ -1907,6 +2386,10 @@ pub fn build_proc<'a, 'ctx, 'env>(
         // the closure argument (if any) comes in as an opaque sequence of bytes.
         // we need to cast that to the specific closure data layout that the body expects
         let value = if let Symbol::ARG_CLOSURE = *arg_symbol {
+            // generate a caller function (to be used by the host)
+            // build_closure_caller(env, fn_val);
+            // builder.position_at_end(entry);
+
             // blindly trust that there is a layout available for the closure data
             let layout = proc.closure_data_layout.clone().unwrap();
 
@@ -1971,8 +2454,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             panic!("Unrecognized builtin function: {:?}", fn_name)
         } else {
             panic!(
-                "Unrecognized non-builtin function: {:?} {:?}",
-                fn_name, layout
+                "Unrecognized non-builtin function: {:?} (symbol: {:?}, layout: {:?})",
+                fn_name, symbol, layout
             )
         }
     });
@@ -2125,6 +2608,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             let inplace = get_inplace_from_layout(layout);
 
             list_keep_if(env, inplace, parent, func, func_layout, list, list_layout)
+        }
+        ListContains => {
+            // List.contains : List elem, elem -> Bool
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_contains(env, parent, elem, elem_layout, list, list_layout)
         }
         ListWalkRight => {
             // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
@@ -2920,7 +3413,7 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
 }
 
 fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {
-    let name = "__cxa_rethrow";
+    let name = "__gxx_personality_v0";
 
     let module = env.module;
     let context = env.context;

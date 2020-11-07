@@ -17,3 +17,7 @@ roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_collections = { path = "../compiler/collections" }
 bumpalo = { version = "3.2", features = ["collections"] }
+
+[dev-dependencies]
+pretty_assertions = "0.5.1"
+maplit = "1.0.1"
