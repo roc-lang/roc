@@ -417,14 +417,23 @@ impl<'a> Procs<'a> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_self_recursive = false;
 
+        let layout = layout_cache
+            .from_var(env.arena, annotation, env.subs)
+            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+        if let Some(existing) = self.partial_procs.get(&symbol) {
+            // only assert that we're really adding the same thing
+            debug_assert_eq!(annotation, existing.annotation);
+            debug_assert_eq!(captured_symbols, existing.captured_symbols);
+            debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
+            return Ok(layout);
+        }
+
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
-                let layout = layout_cache
-                    .from_var(env.arena, annotation, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
                 let tuple = (symbol, layout);
                 let already_specialized = self.specialized.contains_key(&tuple);
@@ -443,8 +452,6 @@ impl<'a> Procs<'a> {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout.clone(), pending);
-
-                            debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! The same PartialProc should never be added twice", symbol);
 
                             self.partial_procs.insert(
                                 symbol,
