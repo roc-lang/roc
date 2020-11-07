@@ -276,7 +276,7 @@ test "strSplitInPlace: three pieces" {
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
-comptime { @export(countSegments, .{ .name = str_namespace ++ ".count_segements", .linkage = .Strong  }); }
+comptime { @export(countSegments, .{ .name = str_namespace ++ ".count_segments", .linkage = .Strong  }); }
 fn countSegments(
     str_bytes_ptrs: [*]u8,
     str_len: usize,
