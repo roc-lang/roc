@@ -55,6 +55,8 @@ let
       pkgs.rust-analyzer
       # (import ./nix/zls.nix { inherit pkgs zig; })
       pkgs.ccls
+      # shaderc for compiling GLSL shaders to SPIR-V
+      pkgs.shaderc
     ];
 in pkgs.mkShell {
   buildInputs = inputs ++ darwin-frameworks;
