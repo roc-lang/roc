@@ -2,5 +2,5 @@ platform folkertdev/foo
     provides [ mainForHost ]
     requires [ main ]
     imports []
-    effects
+    effects Effect
         { putChar : Int -> Effect {}, putLine : Str -> Effect {} }

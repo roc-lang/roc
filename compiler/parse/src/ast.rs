@@ -54,7 +54,7 @@ pub struct PlatformHeader<'a> {
     pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
     pub requires: Vec<'a, Loc<ExposesEntry<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-    pub effects: Vec<'a, Loc<EffectsEntry<'a>>>,
+    pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub after_platform_keyword: &'a [CommentOrNewline<'a>],
@@ -64,8 +64,15 @@ pub struct PlatformHeader<'a> {
     pub after_requires: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
     pub after_imports: &'a [CommentOrNewline<'a>],
-    pub before_effects: &'a [CommentOrNewline<'a>],
-    pub after_effects: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Effects<'a> {
+    pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
+    pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
+    pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
+    pub type_name: &'a str,
+    pub entries: Vec<'a, Loc<EffectsEntry<'a>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

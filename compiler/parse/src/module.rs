@@ -1,11 +1,11 @@
 use crate::ast::{
-    AppHeader, Attempting, CommentOrNewline, Def, EffectsEntry, ExposesEntry, ImportsEntry,
-    InterfaceHeader, Module, PlatformHeader,
+    AppHeader, Attempting, CommentOrNewline, Def, Effects, EffectsEntry, ExposesEntry,
+    ImportsEntry, InterfaceHeader, Module, PlatformHeader,
 };
 use crate::blankspace::{space0, space0_around, space0_before, space1};
 use crate::expr::def;
 use crate::header::{ModuleName, PackageName};
-use crate::ident::{lowercase_ident, unqualified_ident};
+use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::{
     self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
     unexpected_eof, ParseResult, Parser, State,
@@ -216,10 +216,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
                 ((before_provides, after_provides), provides),
                 (
                     ((before_requires, after_requires), requires),
-                    (
-                        ((before_imports, after_imports), imports),
-                        ((before_effects, after_effects), effects),
-                    ),
+                    (((before_imports, after_imports), imports), effects),
                 ),
             ),
         )| {
@@ -236,8 +233,6 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
                 after_requires,
                 before_imports,
                 after_imports,
-                before_effects,
-                after_effects,
             }
         },
     )
@@ -329,23 +324,33 @@ fn imports<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn effects<'a>() -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<EffectsEntry<'a>>>,
-    ),
-> {
-    and!(
-        and!(skip_second!(space1(1), ascii_string("effects")), space1(1)),
-        collection!(
+fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
+    move |arena, state| {
+        let (spaces_before_effects_keyword, state) =
+            skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
+        let (spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
+        let ((type_name, spaces_after_type_name), state) =
+            and!(uppercase_ident(), space1(0)).parse(arena, state)?;
+        let (entries, state) = collection!(
             ascii_char('{'),
             loc!(effects_entry()),
             ascii_char(','),
             ascii_char('}'),
             1
         )
-    )
+        .parse(arena, state)?;
+
+        Ok((
+            Effects {
+                spaces_before_effects_keyword,
+                spaces_after_effects_keyword,
+                spaces_after_type_name,
+                type_name,
+                entries,
+            },
+            state,
+        ))
+    }
 }
 
 #[inline(always)]

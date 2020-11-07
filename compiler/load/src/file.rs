@@ -2483,11 +2483,10 @@ fn fabricate_effects_module<'a>(
 
     let module_id: ModuleId;
 
-    let name = "Effect";
-    let declared_name: ModuleName = name.into();
-
     let PlatformHeader { effects, .. } = header;
-    let effect_entries = unpack_exposes_entries(arena, &effects);
+    let effect_entries = unpack_exposes_entries(arena, &effects.entries);
+    let name = effects.type_name;
+    let declared_name: ModuleName = name.into();
 
     let hardcoded_exposed_functions = vec![name, "after"];
 
@@ -2672,7 +2671,7 @@ fn fabricate_effects_module<'a>(
 
     // Should a effect module ever have a ModuleDocumentation?
     let module_docs = ModuleDocumentation {
-        name: String::from("Effect"),
+        name: String::from(name),
         docs: String::from("idk fix this later"),
         entries: Vec::new(),
     };
