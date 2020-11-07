@@ -2345,18 +2345,20 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = &[Newline, Newline];
         let def = Def::Body(
-            arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
-            arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
+            arena.alloc(Located::new(6, 6, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(6, 6, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
+        let loc_def = &*arena.alloc(Located::new(6, 6, 0, 1, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
-        let loc_ret = Located::new(6, 6, 0, 2, ret);
+        let loc_ret = Located::new(8, 8, 0, 2, ret);
         let reset_indentation = &[
             DocComment("first line of docs"),
             DocComment("    second line"),
             DocComment(" third line"),
             DocComment("fourth line"),
+            DocComment(""),
+            DocComment("sixth line after doc new line"),
         ];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(defs, arena.alloc(loc_ret))),
@@ -2370,6 +2372,8 @@ mod test_parse {
                     ##     second line
                     ##  third line
                     ## fourth line
+                    ##
+                    ## sixth line after doc new line
                     x = 5
 
                     42
