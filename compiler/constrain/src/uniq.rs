@@ -961,6 +961,60 @@ pub fn constrain_expr(
                 ]),
             )
         }
+        ForeignCall {
+            foreign_symbol,
+            args,
+            ret_var,
+        } => {
+            // This is a modified version of what we do for function calls.
+
+            let ret_type = Variable(*ret_var);
+            let mut vars = Vec::with_capacity(1 + args.len());
+
+            vars.push(*ret_var);
+
+            // Canonicalize the function expression and its arguments
+
+            let mut arg_types = Vec::with_capacity(args.len());
+            let mut arg_cons = Vec::with_capacity(args.len());
+
+            for (index, (arg_var, arg_expr)) in args.iter().enumerate() {
+                let arg_type = Variable(*arg_var);
+
+                let reason = Reason::ForeignCallArg {
+                    foreign_symbol: foreign_symbol.clone(),
+                    arg_index: Index::zero_based(index),
+                };
+
+                let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
+                let arg_con = constrain_expr(
+                    env,
+                    var_store,
+                    var_usage,
+                    applied_usage_constraint,
+                    Region::zero(),
+                    arg_expr,
+                    expected_arg,
+                );
+
+                vars.push(*arg_var);
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+            }
+
+            let expected_uniq_type = var_store.fresh();
+            vars.push(expected_uniq_type);
+
+            let category = Category::ForeignCall;
+
+            exists(
+                vars,
+                And(vec![
+                    And(arg_cons),
+                    Eq(ret_type, expected, category, region),
+                ]),
+            )
+        }
         LetRec(defs, loc_ret, var) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique

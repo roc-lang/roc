@@ -810,6 +810,38 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Literal(literal) => build_exp_literal(env, literal),
         RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
+        ForeignCall {
+            foreign_symbol,
+            arguments,
+            ret_layout,
+        } => {
+            let mut arg_vals: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(arguments.len(), env.arena);
+
+            let mut arg_types = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for arg in arguments.iter() {
+                let (value, layout) = load_symbol_and_layout(env, scope, arg);
+                arg_vals.push(value);
+                let arg_type =
+                    basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+                arg_types.push(arg_type);
+            }
+
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+            let function_type = get_fn_type(&ret_type, &arg_types);
+            let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
+
+            let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+            // this is a foreign function, use c calling convention
+            call.set_call_convention(C_CALL_CONV);
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+        }
         FunctionCall {
             call_type: ByName(name),
             full_layout,
@@ -1116,9 +1148,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env.arena.alloc(format!("closure_field_access_{}_", index)),
                     )
                     .unwrap(),
-                (other, layout) => {
-                    unreachable!("can only index into struct layout {:?} {:?}", other, layout)
-                }
+                (other, layout) => unreachable!(
+                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+                    other, layout, index
+                ),
             }
         }
 
@@ -3410,6 +3443,28 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
 
     call.set_call_convention(C_CALL_CONV);
     call.try_as_basic_value().left().unwrap()
+}
+
+fn get_foreign_symbol<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    foreign_symbol: roc_module::ident::ForeignSymbol,
+    function_type: FunctionType<'ctx>,
+) -> FunctionValue<'ctx> {
+    let module = env.module;
+
+    match module.get_function(foreign_symbol.as_str()) {
+        Some(gvalue) => gvalue,
+        None => {
+            let foreign_function = module.add_function(
+                foreign_symbol.as_str(),
+                function_type,
+                Some(Linkage::External),
+            );
+            foreign_function.set_call_conventions(C_CALL_CONV);
+
+            foreign_function
+        }
+    }
 }
 
 fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {

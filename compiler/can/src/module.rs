@@ -445,7 +445,7 @@ fn fix_values_captured_in_closure_expr(
                 fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
             }
         }
-        RunLowLevel { args, .. } => {
+        RunLowLevel { args, .. } | ForeignCall { args, .. } => {
             for (_, arg) in args.iter_mut() {
                 fix_values_captured_in_closure_expr(arg, no_capture_symbols);
             }

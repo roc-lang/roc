@@ -11,7 +11,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use inlinable_string::InlinableString;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -95,6 +95,11 @@ pub enum Expr {
     ),
     RunLowLevel {
         op: LowLevel,
+        args: Vec<(Variable, Expr)>,
+        ret_var: Variable,
+    },
+    ForeignCall {
+        foreign_symbol: ForeignSymbol,
         args: Vec<(Variable, Expr)>,
         ret_var: Variable,
     },
@@ -1170,7 +1175,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Accessor { .. }
         | other @ Update { .. }
         | other @ Var(_)
-        | other @ RunLowLevel { .. } => other,
+        | other @ RunLowLevel { .. }
+        | other @ ForeignCall { .. } => other,
 
         List {
             list_var,
