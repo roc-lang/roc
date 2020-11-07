@@ -2,7 +2,7 @@ app Main provides [ main ] imports [ Effect ]
 
 main : Effect.Effect {} as Fx
 main =
-    Effect.putLine "Hello"
-        |> Effect.after \{} -> Effect.putChar 87
-        # |> Effect.after \{} -> Effect.putLine "orld"
+    Effect.putLine "Write a thing!"
+        |> Effect.after (\{} -> Effect.getLine 3)
+        |> Effect.after (\line -> Effect.putLine line)
 

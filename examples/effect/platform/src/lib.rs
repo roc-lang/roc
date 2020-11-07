@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use roc_std::alloca;
 use roc_std::RocCallResult;
 use roc_std::RocStr;
@@ -33,6 +35,16 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
     println!("{}", string);
 
     ()
+}
+
+#[no_mangle]
+pub fn roc_fx_getLine(_: i64) -> RocStr {
+    use std::io::{self, BufRead};
+
+    let stdin = io::stdin();
+    let line1 = stdin.lock().lines().next().unwrap().unwrap();
+
+    RocStr::from_slice_with_capacity(line1.as_bytes(), line1.len())
 }
 
 unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const u8) -> i64 {
