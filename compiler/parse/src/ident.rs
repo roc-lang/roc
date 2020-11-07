@@ -71,46 +71,27 @@ pub fn parse_ident<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
-    let part_buf; // The current "part" (parts are dot-separated.)
-    let mut package_part: Option<String<'a>>;
-    let mut capitalized_parts: Vec<String<'a>> = Vec::new_in(arena);
-    let mut postcapitalized_parts: Vec<String<'a>> = Vec::new_in(arena);
+    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
+    let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
+    let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
+    let mut is_capitalized;
     let is_accessor_fn;
-    let mut is_private_tag;
+    let mut is_private_tag = false;
 
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
     match peek_utf8_char(&state) {
         Ok((first_ch, bytes_parsed)) => {
             if first_ch.is_alphabetic() {
-                if first_ch.is_uppercase() {
-                    // We don't have a package part.
-                    package_part = None;
-
-                    capitalized_parts.push(String::new_in(arena));
-
-                    part_buf = capitalized_parts.get_mut(0).unwrap();
-                } else {
-                    // Assume this is a package part until we are given a
-                    // reason to believe otherwise.
-                    package_part = Some(String::new_in(arena));
-
-                    part_buf = package_part.iter_mut().next().unwrap();
-                }
-
                 part_buf.push(first_ch);
 
+                is_capitalized = first_ch.is_uppercase();
                 is_accessor_fn = false;
-                is_private_tag = false;
 
                 state = state.advance_without_indenting(bytes_parsed)?;
             } else if first_ch == '.' {
+                is_capitalized = false;
                 is_accessor_fn = true;
-                is_private_tag = false;
-
-                // We definitely don't have a package part, because
-                // accessor functions can't have those.
-                package_part = None;
 
                 state = state.advance_without_indenting(bytes_parsed)?;
             } else if first_ch == '@' {
@@ -120,16 +101,13 @@ pub fn parse_ident<'a>(
                 match peek_utf8_char(&state) {
                     Ok((next_ch, next_bytes_parsed)) => {
                         if next_ch.is_uppercase() {
-                            // We definitely don't have a package part, because
-                            // private tags can't have those.
-                            package_part = None;
-
                             state = state.advance_without_indenting(next_bytes_parsed)?;
 
                             part_buf.push('@');
                             part_buf.push(next_ch);
 
                             is_private_tag = true;
+                            is_capitalized = true;
                             is_accessor_fn = false;
                         } else {
                             return Err(unexpected(
@@ -151,34 +129,15 @@ pub fn parse_ident<'a>(
     while !state.bytes.is_empty() {
         match peek_utf8_char(&state) {
             Ok((ch, bytes_parsed)) => {
-                // After the first character in the part, only these are allowed:
+                // After the first character, only these are allowed:
                 //
                 // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
                 // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
                 // * A dot ('.')
                 if ch.is_alphabetic() {
                     if part_buf.is_empty() {
-                        // This could be because either this is an accessor function,
-                        // or because we just completed the previous part (meaning
-                        // we hit a dot) and are beginning to parse the next part.
-                        //
                         // Capitalization is determined by the first character in the part.
-                        if ch.is_uppercase() {
-                            // We don't have a package part.
-                            package_part = None;
-
-                            capitalized_parts.push(String::new_in(arena));
-
-                            part_buf = capitalized_parts.get_mut(0).unwrap();
-                        } else {
-                            // Assume this is a package part until we are given a
-                            // reason to believe otherwise.
-                            package_part = Some(String::new_in(arena));
-
-                            part_buf = package_part.iter_mut().next().unwrap();
-                        }
-
-                        part_buf.push(first_ch);
+                        is_capitalized = ch.is_uppercase();
                     }
 
                     part_buf.push(ch);
@@ -189,9 +148,8 @@ pub fn parse_ident<'a>(
                             Some(ch),
                             arena,
                             state,
-                            package_part,
                             capitalized_parts,
-                            postcapitalized_parts,
+                            noncapitalized_parts,
                         );
                     }
 
@@ -200,23 +158,21 @@ pub fn parse_ident<'a>(
                     // There are two posssible errors here:
                     //
                     // 1. Having two consecutive dots is an error.
-                    // 2. Having capitalized parts after postcapitalized (e.g. `foo.Bar`) is an error.
-                    if part_buf.is_empty() || (is_capitalized && !postcapitalized_parts.is_empty())
-                    {
+                    // 2. Having capitalized parts after noncapitalized (e.g. `foo.Bar`) is an error.
+                    if part_buf.is_empty() || (is_capitalized && !noncapitalized_parts.is_empty()) {
                         return malformed(
                             Some(ch),
                             arena,
                             state,
-                            package_part,
                             capitalized_parts,
-                            postcapitalized_parts,
+                            noncapitalized_parts,
                         );
                     }
 
                     if is_capitalized {
-                        capitalized_parts.push(part_buf);
+                        capitalized_parts.push(part_buf.into_bump_str());
                     } else {
-                        postcapitalized_parts.push(part_buf);
+                        noncapitalized_parts.push(part_buf.into_bump_str());
                     }
 
                     // Now that we've recorded the contents of the current buffer, reset it.
@@ -244,9 +200,8 @@ pub fn parse_ident<'a>(
             Some('.'),
             arena,
             state,
-            package_part,
             capitalized_parts,
-            postcapitalized_parts,
+            noncapitalized_parts,
         );
     }
 
@@ -254,27 +209,20 @@ pub fn parse_ident<'a>(
     if is_capitalized {
         capitalized_parts.push(part_buf.into_bump_str());
     } else {
-        postcapitalized_parts.push(part_buf.into_bump_str());
+        noncapitalized_parts.push(part_buf.into_bump_str());
     }
 
     let answer = if is_accessor_fn {
         // Handle accessor functions first because they have the strictest requirements.
         // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
-        if capitalized_parts.is_empty() && postcapitalized_parts.len() == 1 && !is_private_tag {
-            let value = postcapitalized_parts.iter().next().unwrap();
+        if capitalized_parts.is_empty() && noncapitalized_parts.len() == 1 && !is_private_tag {
+            let value = noncapitalized_parts.iter().next().unwrap();
 
             Ident::AccessorFunction(value)
         } else {
-            return malformed(
-                None,
-                arena,
-                state,
-                package_part,
-                capitalized_parts,
-                postcapitalized_parts,
-            );
+            return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
         }
-    } else if postcapitalized_parts.is_empty() {
+    } else if noncapitalized_parts.is_empty() {
         // We have capitalized parts only, so this must be a tag.
         match capitalized_parts.first() {
             Some(value) => {
@@ -286,18 +234,11 @@ pub fn parse_ident<'a>(
                     }
                 } else {
                     // This is a qualified tag, which is not allowed!
-                    return malformed(
-                        None,
-                        arena,
-                        state,
-                        package_part,
-                        capitalized_parts,
-                        postcapitalized_parts,
-                    );
+                    return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
                 }
             }
             None => {
-                // We had neither capitalized nor postcapitalized parts,
+                // We had neither capitalized nor noncapitalized parts,
                 // yet we made it this far. The only explanation is that this was
                 // a stray '.' drifting through the cosmos.
                 return Err(unexpected(1, state, Attempting::Identifier));
@@ -305,19 +246,12 @@ pub fn parse_ident<'a>(
         }
     } else if is_private_tag {
         // This is qualified field access with an '@' in front, which does not make sense!
-        return malformed(
-            None,
-            arena,
-            state,
-            package_part,
-            capitalized_parts,
-            postcapitalized_parts,
-        );
+        return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
     } else {
-        // We have multiple postcapitalized parts, so this must be field access.
+        // We have multiple noncapitalized parts, so this must be field access.
         Ident::Access {
             module_name: join_module_parts(arena, capitalized_parts.into_bump_slice()),
-            parts: postcapitalized_parts.into_bump_slice(),
+            parts: noncapitalized_parts.into_bump_slice(),
         }
     };
 
@@ -328,34 +262,16 @@ fn malformed<'a>(
     opt_bad_char: Option<char>,
     arena: &'a Bump,
     mut state: State<'a>,
-    package_part: Option<String<'a>>,
-    capitalized_parts: Vec<String<'a>>,
-    postcapitalized_parts: Vec<String<'a>>,
+    capitalized_parts: Vec<&'a str>,
+    noncapitalized_parts: Vec<&'a str>,
 ) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
     // Reconstruct the original string that we've been parsing.
     let mut full_string = String::new_in(arena);
 
-    full_string.push_str(
-        arena_join(
-            arena,
-            &mut capitalized_parts
-                .into_iter()
-                .map(|part| part.into_bump_str()),
-            ".",
-        )
-        .into_bump_str(),
-    );
-
-    full_string.push_str(
-        arena_join(
-            arena,
-            &mut postcapitalized_parts
-                .into_iter()
-                .map(|part| part.into_bump_str()),
-            ".",
-        )
-        .into_bump_str(),
-    );
+    full_string
+        .push_str(arena_join(arena, &mut capitalized_parts.into_iter(), ".").into_bump_str());
+    full_string
+        .push_str(arena_join(arena, &mut noncapitalized_parts.into_iter(), ".").into_bump_str());
 
     if let Some(bad_char) = opt_bad_char {
         full_string.push(bad_char);
