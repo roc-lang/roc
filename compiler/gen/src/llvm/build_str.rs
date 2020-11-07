@@ -7,6 +7,7 @@ use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
@@ -34,25 +35,45 @@ pub fn str_split<'a, 'ctx, 'env>(
         parent,
         *str_ptr,
         str_wrapper_type,
-        |_, _str_len, _str_smallness| {
+        |_, str_len, _str_smallness| {
             load_str(
                 env,
                 parent,
                 *delimiter_ptr,
                 str_wrapper_type,
-                |_, _delimiter_len, _delimiter_smallness| {
+                |_, delimiter_len, _delimiter_smallness| {
                     let str_ = builder.build_load(*str_ptr, "get_str");
 
                     let delimiter = builder.build_load(*delimiter_ptr, "get_delimiter");
 
-                    let segment_count = call_bitcode_fn(env, &[str_, delimiter], "count_segments_")
-                        .into_int_value();
+                    let segment_count = call_bitcode_fn(
+                        env,
+                        &[
+                            str_,
+                            BasicValueEnum::IntValue(str_len),
+                            delimiter,
+                            BasicValueEnum::IntValue(delimiter_len),
+                        ],
+                        &bitcode::STR_COUNT_SEGMENTS,
+                    );
 
-                    let ret_list_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, segment_count);
+                    let ret_list_ptr =
+                        allocate_list(env, inplace, &CHAR_LAYOUT, segment_count.into_int_value());
 
                     let ret_list = builder.build_load(ret_list_ptr, "get_str_split_ret_list");
 
-                    call_bitcode_fn(env, &[ret_list, str_, delimiter], "str_split_")
+                    call_bitcode_fn(
+                        env,
+                        &[
+                            ret_list,
+                            segment_count,
+                            str_,
+                            BasicValueEnum::IntValue(str_len),
+                            delimiter,
+                            BasicValueEnum::IntValue(delimiter_len),
+                        ],
+                        &bitcode::STR_STR_SPLIT_IN_PLACE,
+                    )
                 },
             )
         },
