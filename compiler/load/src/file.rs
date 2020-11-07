@@ -138,8 +138,7 @@ impl Dependencies {
     pub fn add_platform_module(
         &mut self,
         module_id: ModuleId,
-        // NOTE we assume for now a platform module has no imports
-        _dependencies: &MutSet<ModuleId>,
+        dependencies: &MutSet<ModuleId>,
         goal_phase: Phase,
     ) -> MutSet<(ModuleId, Phase)> {
         // add dependencies for self
@@ -155,12 +154,14 @@ impl Dependencies {
             }
         }
 
-        //        // all the dependencies can be loaded
-        //        for dep in dependencies {
-        //            output.insert((*dep, LoadHeader));
-        //        }
+        let mut output = MutSet::default();
 
-        MutSet::default()
+        // all the dependencies can be loaded
+        for dep in dependencies {
+            output.insert((*dep, Phase::LoadHeader));
+        }
+
+        output
     }
 
     /// Propagate a notification, return (module, phase) pairs that can make progress
