@@ -46,7 +46,7 @@ pub fn rebuild_host(host_input_path: &Path) {
     let host_dest = host_input_path.with_file_name("host.o");
 
     // Compile host.c
-    let env_path = std::env::var("PATH").unwrap_or("".to_string());
+    let env_path = std::env::var("PATH").unwrap_or_else(|_| "".to_string());
     let output = Command::new("clang")
         .env_clear()
         .env("PATH", &env_path)
@@ -169,7 +169,7 @@ fn link_linux(
         }
     };
 
-    let env_path = std::env::var("PATH").unwrap_or("".to_string());
+    let env_path = std::env::var("PATH").unwrap_or_else(|_| "".to_string());
     Ok((
         Command::new("clang++")
             // Don't allow LD_ env vars to affect this
@@ -207,7 +207,7 @@ fn link_macos(
         }
     };
 
-    let env_path = std::env::var("PATH").unwrap_or("".to_string());
+    let env_path = std::env::var("PATH").unwrap_or_else(|_| "".to_string());
     Ok((
         // NOTE: order of arguments to `ld` matters here!
         // The `-l` flags should go after the `.o` arguments
