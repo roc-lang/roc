@@ -22,10 +22,10 @@ macro_rules! tag_union {
         map!(
             and!(
                 collection!(
-                    ascii_char('['),
+                    ascii_char(b'['),
                     loc!(tag_type($min_indent)),
-                    ascii_char(','),
-                    ascii_char(']'),
+                    ascii_char(b','),
+                    ascii_char(b']'),
                     $min_indent
                 ),
                 optional(
@@ -89,7 +89,7 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    map!(loc!(ascii_char('*')), |loc_val: Located<()>| {
+    map!(loc!(ascii_char(b'*')), |loc_val: Located<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
@@ -112,12 +112,12 @@ pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnot
 #[inline(always)]
 fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     between!(
-        ascii_char('('),
+        ascii_char(b'('),
         space0_around(
             move |arena, state| expression(min_indent).parse(arena, state),
             min_indent,
         ),
-        ascii_char(')')
+        ascii_char(b')')
     )
 }
 
@@ -208,7 +208,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
     move |arena, state: State<'a>| {
         let (first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;
         let (rest, state) = zero_or_more!(skip_first!(
-            ascii_char(','),
+            ascii_char(b','),
             space0_around(term(min_indent), min_indent)
         ))
         .parse(arena, state)?;

@@ -19,7 +19,9 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
-use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, PlatformHeader};
+use roc_parse::ast::{
+    self, Attempting, ExposesEntry, ImportsEntry, PlatformHeader, TypeAnnotation, TypedIdent,
+};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
@@ -2434,18 +2436,11 @@ fn build_effect_actual(effect_tag_name: TagName, a_type: Type, var_store: &mut V
 
 fn unpack_exposes_entries<'a>(
     arena: &'a Bump,
-    entries: &'a [Located<roc_parse::ast::EffectsEntry<'a>>],
-) -> bumpalo::collections::Vec<
-    'a,
-    (
-        &'a Located<&'a str>,
-        &'a Located<roc_parse::ast::TypeAnnotation<'a>>,
-    ),
-> {
+    entries: &'a [Located<TypedIdent<'a>>],
+) -> bumpalo::collections::Vec<'a, (&'a Located<&'a str>, &'a Located<TypeAnnotation<'a>>)> {
     use bumpalo::collections::Vec;
-    use roc_parse::ast::EffectsEntry;
 
-    let mut stack: Vec<&EffectsEntry> = Vec::with_capacity_in(entries.len(), arena);
+    let mut stack: Vec<&TypedIdent> = Vec::with_capacity_in(entries.len(), arena);
     let mut output = Vec::with_capacity_in(entries.len(), arena);
 
     for entry in entries.iter() {
@@ -2454,10 +2449,14 @@ fn unpack_exposes_entries<'a>(
 
     while let Some(effects_entry) = stack.pop() {
         match effects_entry {
-            EffectsEntry::Effect { ident, ann } => {
+            TypedIdent::Entry {
+                ident,
+                spaces_before_colon: _,
+                ann,
+            } => {
                 output.push((ident, ann));
             }
-            EffectsEntry::SpaceAfter(nested, _) | EffectsEntry::SpaceBefore(nested, _) => {
+            TypedIdent::SpaceAfter(nested, _) | TypedIdent::SpaceBefore(nested, _) => {
                 stack.push(nested);
             }
         }
@@ -2479,11 +2478,10 @@ fn fabricate_effects_module<'a>(
 
     let module_id: ModuleId;
 
-    let name = "Effect";
-    let declared_name: ModuleName = name.into();
-
     let PlatformHeader { effects, .. } = header;
-    let effect_entries = unpack_exposes_entries(arena, &effects);
+    let effect_entries = unpack_exposes_entries(arena, &effects.entries);
+    let name = effects.type_name;
+    let declared_name: ModuleName = name.into();
 
     let hardcoded_exposed_functions = vec![name, "after"];
 
@@ -2668,7 +2666,7 @@ fn fabricate_effects_module<'a>(
 
     // Should a effect module ever have a ModuleDocumentation?
     let module_docs = ModuleDocumentation {
-        name: String::from("Effect"),
+        name: String::from(name),
         docs: String::from("idk fix this later"),
         entries: Vec::new(),
     };

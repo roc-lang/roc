@@ -1,6 +1,6 @@
 platform folkertdev/foo
     provides [ mainForHost ]
-    requires [ main ]
+    requires { main : Effect {} }
     imports []
-    effects
-        { putChar Int -> Effect {}, putLine Str -> Effect {} }
+    effects Effect
+        { putChar : Int -> Effect {}, putLine : Str -> Effect {} }
