@@ -616,8 +616,8 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
                 LowLevel::StrCountGraphemes,
                 env,
                 &[
-                    BasicValueEnum::PointerValue(str_ptr).into(),
-                    BasicValueEnum::IntValue(str_len).into(),
+                    BasicValueEnum::PointerValue(str_ptr),
+                    BasicValueEnum::IntValue(str_len),
                 ],
                 &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
             )

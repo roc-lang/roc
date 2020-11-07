@@ -45,6 +45,7 @@ fn main() {
 
     run_command("llvm-as-10", &[dest_ll, "-o", dest_bc]);
 
+    // TODO: Recursivly search zig src dir to watch for each file
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", src_path_str);
     println!("cargo:rustc-env=BUILTINS_BC={}", dest_bc);
