@@ -4,7 +4,7 @@ use crate::llvm::build_list::{
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
     list_reverse, list_set, list_single, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, str_len, str_split, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, str_split, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -810,6 +810,38 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Literal(literal) => build_exp_literal(env, literal),
         RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
+        ForeignCall {
+            foreign_symbol,
+            arguments,
+            ret_layout,
+        } => {
+            let mut arg_vals: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(arguments.len(), env.arena);
+
+            let mut arg_types = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for arg in arguments.iter() {
+                let (value, layout) = load_symbol_and_layout(env, scope, arg);
+                arg_vals.push(value);
+                let arg_type =
+                    basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+                arg_types.push(arg_type);
+            }
+
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+            let function_type = get_fn_type(&ret_type, &arg_types);
+            let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
+
+            let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+            // this is a foreign function, use c calling convention
+            call.set_call_convention(C_CALL_CONV);
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+        }
         FunctionCall {
             call_type: ByName(name),
             full_layout,
@@ -873,7 +905,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Struct(sorted_fields) => {
             let ctx = env.context;
             let builder = env.builder;
-            let ptr_bytes = env.ptr_bytes;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -884,7 +915,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 let (field_expr, field_layout) = load_symbol_and_layout(env, scope, symbol);
-                if field_layout.stack_size(ptr_bytes) != 0 {
+                if !field_layout.is_dropped_because_empty() {
                     field_types.push(basic_type_from_layout(
                         env.arena,
                         env.context,
@@ -924,7 +955,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let it = arguments.iter();
 
             let ctx = env.context;
-            let ptr_bytes = env.ptr_bytes;
             let builder = env.builder;
 
             // Determine types
@@ -934,9 +964,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             for field_symbol in it {
                 let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if field_layout.stack_size(ptr_bytes) != 0 {
+                if !field_layout.is_dropped_because_empty() {
                     let field_type = basic_type_from_layout(
                         env.arena,
                         env.context,
@@ -1116,9 +1144,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env.arena.alloc(format!("closure_field_access_{}_", index)),
                     )
                     .unwrap(),
-                (other, layout) => {
-                    unreachable!("can only index into struct layout {:?} {:?}", other, layout)
-                }
+                (other, layout) => unreachable!(
+                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+                    other, layout, index
+                ),
             }
         }
 
@@ -2535,6 +2564,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             );
             BasicValueEnum::IntValue(is_zero)
         }
+        StrCountGraphemes => {
+            // Str.countGraphemes : Str -> Int
+            debug_assert_eq!(args.len(), 1);
+
+            str_count_graphemes(env, scope, parent, args[0])
+        }
         ListLen => {
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
@@ -3031,7 +3066,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::MATH_POW_INT),
+        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::NUM_POW_INT),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -3078,7 +3113,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::MATH_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -3099,7 +3134,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::MATH_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -3228,10 +3263,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::MATH_IS_FINITE),
-        NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::MATH_ATAN),
-        NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::MATH_ACOS),
-        NumAsin => call_bitcode_fn(env, &[arg.into()], &bitcode::MATH_ASIN),
+        NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE),
+        NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN),
+        NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS),
+        NumAsin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ASIN),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
@@ -3410,6 +3445,28 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
 
     call.set_call_convention(C_CALL_CONV);
     call.try_as_basic_value().left().unwrap()
+}
+
+fn get_foreign_symbol<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    foreign_symbol: roc_module::ident::ForeignSymbol,
+    function_type: FunctionType<'ctx>,
+) -> FunctionValue<'ctx> {
+    let module = env.module;
+
+    match module.get_function(foreign_symbol.as_str()) {
+        Some(gvalue) => gvalue,
+        None => {
+            let foreign_function = module.add_function(
+                foreign_symbol.as_str(),
+                function_type,
+                Some(Linkage::External),
+            );
+            foreign_function.set_call_conventions(C_CALL_CONV);
+
+            foreign_function
+        }
+    }
 }
 
 fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {

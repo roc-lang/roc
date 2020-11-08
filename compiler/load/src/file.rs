@@ -8,18 +8,20 @@ use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, Lowercase, ModuleName};
+use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
-use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
+use roc_parse::ast::{
+    self, Attempting, ExposesEntry, ImportsEntry, PlatformHeader, TypeAnnotation, TypedIdent,
+};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
@@ -27,7 +29,7 @@ use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, Type};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -40,6 +42,9 @@ use std::time::{Duration, SystemTime};
 
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
+
+/// Roc-Config file name
+const PKG_CONFIG_FILE_NAME: &str = "Pkg-Config";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
@@ -125,7 +130,39 @@ impl Dependencies {
 
         // all the dependencies can be loaded
         for dep in dependencies {
-            output.insert((*dep, LoadHeader));
+            // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
+            if !format!("{:?}", dep).contains("Effect") {
+                output.insert((*dep, LoadHeader));
+            }
+        }
+
+        output
+    }
+
+    pub fn add_platform_module(
+        &mut self,
+        module_id: ModuleId,
+        dependencies: &MutSet<ModuleId>,
+        goal_phase: Phase,
+    ) -> MutSet<(ModuleId, Phase)> {
+        // add dependencies for self
+        // phase i + 1 of a file always depends on phase i being completed
+        {
+            let mut i = 2;
+
+            // platform modules should only start at CanonicalizeAndConstrain
+            debug_assert!(PHASES[i] == Phase::CanonicalizeAndConstrain);
+            while PHASES[i] < goal_phase {
+                self.add_dependency_help(module_id, module_id, PHASES[i + 1], PHASES[i]);
+                i += 1;
+            }
+        }
+
+        let mut output = MutSet::default();
+
+        // all the dependencies can be loaded
+        for dep in dependencies {
+            output.insert((*dep, Phase::LoadHeader));
         }
 
         output
@@ -204,7 +241,6 @@ struct ModuleCache<'a> {
     /// Phases
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
-    canonicalized: MutMap<ModuleId, CanonicalizedModule<'a>>,
     aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
@@ -236,6 +272,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 // so other modules can populate them as they load.
                 module_ids: Arc::clone(&state.arc_modules),
                 ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                mode: state.stdlib.mode,
             }
         }
         Phase::Parse => {
@@ -250,7 +287,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
 
             let deps_by_name = &parsed.deps_by_name;
             let num_deps = deps_by_name.len();
-            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
+            let mut dep_idents: MutMap<ModuleId, IdentIds> = IdentIds::exposed_builtins(num_deps);
 
             let State {
                 ident_ids_by_module,
@@ -494,17 +531,16 @@ struct ParsedModule<'a> {
 }
 
 #[derive(Debug)]
-struct CanonicalizedModule<'a> {
-    module: Module,
-    src: &'a str,
-    module_timing: ModuleTiming,
-}
-
-#[derive(Debug)]
 enum Msg<'a> {
+    Many(Vec<Msg<'a>>),
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
+        constrained_module: ConstrainedModule,
+        canonicalization_problems: Vec<roc_problem::can::Problem>,
+        module_docs: ModuleDocumentation,
+    },
+    MadeEffectModule {
         constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
@@ -569,7 +605,7 @@ struct State<'a> {
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<ModuleIds>>,
 
-    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 
     /// All the dependent modules we've already begun loading -
     /// meaning we should never kick off another load_module on them!
@@ -632,6 +668,19 @@ pub struct ModuleTiming {
 }
 
 impl ModuleTiming {
+    pub fn new(start_time: SystemTime) -> Self {
+        ModuleTiming {
+            read_roc_file: Duration::default(),
+            parse_header: Duration::default(),
+            parse_body: Duration::default(),
+            canonicalize: Duration::default(),
+            constrain: Duration::default(),
+            solve: Duration::default(),
+            start_time,
+            end_time: start_time, // just for now; we'll overwrite this at the end
+        }
+    }
+
     pub fn total(&self) -> Duration {
         self.end_time.duration_since(self.start_time).unwrap()
     }
@@ -674,7 +723,13 @@ enum BuildTask<'a> {
     LoadModule {
         module_name: ModuleName,
         module_ids: Arc<Mutex<ModuleIds>>,
-        ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        mode: Mode,
+    },
+    LoadPkgConfig {
+        module_ids: Arc<Mutex<ModuleIds>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        mode: Mode,
     },
     Parse {
         header: ModuleHeader<'a>,
@@ -682,7 +737,7 @@ enum BuildTask<'a> {
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
-        dep_idents: IdentIdsByModule,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         mode: Mode,
         exposed_symbols: MutSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
@@ -730,6 +785,7 @@ pub enum LoadingProblem {
         filename: PathBuf,
         fail: Fail,
     },
+    UnexpectedHeader(String),
     MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
@@ -742,7 +798,6 @@ pub enum Phases {
     Monomorphize,
 }
 
-type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
 type MsgSender<'a> = Sender<Msg<'a>>;
 
 /// Add a task to the queue, and notify all the listeners.
@@ -771,7 +826,7 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
 
     match load(
         arena,
@@ -795,7 +850,7 @@ pub fn load_and_monomorphize<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
 
     match load(
         arena,
@@ -820,7 +875,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, src)?;
+    let load_start = LoadStart::from_str(arena, filename, src, stdlib.mode)?;
 
     match load(
         arena,
@@ -837,13 +892,17 @@ pub fn load_and_monomorphize_from_str<'a>(
 
 struct LoadStart<'a> {
     pub arc_modules: Arc<Mutex<ModuleIds>>,
-    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     pub root_id: ModuleId,
     pub root_msg: Msg<'a>,
 }
 
 impl<'a> LoadStart<'a> {
-    pub fn from_path(arena: &'a Bump, filename: PathBuf) -> Result<Self, LoadingProblem> {
+    pub fn from_path(
+        arena: &'a Bump,
+        filename: PathBuf,
+        mode: Mode,
+    ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -858,6 +917,7 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
+                mode,
             )?
         };
 
@@ -873,6 +933,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         src: &'a str,
+        mode: Mode,
     ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -889,6 +950,7 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
+                mode,
             )?
         };
 
@@ -1199,6 +1261,16 @@ fn update<'a>(
     use self::Msg::*;
 
     match msg {
+        Many(messages) => {
+            // enqueue all these message
+            for msg in messages {
+                msg_tx
+                    .send(msg)
+                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+            }
+
+            Ok(state)
+        }
         Header(header) => {
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
@@ -1269,6 +1341,7 @@ fn update<'a>(
 
             Ok(state)
         }
+
         CanonicalizedAndConstrained {
             constrained_module,
             canonicalization_problems,
@@ -1299,6 +1372,57 @@ fn update<'a>(
             let work = state
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
+
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
+
+                enqueue_task(&injector, worker_listeners, task)?
+            }
+
+            Ok(state)
+        }
+        MadeEffectModule {
+            constrained_module,
+            canonicalization_problems,
+            module_docs,
+        } => {
+            let module_id = constrained_module.module.module_id;
+            log!("made effect module for {:?}", module_id);
+            state
+                .module_cache
+                .can_problems
+                .insert(module_id, canonicalization_problems);
+
+            state
+                .module_cache
+                .documentation
+                .insert(module_id, module_docs);
+
+            state
+                .module_cache
+                .aliases
+                .insert(module_id, constrained_module.module.aliases.clone());
+
+            state
+                .module_cache
+                .constrained
+                .insert(module_id, constrained_module);
+
+            let mut work = state.dependencies.add_platform_module(
+                module_id,
+                &MutSet::default(),
+                state.goal_phase,
+            );
+
+            work.extend(state.dependencies.notify(module_id, Phase::LoadHeader));
+
+            work.extend(state.dependencies.notify(module_id, Phase::Parse));
+
+            work.extend(
+                state
+                    .dependencies
+                    .notify(module_id, Phase::CanonicalizeAndConstrain),
+            );
 
             for (module_id, phase) in work {
                 let task = start_phase(module_id, phase, &mut state);
@@ -1488,6 +1612,19 @@ fn update<'a>(
             {
                 // state.timings.insert(module_id, module_timing);
 
+                // display the mono IR of the module, for debug purposes
+                if false {
+                    let procs_string = state
+                        .procedures
+                        .values()
+                        .map(|proc| proc.to_pretty(200))
+                        .collect::<Vec<_>>();
+
+                    let result = procs_string.join("\n");
+
+                    println!("{}", result);
+                }
+
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
@@ -1603,13 +1740,82 @@ fn finish<'a>(
     }
 }
 
+/// Load a PkgConfig.roc file
+fn load_pkg_config<'a>(
+    arena: &'a Bump,
+    src_dir: &Path,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
+) -> Result<Msg<'a>, LoadingProblem> {
+    let module_start_time = SystemTime::now();
+
+    let mut filename = PathBuf::from(src_dir);
+
+    filename.push("platform");
+    filename.push(PKG_CONFIG_FILE_NAME);
+
+    // End with .roc
+    filename.set_extension(ROC_FILE_EXTENSION);
+
+    let file_io_start = SystemTime::now();
+    let file = fs::read(&filename);
+    let file_io_duration = file_io_start.elapsed().unwrap();
+
+    match file {
+        Ok(bytes) => {
+            let parse_start = SystemTime::now();
+            let parse_state = parser::State::new(arena.alloc(bytes), Attempting::Module);
+            let parsed = roc_parse::module::header().parse(&arena, parse_state);
+            let parse_header_duration = parse_start.elapsed().unwrap();
+
+            // Insert the first entries for this module's timings
+            let mut module_timing = ModuleTiming::new(module_start_time);
+
+            module_timing.read_roc_file = file_io_duration;
+            module_timing.parse_header = parse_header_duration;
+
+            match parsed {
+                Ok((ast::Module::Interface { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got Interface with header\n{:?}",
+                        header
+                    )))
+                }
+                Ok((ast::Module::App { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got App with header\n{:?}",
+                        header
+                    )))
+                }
+                Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+                    arena,
+                    module_ids,
+                    ident_ids_by_module,
+                    mode,
+                    header,
+                    module_timing,
+                )
+                .map(|x| x.1),
+                Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+            }
+        }
+
+        Err(err) => Err(LoadingProblem::FileProblem {
+            filename,
+            error: err.kind(),
+        }),
+    }
+}
+
 /// Load a module by its module name, rather than by its filename
 fn load_module<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     module_name: ModuleName,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let module_start_time = SystemTime::now();
     let mut filename = PathBuf::new();
@@ -1630,6 +1836,7 @@ fn load_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_start_time,
+        mode,
     )
 }
 
@@ -1659,12 +1866,14 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
     src_bytes: &'a [u8],
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
@@ -1674,16 +1883,7 @@ fn parse_header<'a>(
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
-    let mut module_timing = ModuleTiming {
-        read_roc_file: Duration::default(),
-        parse_header: Duration::default(),
-        parse_body: Duration::default(),
-        canonicalize: Duration::default(),
-        constrain: Duration::default(),
-        solve: Duration::default(),
-        start_time,
-        end_time: start_time, // just for now; we'll overwrite this at the end
-    };
+    let mut module_timing = ModuleTiming::new(start_time);
 
     module_timing.read_roc_file = read_file_duration;
     module_timing.parse_header = parse_header_duration;
@@ -1699,23 +1899,52 @@ fn parse_header<'a>(
             ident_ids_by_module,
             module_timing,
         )),
-        Ok((ast::Module::App { header }, parse_state)) => Ok(send_header(
-            header.name,
-            filename,
-            header.provides.into_bump_slice(),
-            header.imports.into_bump_slice(),
-            parse_state,
+        Ok((ast::Module::App { header }, parse_state)) => {
+            let mut pkg_config_dir = filename.clone();
+            pkg_config_dir.pop();
+
+            let (module_id, app_module_header_msg) = send_header(
+                header.name,
+                filename,
+                header.provides.into_bump_slice(),
+                header.imports.into_bump_slice(),
+                parse_state,
+                module_ids.clone(),
+                ident_ids_by_module.clone(),
+                module_timing,
+            );
+
+            // check whether we can find a Pkg-Config.roc file
+            let mut pkg_config_roc = pkg_config_dir.clone();
+            pkg_config_roc.push("platform");
+            pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
+            pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
+
+            if pkg_config_roc.as_path().exists() {
+                let load_pkg_config_msg = load_pkg_config(
+                    arena,
+                    &pkg_config_dir,
+                    module_ids,
+                    ident_ids_by_module,
+                    mode,
+                )?;
+
+                Ok((
+                    module_id,
+                    Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
+                ))
+            } else {
+                Ok((module_id, app_module_header_msg))
+            }
+        }
+        Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+            arena,
             module_ids,
             ident_ids_by_module,
+            mode,
+            header,
             module_timing,
-        )),
-        Ok((ast::Module::Platform { header }, parse_state)) => {
-            todo!(
-                "TODO load a platform with {:?} and {:?}",
-                header,
-                parse_state
-            );
-        }
+        ),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }
@@ -1725,8 +1954,9 @@ fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
@@ -1739,6 +1969,7 @@ fn load_filename<'a>(
             filename,
             module_ids,
             ident_ids_by_module,
+            mode,
             arena.alloc(bytes),
             module_start_time,
         ),
@@ -1756,8 +1987,9 @@ fn load_from_str<'a>(
     filename: PathBuf,
     src: &'a str,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
     let file_io_duration = file_io_start.elapsed().unwrap();
@@ -1768,6 +2000,7 @@ fn load_from_str<'a>(
         filename,
         module_ids,
         ident_ids_by_module,
+        mode,
         src.as_bytes(),
         module_start_time,
     )
@@ -1781,7 +2014,7 @@ fn send_header<'a>(
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let declared_name: ModuleName = name.value.as_str().into();
@@ -2020,10 +2253,629 @@ fn run_solve<'a>(
     }
 }
 
+fn fabricate_effect_after(
+    env: &mut roc_can::env::Env,
+    scope: &mut roc_can::scope::Scope,
+    effect_symbol: Symbol,
+    effect_tag_name: TagName,
+    var_store: &mut VarStore,
+) -> (Symbol, roc_can::def::Def) {
+    use roc_can::expr::Expr;
+    use roc_can::expr::Recursive;
+    use roc_module::operator::CalledVia;
+
+    let thunk_symbol = {
+        scope
+            .introduce(
+                "thunk".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let to_effect_symbol = {
+        scope
+            .introduce(
+                "toEffect".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let after_symbol = {
+        scope
+            .introduce(
+                "after".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    // `thunk {}`
+    let force_thunk_call = {
+        let boxed = (
+            var_store.fresh(),
+            Located::at_zero(Expr::Var(thunk_symbol)),
+            var_store.fresh(),
+            var_store.fresh(),
+        );
+
+        let arguments = vec![(var_store.fresh(), Located::at_zero(Expr::EmptyRecord))];
+        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+    };
+
+    // `toEffect (thunk {})`
+    let to_effect_call = {
+        let boxed = (
+            var_store.fresh(),
+            Located::at_zero(Expr::Var(to_effect_symbol)),
+            var_store.fresh(),
+            var_store.fresh(),
+        );
+
+        let arguments = vec![(var_store.fresh(), Located::at_zero(force_thunk_call))];
+        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+    };
+
+    use roc_can::pattern::Pattern;
+    let arguments = vec![
+        (
+            var_store.fresh(),
+            Located::at_zero(Pattern::AppliedTag {
+                whole_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                tag_name: effect_tag_name.clone(),
+                arguments: vec![(
+                    var_store.fresh(),
+                    Located::at_zero(Pattern::Identifier(thunk_symbol)),
+                )],
+            }),
+        ),
+        (
+            var_store.fresh(),
+            Located::at_zero(Pattern::Identifier(to_effect_symbol)),
+        ),
+    ];
+
+    let function_var = var_store.fresh();
+    let after_closure = Expr::Closure {
+        function_type: function_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: var_store.fresh(),
+        name: after_symbol,
+        captured_symbols: Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments,
+        loc_body: Box::new(Located::at_zero(to_effect_call)),
+    };
+
+    use roc_can::annotation::IntroducedVariables;
+
+    let mut introduced_variables = IntroducedVariables::default();
+
+    let signature = {
+        let var_a = var_store.fresh();
+        let var_b = var_store.fresh();
+
+        introduced_variables.insert_named("a".into(), var_a);
+        introduced_variables.insert_named("b".into(), var_b);
+
+        let effect_a = {
+            let actual =
+                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_a), var_store);
+
+            Type::Alias(
+                effect_symbol,
+                vec![("a".into(), Type::Variable(var_a))],
+                Box::new(actual),
+            )
+        };
+
+        let effect_b = {
+            let actual = build_effect_actual(effect_tag_name, Type::Variable(var_b), var_store);
+
+            Type::Alias(
+                effect_symbol,
+                vec![("b".into(), Type::Variable(var_b))],
+                Box::new(actual),
+            )
+        };
+
+        let closure_var = var_store.fresh();
+        introduced_variables.insert_wildcard(closure_var);
+        let a_to_effect_b = Type::Function(
+            vec![Type::Variable(var_a)],
+            Box::new(Type::Variable(closure_var)),
+            Box::new(effect_b.clone()),
+        );
+
+        let closure_var = var_store.fresh();
+        introduced_variables.insert_wildcard(closure_var);
+        Type::Function(
+            vec![effect_a, a_to_effect_b],
+            Box::new(Type::Variable(closure_var)),
+            Box::new(effect_b),
+        )
+    };
+
+    let def_annotation = roc_can::def::Annotation {
+        signature,
+        introduced_variables,
+        aliases: SendMap::default(),
+        region: Region::zero(),
+    };
+
+    let pattern = Pattern::Identifier(after_symbol);
+    let mut pattern_vars = SendMap::default();
+    pattern_vars.insert(after_symbol, function_var);
+    let def = roc_can::def::Def {
+        loc_pattern: Located::at_zero(pattern),
+        loc_expr: Located::at_zero(after_closure),
+        expr_var: function_var,
+        pattern_vars,
+        annotation: Some(def_annotation),
+    };
+
+    (after_symbol, def)
+}
+
+fn fabricate_host_exposed_def(
+    env: &mut roc_can::env::Env,
+    scope: &mut roc_can::scope::Scope,
+    symbol: Symbol,
+    ident: &str,
+    effect_tag_name: TagName,
+    var_store: &mut VarStore,
+    annotation: roc_can::annotation::Annotation,
+) -> roc_can::def::Def {
+    use roc_can::pattern::Pattern;
+    let expr_var = var_store.fresh();
+    let pattern = Pattern::Identifier(symbol);
+    let mut pattern_vars = SendMap::default();
+    pattern_vars.insert(symbol, expr_var);
+
+    use roc_can::expr::Expr;
+    use roc_can::expr::Recursive;
+
+    let mut arguments: Vec<(Variable, Located<Pattern>)> = Vec::new();
+    let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
+    let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
+
+    let def_body = {
+        match annotation.typ.shallow_dealias() {
+            Type::Function(args, _, _) => {
+                for i in 0..args.len() {
+                    let name = format!("closure_arg_{}_{}", ident, i);
+
+                    let arg_symbol = {
+                        let ident = name.clone().into();
+                        scope
+                            .introduce(
+                                ident,
+                                &env.exposed_ident_ids,
+                                &mut env.ident_ids,
+                                Region::zero(),
+                            )
+                            .unwrap()
+                    };
+
+                    let arg_var = var_store.fresh();
+
+                    arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
+
+                    captured_symbols.push((arg_symbol, arg_var));
+                    linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
+                }
+
+                let foreign_symbol_name = format!("roc_fx_{}", ident);
+                let low_level_call = Expr::ForeignCall {
+                    foreign_symbol: foreign_symbol_name.into(),
+                    args: linked_symbol_arguments,
+                    ret_var: var_store.fresh(),
+                };
+
+                let effect_closure_symbol = {
+                    let name = format!("effect_closure_{}", ident);
+
+                    let ident = name.into();
+                    scope
+                        .introduce(
+                            ident,
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            Region::zero(),
+                        )
+                        .unwrap()
+                };
+
+                let empty_record_pattern = Pattern::RecordDestructure {
+                    whole_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    destructs: vec![],
+                };
+
+                let effect_closure = Expr::Closure {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: effect_closure_symbol,
+                    captured_symbols,
+                    recursive: Recursive::NotRecursive,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
+                    loc_body: Box::new(Located::at_zero(low_level_call)),
+                };
+
+                let body = Expr::Tag {
+                    variant_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    name: effect_tag_name,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
+                };
+
+                Expr::Closure {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: symbol,
+                    captured_symbols: std::vec::Vec::new(),
+                    recursive: Recursive::NotRecursive,
+                    arguments,
+                    loc_body: Box::new(Located::at_zero(body)),
+                }
+            }
+            _ => {
+                // not a function
+
+                let foreign_symbol_name = format!("roc_fx_{}", ident);
+                let low_level_call = Expr::ForeignCall {
+                    foreign_symbol: foreign_symbol_name.into(),
+                    args: linked_symbol_arguments,
+                    ret_var: var_store.fresh(),
+                };
+
+                let effect_closure_symbol = {
+                    let name = format!("effect_closure_{}", ident);
+
+                    let ident = name.into();
+                    scope
+                        .introduce(
+                            ident,
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            Region::zero(),
+                        )
+                        .unwrap()
+                };
+
+                let empty_record_pattern = Pattern::RecordDestructure {
+                    whole_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    destructs: vec![],
+                };
+
+                let effect_closure = Expr::Closure {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: effect_closure_symbol,
+                    captured_symbols,
+                    recursive: Recursive::NotRecursive,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
+                    loc_body: Box::new(Located::at_zero(low_level_call)),
+                };
+                Expr::Tag {
+                    variant_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    name: effect_tag_name,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
+                }
+            }
+        }
+    };
+
+    let def_annotation = roc_can::def::Annotation {
+        signature: annotation.typ,
+        introduced_variables: annotation.introduced_variables,
+        aliases: annotation.aliases,
+        region: Region::zero(),
+    };
+
+    roc_can::def::Def {
+        loc_pattern: Located::at_zero(pattern),
+        loc_expr: Located::at_zero(def_body),
+        expr_var,
+        pattern_vars,
+        annotation: Some(def_annotation),
+    }
+}
+
+fn build_effect_actual(effect_tag_name: TagName, a_type: Type, var_store: &mut VarStore) -> Type {
+    let closure_var = var_store.fresh();
+
+    Type::TagUnion(
+        vec![(
+            effect_tag_name,
+            vec![Type::Function(
+                vec![Type::EmptyRec],
+                Box::new(Type::Variable(closure_var)),
+                Box::new(a_type),
+            )],
+        )],
+        Box::new(Type::EmptyTagUnion),
+    )
+}
+
+fn unpack_exposes_entries<'a>(
+    arena: &'a Bump,
+    entries: &'a [Located<TypedIdent<'a>>],
+) -> bumpalo::collections::Vec<'a, (&'a Located<&'a str>, &'a Located<TypeAnnotation<'a>>)> {
+    use bumpalo::collections::Vec;
+
+    let mut stack: Vec<&TypedIdent> = Vec::with_capacity_in(entries.len(), arena);
+    let mut output = Vec::with_capacity_in(entries.len(), arena);
+
+    for entry in entries.iter() {
+        stack.push(&entry.value);
+    }
+
+    while let Some(effects_entry) = stack.pop() {
+        match effects_entry {
+            TypedIdent::Entry {
+                ident,
+                spaces_before_colon: _,
+                ann,
+            } => {
+                output.push((ident, ann));
+            }
+            TypedIdent::SpaceAfter(nested, _) | TypedIdent::SpaceBefore(nested, _) => {
+                stack.push(nested);
+            }
+        }
+    }
+
+    output
+}
+
+fn fabricate_effects_module<'a>(
+    arena: &'a Bump,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
+    header: PlatformHeader<'a>,
+    module_timing: ModuleTiming,
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    let num_exposes = header.provides.len() + 1;
+    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
+
+    let module_id: ModuleId;
+
+    let PlatformHeader { effects, .. } = header;
+    let effect_entries = unpack_exposes_entries(arena, &effects.entries);
+    let name = effects.type_name;
+    let declared_name: ModuleName = name.into();
+
+    let hardcoded_exposed_functions = vec![name, "after"];
+
+    let exposed_ident_ids = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        module_id = module_ids.get_or_insert(&declared_name.as_inline_str());
+
+        // Ensure this module has an entry in the exposed_ident_ids map.
+        ident_ids_by_module
+            .entry(module_id)
+            .or_insert_with(IdentIds::default);
+
+        let ident_ids = ident_ids_by_module.get_mut(&module_id).unwrap();
+
+        // Generate IdentIds entries for all values this module exposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        for (loc_exposed, _) in effect_entries.iter() {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.into());
+            let symbol = Symbol::new(module_id, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        for hardcoded in hardcoded_exposed_functions {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&hardcoded.into());
+            let symbol = Symbol::new(module_id, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        if cfg!(debug_assertions) {
+            module_id.register_debug_idents(&ident_ids);
+        }
+
+        ident_ids.clone()
+    };
+
+    // a platform module has no dependencies, hence empty
+    let dep_idents: MutMap<ModuleId, IdentIds> = IdentIds::exposed_builtins(0);
+
+    let mut var_store = VarStore::default();
+
+    let module_ids = { (*module_ids).lock().clone() };
+
+    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
+    let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
+
+    let effect_symbol = scope
+        .introduce(
+            name.into(),
+            &can_env.exposed_ident_ids,
+            &mut can_env.ident_ids,
+            Region::zero(),
+        )
+        .unwrap();
+
+    let effect_tag_name = TagName::Private(effect_symbol);
+
+    let mut aliases = MutMap::default();
+    let alias = {
+        let a_var = var_store.fresh();
+
+        let actual = build_effect_actual(
+            effect_tag_name.clone(),
+            Type::Variable(a_var),
+            &mut var_store,
+        );
+
+        scope.add_alias(
+            effect_symbol,
+            Region::zero(),
+            vec![Located::at_zero(("a".into(), a_var))],
+            actual,
+        );
+
+        scope.lookup_alias(effect_symbol).unwrap().clone()
+    };
+
+    aliases.insert(effect_symbol, alias);
+
+    let mut declarations = Vec::new();
+
+    let exposed_vars_by_symbol = {
+        let mut exposed_vars_by_symbol = Vec::new();
+
+        {
+            for (ident, ann) in effect_entries {
+                let symbol = {
+                    scope
+                        .introduce(
+                            ident.value.into(),
+                            &can_env.exposed_ident_ids,
+                            &mut can_env.ident_ids,
+                            Region::zero(),
+                        )
+                        .unwrap()
+                };
+
+                let annotation = roc_can::annotation::canonicalize_annotation(
+                    &mut can_env,
+                    &mut scope,
+                    &ann.value,
+                    Region::zero(),
+                    &mut var_store,
+                );
+
+                let def = fabricate_host_exposed_def(
+                    &mut can_env,
+                    &mut scope,
+                    symbol,
+                    ident.value,
+                    TagName::Private(effect_symbol),
+                    &mut var_store,
+                    annotation,
+                );
+
+                exposed_vars_by_symbol.push((symbol, def.expr_var));
+
+                declarations.push(Declaration::Declare(def));
+            }
+        }
+
+        let (effect_after_symbol, def) = fabricate_effect_after(
+            &mut can_env,
+            &mut scope,
+            effect_symbol,
+            effect_tag_name,
+            &mut var_store,
+        );
+        exposed_vars_by_symbol.push((effect_after_symbol, def.expr_var));
+        declarations.push(Declaration::Declare(def));
+
+        exposed_vars_by_symbol
+    };
+
+    use roc_can::module::ModuleOutput;
+    let module_output = ModuleOutput {
+        aliases,
+        rigid_variables: MutMap::default(),
+        declarations,
+        exposed_imports: MutMap::default(),
+        lookups: Vec::new(),
+        problems: can_env.problems,
+        ident_ids: can_env.ident_ids,
+        exposed_vars_by_symbol,
+        references: MutSet::default(),
+    };
+
+    let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+
+    let module = Module {
+        module_id,
+        exposed_imports: module_output.exposed_imports,
+        exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+        references: module_output.references,
+        aliases: module_output.aliases,
+        rigid_variables: module_output.rigid_variables,
+    };
+
+    let imported_modules = MutSet::default();
+
+    // Should a effect module ever have a ModuleDocumentation?
+    let module_docs = ModuleDocumentation {
+        name: String::from(name),
+        docs: String::from("idk fix this later"),
+        entries: Vec::new(),
+    };
+
+    let constrained_module = ConstrainedModule {
+        module,
+        declarations: module_output.declarations,
+        imported_modules,
+        var_store,
+        constraint,
+        ident_ids: module_output.ident_ids,
+        module_timing,
+    };
+
+    Ok((
+        module_id,
+        Msg::MadeEffectModule {
+            constrained_module,
+            canonicalization_problems: module_output.problems,
+            module_docs,
+        },
+    ))
+}
+
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
-    dep_idents: IdentIdsByModule,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     mode: Mode,
@@ -2436,8 +3288,21 @@ fn run_task<'a>(
             module_name,
             module_ids,
             ident_ids_by_module,
-        } => load_module(arena, src_dir, module_name, module_ids, ident_ids_by_module)
-            .map(|(_, msg)| msg),
+            mode,
+        } => load_module(
+            arena,
+            src_dir,
+            module_name,
+            module_ids,
+            ident_ids_by_module,
+            mode,
+        )
+        .map(|(_, msg)| msg),
+        LoadPkgConfig {
+            module_ids,
+            ident_ids_by_module,
+            mode,
+        } => load_pkg_config(arena, src_dir, module_ids, ident_ids_by_module, mode),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,

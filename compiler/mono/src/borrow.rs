@@ -374,6 +374,15 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_bools(args, ps);
             }
 
+            ForeignCall { arguments, .. } => {
+                // very unsure what demand ForeignCall should place upon its arguments
+                self.own_var(z);
+
+                let ps = foreign_borrow_signature(self.arena, arguments.len());
+
+                self.own_args_using_bools(arguments, ps);
+            }
+
             Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}
         }
     }
@@ -492,6 +501,11 @@ impl<'a> BorrowInfState<'a> {
     }
 }
 
+pub fn foreign_borrow_signature(arena: &Bump, arity: usize) -> &[bool] {
+    let all = bumpalo::vec![in arena; false; arity];
+    all.into_bump_slice()
+}
+
 pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     use LowLevel::*;
 
@@ -506,7 +520,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - arguments that we may want to update destructively must be Owned
     // - other refcounted arguments are Borrowed
     match op {
-        ListLen | StrIsEmpty => arena.alloc_slice_copy(&[borrowed]),
+        ListLen | StrIsEmpty | StrCountGraphemes => arena.alloc_slice_copy(&[borrowed]),
         ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),

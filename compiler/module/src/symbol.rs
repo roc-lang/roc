@@ -671,6 +671,7 @@ define_builtins! {
         3 STR_APPEND: "append"
         4 STR_CONCAT: "concat"
         5 STR_SPLIT: "split"
+        6 STR_COUNT_GRAPHEMES: "countGraphemes"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

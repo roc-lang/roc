@@ -4,7 +4,7 @@ use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -119,10 +119,12 @@ impl<'a> Proc<'a> {
         let args_doc = self
             .args
             .iter()
-            .map(|(_, symbol)| alloc.text(format!("{}", symbol)));
+            .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
 
         alloc
-            .text(format!("procedure {} (", self.name))
+            .text("procedure ")
+            .append(symbol_to_doc(alloc, self.name))
+            .append(" (")
             .append(alloc.intersperse(args_doc, ", "))
             .append("):")
             .append(alloc.hardline())
@@ -417,14 +419,23 @@ impl<'a> Procs<'a> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_self_recursive = false;
 
+        let layout = layout_cache
+            .from_var(env.arena, annotation, env.subs)
+            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+        if let Some(existing) = self.partial_procs.get(&symbol) {
+            // only assert that we're really adding the same thing
+            debug_assert_eq!(annotation, existing.annotation);
+            debug_assert_eq!(captured_symbols, existing.captured_symbols);
+            debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
+            return Ok(layout);
+        }
+
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
-                let layout = layout_cache
-                    .from_var(env.arena, annotation, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
                 let tuple = (symbol, layout);
                 let already_specialized = self.specialized.contains_key(&tuple);
@@ -443,8 +454,6 @@ impl<'a> Procs<'a> {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout.clone(), pending);
-
-                            debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", symbol);
 
                             self.partial_procs.insert(
                                 symbol,
@@ -829,6 +838,11 @@ pub enum Expr<'a> {
         args: &'a [Symbol],
     },
     RunLowLevel(LowLevel, &'a [Symbol]),
+    ForeignCall {
+        foreign_symbol: ForeignSymbol,
+        arguments: &'a [Symbol],
+        ret_layout: Layout<'a>,
+    },
 
     Tag {
         tag_layout: Layout<'a>,
@@ -889,6 +903,7 @@ where
     A: Clone,
 {
     alloc.text(format!("{}", symbol))
+    // alloc.text(format!("{:?}", symbol))
 }
 
 fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
@@ -941,6 +956,17 @@ impl<'a> Expr<'a> {
 
                 alloc
                     .text(format!("lowlevel {:?} ", lowlevel))
+                    .append(alloc.intersperse(it, " "))
+            }
+            ForeignCall {
+                foreign_symbol,
+                arguments,
+                ..
+            } => {
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text(format!("foreign {:?} ", foreign_symbol.as_str()))
                     .append(alloc.intersperse(it, " "))
             }
             Tag {
@@ -1331,8 +1357,27 @@ pub fn specialize_all<'a>(
     let it = procs.externals_others_need.specs.clone();
     let it = it
         .into_iter()
-        .map(|(symbol, solved_types)| solved_types.into_iter().map(move |s| (symbol, s)))
+        .map(|(symbol, solved_types)| {
+            // for some unclear reason, the MutSet does not deduplicate according to the hash
+            // instance. So we do it manually here
+            let mut as_vec: std::vec::Vec<_> = solved_types.into_iter().collect();
+
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let hash_the_thing = |x: &SolvedType| {
+                let mut hasher = DefaultHasher::new();
+                x.hash(&mut hasher);
+                hasher.finish()
+            };
+
+            as_vec.sort_by_key(|x| hash_the_thing(x));
+            as_vec.dedup_by_key(|x| hash_the_thing(x));
+
+            as_vec.into_iter().map(move |s| (symbol, s))
+        })
         .flatten();
+
     for (name, solved_type) in it.into_iter() {
         let partial_proc = match procs.partial_procs.get(&name) {
             Some(v) => v.clone(),
@@ -1396,7 +1441,6 @@ pub fn specialize_all<'a>(
                 procs
                     .specialized
                     .insert((name, outside_layout.clone()), InProgress);
-
                 match specialize(
                     env,
                     &mut procs,
@@ -1407,8 +1451,16 @@ pub fn specialize_all<'a>(
                 ) {
                     Ok((proc, layout)) => {
                         debug_assert_eq!(outside_layout, layout);
-                        procs.specialized.remove(&(name, outside_layout));
-                        procs.specialized.insert((name, layout), Done(proc));
+
+                        if let Layout::Closure(args, closure, ret) = layout {
+                            procs.specialized.remove(&(name, outside_layout));
+                            let layout = ClosureLayout::extend_function_layout(
+                                env.arena, args, closure, ret,
+                            );
+                            procs.specialized.insert((name, layout), Done(proc));
+                        } else {
+                            procs.specialized.insert((name, layout), Done(proc));
+                        }
                     }
                     Err(error) => {
                         let error_msg = env.arena.alloc(format!(
@@ -1451,9 +1503,7 @@ fn specialize_external<'a>(
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
 
     let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
-    debug_assert!(is_valid);
-
-    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
+    debug_assert!(is_valid, "unificaton failure for {:?}", proc_name);
 
     // if this is a closure, add the closure record argument
     let pattern_symbols = if let CapturedSymbols::Captured(_) = captured_symbols {
@@ -1467,6 +1517,7 @@ fn specialize_external<'a>(
     let (proc_args, opt_closure_layout, ret_layout) =
         build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
 
+    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
     // unpack the closure symbols, if any
     if let CapturedSymbols::Captured(captured) = captured_symbols {
         let mut layouts = Vec::with_capacity_in(captured.len(), env.arena);
@@ -1484,16 +1535,26 @@ fn specialize_external<'a>(
         };
 
         for (index, (symbol, variable)) in captured.iter().enumerate() {
-            let expr = Expr::AccessAtIndex {
-                index: index as _,
-                field_layouts,
-                structure: Symbol::ARG_CLOSURE,
-                wrapped,
-            };
-
             // layout is cached anyway, re-using the one found above leads to
             // issues (combining by-ref and by-move in pattern match
             let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+
+            // if the symbol has a layout that is dropped from data structures (e.g. `{}`)
+            // then regenerate the symbol here. The value may not be present in the closure
+            // data struct
+            let expr = {
+                if layout.is_dropped_because_empty() {
+                    Expr::Struct(&[])
+                } else {
+                    Expr::AccessAtIndex {
+                        index: index as _,
+                        field_layouts,
+                        structure: Symbol::ARG_CLOSURE,
+                        wrapped,
+                    }
+                }
+            };
+
             specialized_body = Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
         }
     }
@@ -1669,9 +1730,9 @@ fn build_specialized_proc_adapter<'a>(
 #[allow(clippy::type_complexity)]
 fn build_specialized_proc<'a>(
     arena: &'a Bump,
-    _proc_name: Symbol,
+    proc_name: Symbol,
     pattern_symbols: &[Symbol],
-    pattern_layouts: Vec<Layout<'a>>,
+    pattern_layouts: Vec<'a, Layout<'a>>,
     opt_closure_layout: Option<ClosureLayout<'a>>,
     ret_layout: Layout<'a>,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
@@ -1709,7 +1770,8 @@ fn build_specialized_proc<'a>(
             debug_assert_eq!(
                 pattern_layouts_len + 1,
                 pattern_symbols.len(),
-                "Tried to zip two vecs with different lengths!"
+                "Tried to zip two vecs with different lengths in {:?}!",
+                proc_name,
             );
 
             let proc_args = proc_args.into_bump_slice();
@@ -1738,16 +1800,22 @@ fn build_specialized_proc<'a>(
             // make sure there is not arg_closure argument without a closure layout
             debug_assert!(pattern_symbols.last() != Some(&Symbol::ARG_CLOSURE));
 
-            // since this is not a closure, the number of arguments should match between symbols
-            // and layout
-            debug_assert_eq!(
-                pattern_layouts_len,
-                pattern_symbols.len(),
-                "Tried to zip two vecs with different lengths!"
-            );
-            let proc_args = proc_args.into_bump_slice();
+            use std::cmp::Ordering;
+            match pattern_layouts_len.cmp(&pattern_symbols.len()) {
+                Ordering::Equal => {
+                    let proc_args = proc_args.into_bump_slice();
 
-            Ok((proc_args, None, ret_layout))
+                    Ok((proc_args, None, ret_layout))
+                }
+                Ordering::Greater => {
+                    // so far, the problem when hitting this branch was always somewhere else
+                    // I think this branch should not be reachable in a bugfree compiler
+                    panic!("more arguments (according to the layout) than argument symbols")
+                }
+                Ordering::Less => {
+                    panic!("more argument symbols than arguments (according to the layout)")
+                }
+            }
         }
     }
 }
@@ -1940,6 +2008,7 @@ pub fn with_hole<'a>(
                     recursive,
                     arguments,
                     loc_body: boxed_body,
+                    captured_symbols,
                     ..
                 } = def.loc_expr.value
                 {
@@ -1950,6 +2019,11 @@ pub fn with_hole<'a>(
 
                     let is_self_recursive =
                         !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
+
+                    // this should be a top-level declaration, and hence have no captured symbols
+                    // if we ever do hit this (and it's not a bug), we should make sure to put the
+                    // captured symbols into a CapturedSymbols and give it to insert_named
+                    debug_assert!(captured_symbols.is_empty());
 
                     procs.insert_named(
                         env,
@@ -2201,7 +2275,9 @@ pub fn with_hole<'a>(
                     "The `[]` type has no constructors, source var {:?}",
                     variant_var
                 ),
-                Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
+                Unit | UnitWithArguments => {
+                    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+                }
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -2880,14 +2956,22 @@ pub fn with_hole<'a>(
                     let symbols =
                         Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
                             .into_bump_slice();
-                    let expr = Expr::Struct(symbols);
 
-                    stmt = Stmt::Let(
-                        closure_data,
-                        expr,
-                        closure_data_layout.clone(),
-                        env.arena.alloc(stmt),
-                    );
+                    // define the closure data, unless it's a basic unwrapped type already
+                    match closure_layout.build_closure_data(name, symbols) {
+                        Ok(expr) => {
+                            stmt = Stmt::Let(
+                                closure_data,
+                                expr,
+                                closure_data_layout.clone(),
+                                env.arena.alloc(stmt),
+                            );
+                        }
+                        Err(current) => {
+                            // there is only one symbol captured, use that immediately
+                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        }
+                    }
 
                     let expr = Expr::FunctionPointer(name, function_ptr_layout.clone());
 
@@ -2943,16 +3027,19 @@ pub fn with_hole<'a>(
             };
 
             match loc_expr.value {
-                roc_can::expr::Expr::Var(proc_name) if is_known(&proc_name) => call_by_name(
-                    env,
-                    procs,
-                    fn_var,
-                    proc_name,
-                    loc_args,
-                    layout_cache,
-                    assigned,
-                    hole,
-                ),
+                roc_can::expr::Expr::Var(proc_name) if is_known(&proc_name) => {
+                    // a call by a known name
+                    call_by_name(
+                        env,
+                        procs,
+                        fn_var,
+                        proc_name,
+                        loc_args,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    )
+                }
                 _ => {
                     // Call by pointer - the closure was anonymous, e.g.
                     //
@@ -3124,6 +3211,42 @@ pub fn with_hole<'a>(
                     assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             }
+        }
+
+        ForeignCall {
+            foreign_symbol,
+            args,
+            ret_var,
+        } => {
+            let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
+
+            for (_, arg_expr) in args.iter() {
+                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
+            }
+            let arg_symbols = arg_symbols.into_bump_slice();
+
+            // layout of the return type
+            let layout = layout_cache
+                .from_var(env.arena, ret_var, env.subs)
+                .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            let result = Stmt::Let(
+                assigned,
+                Expr::ForeignCall {
+                    foreign_symbol,
+                    arguments: arg_symbols,
+                    ret_layout: layout.clone(),
+                },
+                layout,
+                hole,
+            );
+
+            let iter = args
+                .into_iter()
+                .rev()
+                .map(|(a, b)| (a, Located::at_zero(b)))
+                .zip(arg_symbols.iter().rev());
+            assign_to_symbols(env, procs, layout_cache, iter, result)
         }
 
         RunLowLevel { op, args, ret_var } => {
@@ -3952,6 +4075,35 @@ fn substitute_in_expr<'a>(
                 let args = new_args.into_bump_slice();
 
                 Some(RunLowLevel(*op, args))
+            } else {
+                None
+            }
+        }
+        ForeignCall {
+            foreign_symbol,
+            arguments,
+            ret_layout,
+        } => {
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                arguments.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let args = new_args.into_bump_slice();
+
+                Some(ForeignCall {
+                    foreign_symbol: foreign_symbol.clone(),
+                    arguments: args,
+                    ret_layout: ret_layout.clone(),
+                })
             } else {
                 None
             }
@@ -4796,7 +4948,7 @@ pub fn from_can_pattern<'a>(
                     "there is no pattern of type `[]`, union var {:?}",
                     *whole_var
                 ),
-                Unit => Pattern::EnumLiteral {
+                Unit | UnitWithArguments => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),
                     union: Union {

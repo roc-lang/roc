@@ -5,25 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use std::str;
 
-fn run_command<S, I>(command: &str, args: I)
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output_result = Command::new(OsStr::new(&command)).args(args).output();
-    match output_result {
-        Ok(output) => {
-            if !output.status.success() {
-                let error_str = match str::from_utf8(&output.stderr) {
-                    Ok(stderr) => stderr.to_string(),
-                    Err(_) => format!("Failed to run \"{}\"", command),
-                };
-                panic!("{} failed: {}", command, error_str);
-            }
-        }
-        Err(reason) => panic!("{} failed: {}", command, reason),
-    }
-}
+// TODO: Use zig build system command instead
 
 fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
@@ -63,7 +45,29 @@ fn main() {
 
     run_command("llvm-as-10", &[dest_ll, "-o", dest_bc]);
 
+    // TODO: Recursivly search zig src dir to watch for each file
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", src_path_str);
     println!("cargo:rustc-env=BUILTINS_BC={}", dest_bc);
+}
+
+fn run_command<S, I>(command: &str, args: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output_result = Command::new(OsStr::new(&command)).args(args).output();
+    match output_result {
+        Ok(output) => match output.status.success() {
+            true => (),
+            false => {
+                let error_str = match str::from_utf8(&output.stderr) {
+                    Ok(stderr) => stderr.to_string(),
+                    Err(_) => format!("Failed to run \"{}\"", command),
+                };
+                panic!("{} failed: {}", command, error_str);
+            }
+        },
+        Err(reason) => panic!("{} failed: {}", command, reason),
+    }
 }
