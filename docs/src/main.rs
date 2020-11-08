@@ -266,8 +266,13 @@ mod test_docs {
             },
             ModuleEntry {
                 name: "multiline".to_string(),
-                docs: "<p>Multiline documentation.\nWithout any complex syntax yet!</p>\n"
-                    .to_string(),
+                docs: "<p>Multiline documentation.\nWithout any complex syntax yet!</p>\n".to_string(),
+            }, ModuleEntry {
+                name: "multiparagraph".to_string(),
+                docs: "<p>Multiparagraph documentation.</p>\n<p>Without any complex syntax yet!</p>\n".to_string(),
+            }, ModuleEntry {
+                name: "codeblock".to_string(),
+                docs: "<p>Turns &gt;&gt;&gt; into code block for now.</p>\n<pre><code class=\"language-roc\">codeblock</code></pre>\n".to_string(),
             },
         ];
 

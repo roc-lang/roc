@@ -433,14 +433,9 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
 }
 
 /// A single ASCII char.
-pub fn ascii_char<'a>(expected: char) -> impl Parser<'a, ()> {
-    // Make sure this really is an ASCII char!
-    debug_assert!(expected.len_utf8() == 1);
-
+pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
     move |_arena, state: State<'a>| match state.bytes.first() {
-        Some(&actual) if expected == actual as char => {
-            Ok(((), state.advance_without_indenting(1)?))
-        }
+        Some(&actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
         Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
@@ -788,7 +783,7 @@ macro_rules! collection {
                 // We could change the AST to add extra storage specifically to
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::ascii_char(' ')),
+                zero_or_more!($crate::parser::ascii_char(b' ')),
                 skip_second!(
                     $crate::parser::sep_by0(
                         $delimiter,
@@ -1025,8 +1020,8 @@ macro_rules! record_field {
             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
             // (This is true in both literals and types.)
             let (opt_loc_val, state) = $crate::parser::optional(either!(
-                skip_first!(ascii_char(':'), space0_before($val_parser, $min_indent)),
-                skip_first!(ascii_char('?'), space0_before($val_parser, $min_indent))
+                skip_first!(ascii_char(b':'), space0_before($val_parser, $min_indent)),
+                skip_first!(ascii_char(b'?'), space0_before($val_parser, $min_indent))
             ))
             .parse(arena, state)?;
 
@@ -1055,10 +1050,10 @@ macro_rules! record_field {
 macro_rules! record_without_update {
     ($val_parser:expr, $min_indent:expr) => {
         collection!(
-            ascii_char('{'),
+            ascii_char(b'{'),
             loc!(record_field!($val_parser, $min_indent)),
-            ascii_char(','),
-            ascii_char('}'),
+            ascii_char(b','),
+            ascii_char(b'}'),
             $min_indent
         )
     };
@@ -1068,7 +1063,7 @@ macro_rules! record_without_update {
 macro_rules! record {
     ($val_parser:expr, $min_indent:expr) => {
         skip_first!(
-            $crate::parser::ascii_char('{'),
+            $crate::parser::ascii_char(b'{'),
             and!(
                 // You can optionally have an identifier followed by an '&' to
                 // make this a record update, e.g. { Foo.user & username: "blah" }.
@@ -1084,7 +1079,7 @@ macro_rules! record {
                         )),
                         $min_indent
                     ),
-                    $crate::parser::ascii_char('&')
+                    $crate::parser::ascii_char(b'&')
                 )),
                 loc!(skip_first!(
                     // We specifically allow space characters inside here, so that
@@ -1098,16 +1093,16 @@ macro_rules! record {
                     // We could change the AST to add extra storage specifically to
                     // support empty literals containing newlines or comments, but this
                     // does not seem worth even the tiniest regression in compiler performance.
-                    zero_or_more!($crate::parser::ascii_char(' ')),
+                    zero_or_more!($crate::parser::ascii_char(b' ')),
                     skip_second!(
                         $crate::parser::sep_by0(
-                            $crate::parser::ascii_char(','),
+                            $crate::parser::ascii_char(b','),
                             $crate::blankspace::space0_around(
                                 loc!(record_field!($val_parser, $min_indent)),
                                 $min_indent
                             )
                         ),
-                        $crate::parser::ascii_char('}')
+                        $crate::parser::ascii_char(b'}')
                     )
                 ))
             )

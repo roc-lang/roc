@@ -1,6 +1,4 @@
-app Quicksort 
-    provides [ quicksort ]
-    imports [ Utils.{swap} ]
+app Quicksort provides [ quicksort ] imports [ Utils.{swap} ]
 
 
 quicksort : List Int -> List Int

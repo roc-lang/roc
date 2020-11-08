@@ -121,11 +121,6 @@ fn comments_or_new_lines_to_docs<'a>(
                 docs.push_str(doc_str);
                 docs.push_str("\n");
             }
-            // TODO: Lines with only `##` are not being parsed as a
-            // DocComment, but as a LineComment("#\r"). This pattern should cover this.
-            // The problem is that this is only valid if it is at the start
-            // of a line. False positive example: `x = 2 ##`.
-            LineComment("#\r") => docs.push_str("\n"),
             Newline | LineComment(_) => {}
         }
     }

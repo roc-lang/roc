@@ -3,7 +3,7 @@ use crate::pretty_print::Parens;
 use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
 use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -966,6 +966,10 @@ pub enum Reason {
         op: LowLevel,
         arg_index: Index,
     },
+    ForeignCallArg {
+        foreign_symbol: ForeignSymbol,
+        arg_index: Index,
+    },
     FloatLiteral,
     IntLiteral,
     NumLiteral,
@@ -992,6 +996,7 @@ pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>),
     LowLevelOpResult(LowLevel),
+    ForeignCall,
     TagApply {
         tag_name: TagName,
         args_count: usize,
