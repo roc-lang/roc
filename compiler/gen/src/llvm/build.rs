@@ -24,8 +24,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
-    PointerValue, StructValue,
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
+    IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -3078,17 +3078,44 @@ pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Did not get return value from bitcode function {:?}",
+                fn_name
+            )
+        })
+}
+
+pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> InstructionValue<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .right()
+        .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
+}
+
+fn call_bitcode_fn_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> CallSiteValue<'ctx> {
     let fn_val = env
-                .module
-                .get_function(fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+        .module
+        .get_function(fn_name)
+        .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+
+    dbg!(fn_val);
+
     let call = env.builder.build_call(fn_val, args, "call_builtin");
 
     call.set_call_convention(fn_val.get_call_conventions());
-
-    call.try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call for bitcode call {:?}", fn_name))
+    call
 }
 
 fn build_float_binop<'a, 'ctx, 'env>(

@@ -1,4 +1,6 @@
-use crate::llvm::build::{call_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope};
+use crate::llvm::build::{
+    call_bitcode_fn, call_void_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope,
+};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
@@ -35,45 +37,48 @@ pub fn str_split<'a, 'ctx, 'env>(
         parent,
         *str_ptr,
         str_wrapper_type,
-        |_, str_len, _str_smallness| {
+        |str_bytes_ptr, str_len, _str_smallness| {
             load_str(
                 env,
                 parent,
                 *delimiter_ptr,
                 str_wrapper_type,
-                |_, delimiter_len, _delimiter_smallness| {
-                    let str_ = builder.build_load(*str_ptr, "get_str");
-
-                    let delimiter = builder.build_load(*delimiter_ptr, "get_delimiter");
-
+                |delimiter_bytes_ptr, delimiter_len, _delimiter_smallness| {
                     let segment_count = call_bitcode_fn(
                         env,
                         &[
-                            BasicValueEnum::PointerValue(*str_ptr),
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
                             BasicValueEnum::IntValue(str_len),
-                            BasicValueEnum::PointerValue(*delimiter_ptr),
+                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
                             BasicValueEnum::IntValue(delimiter_len),
                         ],
                         &bitcode::STR_COUNT_SEGMENTS,
-                    );
+                    )
+                    .into_int_value();
 
                     let ret_list_ptr =
-                        allocate_list(env, inplace, &CHAR_LAYOUT, segment_count.into_int_value());
+                        allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
 
-                    let ret_list = builder.build_load(ret_list_ptr, "get_str_split_ret_list");
+                    let ret_list_ptr_u128s = builder.build_bitcast(
+                        ret_list_ptr,
+                        ctx.i128_type().ptr_type(AddressSpace::Generic),
+                        "ret_u8_list",
+                    );
 
-                    call_bitcode_fn(
+                    call_void_bitcode_fn(
                         env,
                         &[
-                            ret_list,
-                            segment_count,
-                            BasicValueEnum::PointerValue(*str_ptr),
+                            ret_list_ptr_u128s,
+                            BasicValueEnum::IntValue(segment_count),
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
                             BasicValueEnum::IntValue(str_len),
-                            BasicValueEnum::PointerValue(*delimiter_ptr),
+                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
                             BasicValueEnum::IntValue(delimiter_len),
                         ],
                         &bitcode::STR_STR_SPLIT_IN_PLACE,
-                    )
+                    );
+
+                    store_list(env, ret_list_ptr, segment_count)
                 },
             )
         },

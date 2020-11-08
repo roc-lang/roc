@@ -76,13 +76,16 @@ const RocStr = struct {
 // Str.split
 
 pub fn strSplitInPlace(
-    array: [*]RocStr,
+    bytes_array: [*]u128,
     array_len: usize,
     str_bytes_ptrs: [*]u8,
     str_len: usize,
     delimiter_bytes: [*]u8,
     delimiter_len: usize
 ) callconv(.C) void {
+
+    var array = @ptrCast([*]RocStr, bytes_array);
+
     var ret_array_index : usize = 0;
 
     var sliceStart_index : usize = 0;
@@ -252,8 +255,8 @@ pub fn countSegments(
     str_len: usize,
     delimiter_bytes: [*]u8,
     delimiter_len: usize
-) callconv(.C) i64 {
-    var count: i64 = 1;
+) callconv(.C) usize {
+    var count: usize = 1;
 
     if (str_len > delimiter_len) {
         var str_index: usize = 0;
