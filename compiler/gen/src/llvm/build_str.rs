@@ -62,7 +62,7 @@ pub fn str_split<'a, 'ctx, 'env>(
                     let ret_list_ptr_u128s = builder.build_bitcast(
                         ret_list_ptr,
                         ctx.i128_type().ptr_type(AddressSpace::Generic),
-                        "ret_u8_list",
+                        "ret_u128_list",
                     );
 
                     call_void_bitcode_fn(
