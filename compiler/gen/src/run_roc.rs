@@ -36,15 +36,20 @@ macro_rules! run_jit_function {
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
         use inkwell::context::Context;
         use roc_gen::run_roc::RocCallResult;
+        use std::mem::MaybeUninit;
 
         unsafe {
-            let main: libloading::Symbol<unsafe extern "C" fn() -> RocCallResult<$ty>> = $lib
-                .get($main_fn_name.as_bytes())
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
-                .expect("errored");
+            let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<$ty>) -> ()> =
+                $lib.get($main_fn_name.as_bytes())
+                    .ok()
+                    .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+                    .expect("errored");
 
-            match main().into() {
+            let mut result = MaybeUninit::uninit();
+
+            main(result.as_mut_ptr());
+
+            match result.assume_init().into() {
                 Ok(success) => {
                     // only if there are no exceptions thrown, check for errors
                     assert_eq!(

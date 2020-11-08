@@ -1088,7 +1088,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn return_wrapped_closure() {
         assert_non_opt_evals_to!(
             indoc!(
@@ -1101,7 +1100,7 @@ mod gen_primitives {
                 foo =
                     x = 5
 
-                    @Effect \{} -> if x > 3 then {} else {}
+                    @Effect (\{} -> if x > 3 then {} else {})
 
                 main : Effect {}
                 main = foo
