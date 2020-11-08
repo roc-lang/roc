@@ -131,6 +131,7 @@ pub fn basic_type_from_layout<'ctx>(
         Pointer(layout) => basic_type_from_layout(arena, context, &layout, ptr_bytes)
             .ptr_type(AddressSpace::Generic)
             .into(),
+        PhantomEmptyStruct => context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(arena, context, sorted_fields, ptr_bytes),
         Union(tags) if tags.len() == 1 => {
             let sorted_fields = tags.iter().next().unwrap();

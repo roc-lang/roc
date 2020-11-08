@@ -23,7 +23,7 @@ pub enum Layout<'a> {
     /// A layout that is empty (turns into the empty struct in LLVM IR
     /// but for our purposes, not zero-sized, so it does not get dropped from data structures
     /// this is important for closures that capture zero-sized values
-    // PhantomEmptyStruct,
+    PhantomEmptyStruct,
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     RecursiveUnion(&'a [&'a [Layout<'a>]]),
@@ -345,6 +345,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
+            PhantomEmptyStruct => true,
             Struct(fields) => fields
                 .iter()
                 .all(|field_layout| field_layout.safe_to_memcpy()),
@@ -383,6 +384,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.stack_size(pointer_size),
+            PhantomEmptyStruct => 0,
             Struct(fields) => {
                 let mut sum = 0;
 
@@ -435,6 +437,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
+            PhantomEmptyStruct => false,
             Struct(fields) => fields.iter().any(|f| f.is_refcounted()),
             Union(fields) => fields
                 .iter()
