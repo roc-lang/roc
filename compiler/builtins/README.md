@@ -70,7 +70,7 @@ We have to define the uniqueness constraints of a function just like we have to 
 
 ## Testing it
 ### solve/tests/solve_expr.rs
-To make sure that Roc is properly inferring the type of the new builting, add a test to this file simlar to:
+To make sure that Roc is properly inferring the type of the new builtin, add a test to this file simlar to:
 ```
  #[test]
 fn atan() {

@@ -379,7 +379,7 @@ pub fn countGraphemeClusters(bytes_ptr: [*]u8, bytes_len: usize)  callconv(.C) u
         opt_last_codepoint = cur_codepoint;
     }
 
-    // If there are no breaks, but the str is not empty the there
+    // If there are no breaks, but the str is not empty, then there
     // must be a single grapheme
     if (bytes_len != 0) {
         count += 1;
