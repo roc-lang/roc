@@ -28,7 +28,7 @@ fn main() {
         "zig",
         &[
             "build-obj",
-            src_path_str,
+            main_zig_path.to_str().unwrap(),
             &emit_ir_arg,
             "-fno-emit-bin",
             "--strip",
