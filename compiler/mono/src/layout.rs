@@ -20,6 +20,10 @@ pub enum LayoutProblem {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
+    /// A layout that is empty (turns into the empty struct in LLVM IR
+    /// but for our purposes, not zero-sized, so it does not get dropped from data structures
+    /// this is important for closures that capture zero-sized values
+    // PhantomEmptyStruct,
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     RecursiveUnion(&'a [&'a [Layout<'a>]]),

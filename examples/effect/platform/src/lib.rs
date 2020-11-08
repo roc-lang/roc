@@ -38,7 +38,7 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_getLine(_: i64) -> RocStr {
+pub fn roc_fx_getLine() -> RocStr {
     use std::io::{self, BufRead};
 
     let stdin = io::stdin();

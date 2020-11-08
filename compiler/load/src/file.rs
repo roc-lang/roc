@@ -2448,13 +2448,43 @@ fn fabricate_host_exposed_def(
     let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
     let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
 
-    match annotation.typ.shallow_dealias() {
-        Type::Function(args, _, _) => {
-            for i in 0..args.len() {
-                let name = format!("closure_arg_{}_{}", ident, i);
+    let def_body = {
+        match annotation.typ.shallow_dealias() {
+            Type::Function(args, _, _) => {
+                for i in 0..args.len() {
+                    let name = format!("closure_arg_{}_{}", ident, i);
 
-                let arg_symbol = {
-                    let ident = name.clone().into();
+                    let arg_symbol = {
+                        let ident = name.clone().into();
+                        scope
+                            .introduce(
+                                ident,
+                                &env.exposed_ident_ids,
+                                &mut env.ident_ids,
+                                Region::zero(),
+                            )
+                            .unwrap()
+                    };
+
+                    let arg_var = var_store.fresh();
+
+                    arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
+
+                    captured_symbols.push((arg_symbol, arg_var));
+                    linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
+                }
+
+                let foreign_symbol_name = format!("roc_fx_{}", ident);
+                let low_level_call = Expr::ForeignCall {
+                    foreign_symbol: foreign_symbol_name.into(),
+                    args: linked_symbol_arguments,
+                    ret_var: var_store.fresh(),
+                };
+
+                let effect_closure_symbol = {
+                    let name = format!("effect_closure_{}", ident);
+
+                    let ident = name.into();
                     scope
                         .introduce(
                             ident,
@@ -2465,74 +2495,92 @@ fn fabricate_host_exposed_def(
                         .unwrap()
                 };
 
-                let arg_var = var_store.fresh();
+                let empty_record_pattern = Pattern::RecordDestructure {
+                    whole_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    destructs: vec![],
+                };
 
-                arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
+                let effect_closure = Expr::Closure {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: effect_closure_symbol,
+                    captured_symbols,
+                    recursive: Recursive::NotRecursive,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
+                    loc_body: Box::new(Located::at_zero(low_level_call)),
+                };
 
-                captured_symbols.push((arg_symbol, arg_var));
-                linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
+                let body = Expr::Tag {
+                    variant_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    name: effect_tag_name,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
+                };
+
+                Expr::Closure {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: symbol,
+                    captured_symbols: std::vec::Vec::new(),
+                    recursive: Recursive::NotRecursive,
+                    arguments,
+                    loc_body: Box::new(Located::at_zero(body)),
+                }
+            }
+            _ => {
+                // not a function
+
+                let foreign_symbol_name = format!("roc_fx_{}", ident);
+                let low_level_call = Expr::ForeignCall {
+                    foreign_symbol: foreign_symbol_name.into(),
+                    args: linked_symbol_arguments,
+                    ret_var: var_store.fresh(),
+                };
+
+                let effect_closure_symbol = {
+                    let name = format!("effect_closure_{}", ident);
+
+                    let ident = name.into();
+                    scope
+                        .introduce(
+                            ident,
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            Region::zero(),
+                        )
+                        .unwrap()
+                };
+
+                let empty_record_pattern = Pattern::RecordDestructure {
+                    whole_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    destructs: vec![],
+                };
+
+                let effect_closure = Expr::Closure {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: effect_closure_symbol,
+                    captured_symbols,
+                    recursive: Recursive::NotRecursive,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
+                    loc_body: Box::new(Located::at_zero(low_level_call)),
+                };
+                Expr::Tag {
+                    variant_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    name: effect_tag_name,
+                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
+                }
             }
         }
-        _ => todo!(),
-    }
-
-    // TODO figure out something better for run lowlevel
-    let foreign_symbol_name = format!("roc_fx_{}", ident);
-    let low_level_call = Expr::ForeignCall {
-        foreign_symbol: foreign_symbol_name.into(),
-        args: linked_symbol_arguments,
-        ret_var: var_store.fresh(),
-    };
-
-    let effect_closure_symbol = {
-        let name = format!("effect_closure_{}", ident);
-
-        let ident = name.into();
-        scope
-            .introduce(
-                ident,
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
-            .unwrap()
-    };
-
-    let empty_record_pattern = Pattern::RecordDestructure {
-        whole_var: var_store.fresh(),
-        ext_var: var_store.fresh(),
-        destructs: vec![],
-    };
-
-    let effect_closure = Expr::Closure {
-        function_type: var_store.fresh(),
-        closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
-        return_type: var_store.fresh(),
-        name: effect_closure_symbol,
-        captured_symbols,
-        recursive: Recursive::NotRecursive,
-        arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
-        loc_body: Box::new(Located::at_zero(low_level_call)),
-    };
-
-    let body = Expr::Tag {
-        variant_var: var_store.fresh(),
-        ext_var: var_store.fresh(),
-        name: effect_tag_name,
-        arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
-    };
-
-    let expr = Expr::Closure {
-        function_type: var_store.fresh(),
-        closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
-        return_type: var_store.fresh(),
-        name: symbol,
-        captured_symbols: std::vec::Vec::new(),
-        recursive: Recursive::NotRecursive,
-        arguments,
-        loc_body: Box::new(Located::at_zero(body)),
     };
 
     let def_annotation = roc_can::def::Annotation {
@@ -2544,7 +2592,7 @@ fn fabricate_host_exposed_def(
 
     roc_can::def::Def {
         loc_pattern: Located::at_zero(pattern),
-        loc_expr: Located::at_zero(expr),
+        loc_expr: Located::at_zero(def_body),
         expr_var,
         pattern_vars,
         annotation: Some(def_annotation),

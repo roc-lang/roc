@@ -6,5 +6,5 @@ platform folkertdev/foo
         {
             putChar : Int -> Effect {},
             putLine : Str -> Effect {},
-            getLine : Int -> Effect Str
+            getLine : Effect Str
         }
