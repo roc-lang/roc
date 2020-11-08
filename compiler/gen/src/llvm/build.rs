@@ -905,7 +905,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Struct(sorted_fields) => {
             let ctx = env.context;
             let builder = env.builder;
-            let ptr_bytes = env.ptr_bytes;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -916,7 +915,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 let (field_expr, field_layout) = load_symbol_and_layout(env, scope, symbol);
-                if field_layout.stack_size(ptr_bytes) != 0 {
+                if !field_layout.is_dropped_because_empty() {
                     field_types.push(basic_type_from_layout(
                         env.arena,
                         env.context,
@@ -956,7 +955,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let it = arguments.iter();
 
             let ctx = env.context;
-            let ptr_bytes = env.ptr_bytes;
             let builder = env.builder;
 
             // Determine types
@@ -966,9 +964,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             for field_symbol in it {
                 let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if field_layout.stack_size(ptr_bytes) != 0 {
+                if !field_layout.is_dropped_because_empty() {
                     let field_type = basic_type_from_layout(
                         env.arena,
                         env.context,

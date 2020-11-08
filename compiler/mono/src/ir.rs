@@ -119,10 +119,12 @@ impl<'a> Proc<'a> {
         let args_doc = self
             .args
             .iter()
-            .map(|(_, symbol)| alloc.text(format!("{}", symbol)));
+            .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
 
         alloc
-            .text(format!("procedure {} (", self.name))
+            .text("procedure ")
+            .append(symbol_to_doc(alloc, self.name))
+            .append(" (")
             .append(alloc.intersperse(args_doc, ", "))
             .append("):")
             .append(alloc.hardline())
@@ -417,14 +419,23 @@ impl<'a> Procs<'a> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_self_recursive = false;
 
+        let layout = layout_cache
+            .from_var(env.arena, annotation, env.subs)
+            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+        if let Some(existing) = self.partial_procs.get(&symbol) {
+            // only assert that we're really adding the same thing
+            debug_assert_eq!(annotation, existing.annotation);
+            debug_assert_eq!(captured_symbols, existing.captured_symbols);
+            debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
+            return Ok(layout);
+        }
+
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
-                let layout = layout_cache
-                    .from_var(env.arena, annotation, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
                 let tuple = (symbol, layout);
                 let already_specialized = self.specialized.contains_key(&tuple);
@@ -443,8 +454,6 @@ impl<'a> Procs<'a> {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout.clone(), pending);
-
-                            debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! The same PartialProc should never be added twice", symbol);
 
                             self.partial_procs.insert(
                                 symbol,
@@ -894,6 +903,7 @@ where
     A: Clone,
 {
     alloc.text(format!("{}", symbol))
+    // alloc.text(format!("{:?}", symbol))
 }
 
 fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
@@ -1525,16 +1535,26 @@ fn specialize_external<'a>(
         };
 
         for (index, (symbol, variable)) in captured.iter().enumerate() {
-            let expr = Expr::AccessAtIndex {
-                index: index as _,
-                field_layouts,
-                structure: Symbol::ARG_CLOSURE,
-                wrapped,
-            };
-
             // layout is cached anyway, re-using the one found above leads to
             // issues (combining by-ref and by-move in pattern match
             let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+
+            // if the symbol has a layout that is dropped from data structures (e.g. `{}`)
+            // then regenerate the symbol here. The value may not be present in the closure
+            // data struct
+            let expr = {
+                if layout.is_dropped_because_empty() {
+                    Expr::Struct(&[])
+                } else {
+                    Expr::AccessAtIndex {
+                        index: index as _,
+                        field_layouts,
+                        structure: Symbol::ARG_CLOSURE,
+                        wrapped,
+                    }
+                }
+            };
+
             specialized_body = Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
         }
     }
@@ -1988,6 +2008,7 @@ pub fn with_hole<'a>(
                     recursive,
                     arguments,
                     loc_body: boxed_body,
+                    captured_symbols,
                     ..
                 } = def.loc_expr.value
                 {
@@ -1998,6 +2019,11 @@ pub fn with_hole<'a>(
 
                     let is_self_recursive =
                         !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
+
+                    // this should be a top-level declaration, and hence have no captured symbols
+                    // if we ever do hit this (and it's not a bug), we should make sure to put the
+                    // captured symbols into a CapturedSymbols and give it to insert_named
+                    debug_assert!(captured_symbols.is_empty());
 
                     procs.insert_named(
                         env,
@@ -2249,7 +2275,9 @@ pub fn with_hole<'a>(
                     "The `[]` type has no constructors, source var {:?}",
                     variant_var
                 ),
-                Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
+                Unit | UnitWithArguments => {
+                    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+                }
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -2928,14 +2956,22 @@ pub fn with_hole<'a>(
                     let symbols =
                         Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
                             .into_bump_slice();
-                    let expr = Expr::Struct(symbols);
 
-                    stmt = Stmt::Let(
-                        closure_data,
-                        expr,
-                        closure_data_layout.clone(),
-                        env.arena.alloc(stmt),
-                    );
+                    // define the closure data, unless it's a basic unwrapped type already
+                    match closure_layout.build_closure_data(name, symbols) {
+                        Ok(expr) => {
+                            stmt = Stmt::Let(
+                                closure_data,
+                                expr,
+                                closure_data_layout.clone(),
+                                env.arena.alloc(stmt),
+                            );
+                        }
+                        Err(current) => {
+                            // there is only one symbol captured, use that immediately
+                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        }
+                    }
 
                     let expr = Expr::FunctionPointer(name, function_ptr_layout.clone());
 
@@ -4912,7 +4948,7 @@ pub fn from_can_pattern<'a>(
                     "there is no pattern of type `[]`, union var {:?}",
                     *whole_var
                 ),
-                Unit => Pattern::EnumLiteral {
+                Unit | UnitWithArguments => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),
                     union: Union {
