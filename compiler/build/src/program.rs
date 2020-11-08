@@ -124,7 +124,7 @@ pub fn gen_from_mono_module(
         }
     }
 
-    // Uncomment this to see the module's optimized LLVM instruction output:
+    // Uncomment this to see the module's unoptimized LLVM instruction output:
     // env.module.print_to_stderr();
 
     mpm.run_on(module);
