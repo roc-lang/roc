@@ -1535,16 +1535,26 @@ fn specialize_external<'a>(
         };
 
         for (index, (symbol, variable)) in captured.iter().enumerate() {
-            let expr = Expr::AccessAtIndex {
-                index: index as _,
-                field_layouts,
-                structure: Symbol::ARG_CLOSURE,
-                wrapped,
-            };
-
             // layout is cached anyway, re-using the one found above leads to
             // issues (combining by-ref and by-move in pattern match
             let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+
+            // if the symbol has a layout that is dropped from data structures (e.g. `{}`)
+            // then regenerate the symbol here. The value may not be present in the closure
+            // data struct
+            let expr = {
+                if layout.is_dropped_because_empty() {
+                    Expr::Struct(&[])
+                } else {
+                    Expr::AccessAtIndex {
+                        index: index as _,
+                        field_layouts,
+                        structure: Symbol::ARG_CLOSURE,
+                        wrapped,
+                    }
+                }
+            };
+
             specialized_body = Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
         }
     }
@@ -2946,14 +2956,22 @@ pub fn with_hole<'a>(
                     let symbols =
                         Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
                             .into_bump_slice();
-                    let expr = Expr::Struct(symbols);
 
-                    stmt = Stmt::Let(
-                        closure_data,
-                        expr,
-                        closure_data_layout.clone(),
-                        env.arena.alloc(stmt),
-                    );
+                    // define the closure data, unless it's a basic unwrapped type already
+                    match closure_layout.build_closure_data(name, symbols) {
+                        Ok(expr) => {
+                            stmt = Stmt::Let(
+                                closure_data,
+                                expr,
+                                closure_data_layout.clone(),
+                                env.arena.alloc(stmt),
+                            );
+                        }
+                        Err(current) => {
+                            // there is only one symbol captured, use that immediately
+                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        }
+                    }
 
                     let expr = Expr::FunctionPointer(name, function_ptr_layout.clone());
 

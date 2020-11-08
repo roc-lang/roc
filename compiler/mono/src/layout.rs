@@ -45,9 +45,8 @@ pub struct ClosureLayout<'a> {
 }
 
 impl<'a> ClosureLayout<'a> {
-    #[allow(dead_code)]
     fn from_unit(arena: &'a Bump) -> Self {
-        let layout = Layout::Struct(&[]);
+        let layout = Layout::PhantomEmptyStruct;
         let layouts = arena.alloc(layout);
         ClosureLayout {
             captured: &[],
@@ -127,10 +126,8 @@ impl<'a> ClosureLayout<'a> {
                     UnitWithArguments => {
                         // the closure layout is zero-sized, but there is something in it (e.g.  `{}`)
 
-                        // TODO figure out what to do in this case.
-                        // let closure_layout = ClosureLayout::from_unit(arena);
-                        // Ok(Some(closure_layout))
-                        Ok(None)
+                        let closure_layout = ClosureLayout::from_unit(arena);
+                        Ok(Some(closure_layout))
                     }
                     BoolUnion { .. } => {
                         let closure_layout = ClosureLayout::from_bool(arena);
@@ -245,6 +242,12 @@ impl<'a> ClosureLayout<'a> {
 
                 Ok(expr)
             }
+            Layout::PhantomEmptyStruct => {
+                debug_assert_eq!(symbols.len(), 1);
+
+                Ok(Expr::Struct(&[]))
+            }
+
             _ => {
                 debug_assert_eq!(symbols.len(), 1);
 
@@ -372,11 +375,15 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub fn is_zero_sized(&self) -> bool {
+    pub fn is_dropped_because_empty(&self) -> bool {
         // For this calculation, we don't need an accurate
         // stack size, we just need to know whether it's zero,
         // so it's fine to use a pointer size of 1.
-        self.stack_size(1) == 0
+        if let Layout::PhantomEmptyStruct = self {
+            false
+        } else {
+            self.stack_size(1) == 0
+        }
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
@@ -765,7 +772,7 @@ fn layout_from_flat_type<'a>(
                 match Layout::from_var(env, field_var) {
                     Ok(layout) => {
                         // Drop any zero-sized fields like {}.
-                        if !layout.is_zero_sized() {
+                        if !layout.is_dropped_because_empty() {
                             layouts.push(layout);
                         }
                     }
@@ -874,7 +881,7 @@ pub fn sort_record_fields<'a>(
                 let layout = Layout::from_var(&mut env, var).expect("invalid layout from var");
 
                 // Drop any zero-sized fields like {}
-                if !layout.is_zero_sized() {
+                if !layout.is_dropped_because_empty() {
                     sorted_fields.push((label, var, Ok(layout)));
                 }
             }
@@ -970,7 +977,7 @@ fn union_sorted_tags_help<'a>(
                         match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
                                 // Drop any zero-sized arguments like {}
-                                if !layout.is_zero_sized() {
+                                if !layout.is_dropped_because_empty() {
                                     layouts.push(layout);
                                 } else {
                                     contains_zero_sized = true;
@@ -1015,7 +1022,7 @@ fn union_sorted_tags_help<'a>(
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
                             // Drop any zero-sized arguments like {}
-                            if !layout.is_zero_sized() {
+                            if !layout.is_dropped_because_empty() {
                                 has_any_arguments = true;
 
                                 arg_layouts.push(layout);
