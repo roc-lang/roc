@@ -1,4 +1,4 @@
-use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope};
+use crate::llvm::build::{call_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
@@ -7,6 +7,8 @@ use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
@@ -27,19 +29,19 @@ pub fn str_concat<'a, 'ctx, 'env>(
     let second_str_ptr = ptr_from_symbol(scope, second_str_symbol);
     let first_str_ptr = ptr_from_symbol(scope, first_str_symbol);
 
-    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+    let ret_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
 
     load_str(
         env,
         parent,
         *second_str_ptr,
-        str_wrapper_type,
+        ret_type,
         |second_str_ptr, second_str_len, second_str_smallness| {
             load_str(
                 env,
                 parent,
                 *first_str_ptr,
-                str_wrapper_type,
+                ret_type,
                 |first_str_ptr, first_str_len, first_str_smallness| {
                     // first_str_len > 0
                     // We do this check to avoid allocating memory. If the first input
@@ -72,7 +74,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                             second_str_length_comparison,
                             if_second_str_is_nonempty,
                             if_second_str_is_empty,
-                            str_wrapper_type,
+                            ret_type,
                         )
                     };
 
@@ -589,5 +591,36 @@ fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntVa
         len,
         env.ptr_int().const_zero(),
         "str_len_is_nonzero",
+    )
+}
+
+/// Str.countGraphemes : Str -> Int
+pub fn str_count_graphemes<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let sym_str_ptr = ptr_from_symbol(scope, str_symbol);
+    let ret_type = BasicTypeEnum::IntType(ctx.i64_type());
+
+    load_str(
+        env,
+        parent,
+        *sym_str_ptr,
+        ret_type,
+        |str_ptr, str_len, _str_smallness| {
+            call_bitcode_fn(
+                LowLevel::StrCountGraphemes,
+                env,
+                &[
+                    BasicValueEnum::PointerValue(str_ptr),
+                    BasicValueEnum::IntValue(str_len),
+                ],
+                &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
+            )
+        },
     )
 }

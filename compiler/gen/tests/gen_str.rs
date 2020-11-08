@@ -202,4 +202,18 @@ mod gen_str {
     fn empty_str_is_empty() {
         assert_evals_to!(r#"Str.isEmpty """#, true, bool);
     }
+
+    #[test]
+    fn str_count_graphemes_small_str() {
+        assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
+    }
+
+    #[test]
+    fn str_count_graphemes_big_str() {
+        assert_evals_to!(
+            r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
+            45,
+            usize
+        );
+    }
 }
