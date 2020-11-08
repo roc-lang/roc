@@ -1064,4 +1064,52 @@ mod gen_primitives {
             f64
         );
     }
+
+    #[test]
+    fn return_wrapped_function_pointer() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                foo : Effect {}
+                foo = @Effect \{} -> {}
+
+                main : Effect {}
+                main = foo
+                "#
+            ),
+            1,
+            i64,
+            |_| 1
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn return_wrapped_closure() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                foo : Effect {}
+                foo =
+                    x = 5
+
+                    @Effect \{} -> if x > 3 then {} else {}
+
+                main : Effect {}
+                main = foo
+                "#
+            ),
+            1,
+            i64,
+            |_| 1
+        );
+    }
 }
