@@ -1612,6 +1612,19 @@ fn update<'a>(
             {
                 // state.timings.insert(module_id, module_timing);
 
+                // display the mono IR of the module, for debug purposes
+                if false {
+                    let procs_string = state
+                        .procedures
+                        .values()
+                        .map(|proc| proc.to_pretty(200))
+                        .collect::<Vec<_>>();
+
+                    let result = procs_string.join("\n");
+
+                    println!("{}", result);
+                }
+
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx

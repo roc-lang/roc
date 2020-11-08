@@ -119,10 +119,12 @@ impl<'a> Proc<'a> {
         let args_doc = self
             .args
             .iter()
-            .map(|(_, symbol)| alloc.text(format!("{}", symbol)));
+            .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
 
         alloc
-            .text(format!("procedure {} (", self.name))
+            .text("procedure ")
+            .append(symbol_to_doc(alloc, self.name))
+            .append(" (")
             .append(alloc.intersperse(args_doc, ", "))
             .append("):")
             .append(alloc.hardline())
@@ -901,6 +903,7 @@ where
     A: Clone,
 {
     alloc.text(format!("{}", symbol))
+    // alloc.text(format!("{:?}", symbol))
 }
 
 fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
@@ -1995,6 +1998,7 @@ pub fn with_hole<'a>(
                     recursive,
                     arguments,
                     loc_body: boxed_body,
+                    captured_symbols,
                     ..
                 } = def.loc_expr.value
                 {
@@ -2005,6 +2009,11 @@ pub fn with_hole<'a>(
 
                     let is_self_recursive =
                         !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
+
+                    // this should be a top-level declaration, and hence have no captured symbols
+                    // if we ever do hit this (and it's not a bug), we should make sure to put the
+                    // captured symbols into a CapturedSymbols and give it to insert_named
+                    debug_assert!(captured_symbols.is_empty());
 
                     procs.insert_named(
                         env,
@@ -2256,7 +2265,9 @@ pub fn with_hole<'a>(
                     "The `[]` type has no constructors, source var {:?}",
                     variant_var
                 ),
-                Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
+                Unit | UnitWithArguments => {
+                    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+                }
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -4919,7 +4930,7 @@ pub fn from_can_pattern<'a>(
                     "there is no pattern of type `[]`, union var {:?}",
                     *whole_var
                 ),
-                Unit => Pattern::EnumLiteral {
+                Unit | UnitWithArguments => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),
                     union: Union {

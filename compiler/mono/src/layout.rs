@@ -41,6 +41,15 @@ pub struct ClosureLayout<'a> {
 }
 
 impl<'a> ClosureLayout<'a> {
+    #[allow(dead_code)]
+    fn from_unit(arena: &'a Bump) -> Self {
+        let layout = Layout::Struct(&[]);
+        let layouts = arena.alloc(layout);
+        ClosureLayout {
+            captured: &[],
+            layout: layouts,
+        }
+    }
     fn from_bool(arena: &'a Bump) -> Self {
         let layout = Layout::Builtin(Builtin::Int1);
         let layouts = arena.alloc(layout);
@@ -111,6 +120,14 @@ impl<'a> ClosureLayout<'a> {
                 match variant {
                     Never => Ok(None),
                     Unit => Ok(None),
+                    UnitWithArguments => {
+                        // the closure layout is zero-sized, but there is something in it (e.g.  `{}`)
+
+                        // TODO figure out what to do in this case.
+                        // let closure_layout = ClosureLayout::from_unit(arena);
+                        // Ok(Some(closure_layout))
+                        Ok(None)
+                    }
                     BoolUnion { .. } => {
                         let closure_layout = ClosureLayout::from_bool(arena);
 
@@ -867,6 +884,7 @@ pub fn sort_record_fields<'a>(
 pub enum UnionVariant<'a> {
     Never,
     Unit,
+    UnitWithArguments,
     BoolUnion { ttrue: TagName, ffalse: TagName },
     ByteUnion(Vec<'a, TagName>),
     Unwrapped(Vec<'a, Layout<'a>>),
@@ -933,6 +951,7 @@ fn union_sorted_tags_help<'a>(
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut contains_zero_sized = false;
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
@@ -946,6 +965,8 @@ fn union_sorted_tags_help<'a>(
                                 // Drop any zero-sized arguments like {}
                                 if !layout.is_zero_sized() {
                                     layouts.push(layout);
+                                } else {
+                                    contains_zero_sized = true;
                                 }
                             }
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -962,7 +983,11 @@ fn union_sorted_tags_help<'a>(
             }
 
             if layouts.is_empty() {
-                UnionVariant::Unit
+                if contains_zero_sized {
+                    UnionVariant::UnitWithArguments
+                } else {
+                    UnionVariant::Unit
+                }
             } else {
                 UnionVariant::Unwrapped(layouts)
             }
@@ -1045,7 +1070,7 @@ pub fn layout_from_tag_union<'a>(
 
         match variant {
             Never => panic!("TODO gracefully handle trying to instantiate Never"),
-            Unit => Layout::Struct(&[]),
+            Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
             Unwrapped(mut field_layouts) => {
