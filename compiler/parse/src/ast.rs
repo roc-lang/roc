@@ -168,6 +168,16 @@ pub enum StrLiteral<'a> {
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IdentPart<'a> {
+    AtCapitalized(&'a str),
+    Capitalized(&'a str),
+    Uncapitalized(&'a str),
+    Malformed(&'a str),
+    /// Could be two dots back to back, or a dot at the front (accessor function)
+    Empty,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -190,10 +200,6 @@ pub enum Expr<'a> {
 
     // String Literals
     Str(StrLiteral<'a>), // string without escapes in it
-    /// Look up exactly one field on a record, e.g. (expr).foo.
-    Access(&'a Expr<'a>, &'a str),
-    /// e.g. `.foo`
-    AccessorFunction(&'a str),
 
     // Collection Literals
     List(&'a [&'a Loc<Expr<'a>>]),
@@ -202,15 +208,14 @@ pub enum Expr<'a> {
         fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
     },
 
-    // Lookups
-    Var {
-        module_name: &'a str,
-        ident: &'a str,
-    },
+    /// Lookups, tags, and field access
+    Ident(&'a [IdentPart<'a>]),
 
-    // Tags
-    GlobalTag(&'a str),
-    PrivateTag(&'a str),
+    /// Look up exactly one field on a record, e.g. (expr).foo.
+    Access(&'a Expr<'a>, &'a str),
+
+    /// e.g. (.foo.bar.baz)
+    AccessorFunction(&'a [IdentPart<'a>]),
 
     // Pattern Matching
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
@@ -384,11 +389,9 @@ pub enum CommentOrNewline<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern<'a> {
-    // Identifier
-    Identifier(&'a str),
+    /// Lookups, tags, and field access
+    Identifier(&'a [IdentPart<'a>]),
 
-    GlobalTag(&'a str),
-    PrivateTag(&'a str),
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
@@ -441,8 +444,6 @@ pub enum Base {
 impl<'a> Pattern<'a> {
     pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
         match ident {
-            Ident::GlobalTag(string) => Pattern::GlobalTag(string),
-            Ident::PrivateTag(string) => Pattern::PrivateTag(string),
             Ident::Access { module_name, parts } => {
                 if parts.len() == 1 {
                     // This is valid iff there is no module.

@@ -1,4 +1,4 @@
-use crate::ast::Attempting;
+use crate::ast::{Attempting, IdentPart};
 use crate::keyword;
 use crate::parser::{peek_utf8_char, unexpected, Fail, FailReason, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
@@ -7,58 +7,13 @@ use bumpalo::Bump;
 use roc_collections::all::arena_join;
 use roc_region::all::Region;
 
-/// The parser accepts all of these in any position where any one of them could
-/// appear. This way, canonicalization can give more helpful error messages like
-/// "you can't redefine this tag!" if you wrote `Foo = ...` or
-/// "you can only define unqualified constants" if you wrote `Foo.bar = ...`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Ident<'a> {
-    /// Foo or Bar
-    GlobalTag(&'a str),
-    /// @Foo or @Bar
-    PrivateTag(&'a str),
-    /// foo or foo.bar or Foo.Bar.baz.qux
-    Access {
-        module_name: &'a str,
-        parts: &'a [&'a str],
-    },
-    /// .foo
-    AccessorFunction(&'a str),
-    /// .Foo or foo. or something like foo.Bar
-    Malformed(&'a str),
+enum IdentProblem {
+    ContainedUnderscore(usize),
+    AtSignInMiddle(usize),
+    UncapitalizedAt(usize),
 }
 
-impl<'a> Ident<'a> {
-    pub fn len(&self) -> usize {
-        use self::Ident::*;
-
-        match self {
-            GlobalTag(string) | PrivateTag(string) => string.len(),
-            Access { module_name, parts } => {
-                let mut len = if module_name.is_empty() {
-                    0
-                } else {
-                    module_name.len() + 1
-                    // +1 for the dot
-                };
-
-                for part in parts.iter() {
-                    len += part.len() + 1 // +1 for the dot
-                }
-
-                len - 1
-            }
-            AccessorFunction(string) => string.len(),
-            Malformed(string) => string.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-/// Parse an identifier into a string.
+/// Parse an identifier into a &[IdentPart] slice.
 ///
 /// This is separate from the `ident` Parser because string interpolation
 /// wants to use it this way.
@@ -70,65 +25,29 @@ impl<'a> Ident<'a> {
 pub fn parse_ident<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
-    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
-    let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
-    let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
-    let mut is_capitalized;
-    let is_accessor_fn;
-    let mut is_private_tag = false;
-
-    // Identifiers and accessor functions must start with either a letter or a dot.
-    // If this starts with neither, it must be something else!
-    match peek_utf8_char(&state) {
-        Ok((first_ch, bytes_parsed)) => {
-            if first_ch.is_alphabetic() {
-                part_buf.push(first_ch);
-
-                is_capitalized = first_ch.is_uppercase();
-                is_accessor_fn = false;
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            } else if first_ch == '.' {
-                is_capitalized = false;
-                is_accessor_fn = true;
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            } else if first_ch == '@' {
-                state = state.advance_without_indenting(bytes_parsed)?;
-
-                // '@' must always be followed by a capital letter!
-                match peek_utf8_char(&state) {
-                    Ok((next_ch, next_bytes_parsed)) => {
-                        if next_ch.is_uppercase() {
-                            state = state.advance_without_indenting(next_bytes_parsed)?;
-
-                            part_buf.push('@');
-                            part_buf.push(next_ch);
-
-                            is_private_tag = true;
-                            is_capitalized = true;
-                            is_accessor_fn = false;
-                        } else {
-                            return Err(unexpected(
-                                bytes_parsed + next_bytes_parsed,
-                                state,
-                                Attempting::Identifier,
-                            ));
-                        }
-                    }
-                    Err(reason) => return state.fail(reason),
-                }
-            } else {
-                return Err(unexpected(0, state, Attempting::Identifier));
-            }
-        }
-        Err(reason) => return state.fail(reason),
+) -> ParseResult<'a, &'a [IdentPart<'a>]> {
+    enum PartType {
+        AtCapitalized,
+        Capitalized,
+        Uncapitalized,
+        Malformed,
+        Empty,
     }
+
+    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
+    let mut parts = Vec::new_in(arena);
+    let mut problems = Vec::new_in(arena);
+    let mut part_type = PartType::Empty;
+    let mut original_state_bytes_len = state.bytes.len();
+
+    let mut problem = |prob| {
+        problems.push(prob);
+        part_type = PartType::Malformed;
+    };
 
     while !state.bytes.is_empty() {
         match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
+            Ok((ch, mut bytes_parsed)) => {
                 // After the first character, only these are allowed:
                 //
                 // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
@@ -177,6 +96,54 @@ pub fn parse_ident<'a>(
 
                     // Now that we've recorded the contents of the current buffer, reset it.
                     part_buf = String::new_in(arena);
+                } else if ch == '@' {
+                    // This is AtCapitalized if it's both at the beginning
+                    // of the part, and is followed by an uppercase letter.
+                    // Otherwise, it's malformed!
+                    match peek_utf8_char(&state) {
+                        Ok((next_ch, next_bytes_parsed))
+                            if part_buf.is_empty() && next_ch.is_uppercase() =>
+                        {
+                            bytes_parsed += next_bytes_parsed;
+
+                            part_type = PartType::AtCapitalized;
+                        }
+                        Ok((next_ch, next_bytes_parsed))
+                            if part_buf.is_empty() && !next_ch.is_uppercase() =>
+                        {
+                            bytes_parsed += next_bytes_parsed;
+
+                            let index = original_state_bytes_len - state.bytes.len();
+
+                            problem(IdentProblem::UncapitalizedAt(index));
+                        }
+                        Ok((next_ch, next_bytes_parsed)) if !part_buf.is_empty() => {
+                            bytes_parsed += next_bytes_parsed;
+
+                            let index = original_state_bytes_len - state.bytes.len();
+
+                            problem(IdentProblem::AtSignInMiddle(index));
+                        }
+                        Err(reason) => {
+                            state = state.advance_without_indenting(bytes_parsed)?;
+
+                            return Err((
+                                Fail {
+                                    attempting: state.attempting,
+                                    reason,
+                                },
+                                state,
+                            ));
+                        }
+                    }
+                // This is definitely a malformed identifier
+                } else if ch == '_' {
+                    // This is malformed, but we can give a special-case
+                    // error message about how idents can't have underscores
+                    // in them (since many languages allow it).
+                    let index = original_state_bytes_len - state.bytes.len();
+
+                    problem(IdentProblem::ContainedUnderscore(index));
                 } else {
                     // This must be the end of the identifier. We're done!
 

@@ -4,7 +4,7 @@ use crate::ast::{
 use crate::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
-use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
+use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident, IdentPart};
 use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
@@ -234,15 +234,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, Fail> {
     match expr {
-        Expr::Var { module_name, ident } => {
-            if module_name.is_empty() {
-                Ok(Pattern::Identifier(ident))
-            } else {
-                Ok(Pattern::QualifiedIdentifier { module_name, ident })
-            }
-        }
-        Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
-        Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
+        Expr::Ident(ident) => Ok(Pattern::Identifier(ident)),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern(arena, &loc_val.value)?;
@@ -539,30 +531,36 @@ fn annotation_or_alias<'a>(
     use crate::ast::Pattern::*;
 
     match pattern {
-        // Type aliases initially parse as either global tags
-        // or applied global tags, because they are always uppercase
-        GlobalTag(name) => Def::Alias {
-            name: Located {
-                value: name,
-                region,
-            },
-            vars: &[],
-            ann: loc_ann,
-        },
         Apply(
             Located {
                 region,
-                value: Pattern::GlobalTag(name),
+                value: Pattern::Identifier(ident_parts),
             },
             loc_vars,
-        ) => Def::Alias {
-            name: Located {
-                value: name,
-                region: *region,
-            },
-            vars: loc_vars,
-            ann: loc_ann,
-        },
+        ) => {
+            match ident_parts.first() {
+                // Type aliases are always uppercase and have exactly 1 part.
+                Some(IdentPart::Uppercase(ident)) if ident_parts.len() == 1 => {
+                    Def::Alias {
+                        name: Located {
+                            value: ident,
+                            region: *region,
+                        },
+                        vars: loc_vars,
+                        ann: loc_ann,
+                    }
+                }
+                _ =>
+                    // This is a regular Annotation
+                    Def::Annotation(
+                        Located {
+                            region: *region,
+                            value: Pattern::Identifier(ident_parts),
+                        },
+                        loc_ann,
+                    )
+            }
+        }
         Apply(_, _) => {
             Def::NotYetImplemented("TODO gracefully handle invalid Apply in type annotation")
         }
@@ -575,10 +573,6 @@ fn annotation_or_alias<'a>(
             spaces_before,
         ),
         Nested(value) => annotation_or_alias(arena, value, region, loc_ann),
-
-        PrivateTag(_) => {
-            Def::NotYetImplemented("TODO gracefully handle trying to use a private tag as an annotation.")
-        }
         QualifiedIdentifier { .. } => {
             Def::NotYetImplemented("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`")
         }
@@ -591,15 +585,28 @@ fn annotation_or_alias<'a>(
         Malformed(_) => {
             Def::NotYetImplemented("TODO translate a malformed pattern into a malformed annotation")
         }
-        Identifier(ident) => {
-            // This is a regular Annotation
-            Def::Annotation(
-                Located {
-                    region,
-                    value: Pattern::Identifier(ident),
-                },
-                loc_ann,
-            )
+        Identifier(ident_parts) => {
+            match ident_parts.first() {
+                Some(IdentPart::Uppercase(ident)) if ident_parts.len() == 1 => {
+                    Def::Alias {
+                        name: Located {
+                            value: ident,
+                            region,
+                        },
+                        vars: &[],
+                        ann: loc_ann,
+                    }
+                }
+                _ =>
+                // This is a regular Annotation
+                Def::Annotation(
+                    Located {
+                        region,
+                        value: Pattern::Identifier(ident_parts),
+                    },
+                    loc_ann,
+                )
+            }
         }
         RecordDestructure(loc_patterns) => {
             // This is a record destructure Annotation
@@ -1620,8 +1627,6 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
 
 pub fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
-        Ident::GlobalTag(string) => Expr::GlobalTag(string),
-        Ident::PrivateTag(string) => Expr::PrivateTag(string),
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
 
