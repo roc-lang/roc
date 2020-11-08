@@ -5,4 +5,3 @@ main =
     Effect.putLine "Write a thing!"
         |> Effect.after (\{} -> Effect.getLine {})
         |> Effect.after (\line -> Effect.putLine line)
-

@@ -8,3 +8,6 @@ platform folkertdev/foo
             putLine : Str -> Effect {},
             getLine : {} -> Effect Str
         }
+
+mainForHost : Effect {} as Fx
+mainForHost = main

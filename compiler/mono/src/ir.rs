@@ -4678,6 +4678,12 @@ fn call_by_name<'a>(
                 .specialized
                 .contains_key(&(proc_name, full_layout.clone()))
             {
+                debug_assert_eq!(
+                    arg_layouts.len(),
+                    field_symbols.len(),
+                    "see call_by_name for background (scroll down a bit)"
+                );
+
                 let call = Expr::FunctionCall {
                     call_type: CallType::ByName(proc_name),
                     ret_layout: ret_layout.clone(),
@@ -4721,6 +4727,11 @@ fn call_by_name<'a>(
                             );
                         }
 
+                        debug_assert_eq!(
+                            arg_layouts.len(),
+                            field_symbols.len(),
+                            "see call_by_name for background (scroll down a bit)"
+                        );
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
                             ret_layout: ret_layout.clone(),
@@ -4762,30 +4773,106 @@ fn call_by_name<'a>(
                                         let function_layout =
                                             FunctionLayouts::from_layout(env.arena, layout);
 
-                                        procs.specialized.remove(&(proc_name, full_layout));
+                                        procs.specialized.remove(&(proc_name, full_layout.clone()));
 
                                         procs.specialized.insert(
                                             (proc_name, function_layout.full.clone()),
                                             Done(proc),
                                         );
 
-                                        let call = Expr::FunctionCall {
-                                            call_type: CallType::ByName(proc_name),
-                                            ret_layout: function_layout.result.clone(),
-                                            full_layout: function_layout.full,
-                                            arg_layouts: function_layout.arguments,
-                                            args: field_symbols,
-                                        };
+                                        if field_symbols.is_empty() {
+                                            debug_assert!(loc_args.is_empty());
 
-                                        let iter = loc_args
-                                            .into_iter()
-                                            .rev()
-                                            .zip(field_symbols.iter().rev());
+                                            // This happens when we return a function, e.g.
+                                            //
+                                            // foo = Num.add
+                                            //
+                                            // Even though the layout (and type) are functions,
+                                            // there are no arguments. This confuses our IR,
+                                            // and we have to fix it here.
+                                            match full_layout {
+                                                Layout::Closure(_, closure_layout, _) => {
+                                                    let call = Expr::FunctionCall {
+                                                        call_type: CallType::ByName(proc_name),
+                                                        ret_layout: function_layout.result.clone(),
+                                                        full_layout: function_layout.full.clone(),
+                                                        arg_layouts: function_layout.arguments,
+                                                        args: field_symbols,
+                                                    };
 
-                                        let result =
-                                            Stmt::Let(assigned, call, function_layout.result, hole);
+                                                    // in the case of a closure specifically, we
+                                                    // have to create a custom layout, to make sure
+                                                    // the closure data is part of the layout
+                                                    let closure_struct_layout = Layout::Struct(
+                                                        env.arena.alloc([
+                                                            function_layout.full,
+                                                            closure_layout
+                                                                .as_block_of_memory_layout(),
+                                                        ]),
+                                                    );
 
-                                        assign_to_symbols(env, procs, layout_cache, iter, result)
+                                                    let result = Stmt::Let(
+                                                        assigned,
+                                                        call,
+                                                        closure_struct_layout,
+                                                        hole,
+                                                    );
+
+                                                    result
+                                                }
+                                                _ => {
+                                                    let call = Expr::FunctionCall {
+                                                        call_type: CallType::ByName(proc_name),
+                                                        ret_layout: function_layout.result.clone(),
+                                                        full_layout: function_layout.full.clone(),
+                                                        arg_layouts: function_layout.arguments,
+                                                        args: field_symbols,
+                                                    };
+
+                                                    let result = Stmt::Let(
+                                                        assigned,
+                                                        call,
+                                                        function_layout.full,
+                                                        hole,
+                                                    );
+
+                                                    result
+                                                }
+                                            }
+                                        } else {
+                                            debug_assert_eq!(
+                                                function_layout.arguments.len(),
+                                                field_symbols.len(),
+                                                "scroll up a bit for background"
+                                            );
+                                            let call = Expr::FunctionCall {
+                                                call_type: CallType::ByName(proc_name),
+                                                ret_layout: function_layout.result.clone(),
+                                                full_layout: function_layout.full,
+                                                arg_layouts: function_layout.arguments,
+                                                args: field_symbols,
+                                            };
+
+                                            let iter = loc_args
+                                                .into_iter()
+                                                .rev()
+                                                .zip(field_symbols.iter().rev());
+
+                                            let result = Stmt::Let(
+                                                assigned,
+                                                call,
+                                                function_layout.result,
+                                                hole,
+                                            );
+
+                                            assign_to_symbols(
+                                                env,
+                                                procs,
+                                                layout_cache,
+                                                iter,
+                                                result,
+                                            )
+                                        }
                                     }
                                     Err(error) => {
                                         let error_msg = env.arena.alloc(format!(
@@ -4803,6 +4890,12 @@ fn call_by_name<'a>(
 
                             None if assigned.module_id() != proc_name.module_id() => {
                                 add_needed_external(procs, env, original_fn_var, proc_name);
+
+                                debug_assert_eq!(
+                                    arg_layouts.len(),
+                                    field_symbols.len(),
+                                    "scroll up a bit for background"
+                                );
 
                                 let call = Expr::FunctionCall {
                                     call_type: CallType::ByName(proc_name),
