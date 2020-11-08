@@ -31,10 +31,23 @@ mod gen_str {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Str.split "hello there long long" "hello there long long long long long"
+                    Str.split "string to split is shorter" "than the delimiter which happens to be very very long"
                 "#
             ),
-            &["hello"],
+            &["string to split is shorter"],
+            &'static [&'static str]
+        );
+    }
+
+    #[test]
+    fn str_split_big_str() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "hello 0123456789abcdef there 0123456789abcdef " " 0123456789abcdef "
+                "#
+            ),
+            &["hello", "there"],
             &'static [&'static str]
         );
     }
