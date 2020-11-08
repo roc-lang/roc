@@ -67,9 +67,9 @@ pub fn str_split<'a, 'ctx, 'env>(
                         &[
                             ret_list,
                             segment_count,
-                            str_,
+                            BasicValueEnum::PointerValue(*str_ptr),
                             BasicValueEnum::IntValue(str_len),
-                            delimiter,
+                            BasicValueEnum::PointerValue(*delimiter_ptr),
                             BasicValueEnum::IntValue(delimiter_len),
                         ],
                         &bitcode::STR_STR_SPLIT_IN_PLACE,
