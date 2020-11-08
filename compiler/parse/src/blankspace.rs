@@ -214,7 +214,7 @@ enum LineState {
 
 pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
     then(
-        and!(ascii_char('#'), optional(ascii_string("# "))),
+        and!(ascii_char(b'#'), optional(ascii_string("# "))),
         |_arena: &'a Bump, state: State<'a>, (_, opt_doc)| {
             if opt_doc != None {
                 return Err(unexpected(3, state, Attempting::LineComment));

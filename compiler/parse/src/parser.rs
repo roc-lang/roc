@@ -452,7 +452,7 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
 /// (For newlines, use newline_char(), which handles line numbers)
 pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
     // Make sure this really is not a newline!
-    debug_assert_ne!(expected, '\n');
+    debug_assert_ne!(expected, b'\n');
 
     move |_arena, state: State<'a>| match state.bytes.first() {
         Some(&actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),

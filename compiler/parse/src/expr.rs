@@ -481,7 +481,6 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 //     }
 // }
 
-
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
 fn equals_for_def<'a>() -> impl Parser<'a, ()> {
@@ -551,7 +550,7 @@ fn annotation<'a>(
 
 fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>> {
     skip_first!(
-        zero_or_more!(ascii_char(' ')),
+        zero_or_more!(ascii_char(b' ')),
         map!(
             either!(newline_char(), line_comment()),
             |either_comment_or_newline| match either_comment_or_newline {
@@ -1473,9 +1472,6 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
                 ascii_char(b'#'),
                 newline_char(),
                 ascii_char(b'>')
-                ascii_char(' '),
-                ascii_char('#'),
-                ascii_char('>')
             ),
         ),
         move |arena, state, (spaces, num_or_minus_char)| {
