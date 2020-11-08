@@ -494,6 +494,50 @@ mod test_can {
 
         assert_eq!(problems, Vec::new());
     }
+
+    #[test]
+    fn annotation_followed_with_unrelated_affectation() {
+        let src = indoc!(
+            r#"
+                F : Int
+
+                x = 1
+
+                x
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::UnusedDef(_, _) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn two_annotations_followed_with_unrelated_affectation() {
+        let src = indoc!(
+            r#"
+                G : Int
+
+                F : Int
+                
+                x = 1
+
+                x
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::UnusedDef(_, _) => true,
+            _ => false,
+        }));
+    }
     // LOCALS
 
     // TODO rewrite this test to check only for UnusedDef reports

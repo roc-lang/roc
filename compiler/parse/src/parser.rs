@@ -341,6 +341,22 @@ where
     }
 }
 
+pub fn and_then_with_indent_level<'a, P1, P2, F, Before, After>(
+    parser: P1,
+    transform: F,
+) -> impl Parser<'a, After>
+where
+    P1: Parser<'a, Before>,
+    P2: Parser<'a, After>,
+    F: Fn(Before, u16) -> P2,
+{
+    move |arena, state| {
+        parser.parse(arena, state).and_then(|(output, next_state)| {
+            transform(output, next_state.indent_col).parse(arena, next_state)
+        })
+    }
+}
+
 pub fn then<'a, P1, F, Before, After>(parser: P1, transform: F) -> impl Parser<'a, After>
 where
     P1: Parser<'a, Before>,

@@ -3,15 +3,15 @@ use crate::ast::{
 };
 use crate::blankspace::{
     line_comment, space0, space0_after, space0_around, space0_before, space1, space1_around,
-    space1_before,
+    space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
-    self, allocated, ascii_char, ascii_string, fail, newline_char, not, not_followed_by, optional,
-    sep_by1, then, unexpected, unexpected_eof, Either, Fail, FailReason, ParseResult, Parser,
-    State,
+    self, allocated, and_then_with_indent_level, ascii_char, ascii_string, fail, map, newline_char,
+    not, not_followed_by, optional, sep_by1, then, unexpected, unexpected_eof, Either, Fail,
+    FailReason, ParseResult, Parser, State,
 };
 use crate::type_annotation;
 use bumpalo::collections::string::String;
@@ -567,7 +567,7 @@ type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
 fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
     let indented_more = min_indent + 1;
     and!(
-        skip_first!(space0(min_indent), pattern(min_indent)),
+        pattern(min_indent),
         skip_first!(
             equals_for_def(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
@@ -575,6 +575,22 @@ fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
             space0_before(
                 loc!(move |arena, state| parse_expr(indented_more, arena, state)),
                 min_indent,
+            )
+        )
+    )
+}
+
+fn body_at_indent<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>> {
+    let indented_more = indent_level + 1;
+    and!(
+        skip_first!(spaces_exactly(indent_level), pattern(indent_level)),
+        skip_first!(
+            equals_for_def(),
+            // Spaces after the '=' (at a normal indentation level) and then the expr.
+            // The expr itself must be indented more than the pattern and '='
+            space0_before(
+                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
+                indent_level,
             )
         )
     )
@@ -588,7 +604,10 @@ type AnnotationOrAnnotatedBody<'a> = (
 fn annotated_body<'a>(min_indent: u16) -> impl Parser<'a, AnnotationOrAnnotatedBody<'a>> {
     and!(
         annotation(min_indent),
-        optional(and!(spaces_then_comment_or_newline(), body(min_indent)))
+        optional(and!(
+            spaces_then_comment_or_newline(),
+            body_at_indent(min_indent)
+        ))
     )
 }
 
@@ -813,11 +832,18 @@ fn parse_def_signature<'a>(
                 //
                 // It should be indented more than the original, and it will
                 // end when outdented again.
-                and!(
+                and_then_with_indent_level(
                     type_annotation::located(indented_more),
-                    // The first annotation may be followed by a body
+                    // The first annotation may be immediately (spaces_then_comment_or_newline())
+                    // followed by a body at the exact same indent_level
                     // leading to an AnnotatedBody in this case
-                    optional(and!(spaces_then_comment_or_newline(), body(indented_more)))
+                    |type_ann, indent_level| map(
+                        optional(and!(
+                            spaces_then_comment_or_newline(),
+                            body_at_indent(indent_level)
+                        )),
+                        move |opt_body| (type_ann.clone(), opt_body)
+                    )
                 ),
                 and!(
                     // Optionally parse additional defs.

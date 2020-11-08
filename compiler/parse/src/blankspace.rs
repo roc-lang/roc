@@ -240,6 +240,63 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
 }
 
 #[inline(always)]
+pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
+    move |_arena: &'a Bump, state: State<'a>| {
+        if spaces_expected == 0 {
+            return Ok(((), state));
+        }
+
+        let mut state = state;
+        let mut spaces_seen: u16 = 0;
+
+        while !state.bytes.is_empty() {
+            match peek_utf8_char(&state) {
+                Ok((' ', _)) => {
+                    spaces_seen += 1;
+                    state = state.advance_spaces(1)?;
+                    if spaces_seen == spaces_expected {
+                        return Ok(((), state));
+                    }
+                }
+                Ok(_) => {
+                    return Err(unexpected(
+                        spaces_seen.into(),
+                        state.clone(),
+                        state.attempting,
+                    ));
+                }
+
+                Err(FailReason::BadUtf8) => {
+                    // If we hit an invalid UTF-8 character, bail out immediately.
+                    return state.fail(FailReason::BadUtf8);
+                }
+                Err(_) => {
+                    if spaces_seen == 0 {
+                        return Err(unexpected_eof(0, state.attempting, state));
+                    } else {
+                        return Err(unexpected(
+                            spaces_seen.into(),
+                            state.clone(),
+                            state.attempting,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if spaces_seen == 0 {
+            return Err(unexpected_eof(0, state.attempting, state));
+        } else {
+            return Err(unexpected(
+                spaces_seen.into(),
+                state.clone(),
+                state.attempting,
+            ));
+        }
+    }
+}
+
+#[inline(always)]
 fn spaces<'a>(
     require_at_least_one: bool,
     min_indent: u16,
