@@ -1028,6 +1028,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
     });
 
+    // Str.countGraphemes : Attr * Str, -> Attr * Int
+    add_type(Symbol::STR_COUNT_GRAPHEMES, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![str_type(star1)], int_type(star2))
+    });
+
     // Result module
 
     // map : Attr * (Result (Attr a e))

@@ -520,7 +520,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - arguments that we may want to update destructively must be Owned
     // - other refcounted arguments are Borrowed
     match op {
-        ListLen | StrIsEmpty => arena.alloc_slice_copy(&[borrowed]),
+        ListLen | StrIsEmpty | StrCountGraphemes => arena.alloc_slice_copy(&[borrowed]),
         ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),

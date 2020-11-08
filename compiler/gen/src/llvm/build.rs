@@ -4,7 +4,7 @@ use crate::llvm::build_list::{
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
     list_reverse, list_set, list_single, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, str_len, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -2560,6 +2560,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             );
             BasicValueEnum::IntValue(is_zero)
         }
+        StrCountGraphemes => {
+            // Str.countGraphemes : Str -> Int
+            debug_assert_eq!(args.len(), 1);
+
+            str_count_graphemes(env, scope, parent, args[0])
+        }
         ListLen => {
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
@@ -3060,7 +3066,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             NumPowInt,
             env,
             &[lhs.into(), rhs.into()],
-            &bitcode::MATH_POW_INT,
+            &bitcode::NUM_POW_INT,
         ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
@@ -3068,7 +3074,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn call_bitcode_fn<'a, 'ctx, 'env>(
+pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     op: LowLevel,
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
@@ -3109,7 +3115,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::NUM_IS_FINITE)
                     .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
@@ -3131,7 +3137,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::NUM_IS_FINITE)
                     .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
@@ -3261,10 +3267,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::MATH_IS_FINITE),
-        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::MATH_ATAN),
-        NumAcos => call_bitcode_fn(NumAcos, env, &[arg.into()], &bitcode::MATH_ACOS),
-        NumAsin => call_bitcode_fn(NumAsin, env, &[arg.into()], &bitcode::MATH_ASIN),
+        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::NUM_IS_FINITE),
+        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::NUM_ATAN),
+        NumAcos => call_bitcode_fn(NumAcos, env, &[arg.into()], &bitcode::NUM_ACOS),
+        NumAsin => call_bitcode_fn(NumAsin, env, &[arg.into()], &bitcode::NUM_ASIN),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
