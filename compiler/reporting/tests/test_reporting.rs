@@ -3880,4 +3880,26 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn alias_using_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                # The color of a node. Leaves are considered Black.
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # Create an empty dictionary.
+                empty : Dict k v
+                empty =
+                    Empty
+
+                empty
+                "#
+            ),
+            "",
+        )
+    }
 }

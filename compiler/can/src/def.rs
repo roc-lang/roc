@@ -184,17 +184,11 @@ pub fn canonicalize_defs<'a>(
                 let mut can_ann =
                     canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
 
-                // all referenced symbols in an alias must be symbols
-                output
-                    .references
-                    .referenced_aliases
-                    .extend(can_ann.aliases.keys().copied());
-
-                // if an alias definition uses an alias, the used alias is referenced
-                output
-                    .references
-                    .lookups
-                    .extend(can_ann.aliases.keys().copied());
+                // Record all the annotation's references in output.references.lookups
+                for symbol in can_ann.references {
+                    output.references.lookups.insert(symbol);
+                    output.references.referenced_aliases.insert(symbol);
+                }
 
                 let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
                     Vec::with_capacity(vars.len());
