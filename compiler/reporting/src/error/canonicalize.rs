@@ -40,21 +40,25 @@ pub fn can_problem<'b>(
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
 
-            alloc.concat(vec![
-                alloc.symbol_unqualified(closure_symbol),
-                alloc.reflow(" doesn't use "),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow("."),
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.symbol_unqualified(closure_symbol),
+                    alloc.reflow(" doesn't use "),
+                    alloc.symbol_unqualified(argument_symbol),
+                    alloc.text("."),
+                ]),
                 alloc.region(region),
-                alloc.reflow("If you don't need "),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow(", then you can just remove it. However, if you really do need "),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow(" as an argument of "),
-                alloc.symbol_unqualified(closure_symbol),
-                alloc.reflow(", prefix it with an underscore, like this: \"_"),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow(line),
+                alloc.concat(vec![
+                    alloc.reflow("If you don't need "),
+                    alloc.symbol_unqualified(argument_symbol),
+                    alloc.reflow(", then you can just remove it. However, if you really do need "),
+                    alloc.symbol_unqualified(argument_symbol),
+                    alloc.reflow(" as an argument of "),
+                    alloc.symbol_unqualified(closure_symbol),
+                    alloc.reflow(", prefix it with an underscore, like this: \"_"),
+                    alloc.symbol_unqualified(argument_symbol),
+                    alloc.reflow(line),
+                ])
             ])
         }
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => alloc
