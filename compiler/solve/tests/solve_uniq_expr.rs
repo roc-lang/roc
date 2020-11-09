@@ -2523,9 +2523,7 @@ mod solve_uniq_expr {
                 r#"
                 Model : { foo : Int, bar : Int }
 
-                # extract : { foo : Int, bar : Int  } -> Int
                 extract : Model -> Int
-                # extract = \r -> r.foo + r.bar
                 extract = \{foo, bar} -> foo + bar
 
                 extract
