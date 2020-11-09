@@ -1,7 +1,8 @@
 use crate::ast::CommentOrNewline::{self, *};
-use crate::ast::Spaceable;
+use crate::ast::{Attempting, Spaceable};
 use crate::parser::{
-    self, and, peek_utf8_char, unexpected, unexpected_eof, FailReason, Parser, State,
+    self, and, ascii_char, ascii_string, optional, parse_utf8, peek_utf8_char, then, unexpected,
+    unexpected_eof, FailReason, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -209,6 +210,90 @@ enum LineState {
     Normal,
     Comment,
     DocComment,
+}
+
+pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
+    then(
+        and!(ascii_char(b'#'), optional(ascii_string("# "))),
+        |_arena: &'a Bump, state: State<'a>, (_, opt_doc)| {
+            if opt_doc != None {
+                return Err(unexpected(3, state, Attempting::LineComment));
+            }
+            let mut length = 0;
+
+            for &byte in state.bytes.iter() {
+                if byte != b'\n' {
+                    length += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let comment = &state.bytes[..length];
+            let state = state.advance_without_indenting(length + 1)?;
+            match parse_utf8(comment) {
+                Ok(comment_str) => Ok((comment_str, state)),
+                Err(reason) => state.fail(reason),
+            }
+        },
+    )
+}
+
+#[inline(always)]
+pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
+    move |_arena: &'a Bump, state: State<'a>| {
+        if spaces_expected == 0 {
+            return Ok(((), state));
+        }
+
+        let mut state = state;
+        let mut spaces_seen: u16 = 0;
+
+        while !state.bytes.is_empty() {
+            match peek_utf8_char(&state) {
+                Ok((' ', _)) => {
+                    spaces_seen += 1;
+                    state = state.advance_spaces(1)?;
+                    if spaces_seen == spaces_expected {
+                        return Ok(((), state));
+                    }
+                }
+                Ok(_) => {
+                    return Err(unexpected(
+                        spaces_seen.into(),
+                        state.clone(),
+                        state.attempting,
+                    ));
+                }
+
+                Err(FailReason::BadUtf8) => {
+                    // If we hit an invalid UTF-8 character, bail out immediately.
+                    return state.fail(FailReason::BadUtf8);
+                }
+                Err(_) => {
+                    if spaces_seen == 0 {
+                        return Err(unexpected_eof(0, state.attempting, state));
+                    } else {
+                        return Err(unexpected(
+                            spaces_seen.into(),
+                            state.clone(),
+                            state.attempting,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if spaces_seen == 0 {
+            Err(unexpected_eof(0, state.attempting, state))
+        } else {
+            Err(unexpected(
+                spaces_seen.into(),
+                state.clone(),
+                state.attempting,
+            ))
+        }
+    }
 }
 
 #[inline(always)]
