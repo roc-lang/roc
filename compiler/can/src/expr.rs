@@ -9,7 +9,6 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use bumpalo::Bump;
 use inlinable_string::InlinableString;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -405,181 +404,48 @@ pub fn canonicalize_expr<'a>(
 
             (expr, output)
         }
-        AccessorFunction(parts) => {
-            if parts.len() == 1 {
-                let part = parts.into_iter().next();
+        ast::Expr::Var { module_name, ident } => {
+            canonicalize_lookup(env, scope, module_name, ident, region)
+        } //ast::Expr::InterpolatedStr(pairs, suffix) => {
+        //    let mut output = Output::new();
+        //    let can_pairs: Vec<(String, Located<Expr>)> = pairs
+        //        .into_iter()
+        //        .map(|(string, loc_ident)| {
+        //            // From a language design perspective, we only permit idents in interpolation.
+        //            // However, in a canonical Expr we store it as a full Expr, not a Symbol.
+        //            // This is so that we can resolve it to either Var or Unrecognized; if we
+        //            // stored it as a Symbol, we couldn't record runtime errors here.
+        //            let can_expr = match resolve_ident(
+        //                &env,
+        //                &scope,
+        //                loc_ident.value,
+        //                &mut output.references,
+        //            ) {
+        //                Ok(symbol) => Var(symbol),
+        //                Err(ident) => {
+        //                    let loc_ident = Located {
+        //                        region: loc_ident.region,
+        //                        value: ident,
+        //                    };
 
-                todo!("Return accessor function using this part");
-            } else {
-                todo!("malformed accessor function");
-            }
-        }
-        ast::Expr::Ident(parts) => {
-            // Validate parts. Valid patterns include:
-            //
-            // Package qualified lookup, e.g. (json.Foo.Bar.baz)
-            // Package qualified field access, e.g. (json.Foo.Bar.baz.blah)
-            // Module qualified lookup, e.g. (Foo.Bar.baz)
-            // Module qualified field access, e.g. (Foo.Bar.baz.blah)
-            // Field access, e.g. (baz.blah)
-            // Lookup, e.g. (blah)
-            // Global tag, e.g. (Foo)
-            // Private tag, e.g. (@Foo)
-            let arena = Bump::new();
-            let mut iter = parts.into_iter().peekable();
-            let mut module_parts = bumpalo::collections::Vec::new_in(arena);
-            let mut field_access_parts = bumpalo::collections::Vec::new_in(arena);
-            let lookup_name: Option<&str>;
-            let package_part: Option<&str>;
+        //                    env.problem(Problem::LookupNotInScope(loc_ident.clone()));
 
-            // Start by examining the first ident, because that rules out
-            // a lot of cases.
-            match iter.next().unwrap() {
-                IdentPart::AtUppercase(part) => {
-                    // This is a private tag, so it should only have one part!
-                    if iter.peek().is_none() {
-                        let variant_var = var_store.fresh();
-                        let ext_var = var_store.fresh();
-                        let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
-                        let symbol = Symbol::new(env.home, tag_ident);
+        //                    RuntimeError(LookupNotInScope(loc_ident))
+        //                }
+        //            };
 
-                        return (
-                            Tag {
-                                name: TagName::Private(symbol),
-                                arguments: vec![],
-                                variant_var,
-                                ext_var,
-                            },
-                            Output::default(),
-                        );
-                    } else {
-                        todo!("return malformed");
-                    }
-                }
-                IdentPart::Uppercase(part) => {
-                    if iter.peek().is_none() {
-                        // This must be a global tag, because it's one
-                        // uppercase part and that's it.
-                        let variant_var = var_store.fresh();
-                        let ext_var = var_store.fresh();
+        //            (
+        //                string,
+        //                Located {
+        //                    region: loc_ident.region,
+        //                    value: can_expr,
+        //                },
+        //            )
+        //        })
+        //        .collect();
 
-                        (
-                            Tag {
-                                name: TagName::Global((*tag).into()),
-                                arguments: vec![],
-                                variant_var,
-                                ext_var,
-                            },
-                            Output::default(),
-                        )
-                    } else {
-                        module_parts.push(part);
-                    }
-                }
-                IdentPart::Lowercase(part) => {
-                    if iter.peek().is_none() {
-                        // This must be a lookup, because it's one
-                        // lowercase part and that's it.
-                        return canonicalize_lookup(
-                            env,
-                            scope,
-                            package_part,
-                            module_parts,
-                            ident,
-                            region,
-                        );
-                    } else {
-                        // From here, it could be a module, or a field access on a lookup.
-                        // We can tell which based on whether the next part
-                        // is capitalized.
-                        match iter.next() {
-                            IdentPart::AtUppercase(part) => {
-                                todo!("malformed");
-                            }
-                            IdentPart::Uppercase(part) => {
-                                if iter.peek().is_some() {
-                                    package_part = None;
-                                    lookup_name = None;
-                                    module_parts.push(part);
-                                } else {
-                                    // e.g. (json.Foo)
-                                    todo!("malformed");
-                                }
-                            }
-                            IdentPart::Lowercase(field_part) => {
-                                // This must be field access on a lookup.
-                                package_part = None;
-                                lookup_name = Some(part);
-                                field_access_parts.push(field_part);
-                            }
-                            IdentPart::Malformed(part) => {
-                                todo!("malformed");
-                            }
-                        }
-                    }
-                }
-                IdentPart::Malformed(part) => {
-                    todo!("malformed");
-                }
-            }
-
-            for ident_part in iter {
-                match ident_part {
-                    IdentPart::AtUppercase(part) => {
-                        todo!("malformed");
-                    }
-                    IdentPart::Uppercase(part) => {
-                        if lookup_name.is_none() {
-                            module_parts.push(part);
-                        } else {
-                            todo!("malformed");
-                        }
-                    }
-                    IdentPart::Lowercase(part) => {
-                        if lookup_name.is_none() {
-                            if iter.peek().is_none() {
-                                // This must be a fully qualified lookup, because
-                                // we didn't have a lookup name already, and there
-                                // are no more parts after this.
-                                return canonicalize_lookup(
-                                    env,
-                                    scope,
-                                    package_part,
-                                    module_parts,
-                                    ident,
-                                    region,
-                                );
-                            }
-
-                            // This is now our lookup name. There will be
-                            // field accesses after this.
-                            lookup_name = Some(part);
-                        } else {
-                            // We already have a lookup name, so this must
-                            // be a field access on it.
-                            field_access_parts.push(part);
-                        }
-                    }
-                    IdentPart::Malformed(part) => {
-                        todo!("malformed");
-                    }
-                }
-            }
-
-            // Now we're left with a lookup and 1+ field accesses on it.
-            // First, canonicalize the lookup, then wrap it in however many
-            // Access expressions we need.
-            let (mut loc_expr, output) =
-                canonicalize_lookup(env, scope, package_part, module_parts, ident, region);
-
-            for field in field_access_parts {
-                let expr = canonicalize_field_access(loc_expr, field, var_store);
-
-                loc_expr = todo!("re-wrap the expr in the right Region.");
-            }
-
-            (loc_expr.value, output)
-        }
+        //    (InterpolatedStr(can_pairs, suffix), output)
+        //}
         ast::Expr::Defs(loc_defs, loc_ret) => {
             can_defs_with_return(
                 env,
@@ -753,10 +619,17 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Access(record_expr, field) => {
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, record_expr);
 
-            let answer = canonicalize_field_access(loc_expr, field, var_store);
-
-            (answer, output)
-        },
+            (
+                Access {
+                    record_var: var_store.fresh(),
+                    field_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    loc_expr: Box::new(loc_expr),
+                    field: Lowercase::from(*field),
+                },
+                output,
+            )
+        }
         ast::Expr::AccessorFunction(field) => (
             Accessor {
                 function_var: var_store.fresh(),
@@ -768,6 +641,20 @@ pub fn canonicalize_expr<'a>(
             },
             Output::default(),
         ),
+        ast::Expr::GlobalTag(tag) => {
+            let variant_var = var_store.fresh();
+            let ext_var = var_store.fresh();
+
+            (
+                Tag {
+                    name: TagName::Global((*tag).into()),
+                    arguments: vec![],
+                    variant_var,
+                    ext_var,
+                },
+                Output::default(),
+            )
+        }
         ast::Expr::PrivateTag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1751,14 +1638,4 @@ pub fn unescape_char(escaped: &EscapedChar) -> char {
         Tab => '\t',
         Newline => '\n',
     }
-}
-
-fn canonicalize_field_access(loc_expr: Expr, field: &str, var_store: &mut VarStore) -> Expr {
-    Access {
-        record_var: var_store.fresh(),
-        field_var: var_store.fresh(),
-        ext_var: var_store.fresh(),
-        loc_expr: Box::new(loc_expr),
-        field: Lowercase::from(*field),
-    },
 }
