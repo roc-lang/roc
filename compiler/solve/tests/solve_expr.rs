@@ -2980,4 +2980,76 @@ mod solve_expr {
             "List x",
         );
     }
+
+    #[test]
+    fn double_tag_application() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+
+                main =
+                    if 1 == 1 then
+                        Foo (Bar) 1
+                    else
+                        Foo Bar 1
+                "#
+            ),
+            "[ Foo [ Bar ]* (Num *) ]*",
+        );
+
+        infer_eq_without_problem("Foo Bar 1", "[ Foo [ Bar ]* (Num *) ]*");
+    }
+
+    #[test]
+    fn double_tag_application_pattern_global() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Bar : [ Bar ]
+                Foo : [ Foo Bar Int, Empty ]
+
+                foo : Foo
+                foo = Foo Bar 1
+
+                main =
+                    when foo is
+                        Foo Bar 1 ->
+                            Foo Bar 2
+
+                        x ->
+                            x
+                "#
+            ),
+            "[ Empty, Foo [ Bar ] Int ]",
+        );
+    }
+
+    #[test]
+    fn double_tag_application_pattern_private() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Foo : [ @Foo [ @Bar ] Int, @Empty ]
+
+                foo : Foo
+                foo = @Foo @Bar 1
+
+                main =
+                    when foo is
+                        @Foo @Bar 1 ->
+                            @Foo @Bar 2
+
+                        x ->
+                            x
+                "#
+            ),
+            "[ @Empty, @Foo [ @Bar ] Int ]",
+        );
+    }
 }
