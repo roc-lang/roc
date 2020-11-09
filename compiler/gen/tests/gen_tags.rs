@@ -236,7 +236,6 @@ mod gen_tags {
     //    }
 
     #[test]
-    #[ignore]
     fn even_odd() {
         assert_evals_to!(
             indoc!(
