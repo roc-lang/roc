@@ -285,13 +285,13 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
         }
 
         if spaces_seen == 0 {
-            return Err(unexpected_eof(0, state.attempting, state));
+            Err(unexpected_eof(0, state.attempting, state))
         } else {
-            return Err(unexpected(
+            Err(unexpected(
                 spaces_seen.into(),
                 state.clone(),
                 state.attempting,
-            ));
+            ))
         }
     }
 }
