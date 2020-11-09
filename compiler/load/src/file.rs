@@ -2271,7 +2271,15 @@ fn fabricate_effects_module<'a>(
     let name = effects.type_name;
     let declared_name: ModuleName = name.into();
 
-    let hardcoded_exposed_functions = vec![name, "after", "map", "always"];
+    let hardcoded_effect_symbols = {
+        let mut functions: Vec<_> = crate::effect_module::BUILTIN_EFFECT_FUNCTIONS
+            .iter()
+            .map(|x| x.0)
+            .collect();
+        functions.push(name);
+
+        functions
+    };
 
     let exposed_ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
@@ -2307,7 +2315,7 @@ fn fabricate_effects_module<'a>(
             exposed.push(symbol);
         }
 
-        for hardcoded in hardcoded_exposed_functions {
+        for hardcoded in hardcoded_effect_symbols {
             // Use get_or_insert here because the ident_ids may already
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.

@@ -1,51 +1,59 @@
-use roc_can::def::Declaration;
+use roc_can::def::{Declaration, Def};
+use roc_can::env::Env;
+use roc_can::expr::{Expr, Recursive};
 use roc_can::pattern::Pattern;
+use roc_can::scope::Scope;
 use roc_collections::all::SendMap;
 use roc_module::ident::TagName;
+use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Type;
 
+/// Functions that are always implemented for Effect
+pub const BUILTIN_EFFECT_FUNCTIONS: [(
+    &str,
+    for<'r, 's, 't0, 't1> fn(
+        &'r mut Env<'s>,
+        &'t0 mut Scope,
+        Symbol,
+        TagName,
+        &'t1 mut VarStore,
+    ) -> (Symbol, Def),
+); 3] = [
+    // Effect.after : Effect a, (a -> Effect b) -> Effect b
+    ("after", build_effect_after),
+    // Effect.map : Effect a, (a -> b) -> Effect b
+    ("map", build_effect_map),
+    // Effect.always : a -> Effect a
+    ("always", build_effect_always),
+];
+
+// the Effects alias & associated functions
+//
+// A platform can define an Effect type in its header. It can have an arbitrary name
+// (e.g. Task, IO), but we'll call it an Effect in general.
+//
+// From that name, we generate an effect module, an effect alias, and some functions.
+//
+// The effect alias is implemented as
+//
+//  Effect a : [ @Effect ({} -> a) ]
+//
+// For this alias we implement the functions defined in BUILTIN_EFFECT_FUNCTIONS with the
+// standard implementation.
+
 pub fn build_effect_builtins(
-    env: &mut roc_can::env::Env,
-    scope: &mut roc_can::scope::Scope,
+    env: &mut Env,
+    scope: &mut Scope,
     effect_symbol: Symbol,
     var_store: &mut VarStore,
     exposed_vars_by_symbol: &mut Vec<(Symbol, Variable)>,
     declarations: &mut Vec<Declaration>,
 ) {
-    // Effect.after : Effect a, (a -> Effect b) -> Effect b
-    {
-        let (symbol, def) = build_effect_after(
-            env,
-            scope,
-            effect_symbol,
-            TagName::Private(effect_symbol),
-            var_store,
-        );
-
-        exposed_vars_by_symbol.push((symbol, def.expr_var));
-        declarations.push(Declaration::Declare(def));
-    }
-
-    // Effect.map : Effect a, (a -> b) -> Effect b
-    {
-        let (symbol, def) = build_effect_map(
-            env,
-            scope,
-            effect_symbol,
-            TagName::Private(effect_symbol),
-            var_store,
-        );
-
-        exposed_vars_by_symbol.push((symbol, def.expr_var));
-        declarations.push(Declaration::Declare(def));
-    }
-
-    // Effect.always : a -> Effect a
-    {
-        let (symbol, def) = build_effect_always(
+    for (_, f) in BUILTIN_EFFECT_FUNCTIONS.iter() {
+        let (symbol, def) = f(
             env,
             scope,
             effect_symbol,
@@ -59,15 +67,12 @@ pub fn build_effect_builtins(
 }
 
 fn build_effect_always(
-    env: &mut roc_can::env::Env,
-    scope: &mut roc_can::scope::Scope,
+    env: &mut Env,
+    scope: &mut Scope,
     effect_symbol: Symbol,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
-) -> (Symbol, roc_can::def::Def) {
-    use roc_can::expr::Expr;
-    use roc_can::expr::Recursive;
-
+) -> (Symbol, Def) {
     // Effect.always = \value -> @Effect \{} -> value
 
     let value_symbol = {
@@ -197,7 +202,7 @@ fn build_effect_always(
     let pattern = Pattern::Identifier(always_symbol);
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(always_symbol, function_var);
-    let def = roc_can::def::Def {
+    let def = Def {
         loc_pattern: Located::at_zero(pattern),
         loc_expr: Located::at_zero(always_closure),
         expr_var: function_var,
@@ -209,16 +214,12 @@ fn build_effect_always(
 }
 
 fn build_effect_map(
-    env: &mut roc_can::env::Env,
-    scope: &mut roc_can::scope::Scope,
+    env: &mut Env,
+    scope: &mut Scope,
     effect_symbol: Symbol,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
-) -> (Symbol, roc_can::def::Def) {
-    use roc_can::expr::Expr;
-    use roc_can::expr::Recursive;
-    use roc_module::operator::CalledVia;
-
+) -> (Symbol, Def) {
     // Effect.map = \@Effect thunk, mapper -> @Effect \{} -> mapper (thunk {})
 
     let thunk_symbol = {
@@ -416,7 +417,7 @@ fn build_effect_map(
     let pattern = Pattern::Identifier(map_symbol);
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(map_symbol, function_var);
-    let def = roc_can::def::Def {
+    let def = Def {
         loc_pattern: Located::at_zero(pattern),
         loc_expr: Located::at_zero(map_closure),
         expr_var: function_var,
@@ -428,16 +429,12 @@ fn build_effect_map(
 }
 
 fn build_effect_after(
-    env: &mut roc_can::env::Env,
-    scope: &mut roc_can::scope::Scope,
+    env: &mut Env,
+    scope: &mut Scope,
     effect_symbol: Symbol,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
-) -> (Symbol, roc_can::def::Def) {
-    use roc_can::expr::Expr;
-    use roc_can::expr::Recursive;
-    use roc_module::operator::CalledVia;
-
+) -> (Symbol, Def) {
     // Effect.after = \@Effect effect, toEffect -> toEffect (effect {})
 
     let thunk_symbol = {
@@ -590,7 +587,7 @@ fn build_effect_after(
     let pattern = Pattern::Identifier(after_symbol);
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(after_symbol, function_var);
-    let def = roc_can::def::Def {
+    let def = Def {
         loc_pattern: Located::at_zero(pattern),
         loc_expr: Located::at_zero(after_closure),
         expr_var: function_var,
@@ -602,21 +599,18 @@ fn build_effect_after(
 }
 
 pub fn build_host_exposed_def(
-    env: &mut roc_can::env::Env,
-    scope: &mut roc_can::scope::Scope,
+    env: &mut Env,
+    scope: &mut Scope,
     symbol: Symbol,
     ident: &str,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
     annotation: roc_can::annotation::Annotation,
-) -> roc_can::def::Def {
+) -> Def {
     let expr_var = var_store.fresh();
     let pattern = Pattern::Identifier(symbol);
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(symbol, expr_var);
-
-    use roc_can::expr::Expr;
-    use roc_can::expr::Recursive;
 
     let mut arguments: Vec<(Variable, Located<Pattern>)> = Vec::new();
     let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
@@ -762,7 +756,7 @@ pub fn build_host_exposed_def(
         region: Region::zero(),
     };
 
-    roc_can::def::Def {
+    Def {
         loc_pattern: Located::at_zero(pattern),
         loc_expr: Located::at_zero(def_body),
         expr_var,
