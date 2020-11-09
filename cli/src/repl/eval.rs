@@ -60,9 +60,9 @@ fn jit_to_ast_help<'a>(
 ) -> Expr<'a> {
     match layout {
         Layout::Builtin(Builtin::Int1) => {
-            // TODO this will not handle the case where this bool was really
-            // a 1-element recored, e.g. { x: True }, correctly
-            run_jit_function!(lib, main_fn_name, bool, |num| i1_to_ast(num))
+            run_jit_function!(lib, main_fn_name, bool, |num| bool_to_ast(
+                env, num, content
+            ))
         }
         Layout::Builtin(Builtin::Int64) => {
             run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
@@ -94,14 +94,36 @@ fn jit_to_ast_help<'a>(
                 list_to_ast(env, ptr, len, elem_layout, content)
             }
         ),
+        Layout::PhantomEmptyStruct => run_jit_function!(lib, main_fn_name, &'static str, |_| {
+            Expr::Record {
+                update: None,
+                fields: &[],
+            }
+        }),
         Layout::Struct(field_layouts) => {
             let ptr_to_ast = |ptr: *const libc::c_void| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
                     struct_to_ast(env, ptr, field_layouts, fields)
                 }
+                Content::Structure(FlatType::EmptyRecord) => {
+                    struct_to_ast(env, ptr, field_layouts, &MutMap::default())
+                }
+                Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    debug_assert_eq!(tags.len(), 1);
+
+                    let (tag_name, payload_vars) = tags.iter().next().unwrap();
+
+                    // We expect anything with payload vars
+                    // that is a single Tag TagUnion
+                    // has a Record content so the above case
+                    // should match instead
+                    debug_assert_eq!(payload_vars.len(), 0);
+
+                    single_tag_union_to_ast(env, field_layouts, tag_name.clone(), payload_vars)
+                }
                 other => {
                     unreachable!(
-                        "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+                        "Something had a Struct layout, but instead of a Record or TagUnion type, it had: {:?}",
                         other
                     );
                 }
@@ -189,6 +211,13 @@ fn ptr_to_ast<'a>(
 
             num_to_ast(env, i64_to_ast(env.arena, num), content)
         }
+        Layout::Builtin(Builtin::Int1) => {
+            // TODO: bits are not as expected here.
+            // num is always false at the moment.
+            let num = unsafe { *(ptr as *const bool) };
+
+            bool_to_ast(env, num, content)
+        }
         Layout::Builtin(Builtin::Float64) => {
             let num = unsafe { *(ptr as *const f64) };
 
@@ -271,6 +300,34 @@ fn list_to_ast<'a>(
     Expr::List(output)
 }
 
+fn single_tag_union_to_ast<'a>(
+    env: &Env<'a, '_>,
+    field_layouts: &[Layout<'a>],
+    tag_name: TagName,
+    payload_vars: &[Variable],
+) -> Expr<'a> {
+    debug_assert_eq!(field_layouts.len(), payload_vars.len());
+
+    let arena = env.arena;
+
+    let tag_expr = match tag_name {
+        TagName::Global(_) => {
+            Expr::GlobalTag(arena.alloc_str(&tag_name.as_string(env.interns, env.home)))
+        }
+        TagName::Private(_) => {
+            Expr::PrivateTag(arena.alloc_str(&tag_name.as_string(env.interns, env.home)))
+        }
+        TagName::Closure(_) => unreachable!("User cannot type this"),
+    };
+
+    let loc_tag_expr = &*arena.alloc(Located {
+        value: tag_expr,
+        region: Region::zero(),
+    });
+
+    Expr::Apply(loc_tag_expr, &[], CalledVia::Space)
+}
+
 fn struct_to_ast<'a>(
     env: &Env<'a, '_>,
     ptr: *const libc::c_void,
@@ -324,6 +381,121 @@ fn struct_to_ast<'a>(
     Expr::Record {
         update: None,
         fields: output,
+    }
+}
+
+fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a> {
+    use Content::*;
+
+    let arena = env.arena;
+
+    match content {
+        Structure(flat_type) => {
+            match flat_type {
+                FlatType::Record(fields, _) => {
+                    debug_assert_eq!(fields.len(), 1);
+
+                    let (label, field) = fields.iter().next().unwrap();
+                    let loc_label = Located {
+                        value: &*arena.alloc_str(label.as_str()),
+                        region: Region::zero(),
+                    };
+
+                    let assigned_field = {
+                        // We may be multiple levels deep in nested tag unions
+                        // and/or records (e.g. { a: { b: { c: True }  } }),
+                        // so we need to do this recursively on the field type.
+                        let field_var = *field.as_inner();
+                        let field_content = env.subs.get_without_compacting(field_var).content;
+                        let loc_expr = Located {
+                            value: bool_to_ast(env, value, &field_content),
+                            region: Region::zero(),
+                        };
+
+                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
+                    };
+
+                    let loc_assigned_field = Located {
+                        value: assigned_field,
+                        region: Region::zero(),
+                    };
+
+                    Expr::Record {
+                        update: None,
+                        fields: arena.alloc([loc_assigned_field]),
+                    }
+                }
+                FlatType::TagUnion(tags, _) if tags.len() == 1 => {
+                    let (tag_name, payload_vars) = tags.iter().next().unwrap();
+
+                    let loc_tag_expr = {
+                        let tag_name = &tag_name.as_string(env.interns, env.home);
+                        let tag_expr = if tag_name.starts_with('@') {
+                            Expr::PrivateTag(arena.alloc_str(tag_name))
+                        } else {
+                            Expr::GlobalTag(arena.alloc_str(tag_name))
+                        };
+
+                        &*arena.alloc(Located {
+                            value: tag_expr,
+                            region: Region::zero(),
+                        })
+                    };
+
+                    let payload = {
+                        // Since this has the layout of a number, there should be
+                        // exactly one payload in this tag.
+                        debug_assert_eq!(payload_vars.len(), 1);
+
+                        let var = *payload_vars.iter().next().unwrap();
+                        let content = env.subs.get_without_compacting(var).content;
+
+                        let loc_payload = &*arena.alloc(Located {
+                            value: bool_to_ast(env, value, &content),
+                            region: Region::zero(),
+                        });
+
+                        arena.alloc([loc_payload])
+                    };
+
+                    Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
+                }
+                FlatType::TagUnion(tags, _) if tags.len() == 2 => {
+                    let mut tags_iter = tags.iter();
+                    let (tag_name_1, payload_vars_1) = tags_iter.next().unwrap();
+                    let (tag_name_2, payload_vars_2) = tags_iter.next().unwrap();
+
+                    debug_assert!(payload_vars_1.is_empty());
+                    debug_assert!(payload_vars_2.is_empty());
+
+                    let tag_name_as_str_1 = &tag_name_1.as_string(env.interns, env.home);
+                    let tag_name_as_str_2 = &tag_name_2.as_string(env.interns, env.home);
+
+                    let tag_name = if value {
+                        tag_name_as_str_1.max(tag_name_as_str_2)
+                    } else {
+                        tag_name_as_str_1.min(tag_name_as_str_2)
+                    };
+
+                    if tag_name.starts_with('@') {
+                        Expr::PrivateTag(arena.alloc_str(tag_name))
+                    } else {
+                        Expr::GlobalTag(arena.alloc_str(tag_name))
+                    }
+                }
+                other => {
+                    unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+                }
+            }
+        }
+        Alias(_, _, var) => {
+            let content = env.subs.get_without_compacting(*var).content;
+
+            bool_to_ast(env, value, &content)
+        }
+        other => {
+            unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+        }
     }
 }
 
@@ -436,15 +608,6 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 /// e.g. adding underscores for large numbers
 fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-/// This is centralized in case we want to format it differently later,
-/// e.g. adding underscores for large numbers
-fn i1_to_ast<'a>(num: bool) -> Expr<'a> {
-    match num {
-        true => Expr::GlobalTag(&"True"),
-        false => Expr::GlobalTag(&"False"),
-    }
 }
 
 /// This is centralized in case we want to format it differently later,
