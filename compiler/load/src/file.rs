@@ -1613,7 +1613,7 @@ fn update<'a>(
                 // state.timings.insert(module_id, module_timing);
 
                 // display the mono IR of the module, for debug purposes
-                if false {
+                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
                         .procedures
                         .values()
