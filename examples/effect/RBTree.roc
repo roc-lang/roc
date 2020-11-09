@@ -1,4 +1,6 @@
-interface RBTree exposes [ Dict, empty, singleton, size, isEmpty, insert, remove, update ] imports []
+interface RBTree exposes [ Dict, empty, singleton, size, isEmpty, insert, remove, balance ] imports []
+# TODO remove `balance` from the exposed list
+# todo change `foobar` to `balance`
 
 # The color of a node. Leaves are considered Black.
 NodeColor : [ Red, Black ]
@@ -100,152 +102,141 @@ balance = \color, key, value, left, right ->
         _ ->
           Node color key value left right
 
+
 remove : Key k, Dict (Key k) v -> Dict (Key k) v
 remove = \key, dict ->
-  # Root node is always Black
-  when removeHelp key dict is
-    Node Red k v l r ->
-      Node Black k v l r
+    # Root node is always Black
+    when removeHelp key dict is
+        Node Red k v l r ->
+            Node Black k v l r
 
-    x ->
-      x
+        x ->
+            x
+
+
 
 # The easiest thing to remove from the tree, is a red node. However, when searching for the
 # node to remove, we have no way of knowing if it will be red or not. This remove implementation
 # makes sure that the bottom node is red by moving red colors down the tree through rotation
 # and color flips. Any violations this will cause, can easily be fixed by balancing on the way
 # up again.
-removeHelp : Key k -> Dict (Key k) v -> Dict (Key k) v
+removeHelp : Key k, Dict (Key k) v -> Dict (Key k) v
 removeHelp = \targetKey, dict ->
   when dict is
-    RBEmpty_elm_builtin ->
-      RBEmpty_elm_builtin
+    Empty ->
+      Empty
 
-    RBNode_elm_builtin color key value left right ->
+    Node color key value left right ->
       if targetKey < key then
         when left is
-          RBNode_elm_builtin Black _ _ lLeft _ ->
+          Node Black _ _ lLeft _ ->
             when lLeft is
-              RBNode_elm_builtin Red _ _ _ _ ->
-                RBNode_elm_builtin color key value (removeHelp targetKey left) right
+              Node Red _ _ _ _ ->
+                Node color key value (removeHelp targetKey left) right
 
               _ ->
                 when moveRedLeft dict is
-                  RBNode_elm_builtin nColor nKey nValue nLeft nRight ->
+                  Node nColor nKey nValue nLeft nRight ->
                     balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
 
-                  RBEmpty_elm_builtin ->
-                    RBEmpty_elm_builtin
+                  Empty ->
+                    Empty
 
           _ ->
-            RBNode_elm_builtin color key value (removeHelp targetKey left) right
+            Node color key value (removeHelp targetKey left) right
       else
         removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
 
 
-removeHelpPrepEQGT : Key k -> Dict (Key k) v -> NColor -> (Key k) -> v -> Dict (Key k) v -> Dict (Key k) v -> Dict (Key k) v
-removeHelpPrepEQGT = \targetKey, dict, color, key, value, left, right ->
+
+removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+removeHelpPrepEQGT = \_, dict, color, key, value, left, right ->
   when left is
-    RBNode_elm_builtin Red lK lV lLeft lRight ->
-      RBNode_elm_builtin
+    Node Red lK lV lLeft lRight ->
+      Node
         color
         lK
         lV
         lLeft
-        (RBNode_elm_builtin Red key value lRight right)
+        (Node Red key value lRight right)
 
     _ ->
       when right is
-        RBNode_elm_builtin Black _ _ (RBNode_elm_builtin Black _ _ _ _) _ ->
+        Node Black _ _ (Node Black _ _ _ _) _ ->
           moveRedRight dict
 
-        RBNode_elm_builtin Black _ _ RBEmpty_elm_builtin _ ->
+        Node Black _ _ Empty _ ->
           moveRedRight dict
 
         _ ->
           dict
 
 
+
 # When we find the node we are looking for, we can remove by replacing the key-value
 # pair with the key-value pair of the left-most node on the right side (the closest pair).
-removeHelpEQGT : Key k -> Dict (Key k) v -> Dict (Key k) v
+removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
 removeHelpEQGT = \targetKey, dict ->
   when dict is
-    RBNode_elm_builtin color key value left right ->
+    Node color key value left right ->
       if targetKey == key then
         when getMin right is
-          RBNode_elm_builtin _ minKey minValue _ _ ->
+          Node _ minKey minValue _ _ ->
             balance color minKey minValue left (removeMin right)
 
-          RBEmpty_elm_builtin ->
-            RBEmpty_elm_builtin
+          Empty ->
+            Empty
       else
         balance color key value left (removeHelp targetKey right)
 
-    RBEmpty_elm_builtin ->
-      RBEmpty_elm_builtin
+    Empty ->
+      Empty
+
+
 
 getMin : Dict k v -> Dict k v
 getMin = \dict ->
   when dict is
-    RBNode_elm_builtin _ _ _ ((RBNode_elm_builtin _ _ _ _ _) as left) _ ->
-      getMin left
+    # Node _ _ _ ((Node _ _ _ _ _) as left) _ ->
+    Node _ _ _ left _ ->
+        when left is 
+            Node _ _ _ _ _ -> getMin left
+            _ -> dict
 
     _ ->
       dict
 
-removeMin : Dict k v -> Dict k v
-removeMin = \dict ->
-  when dict is
-    RBNode_elm_builtin color key value ((RBNode_elm_builtin lColor _ _ lLeft _) as left) right ->
-      when lColor is
-        Black ->
-          when lLeft is
-            RBNode_elm_builtin Red _ _ _ _ ->
-              RBNode_elm_builtin color key value (removeMin left) right
-
-            _ ->
-              when moveRedLeft dict is
-                RBNode_elm_builtin nColor nKey nValue nLeft nRight ->
-                  balance nColor nKey nValue (removeMin nLeft) nRight
-
-                RBEmpty_elm_builtin ->
-                  RBEmpty_elm_builtin
-
-        _ ->
-          RBNode_elm_builtin color key value (removeMin left) right
-
-    _ ->
-      RBEmpty_elm_builtin
-
 moveRedLeft : Dict k v -> Dict k v
 moveRedLeft = \dict ->
   when dict is
-    RBNode_elm_builtin clr k v (RBNode_elm_builtin lClr lK lV lLeft lRight) (RBNode_elm_builtin rClr rK rV ((RBNode_elm_builtin Red rlK rlV rlL rlR) as rLeft) rRight) ->
-      RBNode_elm_builtin
-        Red
-        rlK
-        rlV
-        (RBNode_elm_builtin Black k v (RBNode_elm_builtin Red lK lV lLeft lRight) rlL)
-        (RBNode_elm_builtin Black rK rV rlR rRight)
+    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV ((Node Red rlK rlV rlL rlR) as rLeft) rRight) ->
+    Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+        when rList is
+            Node Red rlK rlV rlL rlR -> 
+              Node
+                Red
+                rlK
+                rlV
+                (Node Black k v (Node Red lK lV lLeft lRight) rlL)
+                (Node Black rK rV rlR rRight)
 
-    RBNode_elm_builtin clr k v (RBNode_elm_builtin lClr lK lV lLeft lRight) (RBNode_elm_builtin rClr rK rV rLeft rRight) ->
-      when clr is
-        Black ->
-          RBNode_elm_builtin
-            Black
-            k
-            v
-            (RBNode_elm_builtin Red lK lV lLeft lRight)
-            (RBNode_elm_builtin Red rK rV rLeft rRight)
+            _ -> 
+              when clr is
+                Black ->
+                  Node
+                    Black
+                    k
+                    v
+                    (Node Red lK lV lLeft lRight)
+                    (Node Red rK rV rLeft rRight)
 
-        Red ->
-          RBNode_elm_builtin
-            Black
-            k
-            v
-            (RBNode_elm_builtin Red lK lV lLeft lRight)
-            (RBNode_elm_builtin Red rK rV rLeft rRight)
+                Red ->
+                  Node
+                    Black
+                    k
+                    v
+                    (Node Red lK lV lLeft lRight)
+                    (Node Red rK rV rLeft rRight)
 
     _ ->
       dict
@@ -282,8 +273,33 @@ moveRedRight = \dict ->
     _ ->
       dict
 
+removeMin : Dict k v -> Dict k v
+removeMin = \dict ->
+  when dict is
+    Node color key value ((Node lColor _ _ lLeft _) as left) right ->
+      when lColor is
+        Black ->
+          when lLeft is
+            Node Red _ _ _ _ ->
+              Node color key value (removeMin left) right
+
+            _ ->
+              when moveRedLeft dict is
+                Node nColor nKey nValue nLeft nRight ->
+                  balance nColor nKey nValue (removeMin nLeft) nRight
+
+                Empty ->
+                  Empty
+
+        _ ->
+          Node color key value (removeMin left) right
+
+    _ ->
+      Empty
+
+
 # Update the value of a dictionary for a specific key with a given function.
-update : Key k -> (Maybe v -> Maybe v) -> Dict (Key k) v -> Dict (Key k) v
+update : Key k, (Maybe v, Maybe v), Dict (Key k) v -> Dict (Key k) v
 update = \targetKey, alter, dictionary ->
   when alter (get targetKey dictionary) is
     Just value ->
