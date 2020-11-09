@@ -47,7 +47,8 @@ pub fn build_file(
     let app_o_file = roc_file_path.with_file_name("roc_app.o");
     let buf = &mut String::with_capacity(1024);
 
-    for (module_id, module_timing) in loaded.timings.iter() {
+    let mut it = loaded.timings.iter().peekable();
+    while let Some((module_id, module_timing)) = it.next() {
         let module_name = loaded.interns.module_name(*module_id);
 
         buf.push_str("    ");
@@ -60,9 +61,23 @@ pub fn build_file(
         report_timing(buf, "Canonicalize", module_timing.canonicalize);
         report_timing(buf, "Constrain", module_timing.constrain);
         report_timing(buf, "Solve", module_timing.solve);
+        report_timing(
+            buf,
+            "Find Specializations",
+            module_timing.find_specializations,
+        );
+        report_timing(
+            buf,
+            "Make Specializations",
+            module_timing.make_specializations,
+        );
         report_timing(buf, "Other", module_timing.other());
         buf.push('\n');
         report_timing(buf, "Total", module_timing.total());
+
+        if it.peek().is_some() {
+            buf.push('\n');
+        }
     }
 
     println!(
