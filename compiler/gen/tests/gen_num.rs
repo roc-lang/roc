@@ -13,15 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_num {
-    /*
-    use inkwell::passes::PassManager;
-    use inkwell::types::BasicType;
-    use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::layout::Layout;
-    use roc_types::subs::Subs;
-    */
+    use roc_std::RocOrder;
 
     #[test]
     fn f64_sqrt() {
@@ -584,86 +576,16 @@ mod gen_num {
 
     #[test]
     fn int_compare() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 0 1 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            0,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 1 1 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            1,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 1 0 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            2,
-            i64
-        );
+        assert_evals_to!("Num.compare 0 1", RocOrder::Lt, RocOrder);
+        assert_evals_to!("Num.compare 1 1", RocOrder::Eq, RocOrder);
+        assert_evals_to!("Num.compare 1 0", RocOrder::Gt, RocOrder);
     }
 
     #[test]
     fn float_compare() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 0 3.14 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            0,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 3.14 3.14 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            1,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 3.14 0 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            2,
-            i64
-        );
+        assert_evals_to!("Num.compare 0.01 3.14", RocOrder::Lt, RocOrder);
+        assert_evals_to!("Num.compare 3.14 3.14", RocOrder::Eq, RocOrder);
+        assert_evals_to!("Num.compare 3.14 0.01", RocOrder::Gt, RocOrder);
     }
 
     #[test]
