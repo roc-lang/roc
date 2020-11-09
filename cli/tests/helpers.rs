@@ -70,7 +70,7 @@ pub fn run_cmd(cmd_name: &str, args: &[&str]) -> Out {
 
     let output = cmd
         .output()
-        .expect(&format!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
 
     Out {
         stdout: String::from_utf8(output.stdout).unwrap(),
@@ -263,12 +263,12 @@ pub fn repl_eval(input: &str) -> Out {
 
         // Evaluate the expression
         stdin
-            .write_all("\n".as_bytes())
+            .write_all(b"\n")
             .expect("Failed to write newline to stdin");
 
         // Gracefully exit the repl
         stdin
-            .write_all(":exit\n".as_bytes())
+            .write_all(b":exit\n")
             .expect("Failed to write :exit to stdin");
     }
 
