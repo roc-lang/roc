@@ -15,7 +15,7 @@ impl<'a> Formattable<'a> for Def<'a> {
                 loc_pattern.is_multiline() || loc_annotation.is_multiline()
             }
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
-            AnnotatedBody { .. } => true, // Sebbes: not really sure here...
+            AnnotatedBody { .. } => true,
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
                 spaces.iter().any(|s| is_comment(s)) || sub_def.is_multiline()
             }
