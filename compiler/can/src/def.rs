@@ -1347,9 +1347,14 @@ fn to_pending_def<'a>(
             body_expr,
         } => {
             if ann_pattern.value.equivalent(&body_pattern.value) {
+                // NOTE: Pick the body pattern, picking the annotation one is
+                // incorrect in the presence of optional record fields!
+                //
+                // { x, y } : { x : Int, y ? Bool }*
+                // { x, y ? False } = rec
                 Some(pending_typed_body(
                     env,
-                    ann_pattern,
+                    body_pattern,
                     ann_type,
                     body_expr,
                     var_store,

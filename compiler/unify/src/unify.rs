@@ -384,6 +384,7 @@ fn unify_shared_fields(
             // Unifying X with X => X
             let actual = match (actual, expected) {
                 (Demanded(_), Optional(_)) | (Optional(_), Demanded(_)) => {
+                    // this is an error, but we continue to give better error messages
                     continue;
                 }
                 (Demanded(val), Required(_))
@@ -395,7 +396,8 @@ fn unify_shared_fields(
                 (Optional(val), Optional(_)) => Optional(val),
             };
 
-            matching_fields.insert(name, actual);
+            let existing = matching_fields.insert(name, actual);
+            debug_assert_eq!(existing, None);
         }
     }
 
@@ -412,7 +414,7 @@ fn unify_shared_fields(
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch!()
+        mismatch!("in unify_shared_fields")
     }
 }
 
