@@ -88,7 +88,7 @@ mod gen_tags {
     }
 
     #[test]
-    fn applied_tag_just_unit() {
+    fn applied_tag_just_enum() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -105,7 +105,7 @@ mod gen_tags {
                 "#
             ),
             (0, 2),
-            (i64, i64)
+            (i64, u8)
         );
     }
 
