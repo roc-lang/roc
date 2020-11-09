@@ -12,16 +12,15 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Type;
 
 /// Functions that are always implemented for Effect
-pub const BUILTIN_EFFECT_FUNCTIONS: [(
-    &str,
-    for<'r, 's, 't0, 't1> fn(
-        &'r mut Env<'s>,
-        &'t0 mut Scope,
-        Symbol,
-        TagName,
-        &'t1 mut VarStore,
-    ) -> (Symbol, Def),
-); 3] = [
+type Builder = for<'r, 's, 't0, 't1> fn(
+    &'r mut Env<'s>,
+    &'t0 mut Scope,
+    Symbol,
+    TagName,
+    &'t1 mut VarStore,
+) -> (Symbol, Def);
+
+pub const BUILTIN_EFFECT_FUNCTIONS: [(&str, Builder); 3] = [
     // Effect.after : Effect a, (a -> Effect b) -> Effect b
     ("after", build_effect_after),
     // Effect.map : Effect a, (a -> b) -> Effect b
@@ -172,8 +171,7 @@ fn build_effect_always(
         introduced_variables.insert_named("a".into(), var_a);
 
         let effect_a = {
-            let actual =
-                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_a), var_store);
+            let actual = build_effect_actual(effect_tag_name, Type::Variable(var_a), var_store);
 
             Type::Alias(
                 effect_symbol,

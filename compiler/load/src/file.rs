@@ -2362,7 +2362,7 @@ fn fabricate_effects_module<'a>(
         let a_var = var_store.fresh();
 
         let actual = crate::effect_module::build_effect_actual(
-            effect_tag_name.clone(),
+            effect_tag_name,
             Type::Variable(a_var),
             &mut var_store,
         );
