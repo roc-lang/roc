@@ -20,6 +20,10 @@ pub enum LayoutProblem {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
+    /// A layout that is empty (turns into the empty struct in LLVM IR
+    /// but for our purposes, not zero-sized, so it does not get dropped from data structures
+    /// this is important for closures that capture zero-sized values
+    PhantomEmptyStruct,
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     RecursiveUnion(&'a [&'a [Layout<'a>]]),
@@ -41,6 +45,14 @@ pub struct ClosureLayout<'a> {
 }
 
 impl<'a> ClosureLayout<'a> {
+    fn from_unit(arena: &'a Bump) -> Self {
+        let layout = Layout::PhantomEmptyStruct;
+        let layouts = arena.alloc(layout);
+        ClosureLayout {
+            captured: &[],
+            layout: layouts,
+        }
+    }
     fn from_bool(arena: &'a Bump) -> Self {
         let layout = Layout::Builtin(Builtin::Int1);
         let layouts = arena.alloc(layout);
@@ -111,6 +123,12 @@ impl<'a> ClosureLayout<'a> {
                 match variant {
                     Never => Ok(None),
                     Unit => Ok(None),
+                    UnitWithArguments => {
+                        // the closure layout is zero-sized, but there is something in it (e.g.  `{}`)
+
+                        let closure_layout = ClosureLayout::from_unit(arena);
+                        Ok(Some(closure_layout))
+                    }
                     BoolUnion { .. } => {
                         let closure_layout = ClosureLayout::from_bool(arena);
 
@@ -224,6 +242,12 @@ impl<'a> ClosureLayout<'a> {
 
                 Ok(expr)
             }
+            Layout::PhantomEmptyStruct => {
+                debug_assert_eq!(symbols.len(), 1);
+
+                Ok(Expr::Struct(&[]))
+            }
+
             _ => {
                 debug_assert_eq!(symbols.len(), 1);
 
@@ -324,6 +348,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
+            PhantomEmptyStruct => true,
             Struct(fields) => fields
                 .iter()
                 .all(|field_layout| field_layout.safe_to_memcpy()),
@@ -350,11 +375,15 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub fn is_zero_sized(&self) -> bool {
+    pub fn is_dropped_because_empty(&self) -> bool {
         // For this calculation, we don't need an accurate
         // stack size, we just need to know whether it's zero,
         // so it's fine to use a pointer size of 1.
-        self.stack_size(1) == 0
+        if let Layout::PhantomEmptyStruct = self {
+            false
+        } else {
+            self.stack_size(1) == 0
+        }
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
@@ -362,6 +391,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.stack_size(pointer_size),
+            PhantomEmptyStruct => 0,
             Struct(fields) => {
                 let mut sum = 0;
 
@@ -414,6 +444,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
+            PhantomEmptyStruct => false,
             Struct(fields) => fields.iter().any(|f| f.is_refcounted()),
             Union(fields) => fields
                 .iter()
@@ -741,7 +772,7 @@ fn layout_from_flat_type<'a>(
                 match Layout::from_var(env, field_var) {
                     Ok(layout) => {
                         // Drop any zero-sized fields like {}.
-                        if !layout.is_zero_sized() {
+                        if !layout.is_dropped_because_empty() {
                             layouts.push(layout);
                         }
                     }
@@ -850,7 +881,7 @@ pub fn sort_record_fields<'a>(
                 let layout = Layout::from_var(&mut env, var).expect("invalid layout from var");
 
                 // Drop any zero-sized fields like {}
-                if !layout.is_zero_sized() {
+                if !layout.is_dropped_because_empty() {
                     sorted_fields.push((label, var, Ok(layout)));
                 }
             }
@@ -867,6 +898,7 @@ pub fn sort_record_fields<'a>(
 pub enum UnionVariant<'a> {
     Never,
     Unit,
+    UnitWithArguments,
     BoolUnion { ttrue: TagName, ffalse: TagName },
     ByteUnion(Vec<'a, TagName>),
     Unwrapped(Vec<'a, Layout<'a>>),
@@ -933,6 +965,7 @@ fn union_sorted_tags_help<'a>(
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut contains_zero_sized = false;
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
@@ -944,8 +977,10 @@ fn union_sorted_tags_help<'a>(
                         match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
                                 // Drop any zero-sized arguments like {}
-                                if !layout.is_zero_sized() {
+                                if !layout.is_dropped_because_empty() {
                                     layouts.push(layout);
+                                } else {
+                                    contains_zero_sized = true;
                                 }
                             }
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -962,7 +997,11 @@ fn union_sorted_tags_help<'a>(
             }
 
             if layouts.is_empty() {
-                UnionVariant::Unit
+                if contains_zero_sized {
+                    UnionVariant::UnitWithArguments
+                } else {
+                    UnionVariant::Unit
+                }
             } else {
                 UnionVariant::Unwrapped(layouts)
             }
@@ -983,7 +1022,7 @@ fn union_sorted_tags_help<'a>(
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
                             // Drop any zero-sized arguments like {}
-                            if !layout.is_zero_sized() {
+                            if !layout.is_dropped_because_empty() {
                                 has_any_arguments = true;
 
                                 arg_layouts.push(layout);
@@ -1045,7 +1084,7 @@ pub fn layout_from_tag_union<'a>(
 
         match variant {
             Never => panic!("TODO gracefully handle trying to instantiate Never"),
-            Unit => Layout::Struct(&[]),
+            Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
             Unwrapped(mut field_layouts) => {

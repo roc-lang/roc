@@ -397,10 +397,10 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             optional(skip_first!(
                 ascii_char(b'.'),
                 collection!(
-                    ascii_char(b'['),
+                    ascii_char(b'{'),
                     loc!(exposes_entry()),
                     ascii_char(b','),
-                    ascii_char(b']'),
+                    ascii_char(b'}'),
                     1
                 )
             ))

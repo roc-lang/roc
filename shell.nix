@@ -36,6 +36,8 @@ let
       # build libraries
       pkgs.rustc
       pkgs.cargo
+      pkgs.clippy
+      pkgs.rustfmt
       pkgs.cmake
       pkgs.git
       pkgs.python3

@@ -81,6 +81,8 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                 )
             }
         }
+        PhantomEmptyStruct => {}
+
         Struct(layouts) => {
             decrement_refcount_struct(env, parent, layout_ids, value, layouts);
         }
