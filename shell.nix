@@ -13,6 +13,8 @@ with {
   isMacOS = builtins.currentSystem == "x86_64-darwin";
 };
 
+with (pkgs);
+
 let
   darwin-frameworks =
     if isMacOS then
@@ -27,43 +29,63 @@ let
       ]
     else
       [ ];
-  llvm = pkgs.llvm_10;
-  lld = pkgs.lld_10; # this should match llvm's version
-  clang = pkgs.clang_10; # this should match llvm's version
+  llvmPkg = pkgs.llvm_10;
+  lldPkg = pkgs.lld_10; # this should match llvm's version
+  clangPkg = pkgs.clang_10; # this should match llvm's version
   zig = import ./nix/zig.nix { inherit pkgs isMacOS; };
   inputs =
     [
       # build libraries
-      pkgs.rustc
-      pkgs.cargo
-      pkgs.clippy
-      pkgs.rustfmt
-      pkgs.cmake
-      pkgs.git
-      pkgs.python3
-      llvm
-      clang
-      pkgs.valgrind
-      pkgs.pkg-config
+      rustc
+      cargo
+      clippy
+      rustfmt
+      cmake
+      git
+      python3
+      llvmPkg
+      clangPkg
+      valgrind
+      pkg-config
       zig
       # llb deps
-      pkgs.libffi
-      pkgs.libxml2
-      pkgs.xorg.libX11
-      pkgs.zlib
+      libffi
+      libxml2
+      xorg.libX11
+      zlib
+      vulkan-headers
+      vulkan-loader
+      vulkan-tools
+      vulkan-validation-layers
       # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
-      lld
+      lldPkg
       # dev tools
-      pkgs.rust-analyzer
+      rust-analyzer
       # (import ./nix/zls.nix { inherit pkgs zig; })
-      pkgs.ccls
+      ccls
     ];
-in pkgs.mkShell {
+in mkShell {
   buildInputs = inputs ++ darwin-frameworks;
-  LLVM_SYS_100_PREFIX = "${llvm}";
+  LLVM_SYS_100_PREFIX = "${llvmPkg}";
+
+  APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath [
+      pkgconfig
+      vulkan-headers
+      vulkan-loader
+      vulkan-tools
+      vulkan-validation-layers
+      xorg.libX11
+      xorg.libXcursor
+      xorg.libXrandr
+      xorg.libXi
+      libcxx
+      libcxxabi
+      libunwind
+    ];
 
   # Aliases don't work cross shell, so we do this
   shellHook = ''
+    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$APPEND_LIBRARY_PATH"
     export PATH="$PATH:$PWD/nix/bin"
   '';
 }
