@@ -3077,4 +3077,33 @@ mod solve_expr {
             "Int",
         );
     }
+
+    #[test]
+    fn rbtree_empty() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                # The color of a node. Leaves are considered Black.
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # Create an empty dictionary.
+                empty : Dict k v
+                empty =
+                    Empty
+
+                foo : Dict Int Int
+                foo = empty
+
+                main : Dict Int Int
+                main =
+                    foo
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
 }
