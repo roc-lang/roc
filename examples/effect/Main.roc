@@ -5,7 +5,8 @@ empty = ConsList.empty
 
 main : Effect.Effect {} as Fx
 main =
-    if ConsList.isEmpty empty then
+    # if ConsList.isEmpty empty then
+    if ConsList.len empty == 0 then
         Effect.putLine "Yay"
             |> Effect.after (\{} -> Effect.getLine)
             |> Effect.after (\line -> Effect.putLine line)

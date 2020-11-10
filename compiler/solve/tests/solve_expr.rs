@@ -2184,7 +2184,7 @@ mod solve_expr {
                 r#"
                 app Test provides [ main ] imports []
 
-                map = 
+                map =
                     \peano ->
                         when peano is
                             Z -> Z
@@ -2919,7 +2919,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.walkRight 
+                List.walkRight
                 "#
             ),
             "List a, (a, b -> b), b -> b",
@@ -2932,7 +2932,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 empty : List Int
-                empty = 
+                empty =
                     []
 
                 List.walkRight empty (\a, b -> a + b) 0
@@ -3050,6 +3050,31 @@ mod solve_expr {
                 "#
             ),
             "[ @Empty, @Foo [ @Bar ] Int ]",
+        );
+    }
+
+    #[test]
+    fn recursive_functon_with_rigid() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                State a : { count : Int, x : a }
+
+                foo : State a -> Int
+                foo = \state ->
+                    if state.count == 0 then
+                        0
+                    else
+                        1 + foo { count: state.count - 1, x: state.x }
+
+                main : Int
+                main =
+                    foo { count: 3, x: {} }
+                "#
+            ),
+            "Int",
         );
     }
 }
