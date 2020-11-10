@@ -110,13 +110,13 @@ If you have an Nvidia graphics card, run:
 ```
 nix-env -f ./ -iA nixVulkanNvidia
 ```
-If you have integrated Intel graphics, run
+If you have integrated Intel graphics, run:
 ```
 nix-env -f ./ -iA nixVulkanIntel
 ```
 Check the [nixGL repo](https://github.com/guibou/nixGL) for other configurations.
 
-Next you should be able to run the editor:
+Now you should be able to run the editor:
 ```bash
 cd roc
 nixVulkanNvidia cargo run edit `# replace Nvidia with the config you chose in the previous step`
