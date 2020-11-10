@@ -80,7 +80,7 @@ If MacOS and using a version >= 10.15:
 
 You may prefer to setup up the volume manually by following nix documentation.
 
-> You my need to restart your terminal
+> You may need to restart your terminal
 
 ### Usage
 
@@ -95,6 +95,32 @@ You should be in a shell with everything needed to build already installed. Next
 `cargo run repl`
 
 You should be in a repl now. Have fun!
+
+### Editor
+
+When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
+
+```bash
+nix-shell
+git clone https://github.com/guibou/nixGL
+cd nixGL
+```
+
+If you have an Nvidia graphics card, run:
+```
+nix-env -f ./ -iA nixVulkanNvidia
+```
+If you have integrated intel graphics, run
+```
+nix-env -f ./ -iA nixVulkanIntel
+```
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other configurations.
+
+Next you should be able to run the editor:
+```bash
+cd roc
+nixVulkanNvidia cargo run edit `# replace Nvidia with the config you chose in the previous step`
+```
 
 ## Troubleshooting
 
