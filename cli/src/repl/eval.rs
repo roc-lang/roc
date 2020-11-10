@@ -6,7 +6,7 @@ use roc_gen::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionVariant};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
@@ -191,6 +191,32 @@ fn jit_to_ast_help<'a>(
                 other => {
                     panic!("Unsupported target: Roc cannot currently compile to systems where pointers are {} bytes in length.", other);
                 }
+            }
+        }
+        Layout::Union(union_layouts) => {
+            match content {
+                Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    debug_assert_eq!(union_layouts.len(), tags.len());
+
+                    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> =
+                        tags.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+
+                    let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
+
+                    match union_variant {
+                        UnionVariant::Wrapped(tags_and_layouts) => {
+                            dbg!(tags_and_layouts);
+                            // just one eightbyte, returned as-is
+                            run_jit_function!(lib, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
+                                dbg!((&bytes).as_ptr() as *const libc::c_void);
+
+                                Expr::GlobalTag("Thing")
+                            })
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
             }
         }
         other => {
