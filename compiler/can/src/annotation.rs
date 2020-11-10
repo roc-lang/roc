@@ -228,13 +228,17 @@ fn can_annotation_help(
                     actual.substitute(&substitutions);
 
                     // Type::Alias(symbol, vars, Box::new(actual))
-                    let actual_var = var_store.fresh();
-                    introduced_variables.insert_host_exposed_alias(symbol, actual_var);
-                    Type::HostExposedAlias {
-                        name: symbol,
-                        arguments: vars,
-                        actual: Box::new(actual),
-                        actual_var,
+                    if vars.is_empty() {
+                        let actual_var = var_store.fresh();
+                        introduced_variables.insert_host_exposed_alias(symbol, actual_var);
+                        Type::HostExposedAlias {
+                            name: symbol,
+                            arguments: vars,
+                            actual: Box::new(actual),
+                            actual_var,
+                        }
+                    } else {
+                        Type::Alias(symbol, vars, Box::new(actual))
                     }
                 }
                 None => {
@@ -369,13 +373,17 @@ fn can_annotation_help(
 
                 // Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
 
-                let actual_var = var_store.fresh();
-                introduced_variables.insert_host_exposed_alias(symbol, actual_var);
-                Type::HostExposedAlias {
-                    name: symbol,
-                    arguments: vars,
-                    actual: Box::new(alias.typ.clone()),
-                    actual_var,
+                if vars.is_empty() {
+                    let actual_var = var_store.fresh();
+                    introduced_variables.insert_host_exposed_alias(symbol, actual_var);
+                    Type::HostExposedAlias {
+                        name: symbol,
+                        arguments: vars,
+                        actual: Box::new(alias.typ.clone()),
+                        actual_var,
+                    }
+                } else {
+                    Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
                 }
             }
             _ => {
