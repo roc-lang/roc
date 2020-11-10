@@ -1111,4 +1111,96 @@ mod gen_primitives {
             |_| 1
         );
     }
+
+    #[test]
+    fn linked_list_len() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main, len ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                len : ConsList a -> Int
+                len = \list ->
+                    when list is
+                        Cons _ rest -> 1 + len rest
+
+                        Nil ->
+                            0
+
+                main : ConsList Int -> Int
+                main = len
+                "#
+            ),
+            1,
+            i64,
+            |_| 1
+        );
+    }
+
+    #[test]
+    fn linked_list_is_empty_1() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                empty : ConsList a
+                empty = Nil
+
+                isEmpty : ConsList a -> Bool
+                isEmpty = \list ->
+                    when list is
+                        Cons _ _ ->
+                            False
+
+                        Nil ->
+                            True
+
+                main : Bool 
+                main = 
+                    myList : ConsList Int
+                    myList = empty
+
+                    isEmpty myList
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn linked_list_is_empty_2() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                # isEmpty : ConsList a -> Bool
+                isEmpty = \list ->
+                    when list is
+                        Cons _ _ ->
+                            False
+
+                        Nil ->
+                            True
+
+                main : Bool 
+                main = 
+                    myList : ConsList Int
+                    myList = Cons 0x1 Nil
+
+                    isEmpty myList
+                "#
+            ),
+            false,
+            bool
+        );
+    }
 }
