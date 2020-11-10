@@ -80,10 +80,18 @@ const PHASES: [Phase; 6] = [
     Phase::MakeSpecializations,
 ];
 
+#[derive(Debug)]
+enum Status {
+    NotStarted,
+    Pending,
+    Done,
+}
+
 #[derive(Default, Debug)]
 struct Dependencies {
     waiting_for: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
     notifies: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
+    status: MutMap<(ModuleId, Phase), Status>,
 }
 
 impl Dependencies {
@@ -126,6 +134,8 @@ impl Dependencies {
             }
         }
 
+        self.add_to_status(module_id, goal_phase);
+
         let mut output = MutSet::default();
 
         // all the dependencies can be loaded
@@ -158,6 +168,8 @@ impl Dependencies {
             }
         }
 
+        self.add_to_status(module_id, goal_phase);
+
         let mut output = MutSet::default();
 
         // all the dependencies can be loaded
@@ -168,8 +180,22 @@ impl Dependencies {
         output
     }
 
+    fn add_to_status(&mut self, module_id: ModuleId, goal_phase: Phase) {
+        for phase in PHASES.iter() {
+            if *phase > goal_phase {
+                break;
+            }
+
+            if let Vacant(entry) = self.status.entry((module_id, *phase)) {
+                entry.insert(Status::NotStarted);
+            }
+        }
+    }
+
     /// Propagate a notification, return (module, phase) pairs that can make progress
     pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
+        self.status.insert((module_id, phase), Status::Done);
+
         let mut output = MutSet::default();
 
         let key = (module_id, phase);
@@ -229,7 +255,18 @@ impl Dependencies {
     fn solved_all(&self) -> bool {
         debug_assert_eq!(self.notifies.is_empty(), self.waiting_for.is_empty());
 
-        self.notifies.is_empty()
+        for status in self.status.values() {
+            match status {
+                Status::Done => {
+                    continue;
+                }
+                _ => {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -258,6 +295,32 @@ struct ModuleCache<'a> {
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
     // we blindly assume all dependencies are met
+
+    match state.dependencies.status.get_mut(&(module_id, phase)) {
+        Some(current @ Status::NotStarted) => {
+            // start this phase!
+            *current = Status::Pending;
+        }
+        Some(Status::Pending) | Some(Status::Done) => {
+            // don't start this task again!
+            todo!();
+        }
+
+        None => match phase {
+            Phase::LoadHeader => {
+                // this is fine, mark header loading as pending
+                state
+                    .dependencies
+                    .status
+                    .insert((module_id, Phase::LoadHeader), Status::Pending);
+            }
+            _ => unreachable!(
+                "Pair {:?} is not in dependencies.status, that should never happen!",
+                (module_id, phase)
+            ),
+        },
+    }
+
     match phase {
         Phase::LoadHeader => {
             let dep_name = state
@@ -1604,6 +1667,10 @@ fn update<'a>(
 
             state.module_cache.mono_problems.insert(module_id, problems);
 
+            state.procedures.extend(procedures);
+            state.constrained_ident_ids.insert(module_id, ident_ids);
+            state.timings.insert(module_id, module_timing);
+
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
                     .module_cache
@@ -1617,20 +1684,12 @@ fn update<'a>(
                 existing.extend(requested);
             }
 
-            state.procedures.extend(procedures);
-
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
-            state.constrained_ident_ids.insert(module_id, ident_ids);
-
-            state.timings.insert(module_id, module_timing);
-
-            if work.is_empty()
-                && state.dependencies.solved_all()
-                && state.goal_phase == Phase::MakeSpecializations
-            {
+            if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
+                debug_assert!(work.is_empty());
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
