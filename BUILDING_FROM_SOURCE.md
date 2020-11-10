@@ -110,7 +110,7 @@ If you have an Nvidia graphics card, run:
 ```
 nix-env -f ./ -iA nixVulkanNvidia
 ```
-If you have integrated intel graphics, run
+If you have integrated Intel graphics, run
 ```
 nix-env -f ./ -iA nixVulkanIntel
 ```
