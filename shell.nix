@@ -51,6 +51,10 @@ let
       pkgs.libxml2
       pkgs.xorg.libX11
       pkgs.zlib
+      pkgs.vulkan-headers
+      pkgs.vulkan-loader
+      pkgs.vulkan-tools
+      pkgs.vulkan-validation-layers
       # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
       lld
       # dev tools
@@ -62,8 +66,24 @@ in pkgs.mkShell {
   buildInputs = inputs ++ darwin-frameworks;
   LLVM_SYS_100_PREFIX = "${llvm}";
 
+  APPEND_LIBRARY_PATH = pkgs.stdenv.lib.makeLibraryPath [
+      pkgs.pkgconfig
+      pkgs.vulkan-headers
+      pkgs.vulkan-loader
+      pkgs.vulkan-tools
+      pkgs.vulkan-validation-layers
+      pkgs.xorg.libX11
+      pkgs.xorg.libXcursor
+      pkgs.xorg.libXrandr
+      pkgs.xorg.libXi
+      pkgs.libcxx
+      pkgs.libcxxabi
+      pkgs.libunwind
+    ];
+
   # Aliases don't work cross shell, so we do this
   shellHook = ''
+    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$APPEND_LIBRARY_PATH"
     export PATH="$PATH:$PWD/nix/bin"
   '';
 }
