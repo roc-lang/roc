@@ -419,6 +419,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 subs,
                 procs,
                 layout_cache,
+                module_timing,
             } = found_specializations;
 
             BuildTask::MakeSpecializations {
@@ -428,6 +429,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 procs,
                 layout_cache,
                 specializations_we_must_make,
+                module_timing,
             }
         }
     }
@@ -494,6 +496,7 @@ pub struct FoundSpecializationsModule<'a> {
     pub layout_cache: LayoutCache<'a>,
     pub procs: Procs<'a>,
     pub subs: Subs,
+    pub module_timing: ModuleTiming,
 }
 
 #[derive(Debug)]
@@ -565,6 +568,7 @@ enum Msg<'a> {
         procs: Procs<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
+        module_timing: ModuleTiming,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -573,6 +577,7 @@ enum Msg<'a> {
         external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
+        module_timing: ModuleTiming,
         subs: Subs,
     },
 
@@ -660,6 +665,8 @@ pub struct ModuleTiming {
     pub canonicalize: Duration,
     pub constrain: Duration,
     pub solve: Duration,
+    pub find_specializations: Duration,
+    pub make_specializations: Duration,
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
@@ -676,6 +683,8 @@ impl ModuleTiming {
             canonicalize: Duration::default(),
             constrain: Duration::default(),
             solve: Duration::default(),
+            find_specializations: Duration::default(),
+            make_specializations: Duration::default(),
             start_time,
             end_time: start_time, // just for now; we'll overwrite this at the end
         }
@@ -694,6 +703,8 @@ impl ModuleTiming {
             canonicalize,
             constrain,
             solve,
+            find_specializations,
+            make_specializations,
             start_time,
             end_time,
         } = self;
@@ -702,12 +713,16 @@ impl ModuleTiming {
             .duration_since(*start_time)
             .ok()
             .and_then(|t| {
-                t.checked_sub(*solve).and_then(|t| {
-                    t.checked_sub(*constrain).and_then(|t| {
-                        t.checked_sub(*canonicalize).and_then(|t| {
-                            t.checked_sub(*parse_body).and_then(|t| {
-                                t.checked_sub(*parse_header)
-                                    .and_then(|t| t.checked_sub(*read_roc_file))
+                t.checked_sub(*make_specializations).and_then(|t| {
+                    t.checked_sub(*find_specializations).and_then(|t| {
+                        t.checked_sub(*solve).and_then(|t| {
+                            t.checked_sub(*constrain).and_then(|t| {
+                                t.checked_sub(*canonicalize).and_then(|t| {
+                                    t.checked_sub(*parse_body).and_then(|t| {
+                                        t.checked_sub(*parse_header)
+                                            .and_then(|t| t.checked_sub(*read_roc_file))
+                                    })
+                                })
                             })
                         })
                     })
@@ -767,6 +782,7 @@ enum BuildTask<'a> {
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: ExternalSpecializations,
+        module_timing: ModuleTiming,
     },
 }
 
@@ -1531,6 +1547,7 @@ fn update<'a>(
             ident_ids,
             layout_cache,
             problems: _,
+            module_timing,
         } => {
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
@@ -1554,6 +1571,7 @@ fn update<'a>(
                 procs,
                 ident_ids,
                 subs,
+                module_timing,
             };
 
             state
@@ -1579,6 +1597,7 @@ fn update<'a>(
             procedures,
             external_specializations_requested,
             problems,
+            module_timing,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
@@ -1606,12 +1625,12 @@ fn update<'a>(
 
             state.constrained_ident_ids.insert(module_id, ident_ids);
 
+            state.timings.insert(module_id, module_timing);
+
             if work.is_empty()
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
-                // state.timings.insert(module_id, module_timing);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -3052,7 +3071,9 @@ fn make_specializations<'a>(
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations,
+    mut module_timing: ModuleTiming,
 ) -> Msg<'a> {
+    let make_specializations_start = SystemTime::now();
     let mut mono_problems = Vec::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
@@ -3080,6 +3101,11 @@ fn make_specializations<'a>(
     let external_specializations_requested = procs.externals_we_need.clone();
     let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
 
+    let make_specializations_end = SystemTime::now();
+    module_timing.make_specializations = make_specializations_end
+        .duration_since(make_specializations_start)
+        .unwrap();
+
     Msg::MadeSpecializations {
         module_id: home,
         ident_ids,
@@ -3088,6 +3114,7 @@ fn make_specializations<'a>(
         problems: mono_problems,
         subs,
         external_specializations_requested,
+        module_timing,
     }
 }
 
@@ -3098,12 +3125,12 @@ fn build_pending_specializations<'a>(
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
-    // TODO use this?
-    _module_timing: ModuleTiming,
+    mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
+    let find_specializations_start = SystemTime::now();
     let mut procs = Procs::default();
 
     let mut mono_problems = std::vec::Vec::new();
@@ -3149,6 +3176,11 @@ fn build_pending_specializations<'a>(
 
     let problems = mono_env.problems.to_vec();
 
+    let find_specializations_end = SystemTime::now();
+    module_timing.find_specializations = find_specializations_end
+        .duration_since(find_specializations_start)
+        .unwrap();
+
     Msg::FoundSpecializations {
         module_id: home,
         solved_subs: roc_types::solved_types::Solved(subs),
@@ -3156,6 +3188,7 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs,
         problems,
+        module_timing,
     }
 }
 
@@ -3362,6 +3395,7 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
+            module_timing,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -3370,6 +3404,7 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
+            module_timing,
         )),
     }?;
 
