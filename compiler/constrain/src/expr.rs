@@ -1052,9 +1052,9 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
-    let mut pattern_state = constrain_def_pattern(env, &def.loc_pattern, expr_type.clone());
+    let mut def_pattern_state = constrain_def_pattern(env, &def.loc_pattern, expr_type.clone());
 
-    pattern_state.vars.push(expr_var);
+    def_pattern_state.vars.push(expr_var);
 
     let mut new_rigids = Vec::new();
 
@@ -1070,7 +1070,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 &mut new_rigids,
                 &mut ftv,
                 &def.loc_pattern,
-                &mut pattern_state.headers,
+                &mut def_pattern_state.headers,
             );
 
             let env = &Env {
@@ -1087,7 +1087,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 signature.clone(),
             );
 
-            pattern_state.constraints.push(Eq(
+            def_pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
                 Category::Storage(std::file!(), std::line!()),
@@ -1113,7 +1113,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         ..
                     },
                     Type::Function(arg_types, _, _),
-                ) => {
+                ) if false => {
                     let expected = annotation_expected;
                     let region = def.loc_expr.region;
 
@@ -1248,13 +1248,13 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
     Let(Box::new(LetConstraint {
         rigid_vars: new_rigids,
-        flex_vars: pattern_state.vars,
-        def_types: pattern_state.headers,
+        flex_vars: def_pattern_state.vars,
+        def_types: def_pattern_state.headers,
         defs_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),        // always empty
             flex_vars: Vec::new(),         // empty, because our functions have no arguments
             def_types: SendMap::default(), // empty, because our functions have no arguments!
-            defs_constraint: And(pattern_state.constraints),
+            defs_constraint: And(def_pattern_state.constraints),
             ret_constraint: expr_con,
         })),
         ret_constraint: body_con,
