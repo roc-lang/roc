@@ -347,45 +347,24 @@ pub fn constrain_expr(
         } => {
             // NOTE defs are treated somewhere else!
             let loc_body_expr = &**boxed;
-            let mut state = PatternState {
-                headers: SendMap::default(),
-                vars: Vec::with_capacity(arguments.len()),
-                constraints: Vec::with_capacity(1),
-            };
-            let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
-            let mut pattern_types = Vec::with_capacity(state.vars.capacity());
+
             let ret_var = *ret_var;
             let closure_var = *closure_var;
             let closure_ext_var = *closure_ext_var;
-            let ret_type = Type::Variable(ret_var);
+
+            let closure_type = Type::Variable(closure_var);
+            let return_type = Type::Variable(ret_var);
+            let (mut vars, pattern_state, function_type) =
+                constrain_untyped_args(env, arguments, closure_type, return_type.clone());
 
             vars.push(ret_var);
             vars.push(closure_var);
             vars.push(closure_ext_var);
+            vars.push(*fn_var);
 
-            for (pattern_var, loc_pattern) in arguments {
-                let pattern_type = Type::Variable(*pattern_var);
-                let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
-
-                pattern_types.push(pattern_type);
-
-                constrain_pattern(
-                    env,
-                    &loc_pattern.value,
-                    loc_pattern.region,
-                    pattern_expected,
-                    &mut state,
-                );
-
-                vars.push(*pattern_var);
-            }
-
-            let body_type = NoExpectation(ret_type.clone());
+            let body_type = NoExpectation(return_type.clone());
             let ret_constraint =
                 constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
-
-            vars.push(*fn_var);
-            let defs_constraint = And(state.constraints);
 
             // make sure the captured symbols are sorted!
             debug_assert_eq!(captured_symbols.clone(), {
@@ -403,28 +382,22 @@ pub fn constrain_expr(
                 &mut vars,
             );
 
-            let fn_type = Type::Function(
-                pattern_types,
-                Box::new(Type::Variable(closure_var)),
-                Box::new(ret_type),
-            );
-
             exists(
                 vars,
                 And(vec![
                     Let(Box::new(LetConstraint {
                         rigid_vars: Vec::new(),
-                        flex_vars: state.vars,
-                        def_types: state.headers,
-                        defs_constraint,
+                        flex_vars: pattern_state.vars,
+                        def_types: pattern_state.headers,
+                        defs_constraint: And(pattern_state.constraints),
                         ret_constraint,
                     })),
                     // "the closure's type is equal to expected type"
-                    Eq(fn_type.clone(), expected, Category::Lambda, region),
+                    Eq(function_type.clone(), expected, Category::Lambda, region),
                     // "fn_var is equal to the closure's type" - fn_var is used in code gen
                     Eq(
                         Type::Variable(*fn_var),
-                        NoExpectation(fn_type),
+                        NoExpectation(function_type),
                         Category::Storage(std::file!(), std::line!()),
                         region,
                     ),
