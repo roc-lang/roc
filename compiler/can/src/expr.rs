@@ -748,34 +748,34 @@ pub fn canonicalize_expr<'a>(
         }
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
-        ast::Expr::ParensAround(sub_expr) => {
+        bad_expr @ ast::Expr::ParensAround(_) => {
             panic!(
-                "A ParensAround did not get removed during operator desugaring somehow: {:?}",
-                sub_expr
+                "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::SpaceBefore(sub_expr, _spaces) => {
+        bad_expr @ ast::Expr::SpaceBefore(_, _) => {
             panic!(
-                "A SpaceBefore did not get removed during operator desugaring somehow: {:?}",
-                sub_expr
+                "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::SpaceAfter(sub_expr, _spaces) => {
+        bad_expr @ ast::Expr::SpaceAfter(_, _) => {
             panic!(
-                "A SpaceAfter did not get removed during operator desugaring somehow: {:?}",
-                sub_expr
+                "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::BinOp((_, loc_op, _)) => {
+        bad_expr @ ast::Expr::BinOp(_) => {
             panic!(
-                "A binary operator did not get desugared somehow: {:?}",
-                loc_op
+                "A binary operator did not get desugared somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::UnaryOp(_, loc_op) => {
+        bad_expr @ ast::Expr::UnaryOp(_, _) => {
             panic!(
-                "A unary operator did not get desugared somehow: {:?}",
-                loc_op
+                "A unary operator did not get desugared somehow: {:#?}",
+                bad_expr
             );
         }
     };

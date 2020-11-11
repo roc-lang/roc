@@ -244,6 +244,300 @@ mod test_can {
         assert_can_int("-0b11", -0b11);
     }
 
+    // ANNOTATIONS
+    #[test]
+    fn correct_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                f = \ a -> a
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn correct_annotated_body_with_comments() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int # comment
+                f = \ a -> a
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn name_mismatch_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                g = \ a -> a
+
+                g
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        // Here we have 2 issues:
+        // 1. `g` doesn't match the previous annotation named `f`, so we
+        //     have a `SignatureDefMismatch`.
+        // 2. Thus, `g` is not defined then final reference to it is a
+        //    `LookupNotInScope`.
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::SignatureDefMismatch { .. } => true,
+            Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn name_mismatch_annotated_body_with_comment() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int # comment
+                g = \ a -> a
+
+                g
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        // Here we have 2 issues:
+        // 1. `g` doesn't match the previous annotation named `f`, so we
+        //     have a `SignatureDefMismatch`.
+        // 2. Thus, `g` is not defined then final reference to it is a
+        //    `LookupNotInScope`.
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::SignatureDefMismatch { .. } => true,
+            Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn separated_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+
+                f = \ a -> a
+
+                f 42
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn separated_annotated_body_with_comment() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                # comment
+                f = \ a -> a
+
+                f 42
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn shadowed_annotation() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+
+                f : Int -> Int
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        println!("{:#?}", problems);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn correct_nested_unannotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g = 42
+
+                    g + 1
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn correct_nested_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g : Int
+                    g = 42
+
+                    g + 1
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn correct_nested_body_annotated_multiple_lines() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g : Int
+                    g = 42
+                    h : Int
+                    h = 5
+                    z = 4
+                    g + h + z
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn correct_nested_body_unannotated_multiple_lines() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g = 42
+                    h : Int
+                    h = 5
+                    z = 4
+                    g + h + z
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+    #[test]
+    fn correct_double_nested_body() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g =
+                        h = 42
+                        h + 1
+                    g + 1
+
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn annotation_followed_with_unrelated_affectation() {
+        let src = indoc!(
+            r#"
+                F : Int
+
+                x = 1
+
+                x
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::UnusedDef(_, _) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn two_annotations_followed_with_unrelated_affectation() {
+        let src = indoc!(
+            r#"
+                G : Int
+
+                F : Int
+                
+                x = 1
+
+                x
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::UnusedDef(_, _) => true,
+            _ => false,
+        }));
+    }
     // LOCALS
 
     // TODO rewrite this test to check only for UnusedDef reports

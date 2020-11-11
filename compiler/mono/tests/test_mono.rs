@@ -1422,27 +1422,27 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Num.15 (#Attr.2, #Attr.3):
-                    let Test.13 = lowlevel NumSub #Attr.2 #Attr.3;
-                    ret Test.13;
+                    let Test.14 = lowlevel NumSub #Attr.2 #Attr.3;
+                    ret Test.14;
 
                 procedure Num.16 (#Attr.2, #Attr.3):
-                    let Test.11 = lowlevel NumMul #Attr.2 #Attr.3;
-                    ret Test.11;
+                    let Test.12 = lowlevel NumMul #Attr.2 #Attr.3;
+                    ret Test.12;
 
                 procedure Test.1 (Test.2, Test.3):
-                    jump Test.18 Test.2 Test.3;
-                    joinpoint Test.18 Test.2 Test.3:
-                        let Test.15 = true;
-                        let Test.16 = 0i64;
-                        let Test.17 = lowlevel Eq Test.16 Test.2;
-                        let Test.14 = lowlevel And Test.17 Test.15;
-                        if Test.14 then
+                    jump Test.7 Test.2 Test.3;
+                    joinpoint Test.7 Test.2 Test.3:
+                        let Test.16 = true;
+                        let Test.17 = 0i64;
+                        let Test.18 = lowlevel Eq Test.17 Test.2;
+                        let Test.15 = lowlevel And Test.18 Test.16;
+                        if Test.15 then
                             ret Test.3;
                         else
-                            let Test.12 = 1i64;
-                            let Test.9 = CallByName Num.15 Test.2 Test.12;
-                            let Test.10 = CallByName Num.16 Test.2 Test.3;
-                            jump Test.18 Test.9 Test.10;
+                            let Test.13 = 1i64;
+                            let Test.10 = CallByName Num.15 Test.2 Test.13;
+                            let Test.11 = CallByName Num.16 Test.2 Test.3;
+                            jump Test.7 Test.10 Test.11;
 
                 procedure Test.0 ():
                     let Test.5 = 10i64;

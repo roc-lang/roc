@@ -7,16 +7,16 @@ use std::alloc::Layout;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "main_1_exposed"]
+    #[link_name = "Main_main_1_exposed"]
     fn roc_main(output: *mut u8) -> ();
 
-    #[link_name = "main_1_size"]
+    #[link_name = "Main_main_1_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "main_1_Fx_caller"]
+    #[link_name = "Main_main_1_Fx_caller"]
     fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
 
-    #[link_name = "main_1_Fx_size"]
+    #[link_name = "Main_main_1_Fx_size"]
     fn size_Fx() -> i64;
 }
 
@@ -38,7 +38,7 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_getLine(_: ()) -> RocStr {
+pub fn roc_fx_getLine() -> RocStr {
     use std::io::{self, BufRead};
 
     let stdin = io::stdin();

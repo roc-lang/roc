@@ -10,7 +10,9 @@ impl LayoutId {
     // Returns something like "foo#1" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        format!("{}_{}", symbol.ident_string(interns), self.0)
+        let ident_string = symbol.ident_string(interns);
+        let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
+        format!("{}_{}_{}", module_string, ident_string, self.0)
     }
 }
 

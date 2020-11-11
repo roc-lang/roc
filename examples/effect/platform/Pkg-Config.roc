@@ -6,5 +6,8 @@ platform folkertdev/foo
         {
             putChar : Int -> Effect {},
             putLine : Str -> Effect {},
-            getLine : {} -> Effect Str
+            getLine : Effect Str
         }
+
+mainForHost : Effect {} as Fx
+mainForHost = main

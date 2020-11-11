@@ -130,8 +130,6 @@ pub fn canonicalize_defs<'a>(
     // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
-    use roc_parse::ast::Def::*;
-
     // Record both the original and final idents from the scope,
     // so we can diff them while detecting unused defs.
     let mut scope = original_scope.clone();
@@ -139,77 +137,37 @@ pub fn canonicalize_defs<'a>(
     let mut refs_by_symbol = MutMap::default();
     let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
     let mut pending = Vec::with_capacity(num_defs); // TODO bump allocate this!
-    let mut iter = loc_defs.iter().peekable();
 
     // Canonicalize all the patterns, record shadowing problems, and store
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
-    while let Some(loc_def) = iter.next() {
-        // Any time we have an Annotation followed immediately by a Body,
-        // check to see if their patterns are equivalent. If they are,
-        // turn it into a TypedBody. Otherwise, give an error.
-        let (new_output, pending_def) = match &loc_def.value {
-            Annotation(pattern, annotation) | Nested(Annotation(pattern, annotation)) => {
-                match iter.peek() {
-                    Some(Located {
-                        value: Body(body_pattern, body_expr),
-                        region: body_region,
-                    }) => {
-                        if pattern.value.equivalent(&body_pattern.value) {
-                            iter.next();
-
-                            pending_typed_body(
-                                env,
-                                body_pattern,
-                                annotation,
-                                body_expr,
-                                var_store,
-                                &mut scope,
-                                pattern_type,
+    for loc_def in loc_defs {
+        match to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type) {
+            None => (),
+            Some((new_output, pending_def)) => {
+                // store the top-level defs, used to ensure that closures won't capture them
+                if let PatternType::TopLevelDef = pattern_type {
+                    match &pending_def {
+                        PendingDef::AnnotationOnly(_, loc_can_pattern, _)
+                        | PendingDef::Body(_, loc_can_pattern, _)
+                        | PendingDef::TypedBody(_, loc_can_pattern, _, _) => {
+                            env.top_level_symbols.extend(
+                                bindings_from_patterns(std::iter::once(loc_can_pattern))
+                                    .iter()
+                                    .map(|t| t.0),
                             )
-                        } else if loc_def.region.lines_between(body_region) > 1 {
-                            // there is a line of whitespace between the annotation and the body
-                            // treat annotation and body separately
-                            to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type)
-                        } else {
-                            // the pattern of the annotation does not match the pattern of the body directly below it
-                            env.problems.push(Problem::SignatureDefMismatch {
-                                annotation_pattern: pattern.region,
-                                def_pattern: body_pattern.region,
-                            });
-
-                            // both the annotation and definition are skipped!
-                            iter.next();
-                            continue;
                         }
+                        PendingDef::Alias { .. } | PendingDef::InvalidAlias => {}
                     }
-                    _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),
                 }
-            }
-            _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),
-        };
-
-        output.union(new_output);
-
-        // store the top-level defs, used to ensure that closures won't capture them
-        if let PatternType::TopLevelDef = pattern_type {
-            match &pending_def {
-                PendingDef::AnnotationOnly(_, loc_can_pattern, _)
-                | PendingDef::Body(_, loc_can_pattern, _)
-                | PendingDef::TypedBody(_, loc_can_pattern, _, _) => env.top_level_symbols.extend(
-                    bindings_from_patterns(std::iter::once(loc_can_pattern))
-                        .iter()
-                        .map(|t| t.0),
-                ),
-                PendingDef::Alias { .. } | PendingDef::InvalidAlias => {}
+                // Record the ast::Expr for later. We'll do another pass through these
+                // once we have the entire scope assembled. If we were to canonicalize
+                // the exprs right now, they wouldn't have symbols in scope from defs
+                // that get would have gotten added later in the defs list!
+                pending.push(pending_def);
+                output.union(new_output);
             }
         }
-
-        // Record the ast::Expr for later. We'll do another pass through these
-        // once we have the entire scope assembled. If we were to canonicalize
-        // the exprs right now, they wouldn't have symbols in scope from defs
-        // that get would have gotten added later in the defs list!
-        pending.push(pending_def);
     }
 
     if cfg!(debug_assertions) {
@@ -226,17 +184,11 @@ pub fn canonicalize_defs<'a>(
                 let mut can_ann =
                     canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
 
-                // all referenced symbols in an alias must be symbols
-                output
-                    .references
-                    .referenced_aliases
-                    .extend(can_ann.aliases.keys().copied());
-
-                // if an alias definition uses an alias, the used alias is referenced
-                output
-                    .references
-                    .lookups
-                    .extend(can_ann.aliases.keys().copied());
+                // Record all the annotation's references in output.references.lookups
+                for symbol in can_ann.references {
+                    output.references.lookups.insert(symbol);
+                    output.references.referenced_aliases.insert(symbol);
+                }
 
                 let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
                     Vec::with_capacity(vars.len());
@@ -1344,7 +1296,7 @@ fn to_pending_def<'a>(
     def: &'a ast::Def<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> (Output, PendingDef<'a>) {
+) -> Option<(Output, PendingDef<'a>)> {
     use roc_parse::ast::Def::*;
 
     match def {
@@ -1359,10 +1311,10 @@ fn to_pending_def<'a>(
                 loc_pattern.region,
             );
 
-            (
+            Some((
                 output,
                 PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann),
-            )
+            ))
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
@@ -1375,10 +1327,46 @@ fn to_pending_def<'a>(
                 loc_pattern.region,
             );
 
-            (
+            Some((
                 output,
                 PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr),
-            )
+            ))
+        }
+
+        AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment: _,
+            body_pattern,
+            body_expr,
+        } => {
+            if ann_pattern.value.equivalent(&body_pattern.value) {
+                // NOTE: Pick the body pattern, picking the annotation one is
+                // incorrect in the presence of optional record fields!
+                //
+                // { x, y } : { x : Int, y ? Bool }*
+                // { x, y ? False } = rec
+                Some(pending_typed_body(
+                    env,
+                    body_pattern,
+                    ann_type,
+                    body_expr,
+                    var_store,
+                    scope,
+                    pattern_type,
+                ))
+            } else {
+                // the pattern of the annotation does not match the pattern of the body direc
+                env.problems.push(Problem::SignatureDefMismatch {
+                    annotation_pattern: ann_pattern.region,
+                    def_pattern: body_pattern.region,
+                });
+
+                // TODO: Should we instead build some PendingDef::InvalidAnnotatedBody ? This would
+                // remove the `Option` on this function (and be probably more reliable for further
+                // problem/error reporting)
+                None
+            }
         }
 
         Alias { name, vars, ann } => {
@@ -1411,12 +1399,12 @@ fn to_pending_def<'a>(
                                     region: loc_var.region,
                                 });
 
-                                return (Output::default(), PendingDef::InvalidAlias);
+                                return Some((Output::default(), PendingDef::InvalidAlias));
                             }
                         }
                     }
 
-                    (
+                    Some((
                         Output::default(),
                         PendingDef::Alias {
                             name: Located {
@@ -1426,7 +1414,7 @@ fn to_pending_def<'a>(
                             vars: can_rigids,
                             ann,
                         },
-                    )
+                    ))
                 }
 
                 Err((original_region, loc_shadowed_symbol)) => {
@@ -1435,7 +1423,7 @@ fn to_pending_def<'a>(
                         shadow: loc_shadowed_symbol,
                     });
 
-                    (Output::default(), PendingDef::InvalidAlias)
+                    Some((Output::default(), PendingDef::InvalidAlias))
                 }
             }
         }

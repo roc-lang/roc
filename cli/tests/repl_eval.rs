@@ -88,6 +88,45 @@ mod repl_eval {
     }
 
     #[test]
+    fn bool_in_record() {
+        expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
+        expect_success("{ x: 1 != 1 }", "{ x: False } : { x : Bool }");
+        // TODO: see ptr_to_ast
+        // expect_success(
+        //     "{ x: 1 == 1, y: 1 != 1 }",
+        //     "{ x: True, y: False } : { x : Bool, y : Bool }",
+        // );
+    }
+
+    #[test]
+    fn bool_basic_equality() {
+        expect_success("1 == 1", "True : Bool");
+        expect_success("1 != 1", "False : Bool");
+    }
+
+    #[test]
+    fn arbitrary_tag_unions() {
+        expect_success("if 1 == 1 then Red else Green", "Red : [ Green, Red ]*");
+        expect_success("if 1 != 1 then Red else Green", "Green : [ Green, Red ]*");
+    }
+
+    #[test]
+    fn tag_without_arguments() {
+        expect_success("True", "True : [ True ]*");
+        expect_success("False", "False : [ False ]*");
+    }
+
+    #[test]
+    fn tag_with_arguments() {
+        expect_success("True 1", "True 1 : [ True (Num *) ]*");
+        // TODO handle more situations
+        // expect_success(
+        //     "if 1 == 1 then True 1 else False 3.14",
+        //     "True 1 : [ True (Num *), False Float ]*",
+        // )
+    }
+
+    #[test]
     fn literal_empty_str() {
         expect_success("\"\"", "\"\" : Str");
     }
@@ -185,6 +224,11 @@ mod repl_eval {
         expect_success("List.contains [] 0", "False : Bool");
         expect_success("List.contains [ 1, 2, 3 ] 2", "True : Bool");
         expect_success("List.contains [ 1, 2, 3 ] 4", "False : Bool");
+    }
+
+    #[test]
+    fn empty_record() {
+        expect_success("{}", "{} : {}");
     }
 
     #[test]

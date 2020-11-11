@@ -112,7 +112,7 @@ pub fn constrain_expr(
                 let stored_con = Eq(
                     Type::Variable(*record_var),
                     expected,
-                    Category::Storage,
+                    Category::Storage(std::file!(), std::line!()),
                     region,
                 );
 
@@ -391,7 +391,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*fn_var),
                         NoExpectation(fn_type),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     ),
                     closure_constraint,
@@ -469,7 +469,7 @@ pub fn constrain_expr(
                     let ast_con = Eq(
                         Type::Variable(*branch_var),
                         NoExpectation(tipe),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     );
 
@@ -521,7 +521,7 @@ pub fn constrain_expr(
                     branch_cons.push(Eq(
                         Type::Variable(*branch_var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     ));
                     branch_cons.push(else_con);
@@ -556,7 +556,7 @@ pub fn constrain_expr(
                     let ast_con = Eq(
                         Type::Variable(*expr_var),
                         expected.clone(),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     );
                     constraints.push(ast_con);
@@ -743,7 +743,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -761,7 +761,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -805,7 +805,7 @@ pub fn constrain_expr(
             let ast_con = Eq(
                 Type::Variable(*variant_var),
                 expected,
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
@@ -1006,10 +1006,10 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
 
         match decl {
             Declaration::Declare(def) | Declaration::Builtin(def) => {
-                constraint = exists(Vec::new(), constrain_def(&env, def, constraint));
+                constraint = constrain_def(&env, def, constraint);
             }
             Declaration::DeclareRec(defs) => {
-                constraint = exists(Vec::new(), constrain_recursive_defs(&env, defs, constraint));
+                constraint = constrain_recursive_defs(&env, defs, constraint);
             }
             Declaration::InvalidCycle(_, _) => {
                 // invalid cycles give a canonicalization error. we skip them here.
@@ -1090,7 +1090,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 Region::span_across(&annotation.region, &def.loc_expr.region),
             ));
 
@@ -1173,7 +1173,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                             state.constraints.push(Constraint::Eq(
                                 pattern_type.clone(),
                                 Expected::NoExpectation(loc_ann.clone()),
-                                Category::Storage,
+                                Category::Storage(std::file!(), std::line!()),
                                 loc_pattern.region,
                             ));
 
@@ -1218,7 +1218,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                             Eq(
                                 Type::Variable(*fn_var),
                                 NoExpectation(fn_type),
-                                Category::Storage,
+                                Category::Storage(std::file!(), std::line!()),
                                 region,
                             ),
                             closure_constraint,
@@ -1440,32 +1440,31 @@ pub fn rec_defs_help(
                     },
                     def.loc_expr.region,
                     &def.loc_expr.value,
-                    NoExpectation(expr_type.clone()),
+                    annotation_expected.clone(),
                 );
 
                 // ensure expected type unifies with annotated type
-                rigid_info.constraints.push(Eq(
+                let storage_con = Eq(
                     expr_type,
                     annotation_expected.clone(),
-                    Category::Storage,
+                    Category::Storage(std::file!(), std::line!()),
                     def.loc_expr.region,
-                ));
+                );
 
                 // TODO investigate if this let can be safely removed
                 let def_con = Let(Box::new(LetConstraint {
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
-                    defs_constraint: True, // I think this is correct, once again because there are no args
+                    defs_constraint: storage_con,
                     ret_constraint: expr_con,
                 }));
 
                 rigid_info.vars.extend(&new_rigids);
-                // because of how in Roc headers point to variables, we must include the pattern var here
-                rigid_info.vars.extend(pattern_state.vars);
+
                 rigid_info.constraints.push(Let(Box::new(LetConstraint {
                     rigid_vars: new_rigids,
-                    flex_vars: Vec::new(),         // no flex vars introduced
+                    flex_vars: pattern_state.vars,
                     def_types: SendMap::default(), // no headers introduced (at this level)
                     defs_constraint: def_con,
                     ret_constraint: True,

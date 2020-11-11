@@ -47,6 +47,26 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Nested(alias @ Alias { .. }) => Nested(alias),
         ann @ Annotation(_, _) => Nested(ann),
         Nested(ann @ Annotation(_, _)) => Nested(ann),
+        AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment,
+            body_pattern,
+            body_expr,
+        }
+        | Nested(AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment,
+            body_pattern,
+            body_expr,
+        }) => AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment: *comment,
+            body_pattern: *body_pattern,
+            body_expr: desugar_expr(arena, body_expr),
+        },
         Nested(NotYetImplemented(s)) => todo!("{}", s),
         NotYetImplemented(s) => todo!("{}", s),
     }
@@ -308,8 +328,8 @@ fn desugar_field<'a>(
                 desugar_expr(arena, arena.alloc(loc_expr)),
             )
         }
-        SpaceBefore(field, spaces) => SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces),
-        SpaceAfter(field, spaces) => SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces),
+        SpaceBefore(field, _spaces) => desugar_field(arena, field),
+        SpaceAfter(field, _spaces) => desugar_field(arena, field),
 
         Malformed(string) => Malformed(string),
     }

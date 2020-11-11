@@ -8,7 +8,7 @@ use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -80,10 +80,18 @@ const PHASES: [Phase; 6] = [
     Phase::MakeSpecializations,
 ];
 
+#[derive(Debug)]
+enum Status {
+    NotStarted,
+    Pending,
+    Done,
+}
+
 #[derive(Default, Debug)]
 struct Dependencies {
     waiting_for: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
     notifies: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
+    status: MutMap<(ModuleId, Phase), Status>,
 }
 
 impl Dependencies {
@@ -126,6 +134,8 @@ impl Dependencies {
             }
         }
 
+        self.add_to_status(module_id, goal_phase);
+
         let mut output = MutSet::default();
 
         // all the dependencies can be loaded
@@ -158,6 +168,8 @@ impl Dependencies {
             }
         }
 
+        self.add_to_status(module_id, goal_phase);
+
         let mut output = MutSet::default();
 
         // all the dependencies can be loaded
@@ -168,8 +180,22 @@ impl Dependencies {
         output
     }
 
+    fn add_to_status(&mut self, module_id: ModuleId, goal_phase: Phase) {
+        for phase in PHASES.iter() {
+            if *phase > goal_phase {
+                break;
+            }
+
+            if let Vacant(entry) = self.status.entry((module_id, *phase)) {
+                entry.insert(Status::NotStarted);
+            }
+        }
+    }
+
     /// Propagate a notification, return (module, phase) pairs that can make progress
     pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
+        self.status.insert((module_id, phase), Status::Done);
+
         let mut output = MutSet::default();
 
         let key = (module_id, phase);
@@ -229,7 +255,18 @@ impl Dependencies {
     fn solved_all(&self) -> bool {
         debug_assert_eq!(self.notifies.is_empty(), self.waiting_for.is_empty());
 
-        self.notifies.is_empty()
+        for status in self.status.values() {
+            match status {
+                Status::Done => {
+                    continue;
+                }
+                _ => {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -256,80 +293,117 @@ struct ModuleCache<'a> {
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
-fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
+fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
-    match phase {
-        Phase::LoadHeader => {
-            let dep_name = state
-                .module_cache
-                .module_names
-                .remove(&module_id)
-                .expect("module id is present");
 
-            BuildTask::LoadModule {
-                module_name: dep_name,
-                // Provide mutexes of ModuleIds and IdentIds by module,
-                // so other modules can populate them as they load.
-                module_ids: Arc::clone(&state.arc_modules),
-                ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
-                mode: state.stdlib.mode,
+    match state.dependencies.status.get_mut(&(module_id, phase)) {
+        Some(current @ Status::NotStarted) => {
+            // start this phase!
+            *current = Status::Pending;
+        }
+        Some(Status::Pending) => {
+            // don't start this task again!
+            return vec![];
+        }
+        Some(Status::Done) => {
+            // don't start this task again, but tell those waiting for it they can continue
+            return state
+                .dependencies
+                .notify(module_id, phase)
+                .into_iter()
+                .map(|(module_id, phase)| start_phase(module_id, phase, state))
+                .flatten()
+                .collect();
+        }
+        None => match phase {
+            Phase::LoadHeader => {
+                // this is fine, mark header loading as pending
+                state
+                    .dependencies
+                    .status
+                    .insert((module_id, Phase::LoadHeader), Status::Pending);
             }
-        }
-        Phase::Parse => {
-            // parse the file
-            let header = state.module_cache.headers.remove(&module_id).unwrap();
+            _ => unreachable!(
+                "Pair {:?} is not in dependencies.status, that should never happen!",
+                (module_id, phase)
+            ),
+        },
+    }
 
-            BuildTask::Parse { header }
-        }
-        Phase::CanonicalizeAndConstrain => {
-            // canonicalize the file
-            let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
+    let task = {
+        match phase {
+            Phase::LoadHeader => {
+                let dep_name = state
+                    .module_cache
+                    .module_names
+                    .remove(&module_id)
+                    .expect("module id is present");
 
-            let deps_by_name = &parsed.deps_by_name;
-            let num_deps = deps_by_name.len();
-            let mut dep_idents: MutMap<ModuleId, IdentIds> = IdentIds::exposed_builtins(num_deps);
-
-            let State {
-                ident_ids_by_module,
-                ..
-            } = &state;
-
-            {
-                let ident_ids_by_module = (*ident_ids_by_module).lock();
-
-                // Populate dep_idents with each of their IdentIds,
-                // which we'll need during canonicalization to translate
-                // identifier strings into IdentIds, which we need to build Symbols.
-                // We only include the modules we care about (the ones we import).
-                //
-                // At the end of this loop, dep_idents contains all the information to
-                // resolve a symbol from another module: if it's in here, that means
-                // we have both imported the module and the ident was exported by that mdoule.
-                for dep_id in deps_by_name.values() {
-                    // We already verified that these are all present,
-                    // so unwrapping should always succeed here.
-                    let idents = ident_ids_by_module.get(&dep_id).unwrap();
-
-                    dep_idents.insert(*dep_id, idents.clone());
+                BuildTask::LoadModule {
+                    module_name: dep_name,
+                    // Provide mutexes of ModuleIds and IdentIds by module,
+                    // so other modules can populate them as they load.
+                    module_ids: Arc::clone(&state.arc_modules),
+                    ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                    mode: state.stdlib.mode,
                 }
             }
+            Phase::Parse => {
+                // parse the file
+                let header = state.module_cache.headers.remove(&module_id).unwrap();
 
-            // Clone the module_ids we'll need for canonicalization.
-            // This should be small, and cloning it should be quick.
-            // We release the lock as soon as we're done cloning, so we don't have
-            // to lock the global module_ids while canonicalizing any given module.
-            let module_ids = Arc::clone(&state.arc_modules);
-            let module_ids = { (*module_ids).lock().clone() };
+                BuildTask::Parse { header }
+            }
+            Phase::CanonicalizeAndConstrain => {
+                // canonicalize the file
+                let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
 
-            let exposed_symbols = state
-                .exposed_symbols_by_module
-                .remove(&module_id)
-                .expect("Could not find listener ID in exposed_symbols_by_module");
+                let deps_by_name = &parsed.deps_by_name;
+                let num_deps = deps_by_name.len();
+                let mut dep_idents: MutMap<ModuleId, IdentIds> =
+                    IdentIds::exposed_builtins(num_deps);
 
-            let mut aliases = MutMap::default();
+                let State {
+                    ident_ids_by_module,
+                    ..
+                } = &state;
 
-            for imported in parsed.imported_modules.iter() {
-                match state.module_cache.aliases.get(imported) {
+                {
+                    let ident_ids_by_module = (*ident_ids_by_module).lock();
+
+                    // Populate dep_idents with each of their IdentIds,
+                    // which we'll need during canonicalization to translate
+                    // identifier strings into IdentIds, which we need to build Symbols.
+                    // We only include the modules we care about (the ones we import).
+                    //
+                    // At the end of this loop, dep_idents contains all the information to
+                    // resolve a symbol from another module: if it's in here, that means
+                    // we have both imported the module and the ident was exported by that mdoule.
+                    for dep_id in deps_by_name.values() {
+                        // We already verified that these are all present,
+                        // so unwrapping should always succeed here.
+                        let idents = ident_ids_by_module.get(&dep_id).unwrap();
+
+                        dep_idents.insert(*dep_id, idents.clone());
+                    }
+                }
+
+                // Clone the module_ids we'll need for canonicalization.
+                // This should be small, and cloning it should be quick.
+                // We release the lock as soon as we're done cloning, so we don't have
+                // to lock the global module_ids while canonicalizing any given module.
+                let module_ids = Arc::clone(&state.arc_modules);
+                let module_ids = { (*module_ids).lock().clone() };
+
+                let exposed_symbols = state
+                    .exposed_symbols_by_module
+                    .remove(&module_id)
+                    .expect("Could not find listener ID in exposed_symbols_by_module");
+
+                let mut aliases = MutMap::default();
+
+                for imported in parsed.imported_modules.iter() {
+                    match state.module_cache.aliases.get(imported) {
                     None => unreachable!(
                         "imported module {:?} did not register its aliases, so {:?} cannot use them",
                         imported,
@@ -340,97 +414,102 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                         aliases.extend(new.iter().map(|(s, a)| (*s, a.clone())));
                     }
                 }
+                }
+
+                BuildTask::CanonicalizeAndConstrain {
+                    parsed,
+                    dep_idents,
+                    exposed_symbols,
+                    module_ids,
+                    mode: state.stdlib.mode,
+                    aliases,
+                }
             }
 
-            BuildTask::CanonicalizeAndConstrain {
-                parsed,
-                dep_idents,
-                exposed_symbols,
-                module_ids,
-                mode: state.stdlib.mode,
-                aliases,
+            Phase::SolveTypes => {
+                let constrained = state.module_cache.constrained.remove(&module_id).unwrap();
+
+                let ConstrainedModule {
+                    module,
+                    ident_ids,
+                    module_timing,
+                    constraint,
+                    var_store,
+                    imported_modules,
+                    declarations,
+                    ..
+                } = constrained;
+
+                BuildTask::solve_module(
+                    module,
+                    ident_ids,
+                    module_timing,
+                    constraint,
+                    var_store,
+                    imported_modules,
+                    &mut state.exposed_types,
+                    &state.stdlib,
+                    declarations,
+                )
+            }
+            Phase::FindSpecializations => {
+                let typechecked = state.module_cache.typechecked.remove(&module_id).unwrap();
+
+                let TypeCheckedModule {
+                    layout_cache,
+                    module_id,
+                    module_timing,
+                    solved_subs,
+                    decls,
+                    ident_ids,
+                } = typechecked;
+
+                BuildTask::BuildPendingSpecializations {
+                    layout_cache,
+                    module_id,
+                    module_timing,
+                    solved_subs,
+                    decls,
+                    ident_ids,
+                    exposed_to_host: state.exposed_to_host.clone(),
+                }
+            }
+            Phase::MakeSpecializations => {
+                let found_specializations = state
+                    .module_cache
+                    .found_specializations
+                    .remove(&module_id)
+                    .unwrap();
+
+                let specializations_we_must_make = state
+                    .module_cache
+                    .external_specializations_requested
+                    .remove(&module_id)
+                    .unwrap_or_default();
+
+                let FoundSpecializationsModule {
+                    module_id,
+                    ident_ids,
+                    subs,
+                    procs,
+                    layout_cache,
+                    module_timing,
+                } = found_specializations;
+
+                BuildTask::MakeSpecializations {
+                    module_id,
+                    ident_ids,
+                    subs,
+                    procs,
+                    layout_cache,
+                    specializations_we_must_make,
+                    module_timing,
+                }
             }
         }
+    };
 
-        Phase::SolveTypes => {
-            let constrained = state.module_cache.constrained.remove(&module_id).unwrap();
-
-            let ConstrainedModule {
-                module,
-                ident_ids,
-                module_timing,
-                constraint,
-                var_store,
-                imported_modules,
-                declarations,
-                ..
-            } = constrained;
-
-            BuildTask::solve_module(
-                module,
-                ident_ids,
-                module_timing,
-                constraint,
-                var_store,
-                imported_modules,
-                &mut state.exposed_types,
-                &state.stdlib,
-                declarations,
-            )
-        }
-        Phase::FindSpecializations => {
-            let typechecked = state.module_cache.typechecked.remove(&module_id).unwrap();
-
-            let TypeCheckedModule {
-                layout_cache,
-                module_id,
-                module_timing,
-                solved_subs,
-                decls,
-                ident_ids,
-            } = typechecked;
-
-            BuildTask::BuildPendingSpecializations {
-                layout_cache,
-                module_id,
-                module_timing,
-                solved_subs,
-                decls,
-                ident_ids,
-                exposed_to_host: state.exposed_to_host.clone(),
-            }
-        }
-        Phase::MakeSpecializations => {
-            let found_specializations = state
-                .module_cache
-                .found_specializations
-                .remove(&module_id)
-                .unwrap();
-
-            let specializations_we_must_make = state
-                .module_cache
-                .external_specializations_requested
-                .remove(&module_id)
-                .unwrap_or_default();
-
-            let FoundSpecializationsModule {
-                module_id,
-                ident_ids,
-                subs,
-                procs,
-                layout_cache,
-            } = found_specializations;
-
-            BuildTask::MakeSpecializations {
-                module_id,
-                ident_ids,
-                subs,
-                procs,
-                layout_cache,
-                specializations_we_must_make,
-            }
-        }
-    }
+    vec![task]
 }
 
 #[derive(Debug)]
@@ -494,6 +573,7 @@ pub struct FoundSpecializationsModule<'a> {
     pub layout_cache: LayoutCache<'a>,
     pub procs: Procs<'a>,
     pub subs: Subs,
+    pub module_timing: ModuleTiming,
 }
 
 #[derive(Debug)]
@@ -565,6 +645,7 @@ enum Msg<'a> {
         procs: Procs<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
+        module_timing: ModuleTiming,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -573,6 +654,7 @@ enum Msg<'a> {
         external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
+        module_timing: ModuleTiming,
         subs: Subs,
     },
 
@@ -660,6 +742,8 @@ pub struct ModuleTiming {
     pub canonicalize: Duration,
     pub constrain: Duration,
     pub solve: Duration,
+    pub find_specializations: Duration,
+    pub make_specializations: Duration,
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
@@ -676,6 +760,8 @@ impl ModuleTiming {
             canonicalize: Duration::default(),
             constrain: Duration::default(),
             solve: Duration::default(),
+            find_specializations: Duration::default(),
+            make_specializations: Duration::default(),
             start_time,
             end_time: start_time, // just for now; we'll overwrite this at the end
         }
@@ -694,6 +780,8 @@ impl ModuleTiming {
             canonicalize,
             constrain,
             solve,
+            find_specializations,
+            make_specializations,
             start_time,
             end_time,
         } = self;
@@ -702,12 +790,16 @@ impl ModuleTiming {
             .duration_since(*start_time)
             .ok()
             .and_then(|t| {
-                t.checked_sub(*solve).and_then(|t| {
-                    t.checked_sub(*constrain).and_then(|t| {
-                        t.checked_sub(*canonicalize).and_then(|t| {
-                            t.checked_sub(*parse_body).and_then(|t| {
-                                t.checked_sub(*parse_header)
-                                    .and_then(|t| t.checked_sub(*read_roc_file))
+                t.checked_sub(*make_specializations).and_then(|t| {
+                    t.checked_sub(*find_specializations).and_then(|t| {
+                        t.checked_sub(*solve).and_then(|t| {
+                            t.checked_sub(*constrain).and_then(|t| {
+                                t.checked_sub(*canonicalize).and_then(|t| {
+                                    t.checked_sub(*parse_body).and_then(|t| {
+                                        t.checked_sub(*parse_header)
+                                            .and_then(|t| t.checked_sub(*read_roc_file))
+                                    })
+                                })
                             })
                         })
                     })
@@ -767,6 +859,7 @@ enum BuildTask<'a> {
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: ExternalSpecializations,
+        module_timing: ModuleTiming,
     },
 }
 
@@ -1250,6 +1343,21 @@ where
     .unwrap()
 }
 
+fn start_tasks<'a>(
+    work: MutSet<(ModuleId, Phase)>,
+    state: &mut State<'a>,
+    injector: &Injector<BuildTask<'a>>,
+    worker_listeners: &'a [Sender<WorkerMsg>],
+) -> Result<(), LoadingProblem> {
+    for (module_id, phase) in work {
+        for task in start_phase(module_id, phase, state) {
+            enqueue_task(&injector, worker_listeners, task)?
+        }
+    }
+
+    Ok(())
+}
+
 fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
@@ -1305,19 +1413,11 @@ fn update<'a>(
 
             state.module_cache.headers.insert(header.module_id, header);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             let work = state.dependencies.notify(home, Phase::LoadHeader);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1333,11 +1433,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1373,11 +1469,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1424,11 +1516,7 @@ fn update<'a>(
                     .notify(module_id, Phase::CanonicalizeAndConstrain),
             );
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1515,11 +1603,7 @@ fn update<'a>(
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                 }
 
-                for (module_id, phase) in work {
-                    let task = start_phase(module_id, phase, &mut state);
-
-                    enqueue_task(&injector, worker_listeners, task)?
-                }
+                start_tasks(work, &mut state, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -1531,6 +1615,7 @@ fn update<'a>(
             ident_ids,
             layout_cache,
             problems: _,
+            module_timing,
         } => {
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
@@ -1554,6 +1639,7 @@ fn update<'a>(
                 procs,
                 ident_ids,
                 subs,
+                module_timing,
             };
 
             state
@@ -1565,11 +1651,8 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
-                enqueue_task(&injector, worker_listeners, task)?
-            }
             Ok(state)
         }
         MadeSpecializations {
@@ -1579,11 +1662,16 @@ fn update<'a>(
             procedures,
             external_specializations_requested,
             problems,
+            module_timing,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
 
             state.module_cache.mono_problems.insert(module_id, problems);
+
+            state.procedures.extend(procedures);
+            state.constrained_ident_ids.insert(module_id, ident_ids);
+            state.timings.insert(module_id, module_timing);
 
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
@@ -1598,22 +1686,17 @@ fn update<'a>(
                 existing.extend(requested);
             }
 
-            state.procedures.extend(procedures);
-
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
-            state.constrained_ident_ids.insert(module_id, ident_ids);
+            if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
+                debug_assert!(work.is_empty());
 
-            if work.is_empty()
-                && state.dependencies.solved_all()
-                && state.goal_phase == Phase::MakeSpecializations
-            {
-                // state.timings.insert(module_id, module_timing);
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // display the mono IR of the module, for debug purposes
-                if false {
+                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
                         .procedures
                         .values()
@@ -1624,8 +1707,6 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
-
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
@@ -1639,11 +1720,7 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
-                for (module_id, phase) in work {
-                    let task = start_phase(module_id, phase, &mut state);
-
-                    enqueue_task(&injector, worker_listeners, task)?
-                }
+                start_tasks(work, &mut state, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -2253,399 +2330,6 @@ fn run_solve<'a>(
     }
 }
 
-fn fabricate_effect_after(
-    env: &mut roc_can::env::Env,
-    scope: &mut roc_can::scope::Scope,
-    effect_symbol: Symbol,
-    effect_tag_name: TagName,
-    var_store: &mut VarStore,
-) -> (Symbol, roc_can::def::Def) {
-    use roc_can::expr::Expr;
-    use roc_can::expr::Recursive;
-    use roc_module::operator::CalledVia;
-
-    let thunk_symbol = {
-        scope
-            .introduce(
-                "thunk".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
-            .unwrap()
-    };
-
-    let to_effect_symbol = {
-        scope
-            .introduce(
-                "toEffect".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
-            .unwrap()
-    };
-
-    let after_symbol = {
-        scope
-            .introduce(
-                "after".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
-            .unwrap()
-    };
-
-    // `thunk {}`
-    let force_thunk_call = {
-        let boxed = (
-            var_store.fresh(),
-            Located::at_zero(Expr::Var(thunk_symbol)),
-            var_store.fresh(),
-            var_store.fresh(),
-        );
-
-        let arguments = vec![(var_store.fresh(), Located::at_zero(Expr::EmptyRecord))];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
-    };
-
-    // `toEffect (thunk {})`
-    let to_effect_call = {
-        let boxed = (
-            var_store.fresh(),
-            Located::at_zero(Expr::Var(to_effect_symbol)),
-            var_store.fresh(),
-            var_store.fresh(),
-        );
-
-        let arguments = vec![(var_store.fresh(), Located::at_zero(force_thunk_call))];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
-    };
-
-    use roc_can::pattern::Pattern;
-    let arguments = vec![
-        (
-            var_store.fresh(),
-            Located::at_zero(Pattern::AppliedTag {
-                whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name: effect_tag_name.clone(),
-                arguments: vec![(
-                    var_store.fresh(),
-                    Located::at_zero(Pattern::Identifier(thunk_symbol)),
-                )],
-            }),
-        ),
-        (
-            var_store.fresh(),
-            Located::at_zero(Pattern::Identifier(to_effect_symbol)),
-        ),
-    ];
-
-    let function_var = var_store.fresh();
-    let after_closure = Expr::Closure {
-        function_type: function_var,
-        closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
-        return_type: var_store.fresh(),
-        name: after_symbol,
-        captured_symbols: Vec::new(),
-        recursive: Recursive::NotRecursive,
-        arguments,
-        loc_body: Box::new(Located::at_zero(to_effect_call)),
-    };
-
-    use roc_can::annotation::IntroducedVariables;
-
-    let mut introduced_variables = IntroducedVariables::default();
-
-    let signature = {
-        let var_a = var_store.fresh();
-        let var_b = var_store.fresh();
-
-        introduced_variables.insert_named("a".into(), var_a);
-        introduced_variables.insert_named("b".into(), var_b);
-
-        let effect_a = {
-            let actual =
-                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_a), var_store);
-
-            Type::Alias(
-                effect_symbol,
-                vec![("a".into(), Type::Variable(var_a))],
-                Box::new(actual),
-            )
-        };
-
-        let effect_b = {
-            let actual = build_effect_actual(effect_tag_name, Type::Variable(var_b), var_store);
-
-            Type::Alias(
-                effect_symbol,
-                vec![("b".into(), Type::Variable(var_b))],
-                Box::new(actual),
-            )
-        };
-
-        let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
-        let a_to_effect_b = Type::Function(
-            vec![Type::Variable(var_a)],
-            Box::new(Type::Variable(closure_var)),
-            Box::new(effect_b.clone()),
-        );
-
-        let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
-        Type::Function(
-            vec![effect_a, a_to_effect_b],
-            Box::new(Type::Variable(closure_var)),
-            Box::new(effect_b),
-        )
-    };
-
-    let def_annotation = roc_can::def::Annotation {
-        signature,
-        introduced_variables,
-        aliases: SendMap::default(),
-        region: Region::zero(),
-    };
-
-    let pattern = Pattern::Identifier(after_symbol);
-    let mut pattern_vars = SendMap::default();
-    pattern_vars.insert(after_symbol, function_var);
-    let def = roc_can::def::Def {
-        loc_pattern: Located::at_zero(pattern),
-        loc_expr: Located::at_zero(after_closure),
-        expr_var: function_var,
-        pattern_vars,
-        annotation: Some(def_annotation),
-    };
-
-    (after_symbol, def)
-}
-
-fn fabricate_host_exposed_def(
-    env: &mut roc_can::env::Env,
-    scope: &mut roc_can::scope::Scope,
-    symbol: Symbol,
-    ident: &str,
-    effect_tag_name: TagName,
-    var_store: &mut VarStore,
-    annotation: roc_can::annotation::Annotation,
-) -> roc_can::def::Def {
-    use roc_can::pattern::Pattern;
-    let expr_var = var_store.fresh();
-    let pattern = Pattern::Identifier(symbol);
-    let mut pattern_vars = SendMap::default();
-    pattern_vars.insert(symbol, expr_var);
-
-    use roc_can::expr::Expr;
-    use roc_can::expr::Recursive;
-
-    let mut arguments: Vec<(Variable, Located<Pattern>)> = Vec::new();
-    let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
-    let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
-
-    let def_body = {
-        match annotation.typ.shallow_dealias() {
-            Type::Function(args, _, _) => {
-                for i in 0..args.len() {
-                    let name = format!("closure_arg_{}_{}", ident, i);
-
-                    let arg_symbol = {
-                        let ident = name.clone().into();
-                        scope
-                            .introduce(
-                                ident,
-                                &env.exposed_ident_ids,
-                                &mut env.ident_ids,
-                                Region::zero(),
-                            )
-                            .unwrap()
-                    };
-
-                    let arg_var = var_store.fresh();
-
-                    arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
-
-                    captured_symbols.push((arg_symbol, arg_var));
-                    linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
-                }
-
-                let foreign_symbol_name = format!("roc_fx_{}", ident);
-                let low_level_call = Expr::ForeignCall {
-                    foreign_symbol: foreign_symbol_name.into(),
-                    args: linked_symbol_arguments,
-                    ret_var: var_store.fresh(),
-                };
-
-                let effect_closure_symbol = {
-                    let name = format!("effect_closure_{}", ident);
-
-                    let ident = name.into();
-                    scope
-                        .introduce(
-                            ident,
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            Region::zero(),
-                        )
-                        .unwrap()
-                };
-
-                let empty_record_pattern = Pattern::RecordDestructure {
-                    whole_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    destructs: vec![],
-                };
-
-                let effect_closure = Expr::Closure {
-                    function_type: var_store.fresh(),
-                    closure_type: var_store.fresh(),
-                    closure_ext_var: var_store.fresh(),
-                    return_type: var_store.fresh(),
-                    name: effect_closure_symbol,
-                    captured_symbols,
-                    recursive: Recursive::NotRecursive,
-                    arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
-                    loc_body: Box::new(Located::at_zero(low_level_call)),
-                };
-
-                let body = Expr::Tag {
-                    variant_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    name: effect_tag_name,
-                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
-                };
-
-                Expr::Closure {
-                    function_type: var_store.fresh(),
-                    closure_type: var_store.fresh(),
-                    closure_ext_var: var_store.fresh(),
-                    return_type: var_store.fresh(),
-                    name: symbol,
-                    captured_symbols: std::vec::Vec::new(),
-                    recursive: Recursive::NotRecursive,
-                    arguments,
-                    loc_body: Box::new(Located::at_zero(body)),
-                }
-            }
-            _ => {
-                // not a function
-
-                let foreign_symbol_name = format!("roc_fx_{}", ident);
-                let low_level_call = Expr::ForeignCall {
-                    foreign_symbol: foreign_symbol_name.into(),
-                    args: linked_symbol_arguments,
-                    ret_var: var_store.fresh(),
-                };
-
-                let effect_closure_symbol = {
-                    let name = format!("effect_closure_{}", ident);
-
-                    let ident = name.into();
-                    scope
-                        .introduce(
-                            ident,
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            Region::zero(),
-                        )
-                        .unwrap()
-                };
-
-                let empty_record_pattern = Pattern::RecordDestructure {
-                    whole_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    destructs: vec![],
-                };
-
-                let effect_closure = Expr::Closure {
-                    function_type: var_store.fresh(),
-                    closure_type: var_store.fresh(),
-                    closure_ext_var: var_store.fresh(),
-                    return_type: var_store.fresh(),
-                    name: effect_closure_symbol,
-                    captured_symbols,
-                    recursive: Recursive::NotRecursive,
-                    arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
-                    loc_body: Box::new(Located::at_zero(low_level_call)),
-                };
-                Expr::Tag {
-                    variant_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    name: effect_tag_name,
-                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
-                }
-            }
-        }
-    };
-
-    let def_annotation = roc_can::def::Annotation {
-        signature: annotation.typ,
-        introduced_variables: annotation.introduced_variables,
-        aliases: annotation.aliases,
-        region: Region::zero(),
-    };
-
-    roc_can::def::Def {
-        loc_pattern: Located::at_zero(pattern),
-        loc_expr: Located::at_zero(def_body),
-        expr_var,
-        pattern_vars,
-        annotation: Some(def_annotation),
-    }
-}
-
-fn build_effect_actual(effect_tag_name: TagName, a_type: Type, var_store: &mut VarStore) -> Type {
-    let closure_var = var_store.fresh();
-
-    Type::TagUnion(
-        vec![(
-            effect_tag_name,
-            vec![Type::Function(
-                vec![Type::EmptyRec],
-                Box::new(Type::Variable(closure_var)),
-                Box::new(a_type),
-            )],
-        )],
-        Box::new(Type::EmptyTagUnion),
-    )
-}
-
-fn unpack_exposes_entries<'a>(
-    arena: &'a Bump,
-    entries: &'a [Located<TypedIdent<'a>>],
-) -> bumpalo::collections::Vec<'a, (&'a Located<&'a str>, &'a Located<TypeAnnotation<'a>>)> {
-    use bumpalo::collections::Vec;
-
-    let mut stack: Vec<&TypedIdent> = Vec::with_capacity_in(entries.len(), arena);
-    let mut output = Vec::with_capacity_in(entries.len(), arena);
-
-    for entry in entries.iter() {
-        stack.push(&entry.value);
-    }
-
-    while let Some(effects_entry) = stack.pop() {
-        match effects_entry {
-            TypedIdent::Entry {
-                ident,
-                spaces_before_colon: _,
-                ann,
-            } => {
-                output.push((ident, ann));
-            }
-            TypedIdent::SpaceAfter(nested, _) | TypedIdent::SpaceBefore(nested, _) => {
-                stack.push(nested);
-            }
-        }
-    }
-
-    output
-}
-
 fn fabricate_effects_module<'a>(
     arena: &'a Bump,
     module_ids: Arc<Mutex<ModuleIds>>,
@@ -2664,7 +2348,15 @@ fn fabricate_effects_module<'a>(
     let name = effects.type_name;
     let declared_name: ModuleName = name.into();
 
-    let hardcoded_exposed_functions = vec![name, "after"];
+    let hardcoded_effect_symbols = {
+        let mut functions: Vec<_> = crate::effect_module::BUILTIN_EFFECT_FUNCTIONS
+            .iter()
+            .map(|x| x.0)
+            .collect();
+        functions.push(name);
+
+        functions
+    };
 
     let exposed_ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
@@ -2700,7 +2392,7 @@ fn fabricate_effects_module<'a>(
             exposed.push(symbol);
         }
 
-        for hardcoded in hardcoded_exposed_functions {
+        for hardcoded in hardcoded_effect_symbols {
             // Use get_or_insert here because the ident_ids may already
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
@@ -2746,8 +2438,8 @@ fn fabricate_effects_module<'a>(
     let alias = {
         let a_var = var_store.fresh();
 
-        let actual = build_effect_actual(
-            effect_tag_name.clone(),
+        let actual = crate::effect_module::build_effect_actual(
+            effect_tag_name,
             Type::Variable(a_var),
             &mut var_store,
         );
@@ -2790,7 +2482,7 @@ fn fabricate_effects_module<'a>(
                     &mut var_store,
                 );
 
-                let def = fabricate_host_exposed_def(
+                let def = crate::effect_module::build_host_exposed_def(
                     &mut can_env,
                     &mut scope,
                     symbol,
@@ -2806,15 +2498,15 @@ fn fabricate_effects_module<'a>(
             }
         }
 
-        let (effect_after_symbol, def) = fabricate_effect_after(
+        // define Effect.after, Effect.map etc.
+        crate::effect_module::build_effect_builtins(
             &mut can_env,
             &mut scope,
             effect_symbol,
-            effect_tag_name,
             &mut var_store,
+            &mut exposed_vars_by_symbol,
+            &mut declarations,
         );
-        exposed_vars_by_symbol.push((effect_after_symbol, def.expr_var));
-        declarations.push(Declaration::Declare(def));
 
         exposed_vars_by_symbol
     };
@@ -2870,6 +2562,37 @@ fn fabricate_effects_module<'a>(
             module_docs,
         },
     ))
+}
+
+fn unpack_exposes_entries<'a>(
+    arena: &'a Bump,
+    entries: &'a [Located<TypedIdent<'a>>],
+) -> bumpalo::collections::Vec<'a, (&'a Located<&'a str>, &'a Located<TypeAnnotation<'a>>)> {
+    use bumpalo::collections::Vec;
+
+    let mut stack: Vec<&TypedIdent> = Vec::with_capacity_in(entries.len(), arena);
+    let mut output = Vec::with_capacity_in(entries.len(), arena);
+
+    for entry in entries.iter() {
+        stack.push(&entry.value);
+    }
+
+    while let Some(effects_entry) = stack.pop() {
+        match effects_entry {
+            TypedIdent::Entry {
+                ident,
+                spaces_before_colon: _,
+                ann,
+            } => {
+                output.push((ident, ann));
+            }
+            TypedIdent::SpaceAfter(nested, _) | TypedIdent::SpaceBefore(nested, _) => {
+                stack.push(nested);
+            }
+        }
+    }
+
+    output
 }
 
 fn canonicalize_and_constrain<'a>(
@@ -3052,7 +2775,9 @@ fn make_specializations<'a>(
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations,
+    mut module_timing: ModuleTiming,
 ) -> Msg<'a> {
+    let make_specializations_start = SystemTime::now();
     let mut mono_problems = Vec::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
@@ -3080,6 +2805,11 @@ fn make_specializations<'a>(
     let external_specializations_requested = procs.externals_we_need.clone();
     let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
 
+    let make_specializations_end = SystemTime::now();
+    module_timing.make_specializations = make_specializations_end
+        .duration_since(make_specializations_start)
+        .unwrap();
+
     Msg::MadeSpecializations {
         module_id: home,
         ident_ids,
@@ -3088,6 +2818,7 @@ fn make_specializations<'a>(
         problems: mono_problems,
         subs,
         external_specializations_requested,
+        module_timing,
     }
 }
 
@@ -3098,12 +2829,12 @@ fn build_pending_specializations<'a>(
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
-    // TODO use this?
-    _module_timing: ModuleTiming,
+    mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
+    let find_specializations_start = SystemTime::now();
     let mut procs = Procs::default();
 
     let mut mono_problems = std::vec::Vec::new();
@@ -3149,6 +2880,11 @@ fn build_pending_specializations<'a>(
 
     let problems = mono_env.problems.to_vec();
 
+    let find_specializations_end = SystemTime::now();
+    module_timing.find_specializations = find_specializations_end
+        .duration_since(find_specializations_start)
+        .unwrap();
+
     Msg::FoundSpecializations {
         module_id: home,
         solved_subs: roc_types::solved_types::Solved(subs),
@@ -3156,6 +2892,7 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs,
         problems,
+        module_timing,
     }
 }
 
@@ -3362,6 +3099,7 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
+            module_timing,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -3370,6 +3108,7 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
+            module_timing,
         )),
     }?;
 

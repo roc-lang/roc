@@ -3880,4 +3880,54 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn alias_using_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                # The color of a node. Leaves are considered Black.
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # Create an empty dictionary.
+                empty : Dict k v
+                empty =
+                    Empty
+
+                empty
+                "#
+            ),
+            "",
+        )
+    }
+
+    #[test]
+    fn unused_argument() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \foo -> 1
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+            ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+            `f` doesn't use `foo`.
+
+            1│  f = \foo -> 1
+                     ^^^
+
+            If you don't need `foo`, then you can just remove it. However, if you
+            really do need `foo` as an argument of `f`, prefix it with an underscore,
+            like this: "_`foo`". Adding an underscore at the start of a variable
+            name is a way of saying that the variable is not used.
+            "#
+            ),
+        )
+    }
 }
