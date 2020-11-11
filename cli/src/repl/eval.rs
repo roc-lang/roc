@@ -132,156 +132,80 @@ fn jit_to_ast_help<'a>(
             let fields = [Layout::Builtin(Builtin::Int64), layout.clone()];
             let layout = Layout::Struct(&fields);
 
-            match env.ptr_bytes {
-                // 64-bit target (8-byte pointers, 16-byte structs)
-                8 => match layout.stack_size(env.ptr_bytes) {
-                    8 => {
-                        // just one eightbyte, returned as-is
-                        run_jit_function!(lib, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
-                            ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                        })
-                    }
-                    16 => {
-                        // two eightbytes, returned as-is
-                        run_jit_function!(lib, main_fn_name, [u8; 16], |bytes: [u8; 16]| {
-                            ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                        })
-                    }
-                    larger_size => {
-                        // anything more than 2 eightbytes
-                        // the return "value" is a pointer to the result
+            let result_stack_size = layout.stack_size(env.ptr_bytes);
+
+            run_jit_function_dynamic_type!(
+                lib,
+                main_fn_name,
+                result_stack_size as usize,
+                |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
+            )
+        }
+        Layout::Union(union_layouts) => match content {
+            Content::Structure(FlatType::TagUnion(tags, _)) => {
+                debug_assert_eq!(union_layouts.len(), tags.len());
+
+                let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> =
+                    tags.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+
+                let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
+
+                match union_variant {
+                    UnionVariant::Wrapped(tags_and_layouts) => {
+                        let size = layout.stack_size(env.ptr_bytes);
+
                         run_jit_function_dynamic_type!(
                             lib,
                             main_fn_name,
-                            larger_size as usize,
-                            |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
+                            size as usize,
+                            |ptr: *const u8| {
+                                // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
+                                let tag_id = *(ptr as *const i64);
+
+                                // use the tag ID as an index, to get its name and layout of any arguments
+                                let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
+
+                                let tag_expr = tag_name_to_expr(env, tag_name);
+                                let loc_tag_expr = &*env.arena.alloc(Located::at_zero(tag_expr));
+
+                                let variables = &tags[tag_name];
+
+                                // because the arg_layouts include the tag ID, it is one longer
+                                debug_assert_eq!(arg_layouts.len() - 1, variables.len());
+
+                                // skip forward to the start of the first element, ignoring the tag id
+                                let ptr = ptr.offset(8);
+
+                                let it = variables.iter().copied().zip(&arg_layouts[1..]);
+                                let output = sequence_of_expr(env, ptr, it);
+                                let output = output.into_bump_slice();
+
+                                Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                            }
                         )
                     }
-                },
-                // 32-bit target (4-byte pointers, 8-byte structs)
-                4 => {
-                    // TODO what are valid return sizes here?
-                    // this is just extrapolated from the 64-bit case above
-                    // and not (yet) actually tested on a 32-bit system
-                    match layout.stack_size(env.ptr_bytes) {
-                        4 => {
-                            // just one fourbyte, returned as-is
-                            run_jit_function!(lib, main_fn_name, [u8; 4], |bytes: [u8; 4]| {
-                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                            })
-                        }
-                        8 => {
-                            // just one fourbyte, returned as-is
-                            run_jit_function!(lib, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
-                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                            })
-                        }
-                        larger_size => {
-                            // anything more than 2 fourbytes
-                            // the return "value" is a pointer to the result
-                            run_jit_function_dynamic_type!(
-                                lib,
-                                main_fn_name,
-                                larger_size as usize,
-                                |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
-                            )
-                        }
-                    }
-                }
-                other => {
-                    panic!("Unsupported target: Roc cannot currently compile to systems where pointers are {} bytes in length.", other);
+                    _ => unreachable!(),
                 }
             }
-        }
-        Layout::Union(union_layouts) => {
-            match content {
-                Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(union_layouts.len(), tags.len());
-
-                    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> =
-                        tags.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
-
-                    let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
-
-                    match union_variant {
-                        UnionVariant::Wrapped(tags_and_layouts) => {
-                            // just one eightbyte, returned as-is
-                            let size = layout.stack_size(env.ptr_bytes);
-
-                            run_jit_function_dynamic_type!(
-                                lib,
-                                main_fn_name,
-                                size as usize,
-                                |bytes: *const u8| {
-                                    let arena = env.arena;
-
-                                    let ptr = bytes as *const libc::c_void;
-
-                                    let num = *(ptr as *const i64);
-
-                                    let (tag_name, tag_layouts) = &tags_and_layouts[num as usize];
-
-                                    let tag_expr =
-                                        match tag_name {
-                                            TagName::Global(_) => Expr::GlobalTag(arena.alloc_str(
-                                                &tag_name.as_string(env.interns, env.home),
-                                            )),
-                                            TagName::Private(_) => {
-                                                Expr::PrivateTag(arena.alloc_str(
-                                                    &tag_name.as_string(env.interns, env.home),
-                                                ))
-                                            }
-                                            TagName::Closure(_) => {
-                                                unreachable!("User cannot type this")
-                                            }
-                                        };
-
-                                    let loc_tag_expr = &*arena.alloc(Located {
-                                        value: tag_expr,
-                                        region: Region::zero(),
-                                    });
-
-                                    let variables = &tags[tag_name];
-
-                                    debug_assert_eq!(tag_layouts.len() - 1, variables.len());
-
-                                    let mut output = Vec::with_capacity_in(variables.len(), &arena);
-
-                                    // advancing past the tag id
-                                    let mut ptr =
-                                        (ptr as *const u8).offset(8) as *const libc::c_void;
-
-                                    for (var_layout, var) in tag_layouts[1..].iter().zip(variables)
-                                    {
-                                        let content = env.subs.get_without_compacting(*var).content;
-
-                                        let loc_payload = &*arena.alloc(Located {
-                                            value: ptr_to_ast(env, ptr, &var_layout, &content),
-                                            region: Region::zero(),
-                                        });
-
-                                        ptr = (ptr as *const u8)
-                                            .offset(var_layout.stack_size(env.ptr_bytes) as isize)
-                                            as *const libc::c_void;
-
-                                        output.push(loc_payload);
-                                    }
-
-                                    let output = output.into_bump_slice();
-
-                                    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
-                                }
-                            )
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                _ => unreachable!(),
-            }
-        }
+            _ => unreachable!(),
+        },
         other => {
             todo!("TODO add support for rendering {:?} in the REPL", other);
         }
+    }
+}
+
+fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
+    match tag_name {
+        TagName::Global(_) => Expr::GlobalTag(
+            env.arena
+                .alloc_str(&tag_name.as_string(env.interns, env.home)),
+        ),
+        TagName::Private(_) => Expr::PrivateTag(
+            env.arena
+                .alloc_str(&tag_name.as_string(env.interns, env.home)),
+        ),
+        TagName::Closure(_) => unreachable!("User cannot type this"),
     }
 }
 
@@ -412,6 +336,36 @@ fn single_tag_union_to_ast<'a>(
     });
 
     Expr::Apply(loc_tag_expr, &[], CalledVia::Space)
+}
+
+fn sequence_of_expr<'a, I>(
+    env: &Env<'a, '_>,
+    ptr: *const u8,
+    sequence: I,
+) -> Vec<'a, &'a Located<Expr<'a>>>
+where
+    I: Iterator<Item = (Variable, &'a Layout<'a>)>,
+    I: ExactSizeIterator<Item = (Variable, &'a Layout<'a>)>,
+{
+    let arena = env.arena;
+    let subs = env.subs;
+    let mut output = Vec::with_capacity_in(sequence.len(), &arena);
+
+    // We'll advance this as we iterate through the fields
+    let mut field_ptr = ptr as *const libc::c_void;
+
+    for (var, layout) in sequence {
+        let content = subs.get_without_compacting(var).content;
+        let expr = ptr_to_ast(env, field_ptr, layout, &content);
+        let loc_expr = Located::at_zero(expr);
+
+        output.push(&*arena.alloc(loc_expr));
+
+        // Advance the field pointer to the next field.
+        field_ptr = unsafe { field_ptr.offset(layout.stack_size(env.ptr_bytes) as isize) };
+    }
+
+    output
 }
 
 fn struct_to_ast<'a>(
