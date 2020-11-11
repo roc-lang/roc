@@ -64,6 +64,9 @@ fn jit_to_ast_help<'a>(
                 env, num, content
             ))
         }
+        Layout::Builtin(Builtin::Int8) => {
+            run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content))
+        }
         Layout::Builtin(Builtin::Int64) => {
             run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
                 env,
@@ -144,10 +147,9 @@ fn jit_to_ast_help<'a>(
 
                 let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
 
+                let size = layout.stack_size(env.ptr_bytes);
                 match union_variant {
                     UnionVariant::Wrapped(tags_and_layouts) => {
-                        let size = layout.stack_size(env.ptr_bytes);
-
                         run_jit_function_dynamic_type!(
                             lib,
                             main_fn_name,
@@ -175,6 +177,24 @@ fn jit_to_ast_help<'a>(
                                 let output = output.into_bump_slice();
 
                                 Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                            }
+                        )
+                    }
+                    UnionVariant::Unwrapped(field_layouts) => {
+                        let (tag_name, payload_vars) = tags.iter().next().unwrap();
+
+                        run_jit_function_dynamic_type!(
+                            lib,
+                            main_fn_name,
+                            size as usize,
+                            |ptr: *const u8| {
+                                single_tag_union_to_ast(
+                                    env,
+                                    ptr as *const libc::c_void,
+                                    field_layouts.into_bump_slice(),
+                                    tag_name.clone(),
+                                    payload_vars,
+                                )
                             }
                         )
                     }
@@ -519,6 +539,117 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
             let content = env.subs.get_without_compacting(*var).content;
 
             bool_to_ast(env, value, &content)
+        }
+        other => {
+            unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+        }
+    }
+}
+
+fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> {
+    use Content::*;
+
+    let arena = env.arena;
+
+    match content {
+        Structure(flat_type) => {
+            match flat_type {
+                FlatType::Record(fields, _) => {
+                    debug_assert_eq!(fields.len(), 1);
+
+                    let (label, field) = fields.iter().next().unwrap();
+                    let loc_label = Located {
+                        value: &*arena.alloc_str(label.as_str()),
+                        region: Region::zero(),
+                    };
+
+                    let assigned_field = {
+                        // We may be multiple levels deep in nested tag unions
+                        // and/or records (e.g. { a: { b: { c: True }  } }),
+                        // so we need to do this recursively on the field type.
+                        let field_var = *field.as_inner();
+                        let field_content = env.subs.get_without_compacting(field_var).content;
+                        let loc_expr = Located {
+                            value: byte_to_ast(env, value, &field_content),
+                            region: Region::zero(),
+                        };
+
+                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
+                    };
+
+                    let loc_assigned_field = Located {
+                        value: assigned_field,
+                        region: Region::zero(),
+                    };
+
+                    Expr::Record {
+                        update: None,
+                        fields: arena.alloc([loc_assigned_field]),
+                    }
+                }
+                FlatType::TagUnion(tags, _) if tags.len() == 1 => {
+                    let (tag_name, payload_vars) = tags.iter().next().unwrap();
+
+                    let loc_tag_expr = {
+                        let tag_name = &tag_name.as_string(env.interns, env.home);
+                        let tag_expr = if tag_name.starts_with('@') {
+                            Expr::PrivateTag(arena.alloc_str(tag_name))
+                        } else {
+                            Expr::GlobalTag(arena.alloc_str(tag_name))
+                        };
+
+                        &*arena.alloc(Located {
+                            value: tag_expr,
+                            region: Region::zero(),
+                        })
+                    };
+
+                    let payload = {
+                        // Since this has the layout of a number, there should be
+                        // exactly one payload in this tag.
+                        debug_assert_eq!(payload_vars.len(), 1);
+
+                        let var = *payload_vars.iter().next().unwrap();
+                        let content = env.subs.get_without_compacting(var).content;
+
+                        let loc_payload = &*arena.alloc(Located {
+                            value: byte_to_ast(env, value, &content),
+                            region: Region::zero(),
+                        });
+
+                        arena.alloc([loc_payload])
+                    };
+
+                    Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
+                }
+                FlatType::TagUnion(tags, _) => {
+                    // anything with fewer tags is not a byte
+                    debug_assert!(tags.len() > 2);
+
+                    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> =
+                        tags.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+
+                    let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
+
+                    match union_variant {
+                        UnionVariant::ByteUnion(tagnames) => {
+                            let tag_name = &tagnames[value as usize];
+                            let tag_expr = tag_name_to_expr(env, tag_name);
+                            let loc_tag_expr = Located::at_zero(tag_expr);
+                            Expr::Apply(env.arena.alloc(loc_tag_expr), &[], CalledVia::Space)
+                        }
+                        _ => unreachable!("invalid union variant for a Byte!"),
+                    }
+                }
+                other => {
+                    unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+                }
+            }
+        }
+        Alias(_, _, var) => {
+            let content = env.subs.get_without_compacting(*var).content;
+
+            byte_to_ast(env, value, &content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);

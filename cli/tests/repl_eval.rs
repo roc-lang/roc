@@ -120,6 +120,19 @@ mod repl_eval {
     }
 
     #[test]
+    fn byte_tag_union() {
+        expect_success(
+            "if 1 == 1 then Red else if 1 == 1 then Green else Blue",
+            "Red : [ Blue, Green, Red ]*",
+        );
+
+        expect_success(
+            "{ y: { x: if 1 == 1 then Red else if 1 == 1 then Green else Blue } }",
+            "{ y: { x: Red } } : { y : { x : [ Blue, Green, Red ]* } }",
+        );
+    }
+
+    #[test]
     fn single_element_tag_union() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
         expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) Float ]*");
