@@ -1120,7 +1120,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         ..
                     },
                     Type::Function(arg_types, _, _),
-                ) if false => {
+                ) => {
                     let expected = annotation_expected;
                     let region = def.loc_expr.region;
 
@@ -1172,19 +1172,19 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         }
 
                         {
-                            // record the correct type in pattern_var
-                            let pattern_type = Type::Variable(*pattern_var);
-                            pattern_types.push(pattern_type.clone());
+                            // NOTE: because we perform an equality with part of the signature
+                            // this constraint must be to the def_pattern_state's constraints
+                            def_pattern_state.vars.push(*pattern_var);
+                            pattern_types.push(Type::Variable(*pattern_var));
 
-                            state.vars.push(*pattern_var);
-                            state.constraints.push(Constraint::Eq(
-                                pattern_type.clone(),
+                            let pattern_con = Eq(
+                                Type::Variable(*pattern_var),
                                 Expected::NoExpectation(loc_ann.clone()),
                                 Category::Storage(std::file!(), std::line!()),
                                 loc_pattern.region,
-                            ));
+                            );
 
-                            vars.push(*pattern_var);
+                            def_pattern_state.constraints.push(pattern_con);
                         }
                     }
 
