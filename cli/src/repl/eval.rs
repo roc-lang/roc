@@ -113,13 +113,7 @@ fn jit_to_ast_help<'a>(
 
                     let (tag_name, payload_vars) = tags.iter().next().unwrap();
 
-                    // We expect anything with payload vars
-                    // that is a single Tag TagUnion
-                    // has a Record content so the above case
-                    // should match instead
-                    debug_assert_eq!(payload_vars.len(), 0);
-
-                    single_tag_union_to_ast(env, field_layouts, tag_name.clone(), payload_vars)
+                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
                 }
                 other => {
                     unreachable!(
@@ -312,7 +306,8 @@ fn list_to_ast<'a>(
 
 fn single_tag_union_to_ast<'a>(
     env: &Env<'a, '_>,
-    field_layouts: &[Layout<'a>],
+    ptr: *const libc::c_void,
+    field_layouts: &'a [Layout<'a>],
     tag_name: TagName,
     payload_vars: &[Variable],
 ) -> Expr<'a> {
@@ -320,22 +315,14 @@ fn single_tag_union_to_ast<'a>(
 
     let arena = env.arena;
 
-    let tag_expr = match tag_name {
-        TagName::Global(_) => {
-            Expr::GlobalTag(arena.alloc_str(&tag_name.as_string(env.interns, env.home)))
-        }
-        TagName::Private(_) => {
-            Expr::PrivateTag(arena.alloc_str(&tag_name.as_string(env.interns, env.home)))
-        }
-        TagName::Closure(_) => unreachable!("User cannot type this"),
-    };
+    let tag_expr = tag_name_to_expr(env, &tag_name);
 
-    let loc_tag_expr = &*arena.alloc(Located {
-        value: tag_expr,
-        region: Region::zero(),
-    });
+    let loc_tag_expr = &*arena.alloc(Located::at_zero(tag_expr));
 
-    Expr::Apply(loc_tag_expr, &[], CalledVia::Space)
+    let it = payload_vars.iter().copied().zip(field_layouts);
+    let output = sequence_of_expr(env, ptr as *const u8, it).into_bump_slice();
+
+    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
 
 fn sequence_of_expr<'a, I>(

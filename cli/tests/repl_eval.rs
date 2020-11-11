@@ -120,6 +120,12 @@ mod repl_eval {
     }
 
     #[test]
+    fn single_element_tag_union() {
+        expect_success("True 1", "True 1 : [ True (Num *) ]*");
+        expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) Float ]*");
+    }
+
+    #[test]
     fn tag_with_arguments() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
 
