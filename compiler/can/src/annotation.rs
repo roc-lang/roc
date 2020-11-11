@@ -227,19 +227,7 @@ fn can_annotation_help(
                     // instantiate variables
                     actual.substitute(&substitutions);
 
-                    // Type::Alias(symbol, vars, Box::new(actual))
-                    if vars.is_empty() {
-                        let actual_var = var_store.fresh();
-                        introduced_variables.insert_host_exposed_alias(symbol, actual_var);
-                        Type::HostExposedAlias {
-                            name: symbol,
-                            arguments: vars,
-                            actual: Box::new(actual),
-                            actual_var,
-                        }
-                    } else {
-                        Type::Alias(symbol, vars, Box::new(actual))
-                    }
+                    Type::Alias(symbol, vars, Box::new(actual))
                 }
                 None => {
                     let mut args = Vec::new();
@@ -373,7 +361,7 @@ fn can_annotation_help(
 
                 // Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
 
-                if vars.is_empty() {
+                if vars.is_empty() && env.home == symbol.module_id() {
                     let actual_var = var_store.fresh();
                     introduced_variables.insert_host_exposed_alias(symbol, actual_var);
                     Type::HostExposedAlias {

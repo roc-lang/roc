@@ -1,12 +1,12 @@
-app Main provides [ main ] imports [ Effect, ConsList ]
+app Main provides [ main ] imports [ Effect, RBTree ]
 
-empty : ConsList.ConsList Int
-empty = ConsList.empty
+foo : RBTree.Dict Int Int
+foo = Empty # RBTree.empty
 
 main : Effect.Effect {} as Fx
 main =
-    # if ConsList.isEmpty empty then
-    if ConsList.len empty == 0 then
+    # if RBTree.isEmpty empty then
+    if RBTree.size foo == 0 then
         Effect.putLine "Yay"
             |> Effect.after (\{} -> Effect.getLine)
             |> Effect.after (\line -> Effect.putLine line)

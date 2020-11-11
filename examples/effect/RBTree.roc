@@ -1,6 +1,4 @@
-interface RBTree exposes [ Dict, empty, singleton, size, isEmpty, insert, remove, balance ] imports []
-# TODO remove `balance` from the exposed list
-# todo change `foobar` to `balance`
+interface RBTree exposes [ Dict, empty, size, singleton ] imports []
 
 # The color of a node. Leaves are considered Black.
 NodeColor : [ Red, Black ]

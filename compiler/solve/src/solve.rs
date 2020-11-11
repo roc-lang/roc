@@ -154,9 +154,6 @@ pub fn run(
         constraint,
     );
 
-    //dbg!(&subs, &state.env.vars_by_symbol);
-    //panic!();
-
     (Solved(subs), state.env)
 }
 
