@@ -609,7 +609,7 @@ mod test_fmt {
                 r#"
                 { shoes &
                     rightShoe: bareFoot,
-                    leftShoe: bareFoot
+                    leftShoe: bareFoot,
                 }
                 "#
             ),
@@ -1039,7 +1039,7 @@ mod test_fmt {
                 pos =
                     {
                         x: 5,
-                        y: 10
+                        y: 10,
                     }
 
                 pos

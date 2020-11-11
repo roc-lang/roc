@@ -803,39 +803,29 @@ pub fn fmt_record<'a>(
         let is_multiline = loc_fields.iter().any(|loc_field| loc_field.is_multiline())
             || trailing_comma.is_multiline();
 
-        let mut iter = loc_fields.iter().peekable();
-        let field_indent = if is_multiline {
-            indent + INDENT
-        } else {
-            buf.push(' ');
-            indent
-        };
-
-        // we abuse the `Newlines` type to decide between multiline or single-line layout
-        let newlines = if is_multiline {
-            Newlines::Yes
-        } else {
-            Newlines::No
-        };
-
-        while let Some(field) = iter.next() {
-            field.format_with_options(buf, Parens::NotNeeded, newlines, field_indent);
-
-            if iter.peek().is_some() {
-                buf.push(',');
-
-                if !is_multiline {
-                    buf.push(' ');
-                }
-            }
-        }
+        
 
         if is_multiline {
-            newline(buf, indent)
-        } else {
+            let field_indent = indent + INDENT;
+            for field in loc_fields.iter() {
+                field.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, field_indent);
+                buf.push(',');
+            }
+            newline(buf, indent);
+       
+        } else { // is_multiline == false
             buf.push(' ');
-        }
-
+            let field_indent = indent;
+            let mut iter = loc_fields.iter().peekable();
+            while let Some(field) = iter.next() {
+                field.format_with_options(buf, Parens::NotNeeded, Newlines::No, field_indent);
+    
+                if iter.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+            buf.push(' ');
+        };
         buf.push('}');
     }
 }
