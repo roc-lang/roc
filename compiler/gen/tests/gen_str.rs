@@ -13,25 +13,76 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_str {
+    // #[test]
+    // fn str_split_bigger_delimiter_small_str() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 Str.split "hello" "JJJJ there"
+    //             "#
+    //         ),
+    //         &["hello"],
+    //         &'static [&'static str]
+    //     );
+    // }
+    //
+    // #[test]
+    // fn str_split_small_str_big_delimiter() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 Str.split "JJJ" "0123456789abcdefghi"
+    //             "#
+    //         ),
+    //         &["JJJ"],
+    //         &'static [&'static str]
+    //     );
+    // }
+
     #[test]
-    fn str_split_bigger_delimiter_small_str() {
+    fn str_split_big_str_small_delimiter() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Str.split "hello" "hello there"
+                    Str.split "01234567789abcdefghi?01234567789abcdefghi" "?" 
                 "#
             ),
-            &["hello"],
+            &["01234567789abcdefghi", "01234567789abcdefghi"],
+            &'static [&'static str]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch" 
+                "#
+            ),
+            &["01234567789abcdefghi ", " 01234567789abcdefghi"],
             &'static [&'static str]
         );
     }
+
+    // #[test]
+    // fn str_split_small_str_small_delimiter() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 Str.split "J!J!J" "!"
+    //             "#
+    //         ),
+    //         &["J", "J", "J"],
+    //         &'static [&'static str]
+    //     );
+    // }
 
     #[test]
     fn str_split_bigger_delimiter_big_str() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Str.split "string to split is shorter" "than the delimiter which happens to be very very long"
+                    Str.split 
+                        "string to split is shorter" 
+                        "than the delimiter which happens to be very very long"
                 "#
             ),
             &["string to split is shorter"],
@@ -39,18 +90,20 @@ mod gen_str {
         );
     }
 
-    #[test]
-    fn str_split_big_str() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    Str.split "hello 0123456789abcdef there 0123456789abcdef " " 0123456789abcdef "
-                "#
-            ),
-            &["hello", "there"],
-            &'static [&'static str]
-        );
-    }
+    // #[test]
+    // fn str_split_big_str() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 Str.split
+    //                     "hello 0123456789abcdef there 0123456789abcdef "
+    //                     " 0123456789abcdef "
+    //             "#
+    //         ),
+    //         &["hello", "there"],
+    //         &'static [&'static str]
+    //     );
+    // }
 
     #[test]
     fn str_concat_big_to_big() {
