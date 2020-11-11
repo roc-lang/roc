@@ -112,7 +112,7 @@ pub fn constrain_expr(
                 let stored_con = Eq(
                     Type::Variable(*record_var),
                     expected,
-                    Category::Storage,
+                    Category::Storage(std::file!(), std::line!()),
                     region,
                 );
 
@@ -391,7 +391,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*fn_var),
                         NoExpectation(fn_type),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     ),
                     closure_constraint,
@@ -469,7 +469,7 @@ pub fn constrain_expr(
                     let ast_con = Eq(
                         Type::Variable(*branch_var),
                         NoExpectation(tipe),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     );
 
@@ -521,7 +521,7 @@ pub fn constrain_expr(
                     branch_cons.push(Eq(
                         Type::Variable(*branch_var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     ));
                     branch_cons.push(else_con);
@@ -556,7 +556,7 @@ pub fn constrain_expr(
                     let ast_con = Eq(
                         Type::Variable(*expr_var),
                         expected.clone(),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     );
                     constraints.push(ast_con);
@@ -743,7 +743,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -761,7 +761,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -805,7 +805,7 @@ pub fn constrain_expr(
             let ast_con = Eq(
                 Type::Variable(*variant_var),
                 expected,
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
@@ -1447,7 +1447,7 @@ pub fn rec_defs_help(
                 let storage_con = Eq(
                     expr_type,
                     annotation_expected.clone(),
-                    Category::Storage,
+                    Category::Storage(std::file!(), std::line!()),
                     def.loc_expr.region,
                 );
 
