@@ -362,7 +362,7 @@ pub fn constrain_expr(
             vars.push(closure_ext_var);
             vars.push(*fn_var);
 
-            let body_type = NoExpectation(return_type.clone());
+            let body_type = NoExpectation(return_type);
             let ret_constraint =
                 constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
 
