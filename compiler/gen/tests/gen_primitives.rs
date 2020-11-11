@@ -1148,7 +1148,7 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                # isEmpty : ConsList a -> Bool
+                isEmpty : ConsList a -> Bool
                 isEmpty = \list ->
                     when list is
                         Cons _ _ ->

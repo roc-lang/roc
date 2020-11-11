@@ -3106,4 +3106,33 @@ mod solve_expr {
             "Dict Int Int",
         );
     }
+
+    #[test]
+    fn rbtree_insert() {
+        // exposed an issue where pattern variables were not introduced
+        // at the correct level in the constraint
+        //
+        // see 22592eff805511fbe1da63849771ee5f367a6a16
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k), Empty ]
+
+                balance : Dict k -> Dict k
+                balance = \left ->
+                    when left is
+                      Node _ Empty -> Empty
+
+                      _ -> Empty
+
+                main : Dict {}
+                main =
+                    balance Empty
+                "#
+            ),
+            "Dict {}",
+        );
+    }
 }
