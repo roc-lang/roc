@@ -92,10 +92,8 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(Builtin::List(_, elem_layout)) => run_jit_function!(
             lib,
             main_fn_name,
-            (*const libc::c_void, usize),
-            |(ptr, len): (*const libc::c_void, usize)| {
-                list_to_ast(env, ptr, len, elem_layout, content)
-            }
+            (*const u8, usize),
+            |(ptr, len): (*const u8, usize)| { list_to_ast(env, ptr, len, elem_layout, content) }
         ),
         Layout::PhantomEmptyStruct => run_jit_function!(lib, main_fn_name, &'static str, |_| {
             Expr::Record {
@@ -104,7 +102,7 @@ fn jit_to_ast_help<'a>(
             }
         }),
         Layout::Struct(field_layouts) => {
-            let ptr_to_ast = |ptr: *const libc::c_void| match content {
+            let ptr_to_ast = |ptr: *const u8| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
                     struct_to_ast(env, ptr, field_layouts, fields)
                 }
@@ -135,7 +133,7 @@ fn jit_to_ast_help<'a>(
                 lib,
                 main_fn_name,
                 result_stack_size as usize,
-                |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
+                |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
             )
         }
         Layout::Union(union_layouts) => match content {
@@ -190,7 +188,7 @@ fn jit_to_ast_help<'a>(
                             |ptr: *const u8| {
                                 single_tag_union_to_ast(
                                     env,
-                                    ptr as *const libc::c_void,
+                                    ptr as *const u8,
                                     field_layouts.into_bump_slice(),
                                     tag_name.clone(),
                                     payload_vars,
@@ -225,7 +223,7 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
 
 fn ptr_to_ast<'a>(
     env: &Env<'a, '_>,
-    ptr: *const libc::c_void,
+    ptr: *const u8,
     layout: &Layout<'a>,
     content: &Content,
 ) -> Expr<'a> {
@@ -251,7 +249,7 @@ fn ptr_to_ast<'a>(
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
-            let ptr = unsafe { *(ptr as *const *const libc::c_void) };
+            let ptr = unsafe { *(ptr as *const *const u8) };
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
@@ -283,7 +281,7 @@ fn ptr_to_ast<'a>(
 
 fn list_to_ast<'a>(
     env: &Env<'a, '_>,
-    ptr: *const libc::c_void,
+    ptr: *const u8,
     len: usize,
     elem_layout: &Layout<'a>,
     content: &Content,
@@ -326,7 +324,7 @@ fn list_to_ast<'a>(
 
 fn single_tag_union_to_ast<'a>(
     env: &Env<'a, '_>,
-    ptr: *const libc::c_void,
+    ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     tag_name: TagName,
     payload_vars: &[Variable],
@@ -359,7 +357,7 @@ where
     let mut output = Vec::with_capacity_in(sequence.len(), &arena);
 
     // We'll advance this as we iterate through the fields
-    let mut field_ptr = ptr as *const libc::c_void;
+    let mut field_ptr = ptr as *const u8;
 
     for (var, layout) in sequence {
         let content = subs.get_without_compacting(var).content;
@@ -377,7 +375,7 @@ where
 
 fn struct_to_ast<'a>(
     env: &Env<'a, '_>,
-    ptr: *const libc::c_void,
+    ptr: *const u8,
     field_layouts: &[Layout<'a>],
     fields: &MutMap<Lowercase, RecordField<Variable>>,
 ) -> Expr<'a> {
