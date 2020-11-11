@@ -972,7 +972,7 @@ fn add_category<'b>(
             this_is,
             alloc.text(" an uniqueness attribute of type:"),
         ]),
-        Storage => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
+        Storage(_file, _line) => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
 
         DefaultValue(_) => alloc.concat(vec![this_is, alloc.text(" a default field of type:")]),
     }

@@ -2524,6 +2524,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "tempfile",
 ]
 
 [[package]]

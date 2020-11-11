@@ -549,28 +549,25 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_0() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app LinkedListLen0 provides [ main ] imports []
+                app Test provides [ main ] imports []
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                # nil : LinkedList Int
-                nil = Cons 0x1 Nil
-
-                # length : [ Nil, Cons a (LinkedList a) ] as LinkedList a -> Int
-                length : LinkedList a -> Int
-                length = \list ->
+                len : LinkedList a -> Int
+                len = \list ->
                     when list is
                         Nil -> 0
-                        Cons _ rest -> 1 + length rest
-
+                        Cons _ rest -> 1 + len rest
 
                 main =
-                    length nil
+                    nil : LinkedList Int
+                    nil = Nil
+
+                    len nil
                 "#
             ),
             0,
@@ -579,9 +576,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_twice_0() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app LinkedListLenTwice0 provides [ main ] imports []
@@ -607,9 +603,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_1() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -635,9 +630,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_twice_1() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -663,9 +657,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_3() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -1109,6 +1102,97 @@ mod gen_primitives {
             1,
             i64,
             |_| 1
+        );
+    }
+
+    #[test]
+    fn linked_list_is_empty_1() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                empty : ConsList a
+                empty = Nil
+
+                isEmpty : ConsList a -> Bool
+                isEmpty = \list ->
+                    when list is
+                        Cons _ _ ->
+                            False
+
+                        Nil ->
+                            True
+
+                main : Bool
+                main =
+                    myList : ConsList Int
+                    myList = empty
+
+                    isEmpty myList
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn linked_list_is_empty_2() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                # isEmpty : ConsList a -> Bool
+                isEmpty = \list ->
+                    when list is
+                        Cons _ _ ->
+                            False
+
+                        Nil ->
+                            True
+
+                main : Bool
+                main =
+                    myList : ConsList Int
+                    myList = Cons 0x1 Nil
+
+                    isEmpty myList
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    fn recursive_functon_with_rigid() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                State a : { count : Int, x : a }
+
+                foo : State a -> Int
+                foo = \state ->
+                    if state.count == 0 then
+                        0
+                    else
+                        1 + foo { count: state.count - 1, x: state.x }
+
+                main : Int
+                main =
+                    foo { count: 3, x: {} }
+                "#
+            ),
+            3,
+            i64
         );
     }
 }

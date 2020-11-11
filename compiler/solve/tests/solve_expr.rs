@@ -2184,7 +2184,7 @@ mod solve_expr {
                 r#"
                 app Test provides [ main ] imports []
 
-                map = 
+                map =
                     \peano ->
                         when peano is
                             Z -> Z
@@ -2919,7 +2919,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.walkRight 
+                List.walkRight
                 "#
             ),
             "List a, (a, b -> b), b -> b",
@@ -2932,7 +2932,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 empty : List Int
-                empty = 
+                empty =
                     []
 
                 List.walkRight empty (\a, b -> a + b) 0
@@ -2978,6 +2978,132 @@ mod solve_expr {
                 "#
             ),
             "List x",
+        );
+    }
+
+    #[test]
+    fn double_tag_application() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+
+                main =
+                    if 1 == 1 then
+                        Foo (Bar) 1
+                    else
+                        Foo Bar 1
+                "#
+            ),
+            "[ Foo [ Bar ]* (Num *) ]*",
+        );
+
+        infer_eq_without_problem("Foo Bar 1", "[ Foo [ Bar ]* (Num *) ]*");
+    }
+
+    #[test]
+    fn double_tag_application_pattern_global() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Bar : [ Bar ]
+                Foo : [ Foo Bar Int, Empty ]
+
+                foo : Foo
+                foo = Foo Bar 1
+
+                main =
+                    when foo is
+                        Foo Bar 1 ->
+                            Foo Bar 2
+
+                        x ->
+                            x
+                "#
+            ),
+            "[ Empty, Foo [ Bar ] Int ]",
+        );
+    }
+
+    #[test]
+    fn double_tag_application_pattern_private() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Foo : [ @Foo [ @Bar ] Int, @Empty ]
+
+                foo : Foo
+                foo = @Foo @Bar 1
+
+                main =
+                    when foo is
+                        @Foo @Bar 1 ->
+                            @Foo @Bar 2
+
+                        x ->
+                            x
+                "#
+            ),
+            "[ @Empty, @Foo [ @Bar ] Int ]",
+        );
+    }
+
+    #[test]
+    fn recursive_functon_with_rigid() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                State a : { count : Int, x : a }
+
+                foo : State a -> Int
+                foo = \state ->
+                    if state.count == 0 then
+                        0
+                    else
+                        1 + foo { count: state.count - 1, x: state.x }
+
+                main : Int
+                main =
+                    foo { count: 3, x: {} }
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_empty() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                # The color of a node. Leaves are considered Black.
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # Create an empty dictionary.
+                empty : Dict k v
+                empty =
+                    Empty
+
+                foo : Dict Int Int
+                foo = empty
+
+                main : Dict Int Int
+                main =
+                    foo
+                "#
+            ),
+            "Dict Int Int",
         );
     }
 }
