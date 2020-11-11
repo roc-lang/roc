@@ -1090,7 +1090,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 Region::span_across(&annotation.region, &def.loc_expr.region),
             ));
 
@@ -1173,7 +1173,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                             state.constraints.push(Constraint::Eq(
                                 pattern_type.clone(),
                                 Expected::NoExpectation(loc_ann.clone()),
-                                Category::Storage,
+                                Category::Storage(std::file!(), std::line!()),
                                 loc_pattern.region,
                             ));
 
@@ -1218,7 +1218,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                             Eq(
                                 Type::Variable(*fn_var),
                                 NoExpectation(fn_type),
-                                Category::Storage,
+                                Category::Storage(std::file!(), std::line!()),
                                 region,
                             ),
                             closure_constraint,

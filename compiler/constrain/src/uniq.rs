@@ -317,7 +317,7 @@ fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(record_type),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
@@ -381,7 +381,7 @@ fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(union_type),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
@@ -686,7 +686,12 @@ pub fn constrain_expr(
                 constraints.push(Eq(inferred, expected.clone(), Category::List, region));
 
                 let stored = Type::Variable(*list_var);
-                constraints.push(Eq(stored, expected, Category::Storage, region));
+                constraints.push(Eq(
+                    stored,
+                    expected,
+                    Category::Storage(std::file!(), std::line!()),
+                    region,
+                ));
 
                 exists(vec![*elem_var, *list_var, uniq_var], And(constraints))
             }
@@ -1044,7 +1049,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -1079,7 +1084,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -1175,7 +1180,7 @@ pub fn constrain_expr(
                     let ast_con = Eq(
                         Type::Variable(*branch_var),
                         Expected::NoExpectation(tipe),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     );
 
@@ -2278,7 +2283,7 @@ fn constrain_def(
             pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 Region::zero(),
             ));
 
@@ -2552,7 +2557,7 @@ pub fn rec_defs_help(
                 let storage_con = Eq(
                     expr_type,
                     annotation_expected,
-                    Category::Storage,
+                    Category::Storage(std::file!(), std::line!()),
                     def.loc_expr.region,
                 );
 
