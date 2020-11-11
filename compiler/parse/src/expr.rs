@@ -278,6 +278,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         Expr::Record {
             fields,
             update: None,
+            trailing_comma: _,
         } => {
             let mut loc_patterns = Vec::with_capacity_in(fields.len(), arena);
 
@@ -1878,6 +1879,7 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     let mut value = Expr::Record {
                         update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
                         fields: loc_assigned_fields.value.into_bump_slice(),
+                        trailing_comma: arena.alloc(crate::ast::TrailingComma::None),
                     };
 
                     // there can be field access, e.g. `{ x : 4 }.x`

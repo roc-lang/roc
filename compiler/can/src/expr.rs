@@ -208,6 +208,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Record {
             fields,
             update: Some(loc_update),
+            trailing_comma: _,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
@@ -255,6 +256,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Record {
             fields,
             update: None,
+            trailing_comma: _,
         } => {
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
