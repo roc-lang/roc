@@ -55,6 +55,40 @@ pub struct Env {
     pub home: ModuleId,
 }
 
+fn constrain_untyped_args(
+    env: &Env,
+    arguments: &[(Variable, Located<Pattern>)],
+    closure_type: Type,
+    return_type: Type,
+) -> (Vec<Variable>, PatternState, Type) {
+    let mut vars = Vec::with_capacity(arguments.len());
+    let mut pattern_types = Vec::with_capacity(arguments.len());
+
+    let mut pattern_state = PatternState::default();
+
+    for (pattern_var, loc_pattern) in arguments {
+        let pattern_type = Type::Variable(*pattern_var);
+        let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
+
+        pattern_types.push(pattern_type);
+
+        constrain_pattern(
+            env,
+            &loc_pattern.value,
+            loc_pattern.region,
+            pattern_expected,
+            &mut pattern_state,
+        );
+
+        vars.push(*pattern_var);
+    }
+
+    let function_type =
+        Type::Function(pattern_types, Box::new(closure_type), Box::new(return_type));
+
+    (vars, pattern_state, function_type)
+}
+
 pub fn constrain_expr(
     env: &Env,
     region: Region,
