@@ -205,12 +205,48 @@ fn jit_to_ast_help<'a>(
 
                     match union_variant {
                         UnionVariant::Wrapped(tags_and_layouts) => {
-                            dbg!(tags_and_layouts);
                             // just one eightbyte, returned as-is
                             run_jit_function!(lib, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
-                                dbg!((&bytes).as_ptr() as *const libc::c_void);
+                                let arena = env.arena;
 
-                                Expr::GlobalTag("Thing")
+                                let ptr = (&bytes).as_ptr() as *const libc::c_void;
+
+                                let num = *(ptr as *const i64);
+
+                                let (tag_name, tag_layouts) = &tags_and_layouts[num as usize];
+
+                                let tag_expr = match tag_name {
+                                    TagName::Global(_) => Expr::GlobalTag(
+                                        arena.alloc_str(&tag_name.as_string(env.interns, env.home)),
+                                    ),
+                                    TagName::Private(_) => Expr::PrivateTag(
+                                        arena.alloc_str(&tag_name.as_string(env.interns, env.home)),
+                                    ),
+                                    TagName::Closure(_) => unreachable!("User cannot type this"),
+                                };
+
+                                let loc_tag_expr = &*arena.alloc(Located {
+                                    value: tag_expr,
+                                    region: Region::zero(),
+                                });
+
+                                let payload = {
+                                    let variables = &tags[tag_name];
+
+                                    let content =
+                                        env.subs.get_without_compacting(variables[0]).content;
+
+                                    let ptr = ptr.offset(1);
+
+                                    let loc_payload = &*arena.alloc(Located {
+                                        value: ptr_to_ast(env, ptr, &tag_layouts[1], &content),
+                                        region: Region::zero(),
+                                    });
+
+                                    arena.alloc([loc_payload])
+                                };
+
+                                Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
                             })
                         }
                         _ => unreachable!(),
