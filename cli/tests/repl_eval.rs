@@ -133,6 +133,19 @@ mod repl_eval {
     }
 
     #[test]
+    fn tag_in_record() {
+        expect_success(
+            "{ x: Foo 1 2 3, y : 4 }",
+            "{ x: Foo 1 2 3, y: 4 } : { x : [ Foo (Num *) (Num *) (Num *) ]*, y : Num * }",
+        );
+        expect_success(
+            "{ x: Foo 1 2 3 }",
+            "{ x: Foo 1 2 3 } : { x : [ Foo (Num *) (Num *) (Num *) ]* }",
+        );
+        expect_success("{ x: Unit }", "{ x: Unit } : { x : [ Unit ]* }");
+    }
+
+    #[test]
     fn single_element_tag_union() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
         expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) Float ]*");

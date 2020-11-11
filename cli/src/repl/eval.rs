@@ -65,6 +65,7 @@ fn jit_to_ast_help<'a>(
             ))
         }
         Layout::Builtin(Builtin::Int8) => {
+            // NOTE: this is does not handle 8-bit numbers yet
             run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content))
         }
         Layout::Builtin(Builtin::Int64) => {
@@ -95,7 +96,10 @@ fn jit_to_ast_help<'a>(
             (*const u8, usize),
             |(ptr, len): (*const u8, usize)| { list_to_ast(env, ptr, len, elem_layout, content) }
         ),
-        Layout::PhantomEmptyStruct => run_jit_function!(lib, main_fn_name, &'static str, |_| {
+        Layout::Builtin(other) => {
+            todo!("add support for rendering builtin {:?} to the REPL", other)
+        }
+        Layout::PhantomEmptyStruct => run_jit_function!(lib, main_fn_name, &u8, |_| {
             Expr::Record {
                 update: None,
                 fields: &[],
@@ -178,32 +182,22 @@ fn jit_to_ast_help<'a>(
                             }
                         )
                     }
-                    UnionVariant::Unwrapped(field_layouts) => {
-                        let (tag_name, payload_vars) = tags.iter().next().unwrap();
-
-                        run_jit_function_dynamic_type!(
-                            lib,
-                            main_fn_name,
-                            size as usize,
-                            |ptr: *const u8| {
-                                single_tag_union_to_ast(
-                                    env,
-                                    ptr as *const u8,
-                                    field_layouts.into_bump_slice(),
-                                    tag_name.clone(),
-                                    payload_vars,
-                                )
-                            }
-                        )
-                    }
-                    _ => unreachable!(),
+                    _ => unreachable!("any other variant would have a different layout"),
                 }
             }
-            _ => unreachable!(),
+            Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
+                todo!("print recursive tag unions in the REPL")
+            }
+            other => unreachable!("Weird content for Union layout: {:?}", other),
         },
-        other => {
-            todo!("TODO add support for rendering {:?} in the REPL", other);
+        Layout::RecursiveUnion(_) | Layout::RecursivePointer => {
+            todo!("add support for rendering recursive tag unions in the REPL")
         }
+
+        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
+            todo!("add support for rendering functions in the REPL")
+        }
+        Layout::Pointer(_) => todo!("add support for rendering pointers in the REPL"),
     }
 }
 
@@ -263,6 +257,12 @@ fn ptr_to_ast<'a>(
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, ptr, field_layouts, fields)
             }
+            Content::Structure(FlatType::TagUnion(tags, _)) => {
+                debug_assert_eq!(tags.len(), 1);
+
+                let (tag_name, payload_vars) = tags.iter().next().unwrap();
+                single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+            }
             other => {
                 unreachable!(
                     "Something had a Struct layout, but instead of a Record type, it had: {:?}",
@@ -304,11 +304,11 @@ fn list_to_ast<'a>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, &arena);
-    let elem_size = elem_layout.stack_size(env.ptr_bytes);
+    let elem_size = elem_layout.stack_size(env.ptr_bytes) as usize;
 
-    for index in 0..(len as isize) {
-        let offset_bytes: isize = index * elem_size as isize;
-        let elem_ptr = unsafe { ptr.offset(offset_bytes) };
+    for index in 0..len {
+        let offset_bytes = index * elem_size;
+        let elem_ptr = unsafe { ptr.add(offset_bytes) };
         let loc_expr = &*arena.alloc(Located {
             value: ptr_to_ast(env, elem_ptr, elem_layout, &elem_content),
             region: Region::zero(),
@@ -376,7 +376,7 @@ where
 fn struct_to_ast<'a>(
     env: &Env<'a, '_>,
     ptr: *const u8,
-    field_layouts: &[Layout<'a>],
+    field_layouts: &'a [Layout<'a>],
     fields: &MutMap<Lowercase, RecordField<Variable>>,
 ) -> Expr<'a> {
     let arena = env.arena;
@@ -384,7 +384,7 @@ fn struct_to_ast<'a>(
     let mut output = Vec::with_capacity_in(field_layouts.len(), &arena);
 
     // The fields, sorted alphabetically
-    let sorted_fields = {
+    let mut sorted_fields = {
         let mut vec = fields
             .iter()
             .collect::<std::vec::Vec<(&Lowercase, &RecordField<Variable>)>>();
@@ -394,15 +394,14 @@ fn struct_to_ast<'a>(
         vec
     };
 
-    debug_assert_eq!(sorted_fields.len(), field_layouts.len());
+    if sorted_fields.len() == 1 {
+        // this is a 1-field wrapper record around another record or 1-tag tag union
+        let (label, field) = sorted_fields.pop().unwrap();
 
-    // We'll advance this as we iterate through the fields
-    let mut field_ptr = ptr;
+        let inner_content = env.subs.get_without_compacting(field.into_inner()).content;
 
-    for ((label, field), field_layout) in sorted_fields.iter().zip(field_layouts.iter()) {
-        let content = subs.get_without_compacting(*field.as_inner()).content;
         let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(env, field_ptr, field_layout, &content),
+            value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), &inner_content),
             region: Region::zero(),
         });
 
@@ -415,17 +414,47 @@ fn struct_to_ast<'a>(
             region: Region::zero(),
         };
 
-        output.push(loc_field);
+        let output = env.arena.alloc([loc_field]);
 
-        // Advance the field pointer to the next field.
-        field_ptr = unsafe { field_ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
-    }
+        Expr::Record {
+            update: None,
+            fields: output,
+        }
+    } else {
+        debug_assert_eq!(sorted_fields.len(), field_layouts.len());
 
-    let output = output.into_bump_slice();
+        // We'll advance this as we iterate through the fields
+        let mut field_ptr = ptr;
 
-    Expr::Record {
-        update: None,
-        fields: output,
+        for ((label, field), field_layout) in sorted_fields.iter().zip(field_layouts.iter()) {
+            let content = subs.get_without_compacting(*field.as_inner()).content;
+            let loc_expr = &*arena.alloc(Located {
+                value: ptr_to_ast(env, field_ptr, field_layout, &content),
+                region: Region::zero(),
+            });
+
+            let field_name = Located {
+                value: &*arena.alloc_str(label.as_str()),
+                region: Region::zero(),
+            };
+            let loc_field = Located {
+                value: AssignedField::RequiredValue(field_name, &[], loc_expr),
+                region: Region::zero(),
+            };
+
+            output.push(loc_field);
+
+            // Advance the field pointer to the next field.
+            field_ptr =
+                unsafe { field_ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
+        }
+
+        let output = output.into_bump_slice();
+
+        Expr::Record {
+            update: None,
+            fields: output,
+        }
     }
 }
 
@@ -513,20 +542,17 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     debug_assert!(payload_vars_1.is_empty());
                     debug_assert!(payload_vars_2.is_empty());
 
-                    let tag_name_as_str_1 = &tag_name_1.as_string(env.interns, env.home);
-                    let tag_name_as_str_2 = &tag_name_2.as_string(env.interns, env.home);
-
                     let tag_name = if value {
-                        tag_name_as_str_1.max(tag_name_as_str_2)
+                        max_by_key(tag_name_1, tag_name_2, |n| {
+                            n.as_string(env.interns, env.home)
+                        })
                     } else {
-                        tag_name_as_str_1.min(tag_name_as_str_2)
+                        min_by_key(tag_name_1, tag_name_2, |n| {
+                            n.as_string(env.interns, env.home)
+                        })
                     };
 
-                    if tag_name.starts_with('@') {
-                        Expr::PrivateTag(arena.alloc_str(tag_name))
-                    } else {
-                        Expr::GlobalTag(arena.alloc_str(tag_name))
-                    }
+                    tag_name_to_expr(env, tag_name)
                 }
                 other => {
                     unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -803,4 +829,31 @@ fn str_slice_to_ast<'a>(_arena: &'a Bump, string: &'a str) -> Expr<'a> {
     } else {
         Expr::Str(StrLiteral::PlainLine(string))
     }
+}
+
+// TODO this is currently nighly-only: use the implementation in std once it's stabilized
+pub fn max_by<T, F: FnOnce(&T, &T) -> std::cmp::Ordering>(v1: T, v2: T, compare: F) -> T {
+    use std::cmp::Ordering;
+
+    match compare(&v1, &v2) {
+        Ordering::Less | Ordering::Equal => v2,
+        Ordering::Greater => v1,
+    }
+}
+
+pub fn min_by<T, F: FnOnce(&T, &T) -> std::cmp::Ordering>(v1: T, v2: T, compare: F) -> T {
+    use std::cmp::Ordering;
+
+    match compare(&v1, &v2) {
+        Ordering::Less | Ordering::Equal => v1,
+        Ordering::Greater => v2,
+    }
+}
+
+pub fn max_by_key<T, F: FnMut(&T) -> K, K: Ord>(v1: T, v2: T, mut f: F) -> T {
+    max_by(v1, v2, |v1, v2| f(v1).cmp(&f(v2)))
+}
+
+pub fn min_by_key<T, F: FnMut(&T) -> K, K: Ord>(v1: T, v2: T, mut f: F) -> T {
+    min_by(v1, v2, |v1, v2| f(v1).cmp(&f(v2)))
 }
