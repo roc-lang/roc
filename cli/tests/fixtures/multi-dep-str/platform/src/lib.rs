@@ -3,7 +3,7 @@ use roc_std::RocStr;
 use std::str;
 
 extern "C" {
-    #[link_name = "main_1_exposed"]
+    #[link_name = "Main_main_1_exposed"]
     fn say_hello(output: &mut RocCallResult<RocStr>) -> ();
 }
 

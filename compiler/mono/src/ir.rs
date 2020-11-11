@@ -2173,6 +2173,17 @@ pub fn with_hole<'a>(
                 if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
                     substitute_in_exprs(env.arena, &mut stmt, symbol, original);
 
+                    // if the substituted variable is a function, make sure we specialize it
+                    stmt = reuse_function_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        Some(def.expr_var),
+                        original,
+                        stmt,
+                        original,
+                    );
+
                     stmt
                 } else {
                     with_hole(
@@ -3575,6 +3586,17 @@ pub fn from_can<'a>(
                         let mut rest = from_can(env, def.expr_var, cont.value, procs, layout_cache);
                         // a variable is aliased
                         substitute_in_exprs(env.arena, &mut rest, *symbol, original);
+
+                        // if the substituted variable is a function, make sure we specialize it
+                        rest = reuse_function_symbol(
+                            env,
+                            procs,
+                            layout_cache,
+                            Some(def.expr_var),
+                            original,
+                            rest,
+                            original,
+                        );
 
                         return rest;
                     }

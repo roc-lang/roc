@@ -11,6 +11,14 @@ extern "C" {
 
 const REFCOUNT_1: usize = isize::MIN as usize;
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RocOrder {
+    Eq = 0,
+    Gt = 1,
+    Lt = 2,
+}
+
 //#[macro_export]
 //macro_rules! roclist {
 //    () => (

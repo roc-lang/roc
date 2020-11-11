@@ -1002,7 +1002,7 @@ fn parse_closure_param<'a>(
 ) -> ParseResult<'a, Located<Pattern<'a>>> {
     one_of!(
         // An ident is the most common param, e.g. \foo -> ...
-        loc_ident_pattern(min_indent),
+        loc_ident_pattern(min_indent, true),
         // Underscore is also common, e.g. \_ -> ...
         loc!(underscore_pattern()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
@@ -1026,12 +1026,44 @@ fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
         one_of!(
             loc_parenthetical_pattern(min_indent),
             loc!(underscore_pattern()),
-            loc_ident_pattern(min_indent),
+            loc_ident_pattern(min_indent, true),
             loc!(record_destructure(min_indent)),
             loc!(string_pattern()),
             loc!(number_pattern())
         )
     )
+}
+
+fn loc_tag_pattern_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>> {
+    zero_or_more!(space1_before(loc_tag_pattern_arg(min_indent), min_indent))
+}
+
+fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    skip_first!(
+        // If this is a reserved keyword ("if", "then", "case, "when"), then
+        // it is not a function argument!
+        not(reserved_keyword()),
+        // Don't parse operators, because they have a higher precedence than function application.
+        // If we encounter one, we're done parsing function args!
+        move |arena, state| loc_parse_tag_pattern_arg(min_indent, arena, state)
+    )
+}
+
+fn loc_parse_tag_pattern_arg<'a>(
+    min_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Located<Pattern<'a>>> {
+    one_of!(
+        loc_parenthetical_pattern(min_indent),
+        loc!(underscore_pattern()),
+        // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
+        loc_ident_pattern(min_indent, false),
+        loc!(record_destructure(min_indent)),
+        loc!(string_pattern()),
+        loc!(number_pattern())
+    )
+    .parse(arena, state)
 }
 
 fn loc_parenthetical_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
@@ -1133,51 +1165,64 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     )
 }
 
-fn loc_ident_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+fn loc_ident_pattern<'a>(
+    min_indent: u16,
+    can_have_arguments: bool,
+) -> impl Parser<'a, Located<Pattern<'a>>> {
     move |arena: &'a Bump, state: State<'a>| {
         let (loc_ident, state) = loc!(ident()).parse(arena, state)?;
 
         match loc_ident.value {
             Ident::GlobalTag(tag) => {
-                let (loc_args, state) =
-                    zero_or_more!(space1_before(loc_pattern(min_indent), min_indent))
-                        .parse(arena, state)?;
                 let loc_tag = Located {
                     region: loc_ident.region,
                     value: Pattern::GlobalTag(tag),
                 };
 
-                if loc_args.is_empty() {
-                    Ok((loc_tag, state))
-                } else {
-                    let region = Region::across_all(
-                        std::iter::once(&loc_ident.region)
-                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                    );
-                    let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+                // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
+                if can_have_arguments {
+                    let (loc_args, state) = loc_tag_pattern_args(min_indent).parse(arena, state)?;
 
-                    Ok((Located { region, value }, state))
+                    if loc_args.is_empty() {
+                        Ok((loc_tag, state))
+                    } else {
+                        let region = Region::across_all(
+                            std::iter::once(&loc_ident.region)
+                                .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                        );
+                        let value =
+                            Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+
+                        Ok((Located { region, value }, state))
+                    }
+                } else {
+                    Ok((loc_tag, state))
                 }
             }
             Ident::PrivateTag(tag) => {
-                let (loc_args, state) =
-                    zero_or_more!(space1_before(loc_pattern(min_indent), min_indent))
-                        .parse(arena, state)?;
                 let loc_tag = Located {
                     region: loc_ident.region,
                     value: Pattern::PrivateTag(tag),
                 };
 
-                if loc_args.is_empty() {
-                    Ok((loc_tag, state))
-                } else {
-                    let region = Region::across_all(
-                        std::iter::once(&loc_ident.region)
-                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                    );
-                    let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+                // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
+                if can_have_arguments {
+                    let (loc_args, state) = loc_tag_pattern_args(min_indent).parse(arena, state)?;
 
-                    Ok((Located { region, value }, state))
+                    if loc_args.is_empty() {
+                        Ok((loc_tag, state))
+                    } else {
+                        let region = Region::across_all(
+                            std::iter::once(&loc_ident.region)
+                                .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                        );
+                        let value =
+                            Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+
+                        Ok((Located { region, value }, state))
+                    }
+                } else {
+                    Ok((loc_tag, state))
                 }
             }
             Ident::Access { module_name, parts } => {
