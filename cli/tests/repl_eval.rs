@@ -122,11 +122,11 @@ mod repl_eval {
     #[test]
     fn tag_with_arguments() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
-        // TODO handle more situations
-        // expect_success(
-        //     "if 1 == 1 then True 3 else False 3.14",
-        //     "True 3 : [ True (Num *), False Float ]*",
-        // )
+
+        expect_success(
+            "if 1 == 1 then True 3 else False 3.14",
+            "True 3 : [ False Float, True (Num *) ]*",
+        )
     }
 
     #[test]

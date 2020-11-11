@@ -243,26 +243,33 @@ fn jit_to_ast_help<'a>(
 
                                     let variables = &tags[tag_name];
 
-                                    let content =
-                                        env.subs.get_without_compacting(variables[0]).content;
+                                    debug_assert_eq!(tag_layouts.len() - 1, variables.len());
 
-                                    let ptr = ptr
-                                        .offset(tag_layouts[1].stack_size(env.ptr_bytes) as isize);
+                                    let mut output = Vec::with_capacity_in(variables.len(), &arena);
 
-                                    let payload = {
+                                    // advancing past the tag id
+                                    let mut ptr =
+                                        (ptr as *const u8).offset(8) as *const libc::c_void;
+
+                                    for (var_layout, var) in tag_layouts[1..].iter().zip(variables)
+                                    {
+                                        let content = env.subs.get_without_compacting(*var).content;
+
                                         let loc_payload = &*arena.alloc(Located {
-                                            value: ptr_to_ast(env, ptr, &tag_layouts[1], &content),
+                                            value: ptr_to_ast(env, ptr, &var_layout, &content),
                                             region: Region::zero(),
                                         });
 
-                                        arena.alloc([loc_payload])
-                                    };
+                                        ptr = (ptr as *const u8)
+                                            .offset(var_layout.stack_size(env.ptr_bytes) as isize)
+                                            as *const libc::c_void;
 
-                                    dbg!(variables);
-                                    dbg!(content);
-                                    dbg!(tag_layouts);
+                                        output.push(loc_payload);
+                                    }
 
-                                    Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
+                                    let output = output.into_bump_slice();
+
+                                    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
                                 }
                             )
                         }
