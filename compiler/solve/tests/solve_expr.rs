@@ -3367,7 +3367,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn rbtree_remove_min() {
+    fn rbtree_remove_min_1() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -3398,6 +3398,106 @@ mod solve_expr {
 
 
                 main : Dict Int
+                main =
+                    removeHelp 1 Empty
+                "#
+            ),
+            "Dict Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_foobar() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                removeHelp : Num k, Dict (Num k) v -> Dict (Num k) v
+                removeHelp = \targetKey, dict ->
+                  when dict is
+                    Empty ->
+                      Empty
+
+                    Node color key value left right ->
+                      if targetKey < key then
+                        when left is
+                          Node Black _ _ lLeft _ ->
+                            when lLeft is
+                              Node Red _ _ _ _ ->
+                                Node color key value (removeHelp targetKey left) right
+
+                              _ ->
+                                when moveRedLeft dict is # here 2
+                                  Node nColor nKey nValue nLeft nRight ->
+                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
+
+                                  Empty ->
+                                    Empty
+
+                          _ ->
+                            Node color key value (removeHelp targetKey left) right
+                      else
+                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+
+                Key k : Num k
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+
+                moveRedLeft : Dict k v -> Dict k v
+
+                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+
+                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelpEQGT = \targetKey, dict ->
+                  when dict is
+                    Node color key value left right ->
+                      if targetKey == key then
+                        when getMin right is
+                          Node _ minKey minValue _ _ ->
+                            balance color minKey minValue left (removeMin right)
+
+                          Empty ->
+                            Empty
+                      else
+                        balance color key value left (removeHelp targetKey right)
+
+                    Empty ->
+                      Empty
+
+                removeMin : Dict k v -> Dict k v
+                removeMin = \dict ->
+                  when dict is
+                    Node color key value left right ->
+                        when left is
+                            Node lColor _ _ lLeft _ ->
+                              when lColor is
+                                Black ->
+                                  when lLeft is
+                                    Node Red _ _ _ _ ->
+                                      Node color key value (removeMin left) right
+
+                                    _ ->
+                                      when moveRedLeft dict is # here 1
+                                        Node nColor nKey nValue nLeft nRight ->
+                                          balance nColor nKey nValue (removeMin nLeft) nRight
+
+                                        Empty ->
+                                          Empty
+
+                                _ ->
+                                  Node color key value (removeMin left) right
+
+                            _ ->
+                                Empty
+                    _ ->
+                      Empty
+
+                main : Dict Int Int
                 main =
                     removeHelp 1 Empty
                 "#
