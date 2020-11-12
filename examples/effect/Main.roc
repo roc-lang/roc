@@ -1,12 +1,21 @@
 app Main provides [ main ] imports [ Effect, RBTree ]
 
-foo : RBTree.Dict Int Int
-foo = Empty # RBTree.empty
+toAndFro : Int
+toAndFro =
+    empty : RBTree.Dict Int Int
+    empty = RBTree.empty
+
+    empty
+        |> RBTree.toList
+        |> List.len
+
+
+
 
 main : Effect.Effect {} as Fx
 main =
     # if RBTree.isEmpty empty then
-    if RBTree.size foo == 0 then
+    if toAndFro == 2 then
         Effect.putLine "Yay"
             |> Effect.after (\{} -> Effect.getLine)
             |> Effect.after (\line -> Effect.putLine line)

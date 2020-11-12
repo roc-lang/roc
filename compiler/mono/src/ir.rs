@@ -4615,7 +4615,15 @@ fn reuse_function_symbol<'a>(
     original: Symbol,
 ) -> Stmt<'a> {
     match procs.partial_procs.get(&original) {
-        None => result,
+        None => {
+            // danger: a foreign symbol may not be specialized!
+            debug_assert!(
+                env.home == original.module_id() || original.module_id() == ModuleId::ATTR
+            );
+
+            result
+        }
+
         Some(partial_proc) => {
             let arg_var = arg_var.unwrap_or(partial_proc.annotation);
             // this symbol is a function, that is used by-name (e.g. as an argument to another
