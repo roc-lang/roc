@@ -181,10 +181,42 @@ range : Int a, Int a -> List (Int a)
 ## >>> List.reverse [ 1, 2, 3 ]
 reverse : List elem -> List elem
 
-## Sorts a list using a function which specifies how two elements are ordered.
+## Sort a list of numbers in ascending order (from lowest to highest).
+sortAsc : List (Num a) -> List (Num a)
+
+## Sort a list of numbers in descending order (from highest to lowest).
+sortDesc : List (Num a) -> List (Num a)
+
+## Sorts a list using a function which specifies how any two elements are ordered.
 ##
+## One example of how to use this is with a record field:
 ##
+## >>> List.sortAscBy .points [ { name: "Sam", points: 2 }, { name: "Ali", points: 4 }, { name: "Robin", points: 3 } ]
+##
+## You can find more convenient ways to sort lists in the `roc/sort` package.
+## It includes functions for sorting strings, which vary based on locale.
+## (That's why there is no `Str.compare` - such a function would give wrong
+## answers in some locales. You also may or may not want [natural sorting](https://github.com/sourcefrog/natsort),
+## which has a performance cost but only gives noticeably better answers in
+## certain use cases.)
+sortAscBy : List elem, (elem -> Num *) -> List elem
+
+sortDescBy : List elem, (elem -> Num *) -> List elem
+
+## Sorts a list using a function which specifies how any two elements are ordered.
+##
+## One example of how to use this is with a record field:
+##
+## >>> List.sortAscBy .points [ { name: "Sam", points: 2 }, { name: "Ali", points: 4 }, { name: "Robin", points: 3 } ]
+##
+## You can find more convenient ways to sort lists in the `roc/sort` package.
+## It includes functions for sorting strings, which vary based on locale.
+## (That's why there is no `Str.compare` - such a function would give wrong
+## answers in some locales. You also may or may not want [natural sorting](https://github.com/sourcefrog/natsort),
+## which has a performance cost but only gives noticeably better answers in
+## certain use cases.)
 sort : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
+
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
@@ -200,10 +232,6 @@ map : List before, (before -> after) -> List after
 ## This works like #List.map, except it also passes the index
 ## of the element to the conversion function.
 mapWithIndex : List before, (before, Int -> after) -> List after
-
-## This works like #List.map, except at any time you can return `Err` to
-## cancel the entire operation immediately, and return that #Err.
-mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
 
 ## This works like #List.map, except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
@@ -231,10 +259,6 @@ update : List elem, Len, (elem -> elem) -> List elem
 ## A more flexible version of #List.update, which returns an "updater" function
 ## that lets you delay performing the update until later.
 updater : List elem, Len -> { elem, new : elem -> List elem }
-
-## If all the elements in the list are #Ok, return a new list containing the
-## contents of those #Ok tags. If any elements are #Err, return #Err.
-allOks : List (Result ok err) -> Result (List ok) err
 
 ## Add a single element to the end of a list.
 ##
@@ -269,6 +293,9 @@ concat : List elem, List elem -> List elem
 ## >>> List.join []
 join : List (List elem) -> List elem
 
+## e.g. List.intersperse "and" [ "a", "b", "c" ] == [ "a", "and", "b", "and", "c" ]
+intersperse : List elem, elem -> List elem
+
 ## Like #List.map, except the transformation function wraps the return value
 ## in a list. At the end, all the lists get joined together into one list.
 joinMap : List before, (before -> List after) -> List after
@@ -288,26 +315,38 @@ joinMap : List before, (before -> List after) -> List after
 ## so we're sticking with `Result` for now.
 oks : List (Result elem *) -> List elem
 
-## Iterates over the shortest of the given lists and returns a list of `Pair`
-## tags, each wrapping one of the elements in that list, along with the elements
-## in the same index in # the other lists.
+## Calls the given function on the first element in each of 2 lists, then repeats for the next element in each list until one of the lists runs out of elements. Finally, returns a new list consisting of all the returned values.
 ##
-## >>> List.zip [ "a1", "b1" "c1" ] [ "a2", "b2" ] [ "a3", "b3", "c3" ]
+## This means that if either input list is longer than
+## the other, its excess elements will be ignored.
 ##
-## Accepts up to 8 lists.
+## >>> List.map2 [ 1, 2 ] [ 3, 4, 5 ] Num.plus
 ##
-## > For a generalized version that returns whatever you like, instead of a `Pair`,
-## > see `zipMap`.
-zip : List a, List b, -> List [ Pair a b ]*
+## >>> List.map2 [ "a1", "b1" "c1" ] [ "a2", "b2" ] Pair
+##
+## This function is sometimes known as `zipWith`.
+map2 : List a, List b, (a, b -> c) -> List c
 
-## Like `zip` but you can specify what to do with each element.
+## Calls the given function on the first element in each of 3 lists, then repeats for the next element in each list until one of the lists runs out of elements. Finally, returns a new list consisting of all the returned values.
 ##
-## More specifically, [repeat what zip's docs say here]
+## This means that if any input list is longer than the
+## shortest one, its excess elements will be ignored.
 ##
-## >>> List.zipMap [ 1, 2, 3 ] [ 0, 5, 4 ] [ 2, 1 ] \num1 num2 num3 -> num1 + num2 - num3
+## >>> List.map3 [ 1, 2 ] [ 3, 4, 5 ] [ 6, 7, 8, 9 ] Num.plus
 ##
-## Accepts up to 8 lists.
-zipMap : List a, List b, (a, b) -> List c
+## >>> List.map3 [ "a1", "b1" "c1" ] [ "a2", "b2", "c2" ] [ "a3", "b3", "c3" ] Triplet
+map3 : List a, List b, (a, b -> c) -> List c
+
+
+## Calls the given function on the first element in each of 4 lists, then repeats for the next element in each list until one of the lists runs out of elements. Finally, returns a new list consisting of all the returned values.
+##
+## This means that if any input list is longer than the
+## shortest one, its excess elements will be ignored.
+##
+## >>> List.map4 [ 1, 2 ] [ 3, 4, 5 ] [ 6, 7, 8, 9 ] [ 0, 1, 2, 3, 4, 5 ] Num.plus
+##
+## >>> List.map4 [ "a1", "b1" "c1", "d1" ] [ "a2", "b2", "c2", "d2" ] [ "a3", "b3", "c3", "d3" ] [ "a4", "b4", "c4", "d4" ] Quad
+map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
 
 ## Filter
@@ -360,6 +399,10 @@ max : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 
 min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 
+sum : List (Num a) -> Num a
+
+product : List (Num a) -> Num a
+
 ## Modify
 
 ## Replaces the element at the given index with a replacement.
@@ -370,13 +413,15 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 ## list unmodified.
 ##
 ## To drop the element at a given index, instead of replacing it, see #List.drop.
-put : List elem, Len, elem -> List elem
+set : List elem, Len, elem -> List elem
 
 ## Drops the element at the given index from the list.
 ##
 ## This has no effect if the given index is outside the bounds of the list.
 ##
 ## To replace the element at a given index, instead of dropping it, see #List.put.
+##
+## To
 drop : List elem, Len -> List elem
 
 ## Adds a new element to the end of the list.
@@ -419,20 +464,20 @@ prepend : List elem, elem -> List elem
 ##
 ## Here's one way you can use this:
 ##
-##     when List.pop list is
+##     when List.removeLast list is
 ##         Ok { others, last } -> ...
 ##         Err ListWasEmpty -> ...
 ##
 ## ## Performance Details
 ##
-## Calling #List.pop on a Unique list runs extremely fast. It's essentially
+## Calling #List.dropLast on a Unique list runs extremely fast. It's essentially
 ## the same as a #List.last except it also returns the #List it was given,
 ## with its length decreased by 1.
 ##
-## In contrast, calling #List.pop on a Shared list creates a new list, then
+## In contrast, calling #List.dropLast on a Shared list creates a new list, then
 ## copies over every element in the original list except the last one. This
 ## takes much longer.
-dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpty ]*
+dropLast : List elem -> List elem
 
 ##
 ## Here's one way you can use this:
@@ -455,7 +500,7 @@ dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpt
 ##-----------+----------------------------------+---------------------------------+
 ## dropFirst | #List.last + length change       | #List.last + clone rest of list |
 ## dropLast  | #List.last + clone rest of list  | #List.last + clone rest of list |
-dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
+dropFirst : List elem -> List elem
 
 ## Returns the given number of elements from the beginning of the list.
 ##
@@ -518,7 +563,7 @@ takeLast : List elem, Len -> List elem
 ##
 ## The returned lists are labeled `before` and `others`. The `before` list will
 ## contain all the elements whose index in the original list was **less than**
-## than the given index, # and the `others` list will be all the others. (This
+## than the given index, and the `others` list will be all the others. (This
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
 split : List elem, Len -> { before: List elem, others: List elem }
@@ -549,7 +594,7 @@ sublist : List elem, { start : Len, len : Len } -> List elem
 ## You can use it in a pipeline:
 ##
 ##     [ 2, 4, 8 ]
-##         |> List.walk { start: 0, step: Num.add }
+##         |> List.walk 0 Num.add
 ##
 ## This returns 14 because:
 ## * `state` starts at 0 (because of `start: 0`)
@@ -566,21 +611,21 @@ sublist : List elem, { start : Len, len : Len } -> List elem
 ## 6       | 8      | 14
 ##
 ## So `state` goes through these changes:
-## 1. `0` (because of `start: 0`)
+## 1. `0` (because of `start` = 0)
 ## 2. `1` (because of `Num.add state elem` with `state` = 0 and `elem` = 1
 ##
 ##     [ 1, 2, 3 ]
-##         |> List.walk { start: 0, step: Num.sub }
+##         |> List.walk 0 Num.sub
 ##
 ## This returns -6 because
 ##
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
-walk : List elem, { start : state, step : (state, elem -> state) } -> state
+walk : List elem, state, (state, elem -> state) -> state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
-walkBackwards : List elem, { start : state, step : (state, elem -> state ]) } -> state
+walkBackwards : List elem, state, (state, elem -> state) -> state
 
 ## Same as #List.walk, except you can stop walking early.
 ##
@@ -593,10 +638,10 @@ walkBackwards : List elem, { start : state, step : (state, elem -> state ]) } ->
 ##
 ## As such, it is typically better for performance to use this over #List.walk
 ## if returning `Done` earlier than the last element is expected to be common.
-walkUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
+walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 
 # Same as #List.walkBackwards, except you can stop walking early.
-walkBackwardsUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
+walkBackwardsUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 
 ## Check
 

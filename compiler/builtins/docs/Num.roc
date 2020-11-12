@@ -475,6 +475,18 @@ ceil : Float * -> Int *
 floor : Float * -> Int *
 trunc : Float * -> Int *
 
+## Convert between one number type and another, truncating
+## if there isn't enough space in the destination type.
+##
+## TODO is this a good idea? It seems suspect that examples
+## here would be hard to do in a repl...also kind of non-explicit,
+## which I dislike. What about polymorphism though? Like
+## how would I convert polymorphically between things?
+## e.g. if I want to accept (Float a) and convert to (Int a) of the same size, how else could that work?
+##
+## By default, casts to I32.
+cast : Num * -> Num *
+
 ## Convert an #Int to a #Len. If the given number doesn't fit in #Len, it will be truncated.
 ## Since #Len has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
@@ -580,17 +592,14 @@ and : Int -> Int -> Int
 
 not : Int -> Int
 
-## Sort ascending - that is, with the lowest first, and the highest last.
+## Returns whether the first number is less than (`Lt`), equal to (`Eq`), or greater than (`Gt`) the second number.
 ##
-##     List.sort Num.asc [ 3, 6, 0 ]
+## This will sort a list of numbers from smallest to largest:
 ##
-asc : Num a, Num a -> [ Eq, Lt, Gt ]
+##     List.sort Num.compare [ 3, 6, 0 ]
+##
+compare : Num a, Num a -> [ Lt, Eq, Gt ]
 
-## Sort descending - that is, with the highest first, and the lowest last.
-##
-##     List.sort Num.desc [ 3, 6, 0 ]
-##
-desc : Num a, Num a -> [ Eq, Lt, Gt ]
 
 ## TODO should we offer hash32 etc even if someday it has to do a hash64 and truncate?
 ##

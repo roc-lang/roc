@@ -8,6 +8,16 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
+    // I think this is the problem right here: when we include this library
+    // the path to the library is relative to Cargo itself, not necessarily
+    // wherever the library was built.
+    //
+    // There's also this approach, but it presumably requires lots of code gen
+    // (maybe macros?) and relies on LLVM eliminating conditionals.
+    // https://www.reddit.com/r/rust/comments/fu37q9/like_alloca_but_not_quite_hello_to_the_community/fmatq68/
+    //
+    // On the other hand, if that stuff does get eliminated, it doesn't have the
+    // overhead of a C function call, which is nice. Maybe it's therefore better?
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let cargo_dir = Path::new(manifest_dir.as_str());
     let lib_dir = cargo_dir.join("lib");
