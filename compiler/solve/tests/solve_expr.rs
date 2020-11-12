@@ -3135,4 +3135,359 @@ mod solve_expr {
             "Dict {}",
         );
     }
+
+    #[test]
+    fn rbtree_full_remove_min() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                moveRedLeft : Dict k v -> Dict k v
+                moveRedLeft = \dict ->
+                  when dict is
+                    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV ((Node Red rlK rlV rlL rlR) as rLeft) rRight) ->
+                    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+                    Node clr k v (Node _ lK lV lLeft lRight) (Node _ rK rV rLeft rRight) ->
+                        when rLeft is
+                            Node Red rlK rlV rlL rlR ->
+                              Node
+                                Red
+                                rlK
+                                rlV
+                                (Node Black k v (Node Red lK lV lLeft lRight) rlL)
+                                (Node Black rK rV rlR rRight)
+
+                            _ ->
+                              when clr is
+                                Black ->
+                                  Node
+                                    Black
+                                    k
+                                    v
+                                    (Node Red lK lV lLeft lRight)
+                                    (Node Red rK rV rLeft rRight)
+
+                                Red ->
+                                  Node
+                                    Black
+                                    k
+                                    v
+                                    (Node Red lK lV lLeft lRight)
+                                    (Node Red rK rV rLeft rRight)
+
+                    _ ->
+                      dict
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+
+                Key k : Num k
+
+                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelpEQGT = \targetKey, dict ->
+                  when dict is
+                    Node color key value left right ->
+                      if targetKey == key then
+                        when getMin right is
+                          Node _ minKey minValue _ _ ->
+                            balance color minKey minValue left (removeMin right)
+
+                          Empty ->
+                            Empty
+                      else
+                        balance color key value left (removeHelp targetKey right)
+
+                    Empty ->
+                      Empty
+
+                getMin : Dict k v -> Dict k v
+                getMin = \dict ->
+                  when dict is
+                    # Node _ _ _ ((Node _ _ _ _ _) as left) _ ->
+                    Node _ _ _ left _ ->
+                        when left is
+                            Node _ _ _ _ _ -> getMin left
+                            _ -> dict
+
+                    _ ->
+                      dict
+
+
+                moveRedRight : Dict k v -> Dict k v
+                moveRedRight = \dict ->
+                  when dict is
+                    Node clr k v (Node lClr lK lV (Node Red llK llV llLeft llRight) lRight) (Node rClr rK rV rLeft rRight) ->
+                      Node
+                        Red
+                        lK
+                        lV
+                        (Node Black llK llV llLeft llRight)
+                        (Node Black k v lRight (Node Red rK rV rLeft rRight))
+
+                    Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+                      when clr is
+                        Black ->
+                          Node
+                            Black
+                            k
+                            v
+                            (Node Red lK lV lLeft lRight)
+                            (Node Red rK rV rLeft rRight)
+
+                        Red ->
+                          Node
+                            Black
+                            k
+                            v
+                            (Node Red lK lV lLeft lRight)
+                            (Node Red rK rV rLeft rRight)
+
+                    _ ->
+                      dict
+
+
+                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+                removeHelpPrepEQGT = \_, dict, color, key, value, left, right ->
+                  when left is
+                    Node Red lK lV lLeft lRight ->
+                      Node
+                        color
+                        lK
+                        lV
+                        lLeft
+                        (Node Red key value lRight right)
+
+                    _ ->
+                      when right is
+                        Node Black _ _ (Node Black _ _ _ _) _ ->
+                          moveRedRight dict
+
+                        Node Black _ _ Empty _ ->
+                          moveRedRight dict
+
+                        _ ->
+                          dict
+
+
+                removeMin : Dict k v -> Dict k v
+                removeMin = \dict ->
+                  when dict is
+                    Node color key value left right ->
+                        when left is
+                            Node lColor _ _ lLeft _ ->
+                              when lColor is
+                                Black ->
+                                  when lLeft is
+                                    Node Red _ _ _ _ ->
+                                      Node color key value (removeMin left) right
+
+                                    _ ->
+                                      when moveRedLeft dict is # here 1
+                                        Node nColor nKey nValue nLeft nRight ->
+                                          balance nColor nKey nValue (removeMin nLeft) nRight
+
+                                        Empty ->
+                                          Empty
+
+                                _ ->
+                                  Node color key value (removeMin left) right
+
+                            _ ->
+                                Empty
+                    _ ->
+                      Empty
+
+                removeHelp : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelp = \targetKey, dict ->
+                  when dict is
+                    Empty ->
+                      Empty
+
+                    Node color key value left right ->
+                      if targetKey < key then
+                        when left is
+                          Node Black _ _ lLeft _ ->
+                            when lLeft is
+                              Node Red _ _ _ _ ->
+                                Node color key value (removeHelp targetKey left) right
+
+                              _ ->
+                                when moveRedLeft dict is # here 2
+                                  Node nColor nKey nValue nLeft nRight ->
+                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
+
+                                  Empty ->
+                                    Empty
+
+                          _ ->
+                            Node color key value (removeHelp targetKey left) right
+                      else
+                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+
+
+                main : Dict Int Int
+                main =
+                    removeHelp 1 Empty
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_remove_min() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                moveRedLeft : Dict k v -> Dict k v
+                moveRedLeft = \x -> x
+
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+
+                Key k : Num k
+
+                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
+
+                getMin : Dict k v -> Dict k v
+
+
+                moveRedRight : Dict k v -> Dict k v
+
+
+                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+
+
+                # NOTE: removing this body fixes the problem
+                removeMin : Dict k v -> Dict k v
+                removeMin = \dict ->
+                  when dict is
+                    Node color key value left right ->
+                        when left is
+                            Node lColor _ _ lLeft _ ->
+                              when lColor is
+                                Black ->
+                                  when lLeft is
+                                    Node Red _ _ _ _ ->
+                                      Node color key value (removeMin left) right
+
+                                    _ ->
+                                      when moveRedLeft dict is # here 1
+                                        Node nColor nKey nValue nLeft nRight ->
+                                          balance nColor nKey nValue (removeMin nLeft) nRight
+
+                                        Empty ->
+                                          Empty
+
+                                _ ->
+                                  Node color key value (removeMin left) right
+
+                            _ ->
+                                Empty
+                    _ ->
+                      Empty
+
+                # NOTE: removing this body fixes the problem
+                removeHelp : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelp = \targetKey, dict ->
+                  when dict is
+                    Empty ->
+                      Empty
+
+                    Node color key value left right ->
+                      if targetKey < key then
+                        when left is
+                          Node Black _ _ lLeft _ ->
+                            when lLeft is
+                              Node Red _ _ _ _ ->
+                                Node color key value (removeHelp targetKey left) right
+
+                              _ ->
+                                when moveRedLeft dict is # here 2
+                                  Node nColor nKey nValue nLeft nRight ->
+                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
+
+                                  Empty ->
+                                    Empty
+
+                          _ ->
+                            Node color key value (removeHelp targetKey left) right
+                      else
+                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+
+
+                main : Dict Int Int
+                main =
+                    removeHelp 1 Empty
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
 }
