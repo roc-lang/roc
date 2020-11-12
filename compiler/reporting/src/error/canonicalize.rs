@@ -427,8 +427,15 @@ fn pretty_runtime_error<'b>(
             // do nothing, reported with PrecedenceProblem
             unreachable!()
         }
-        RuntimeError::MalformedIdentifier(_, _) => {
-            todo!("malformed identifier, currently gives a parse error and thus is unreachable")
+        RuntimeError::MalformedIdentifier(box_str, region) => {
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The ")
+                    .append(format!("`{}`", box_str))
+                    .append(alloc.reflow(" identifier is malformed:")),
+                ]),
+                alloc.region(region),
+            ])
         }
         RuntimeError::MalformedClosure(_) => todo!(""),
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)

@@ -725,10 +725,11 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::MalformedIdent(name) => {
             use roc_problem::can::RuntimeError::*;
-            (
-                RuntimeError(MalformedIdentifier((*name).into(), region)),
-                Output::default(),
-            )
+
+            let problem = MalformedIdentifier((*name).into(), region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
         }
         ast::Expr::Nested(sub_expr) => {
             let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
