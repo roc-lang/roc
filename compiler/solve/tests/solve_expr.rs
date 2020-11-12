@@ -3377,83 +3377,8 @@ mod solve_expr {
 
                 Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
 
-                moveRedLeft : Dict k v -> Dict k v
-                moveRedLeft = \x -> x
-
-
-                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
-                balance = \color, key, value, left, right ->
-                  when right is
-                    Node Red rK rV rLeft rRight ->
-                      when left is
-                        Node Red lK lV lLeft lRight ->
-                          Node
-                            Red
-                            key
-                            value
-                            (Node Black lK lV lLeft lRight)
-                            (Node Black rK rV rLeft rRight)
-
-                        _ ->
-                          Node color rK rV (Node Red key value left rLeft) rRight
-
-                    _ ->
-                      when left is
-                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
-                          Node
-                            Red
-                            lK
-                            lV
-                            (Node Black llK llV llLeft llRight)
-                            (Node Black key value lRight right)
-
-                        _ ->
-                          Node color key value left right
-
-
                 Key k : Num k
 
-                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
-
-                getMin : Dict k v -> Dict k v
-
-
-                moveRedRight : Dict k v -> Dict k v
-
-
-                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
-
-
-                # NOTE: removing this body fixes the problem
-                removeMin : Dict k v -> Dict k v
-                removeMin = \dict ->
-                  when dict is
-                    Node color key value left right ->
-                        when left is
-                            Node lColor _ _ lLeft _ ->
-                              when lColor is
-                                Black ->
-                                  when lLeft is
-                                    Node Red _ _ _ _ ->
-                                      Node color key value (removeMin left) right
-
-                                    _ ->
-                                      when moveRedLeft dict is # here 1
-                                        Node nColor nKey nValue nLeft nRight ->
-                                          balance nColor nKey nValue (removeMin nLeft) nRight
-
-                                        Empty ->
-                                          Empty
-
-                                _ ->
-                                  Node color key value (removeMin left) right
-
-                            _ ->
-                                Empty
-                    _ ->
-                      Empty
-
-                # NOTE: removing this body fixes the problem
                 removeHelp : Key k, Dict (Key k) v -> Dict (Key k) v
                 removeHelp = \targetKey, dict ->
                   when dict is
@@ -3466,20 +3391,14 @@ mod solve_expr {
                           Node Black _ _ lLeft _ ->
                             when lLeft is
                               Node Red _ _ _ _ ->
-                                Node color key value (removeHelp targetKey left) right
+                                Empty
 
-                              _ ->
-                                when moveRedLeft dict is # here 2
-                                  Node nColor nKey nValue nLeft nRight ->
-                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
-
-                                  Empty ->
-                                    Empty
+                              _ -> Empty
 
                           _ ->
                             Node color key value (removeHelp targetKey left) right
                       else
-                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+                        Empty
 
 
                 main : Dict Int Int
