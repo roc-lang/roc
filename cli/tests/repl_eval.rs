@@ -90,12 +90,15 @@ mod repl_eval {
     #[test]
     fn bool_in_record() {
         expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
+        expect_success(
+            "{ z: { y: { x: 1 == 1 } } }",
+            "{ z: { y: { x: True } } } : { z : { y : { x : Bool } } }",
+        );
         expect_success("{ x: 1 != 1 }", "{ x: False } : { x : Bool }");
-        // TODO: see ptr_to_ast
-        // expect_success(
-        //     "{ x: 1 == 1, y: 1 != 1 }",
-        //     "{ x: True, y: False } : { x : Bool, y : Bool }",
-        // );
+        expect_success(
+            "{ x: 1 == 1, y: 1 != 1 }",
+            "{ x: True, y: False } : { x : Bool, y : Bool }",
+        );
     }
 
     #[test]
@@ -117,13 +120,45 @@ mod repl_eval {
     }
 
     #[test]
+    fn byte_tag_union() {
+        expect_success(
+            "if 1 == 1 then Red else if 1 == 1 then Green else Blue",
+            "Red : [ Blue, Green, Red ]*",
+        );
+
+        expect_success(
+            "{ y: { x: if 1 == 1 then Red else if 1 == 1 then Green else Blue } }",
+            "{ y: { x: Red } } : { y : { x : [ Blue, Green, Red ]* } }",
+        );
+    }
+
+    #[test]
+    fn tag_in_record() {
+        expect_success(
+            "{ x: Foo 1 2 3, y : 4 }",
+            "{ x: Foo 1 2 3, y: 4 } : { x : [ Foo (Num *) (Num *) (Num *) ]*, y : Num * }",
+        );
+        expect_success(
+            "{ x: Foo 1 2 3 }",
+            "{ x: Foo 1 2 3 } : { x : [ Foo (Num *) (Num *) (Num *) ]* }",
+        );
+        expect_success("{ x: Unit }", "{ x: Unit } : { x : [ Unit ]* }");
+    }
+
+    #[test]
+    fn single_element_tag_union() {
+        expect_success("True 1", "True 1 : [ True (Num *) ]*");
+        expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) Float ]*");
+    }
+
+    #[test]
     fn tag_with_arguments() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
-        // TODO handle more situations
-        // expect_success(
-        //     "if 1 == 1 then True 1 else False 3.14",
-        //     "True 1 : [ True (Num *), False Float ]*",
-        // )
+
+        expect_success(
+            "if 1 == 1 then True 3 else False 3.14",
+            "True 3 : [ False Float, True (Num *) ]*",
+        )
     }
 
     #[test]
@@ -273,32 +308,29 @@ mod repl_eval {
         );
     }
 
-    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
-    // #[test]
-    // fn basic_2_field_f64_record() {
-    //     expect_success(
-    //         "{ foo: 4.1, bar: 2.3 }",
-    //         "{ bar: 2.3, foo: 4.1 } : { bar : Float, foo : Float }",
-    //     );
-    // }
+    #[test]
+    fn basic_2_field_f64_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2.3 }",
+            "{ bar: 2.3, foo: 4.1 } : { bar : Float, foo : Float }",
+        );
+    }
 
-    // #[test]
-    // fn basic_2_field_mixed_record() {
-    //     expect_success(
-    //         "{ foo: 4.1, bar: 2 }",
-    //         "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
-    //     );
-    // }
+    #[test]
+    fn basic_2_field_mixed_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2 }",
+            "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
+        );
+    }
 
-    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
-    //
-    // #[test]
-    // fn basic_3_field_record() {
-    //     expect_success(
-    //         "{ foo: 4.1, bar: 2, baz: 0x5 }",
-    //         "{ foo: 4.1, bar: 2, baz: 0x5 } : { foo : Float, bar : Num *, baz : Int }",
-    //     );
-    // }
+    #[test]
+    fn basic_3_field_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2, baz: 0x5 }",
+            "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int, foo : Float }",
+        );
+    }
 
     #[test]
     fn list_of_1_field_records() {
