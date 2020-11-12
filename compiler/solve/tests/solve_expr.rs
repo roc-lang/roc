@@ -3469,33 +3469,9 @@ mod solve_expr {
                     Empty ->
                       Empty
 
+                getMin : Dict k v -> Dict k v
+
                 removeMin : Dict k v -> Dict k v
-                removeMin = \dict ->
-                  when dict is
-                    Node color key value left right ->
-                        when left is
-                            Node lColor _ _ lLeft _ ->
-                              when lColor is
-                                Black ->
-                                  when lLeft is
-                                    Node Red _ _ _ _ ->
-                                      Node color key value (removeMin left) right
-
-                                    _ ->
-                                      when moveRedLeft dict is # here 1
-                                        Node nColor nKey nValue nLeft nRight ->
-                                          balance nColor nKey nValue (removeMin nLeft) nRight
-
-                                        Empty ->
-                                          Empty
-
-                                _ ->
-                                  Node color key value (removeMin left) right
-
-                            _ ->
-                                Empty
-                    _ ->
-                      Empty
 
                 main : Dict Int Int
                 main =
