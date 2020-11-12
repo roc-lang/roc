@@ -3481,4 +3481,42 @@ mod solve_expr {
             "Dict Int Int",
         );
     }
+
+    #[test]
+    fn quicksort_partition_help() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ partitionHelp ] imports []
+
+                swap : Int, Int, List a -> List a
+                swap = \i, j, list ->
+                    when Pair (List.get list i) (List.get list j) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+
+                        _ ->
+                            []
+
+                partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+                partitionHelp = \i, j, list, high, pivot ->
+                    if j < high then
+                        when List.get list j is
+                            Ok value ->
+                                if value <= pivot then
+                                    partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                else
+                                    partitionHelp i (j + 1) list high pivot
+
+                            Err _ ->
+                                Pair i list
+                    else
+                        Pair i list
+                "#
+            ),
+            "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
+        );
+    }
 }

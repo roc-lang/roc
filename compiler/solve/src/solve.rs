@@ -244,6 +244,34 @@ fn solve(
                 }
             }
         }
+        Store(source, target, _filename, _linenr) => {
+            // a special version of Eq that is used to store types in the AST.
+            // IT DOES NOT REPORT ERRORS!
+            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+            let target = *target;
+
+            match unify(subs, actual, target) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, _actual_type, _expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
+
+                    state
+                }
+                BadType(vars, _problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
+
+                    state
+                }
+            }
+        }
         Lookup(symbol, expectation, region) => {
             let var = *env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record

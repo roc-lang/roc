@@ -1221,19 +1221,9 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                             })),
                             // "the closure's type is equal to expected type"
                             Eq(fn_type.clone(), expected.clone(), Category::Lambda, region),
-                            // "fn_var is equal to the closure's type" - fn_var is used in code gen
-                            Eq(
-                                Type::Variable(*fn_var),
-                                NoExpectation(Type::Variable(expr_var)),
-                                Category::Storage(std::file!(), std::line!()),
-                                region,
-                            ),
-                            Eq(
-                                Type::Variable(expr_var),
-                                expected,
-                                Category::Storage(std::file!(), std::line!()),
-                                region,
-                            ),
+                            // Store type into AST vars. We use Store so errors aren't reported twice
+                            Store(signature.clone(), *fn_var, std::file!(), std::line!()),
+                            Store(signature, expr_var, std::file!(), std::line!()),
                             closure_constraint,
                         ]),
                     )
@@ -1579,18 +1569,9 @@ pub fn rec_defs_help(
                                 })),
                                 Eq(fn_type.clone(), expected.clone(), Category::Lambda, region),
                                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
-                                Eq(
-                                    Type::Variable(*fn_var),
-                                    NoExpectation(fn_type),
-                                    Category::Storage(std::file!(), std::line!()),
-                                    region,
-                                ),
-                                Eq(
-                                    Type::Variable(expr_var),
-                                    expected,
-                                    Category::Storage(std::file!(), std::line!()),
-                                    region,
-                                ),
+                                // Store type into AST vars. We use Store so errors aren't reported twice
+                                Store(signature.clone(), *fn_var, std::file!(), std::line!()),
+                                Store(signature, expr_var, std::file!(), std::line!()),
                                 closure_constraint,
                             ]),
                         );
