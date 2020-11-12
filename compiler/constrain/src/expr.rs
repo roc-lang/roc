@@ -1220,11 +1220,17 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 ret_constraint,
                             })),
                             // "the closure's type is equal to expected type"
-                            Eq(fn_type.clone(), expected, Category::Lambda, region),
+                            Eq(fn_type.clone(), expected.clone(), Category::Lambda, region),
                             // "fn_var is equal to the closure's type" - fn_var is used in code gen
                             Eq(
                                 Type::Variable(*fn_var),
-                                NoExpectation(fn_type),
+                                NoExpectation(Type::Variable(expr_var)),
+                                Category::Storage(std::file!(), std::line!()),
+                                region,
+                            ),
+                            Eq(
+                                Type::Variable(expr_var),
+                                expected,
                                 Category::Storage(std::file!(), std::line!()),
                                 region,
                             ),
@@ -1378,6 +1384,8 @@ pub fn rec_defs_help(
 
         let mut def_pattern_state = constrain_def_pattern(env, &def.loc_pattern, expr_type.clone());
 
+        def_pattern_state.vars.push(expr_var);
+
         let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
@@ -1387,8 +1395,6 @@ pub fn rec_defs_help(
                     &def.loc_expr.value,
                     NoExpectation(expr_type),
                 );
-
-                def_pattern_state.vars.push(expr_var);
 
                 // TODO investigate if this let can be safely removed
                 let def_con = Let(Box::new(LetConstraint {
@@ -1571,11 +1577,17 @@ pub fn rec_defs_help(
                                     defs_constraint: And(state.constraints),
                                     ret_constraint: expr_con,
                                 })),
-                                Eq(fn_type.clone(), expected, Category::Lambda, region),
+                                Eq(fn_type.clone(), expected.clone(), Category::Lambda, region),
                                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                                 Eq(
                                     Type::Variable(*fn_var),
                                     NoExpectation(fn_type),
+                                    Category::Storage(std::file!(), std::line!()),
+                                    region,
+                                ),
+                                Eq(
+                                    Type::Variable(expr_var),
+                                    expected,
                                     Category::Storage(std::file!(), std::line!()),
                                     region,
                                 ),
