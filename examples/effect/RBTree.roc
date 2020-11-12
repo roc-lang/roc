@@ -1,4 +1,4 @@
-interface RBTree exposes [ Dict, empty, size, singleton, isEmpty, insert, remove, update ] imports []
+interface RBTree exposes [ Dict, empty, size, singleton, isEmpty, insert, remove, update, fromList, toList ] imports []
 
 # The color of a node. Leaves are considered Black.
 NodeColor : [ Red, Black ]
@@ -248,7 +248,7 @@ moveRedLeft = \dict ->
 moveRedRight : Dict k v -> Dict k v
 moveRedRight = \dict ->
   when dict is
-    Node clr k v (Node lClr lK lV (Node Red llK llV llLeft llRight) lRight) (Node rClr rK rV rLeft rRight) ->
+    Node _ k v (Node _ lK lV (Node Red llK llV llLeft llRight) lRight) (Node _ rK rV rLeft rRight) ->
       Node
         Red
         lK
@@ -256,7 +256,7 @@ moveRedRight = \dict ->
         (Node Black llK llV llLeft llRight)
         (Node Black k v lRight (Node Red rK rV rLeft rRight))
 
-    Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+    Node clr k v (Node _ lK lV lLeft lRight) (Node _ rK rV rLeft rRight) ->
       when clr is
         Black ->
           Node
@@ -316,3 +316,37 @@ update = \targetKey, alter, dictionary ->
     Nothing ->
       remove targetKey dictionary
 
+get : Key k, Dict (Key k) v -> Maybe v
+get = \targetKey, dict ->
+  when dict is
+    Empty ->
+      Nothing
+
+    Node _ key value left right ->
+      when Num.compare targetKey key is
+        LT ->
+          get targetKey left
+
+        EQ ->
+          Just value
+
+        GT ->
+          get targetKey right
+
+fromList : List {key : Num k, value : v } -> Dict (Num k) v
+fromList = \xs ->
+    List.walkRight xs (\{key, value}, dict -> insert key value dict) empty
+
+foldr : (k, v, b -> b), b, Dict k v -> b
+foldr = \func, acc, t ->
+  when t is
+    Empty ->
+      acc
+
+    Node _ key value left right ->
+      foldr func (func key value (foldr func acc right)) left
+
+#  Convert a dictionary into an association list of key-value pairs, sorted by keys.
+toList : Dict k v -> List { key : k, value : v }
+toList = \dict ->
+  foldr (\key, value, list -> List.append list {key,value}) [] dict
