@@ -11,6 +11,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Category, PReason, PatternCategory, Reason, RecordField, Type};
 
+#[derive(Default)]
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
     pub vars: Vec<Variable>,
