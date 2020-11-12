@@ -3373,35 +3373,31 @@ mod solve_expr {
                 r#"
                 app Test provides [ main ] imports []
 
-                NodeColor : [ Red, Black ]
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
-
-                Key k : Num k
-
-                removeHelp : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelp : Num k, Dict (Num k) -> Dict (Num k)
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
                       Empty
 
-                    Node color key value left right ->
+                    Node key left right ->
                       if targetKey < key then
                         when left is
-                          Node Black _ _ lLeft _ ->
+                          Node _ lLeft _ ->
                             when lLeft is
-                              Node Red _ _ _ _ ->
+                              Node _ _ _ ->
                                 Empty
 
                               _ -> Empty
 
                           _ ->
-                            Node color key value (removeHelp targetKey left) right
+                            Node key (removeHelp targetKey left) right
                       else
                         Empty
 
 
-                main : Dict Int Int
+                main : Dict Int
                 main =
                     removeHelp 1 Empty
                 "#
