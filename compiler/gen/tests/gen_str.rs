@@ -13,19 +13,55 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_str {
-    // #[test]
-    // fn str_split_bigger_delimiter_small_str() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 Str.split "hello" "JJJJ there"
-    //             "#
-    //         ),
-    //         &["hello"],
-    //         &'static [&'static str]
-    //     );
-    // }
-    //
+    #[test]
+    fn str_split_bigger_delimiter_small_str() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    List.len (Str.split "hello" "JJJJ there")
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.first (Str.split "JJJ" "JJJJ there") is
+                        Ok str -> 
+                            Str.countGraphemes str
+                            
+                        _ ->
+                            -1
+                            
+                "#
+            ),
+            3,
+            i64
+        );
+
+        // assert_evals_to!(
+        //     indoc!(
+        //         r#"
+        //             when List.first (Str.split "JJJJJ" "JJJJ there") is
+        //                 Ok str ->
+        //                     str
+        //                         |> Str.concat str
+        //                         |> Str.concat str
+        //                         |> Str.concat str
+        //                         |> Str.concat str
+        //
+        //                 _ ->
+        //                     "Not Str!"
+        //
+        //         "#
+        //     ),
+        //     "JJJJJJJJJJJJJJJJJJJJJJJJJ",
+        //     &'static str
+        // );
+    }
+
     // #[test]
     // fn str_split_small_str_big_delimiter() {
     //     assert_evals_to!(
