@@ -21,7 +21,7 @@ in with {
 with (pkgs);
 
 let
-  darwin-frameworks = if isMacOS then
+  macos-only = if isMacOS then
     with pkgs.darwin.apple_sdk.frameworks; [
       AppKit
       CoreFoundation
@@ -35,10 +35,10 @@ let
     [ ];
 
   linux-only = if !isMacOS then [
-    vulkan-headers
-    vulkan-loader
-    vulkan-tools
-    vulkan-validation-layers
+    # vulkan-headers
+    # vulkan-loader
+    # vulkan-tools
+    # vulkan-validation-layers
     xorg.libX11
     xorg.libXcursor
     xorg.libXrandr
@@ -78,7 +78,7 @@ let
   ];
 
 in mkShell {
-  buildInputs = inputs ++ darwin-frameworks ++ linux-only;
+  buildInputs = inputs ++ macos-only ++ linux-only;
   LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
 
   APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
