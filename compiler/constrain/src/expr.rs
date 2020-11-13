@@ -1220,7 +1220,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 ret_constraint,
                             })),
                             // "the closure's type is equal to expected type"
-                            Eq(fn_type.clone(), expected.clone(), Category::Lambda, region),
+                            Eq(fn_type, expected, Category::Lambda, region),
                             // Store type into AST vars. We use Store so errors aren't reported twice
                             Store(signature.clone(), *fn_var, std::file!(), std::line!()),
                             Store(signature, expr_var, std::file!(), std::line!()),
