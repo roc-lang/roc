@@ -6,13 +6,8 @@ use roc_gen::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-<<<<<<< HEAD
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionVariant};
-use roc_parse::ast::{AssignedField, Expr, StrLiteral, TrailingComma};
-=======
-use roc_mono::layout::{Builtin, Layout};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
->>>>>>> correctly parse trailing commas in record
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
@@ -425,6 +420,7 @@ fn struct_to_ast<'a>(
         Expr::Record {
             update: None,
             fields: output,
+            final_comments: &[],
         }
     } else {
         debug_assert_eq!(sorted_fields.len(), field_layouts.len());
@@ -460,7 +456,7 @@ fn struct_to_ast<'a>(
         Expr::Record {
             update: None,
             fields: output,
-            trailing_comma: arena.alloc([]),
+            final_comments: &[],
         }
     }
 }
@@ -617,6 +613,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                     Expr::Record {
                         update: None,
                         fields: arena.alloc([loc_assigned_field]),
+                        final_comments: &[],
                     }
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {

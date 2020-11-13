@@ -611,7 +611,7 @@ where
     D: Parser<'a, ()>,
     P: Parser<'a, Val>,
 {
-    move |arena, state: State<'a>| {        
+    move |arena, state: State<'a>| {
         match parser.parse(arena, state) {
             Ok((first_output, next_state)) => {
                 let mut state = next_state;
@@ -894,7 +894,8 @@ macro_rules! collection_trailing_sep {
                         $crate::parser::trailing_sep_by0(
                             $delimiter,
                             $crate::blankspace::space0_around($elem, $min_indent)
-                        ), $crate::blankspace::spaces0($min_indent)
+                        ),
+                        $crate::blankspace::spaces0($min_indent)
                     ),
                     $closing_brace
                 )
@@ -1209,7 +1210,8 @@ macro_rules! record {
                                     loc!(record_field!($val_parser, $min_indent)),
                                     $min_indent
                                 ),
-                            ), $crate::blankspace::space0($min_indent)
+                            ),
+                            $crate::blankspace::space0($min_indent)
                         ),
                         $crate::parser::ascii_char(b'}')
                     )
