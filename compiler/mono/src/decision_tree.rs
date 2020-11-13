@@ -987,6 +987,8 @@ fn path_to_expr_help<'a>(
                         other => vec![other.clone()],
                     };
 
+                    debug_assert!(*index < field_layouts.len() as u64);
+
                     let inner_layout = match &field_layouts[*index as usize] {
                         Layout::RecursivePointer => layout.clone(),
                         other => other.clone(),

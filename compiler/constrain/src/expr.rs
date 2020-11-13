@@ -1533,30 +1533,6 @@ pub fn rec_defs_help(
 
                         vars.push(*fn_var);
 
-                        //                        let expr_con = constrain_expr(
-                        //                            &Env {
-                        //                                rigids: ftv,
-                        //                                home: env.home,
-                        //                            },
-                        //                            def.loc_expr.region,
-                        //                            &def.loc_expr.value,
-                        //                            annotation_expected.clone(),
-                        //                        );
-                        //
-                        //                        // ensure expected type unifies with annotated type
-                        //                        let storage_con = Eq(
-                        //                            expr_type,
-                        //                            annotation_expected.clone(),
-                        //                            Category::Storage(std::file!(), std::line!()),
-                        //                            def.loc_expr.region,
-                        //                        );
-                        //
-                        //                        def_pattern_state.vars.push(expr_var);
-                        //                        // Open question: where should this constraint live?
-                        //                        // rigid_info.vars.push(expr_var);
-                        //                        rigid_info.constraints.push(storage_con);
-
-                        // TODO investigate if this let can be safely removed
                         let def_con = exists(
                             vars,
                             And(vec![
