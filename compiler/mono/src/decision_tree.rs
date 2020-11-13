@@ -1169,6 +1169,98 @@ fn test_to_equality<'a>(
     }
 }
 
+fn stores_and_condition<'a>(
+    env: &mut Env<'a, '_>,
+    cond_symbol: Symbol,
+    cond_layout: &Layout<'a>,
+    test_chain: Vec<(Path, Test<'a>)>,
+) -> (
+    std::vec::Vec<(
+        bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+        Symbol,
+        Symbol,
+        Layout<'a>,
+    )>,
+    Option<(Symbol, JoinPointId, Stmt<'a>)>,
+) {
+    let mut tests = Vec::with_capacity(test_chain.len());
+
+    let mut guard = None;
+
+    // Assumption: there is at most 1 guard, and it is the outer layer.
+    for (path, test) in test_chain {
+        match test {
+            Test::Guarded {
+                opt_test,
+                id,
+                symbol,
+                stmt,
+            } => {
+                if let Some(nested) = opt_test {
+                    tests.push(test_to_equality(
+                        env,
+                        cond_symbol,
+                        &cond_layout,
+                        &path,
+                        *nested,
+                    ));
+                }
+
+                // let (stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+                guard = Some((symbol, id, stmt));
+            }
+
+            _ => tests.push(test_to_equality(
+                env,
+                cond_symbol,
+                &cond_layout,
+                &path,
+                test,
+            )),
+        }
+    }
+
+    (tests, guard)
+}
+
+fn compile_guard<'a>(
+    env: &mut Env<'a, '_>,
+    ret_layout: Layout<'a>,
+    id: JoinPointId,
+    stmt: &'a Stmt<'a>,
+    fail: &'a Stmt<'a>,
+    mut cond: Stmt<'a>,
+) -> Stmt<'a> {
+    // the guard is the final thing that we check, so needs to be layered on first!
+    let test_symbol = env.unique_symbol();
+    let arena = env.arena;
+
+    cond = Stmt::Cond {
+        cond_symbol: test_symbol,
+        cond_layout: Layout::Builtin(Builtin::Int1),
+        branching_symbol: test_symbol,
+        branching_layout: Layout::Builtin(Builtin::Int1),
+        pass: arena.alloc(cond),
+        fail,
+        ret_layout,
+    };
+
+    // calculate the guard value
+    let param = Param {
+        symbol: test_symbol,
+        layout: Layout::Builtin(Builtin::Int1),
+        borrow: false,
+    };
+
+    Stmt::Join {
+        id,
+        parameters: arena.alloc([param]),
+        remainder: stmt,
+        continuation: arena.alloc(cond),
+    }
+}
+
 // TODO procs and layout are currently unused, but potentially required
 // for defining optional fields?
 // if not, do remove
@@ -1231,55 +1323,11 @@ fn decide_to_branching<'a>(
             let branching_symbol = env.unique_symbol();
             let branching_layout = Layout::Builtin(Builtin::Int1);
 
-            let mut cond = Stmt::Cond {
-                cond_symbol,
-                cond_layout: cond_layout.clone(),
-                branching_symbol,
-                branching_layout,
-                pass,
-                fail,
-                ret_layout,
-            };
+            let mut cond = pass.clone();
 
             let true_symbol = env.unique_symbol();
 
-            let mut tests = Vec::with_capacity(test_chain.len());
-
-            let mut guard = None;
-
-            // Assumption: there is at most 1 guard, and it is the outer layer.
-            for (path, test) in test_chain {
-                match test {
-                    Test::Guarded {
-                        opt_test,
-                        id,
-                        symbol,
-                        stmt,
-                    } => {
-                        if let Some(nested) = opt_test {
-                            tests.push(test_to_equality(
-                                env,
-                                cond_symbol,
-                                &cond_layout,
-                                &path,
-                                *nested,
-                            ));
-                        }
-
-                        // let (stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                        guard = Some((symbol, id, stmt));
-                    }
-
-                    _ => tests.push(test_to_equality(
-                        env,
-                        cond_symbol,
-                        &cond_layout,
-                        &path,
-                        test,
-                    )),
-                }
-            }
+            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
 
             let mut current_symbol = branching_symbol;
 
@@ -1297,52 +1345,26 @@ fn decide_to_branching<'a>(
 
             // the guard is the final thing that we check, so needs to be layered on first!
             if let Some((_, id, stmt)) = guard {
-                let accum = accum_it.next().unwrap();
-                let test_symbol = env.unique_symbol();
-
-                let and_expr = Expr::RunLowLevel(LowLevel::And, arena.alloc([test_symbol, accum]));
-
-                // write to the branching symbol
-                cond = Stmt::Let(
-                    current_symbol,
-                    and_expr,
-                    Layout::Builtin(Builtin::Int1),
-                    arena.alloc(cond),
-                );
-
-                // calculate the guard value
-                let param = Param {
-                    symbol: test_symbol,
-                    layout: Layout::Builtin(Builtin::Int1),
-                    borrow: false,
-                };
-                cond = Stmt::Join {
-                    id,
-                    parameters: arena.alloc([param]),
-                    remainder: arena.alloc(stmt),
-                    continuation: arena.alloc(cond),
-                };
-
-                // load all the variables (the guard might need them);
-
-                current_symbol = accum;
+                cond = compile_guard(env, ret_layout.clone(), id, arena.alloc(stmt), fail, cond);
             }
 
             for ((new_stores, lhs, rhs, _layout), accum) in tests.into_iter().rev().zip(accum_it) {
+                // `if test_symbol then cond else false_branch
                 let test_symbol = env.unique_symbol();
+
+                cond = Stmt::Cond {
+                    cond_symbol: test_symbol,
+                    cond_layout: Layout::Builtin(Builtin::Int1),
+                    branching_symbol: test_symbol,
+                    branching_layout: Layout::Builtin(Builtin::Int1),
+                    pass: env.arena.alloc(cond),
+                    fail,
+                    ret_layout: ret_layout.clone(),
+                };
+
                 let test = Expr::RunLowLevel(
                     LowLevel::Eq,
                     bumpalo::vec![in arena; lhs, rhs].into_bump_slice(),
-                );
-
-                let and_expr = Expr::RunLowLevel(LowLevel::And, arena.alloc([test_symbol, accum]));
-
-                // write to the branching symbol
-                cond = Stmt::Let(
-                    current_symbol,
-                    and_expr,
-                    Layout::Builtin(Builtin::Int1),
-                    arena.alloc(cond),
                 );
 
                 // write to the test symbol
