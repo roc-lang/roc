@@ -1134,7 +1134,6 @@ impl<'a> Stmt<'a> {
 
                 alloc.intersperse(
                     vec![
-                        remainder.to_doc(alloc),
                         alloc
                             .text("joinpoint ")
                             .append(join_point_to_doc(alloc, *id))
@@ -1142,6 +1141,8 @@ impl<'a> Stmt<'a> {
                             .append(alloc.intersperse(it, alloc.space()))
                             .append(":"),
                         continuation.to_doc(alloc).indent(4),
+                        alloc.text("in"),
+                        remainder.to_doc(alloc),
                     ],
                     alloc.hardline(),
                 )
