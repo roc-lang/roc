@@ -17,16 +17,17 @@ pub enum Ident<'a> {
     GlobalTag(&'a str),
     /// @Foo or @Bar
     PrivateTag(&'a str),
-    /// foo or foo.bar or Foo.Bar.baz.qux
-    Access {
-        package_name: &'a str,
+    /// foo.bar
+    Access(&'a str, &'a Ident<'a>),
+    /// Foo.Bar.baz or foo.Bar.Baz.blah
+    Lookup {
         module_name: &'a str,
-        parts: &'a [&'a str],
+        var_name: &'a str,
     },
     /// .foo
     AccessorFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
-    Malformed(&'a [IdentProblem]),
+    Malformed(&'a [(usize, IdentProblem)]),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -41,14 +42,13 @@ enum IdentPart {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum IdentProblem {
-    ContainedUnderscore(usize),
-    AtSignInMiddle(usize),
-    UncapitalizedAt(usize),
-    PartBeginsWithNumber(usize),
-    ModuleNameWithoutValue(usize),
-    FieldAccessOnTag(usize),
-    CapitalizedAfterValue(usize),
-    QualifiedTag(usize),
+    ContainedUnderscore,
+    AtSignInMiddle,
+    UncapitalizedAt,
+    PartBeginsWithNumber,
+    DotAfterPrivateTag,
+    CapitalizedAfterVar,
+    QualifiedTag,
 }
 
 impl<'a> Ident<'a> {
@@ -57,19 +57,20 @@ impl<'a> Ident<'a> {
 
         match self {
             GlobalTag(string) | PrivateTag(string) => string.len(),
-            Access { module_name, parts } => {
-                let mut len = if module_name.is_empty() {
-                    0
+            Access(field_name, child) => {
+                // +1 for the dot
+                field_name.len() + child.len() + 1
+            }
+            Lookup {
+                module_name,
+                var_name,
+            } => {
+                if module_name.is_empty() {
+                    var_name.len()
                 } else {
-                    module_name.len() + 1
                     // +1 for the dot
-                };
-
-                for part in parts.iter() {
-                    len += part.len() + 1 // +1 for the dot
+                    var_name.len() + module_name.len() + 1
                 }
-
-                len - 1
             }
             AccessorFunction(string) => string.len(),
             Malformed(string) => string.len(),
@@ -86,231 +87,135 @@ impl<'a> Ident<'a> {
 
         // Validate parts. Valid patterns include:
         //
-        // Package qualified lookup, e.g. (json.Foo.Bar.baz)
-        // Package qualified field access, e.g. (json.Foo.Bar.baz.blah)
-        // Module qualified lookup, e.g. (Foo.Bar.baz)
-        // Module qualified field access, e.g. (Foo.Bar.baz.blah)
-        // Field access, e.g. (baz.blah)
-        // Lookup, e.g. (blah)
         // Global tag, e.g. (Foo)
         // Private tag, e.g. (@Foo)
+        // Lookup, e.g. (blah)
+        // Field access, e.g. (baz.blah)
+        // Module qualified lookup, e.g. (Foo.Bar.baz)
+        // Package qualified lookup, e.g. (json.Foo.Bar.baz)
+        // Module qualified field access, e.g. (Foo.Bar.baz.blah)
+        // Package qualified field access, e.g. (json.Foo.Bar.baz.blah)
         let mut iter = parts.into_iter().peekable();
-        let mut module_parts = bumpalo::collections::Vec::new_in(arena);
-        let mut field_access_parts = bumpalo::collections::Vec::new_in(arena);
-        let uncapitalized_prefix: Option<&str>;
+        let mut fields: Vec<'_, &str> = bumpalo::collections::Vec::new_in(arena);
+        let mut module_name: String<'_> = bumpalo::collections::String::new_in(arena);
+        let var_name = "";
+        let package_name: Option<&str>;
 
-        //         #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-        //         enum IdentProblem {
-        //             ContainedUnderscore(usize),
-        //             AtSignInMiddle(usize),
-        //             UncapitalizedAt(usize),
-        //             PartBeginsWithNumber(usize),
-        //             FieldAccessOnTag(usize),
-        //         }
+        let malformed = |problem| {
+            let mut offset = if module_name.is_empty() {
+                var_name.len()
+            } else {
+                // +1 for the dot
+                var_name.len() + module_name.len() + 1
+            };
 
-        let current_offset = || {
-            let mut offset = 0;
-            let mut iter = module_parts
-                .iter()
-                .chain(field_access_parts.iter())
-                .chain(uncapitalized_prefix.iter());
-
-            for part in iter {
+            for part in fields.into_iter().chain(package_name.into_iter()) {
+                // +1 for the dot
                 offset += part.len() + 1;
             }
 
-            offset
+            let problems = bumpalo::vec![in arena; (offset, problem)];
+
+            Ident::Malformed(problems.into_bump_slice())
         };
 
-        macro_rules! malformed {
-            ($to_problem:expr) => {
-                {
-                    let problem = ($to_problem(current_offset()));
-                    let problems = bumpalo::vec![in arena; problem];
-
-                    Ident::Malformed(problems.into_bump_slice())
-                }
-            };
-        }
-
-        // Start by examining the first ident, because that rules out
-        // a lot of cases.
+        // Start by examining the first part, because there are lots
+        // of special cases on the first one!
         match iter.next().unwrap() {
-            (IdentPart::AtCapitalized, part) => {
+            (IdentPart::AtCapitalized, part_str) => {
                 // This is a private tag, so it should only have one part!
                 if iter.peek().is_none() {
-                    return Ident::PrivateTag(part);
+                    return Ident::PrivateTag(part_str);
                 } else {
-                    return malformed!(FieldAccessOnTag);
+                    return malformed(DotAfterPrivateTag);
                 }
             }
-            (IdentPart::Capitalized, part) => {
+            (IdentPart::Capitalized, part_str) => {
                 if iter.peek().is_none() {
                     // This must be a global tag, because it's one
                     // uppercase part and that's it.
-                    return Ident::GlobalTag(part);
+                    return Ident::GlobalTag(part_str);
                 } else {
-                    module_parts.push(part);
+                    // This must be a module name.
+                    // We don't yet know what var_name is, so leave it as "".
+                    module_name.push('.');
+                    module_name.push_str(part_str);
                 }
             }
-            (IdentPart::Uncapitalized, part) => {
-                match iter.next() {
-                    None => {
-                        // This must be a lookup, because it's one
-                        // lowercase part and that's it.
-                        return Ident::Access {
-                            package_name: "",
-                            module_name: "",
-                            parts: &[],
-                        };
-                    }
-                    Some((part_type, part_str)) => {
-                        // From here, it could be a module, or a field access on a lookup.
-                        // We can tell which based on whether the next part
-                        // is capitalized.
-                        match part_type {
-                            IdentPart::AtCapitalized => {
-                                return malformed!(AtSignInMiddle);
-                            }
-                            IdentPart::Capitalized => {
-                                match iter.peek() {
-                                    Some(_) => {
-                                        uncapitalized_prefix = None;
-                                        module_parts.push(part);
-                                    }
-                                    None => {
-                                        // e.g. (json.Foo)
-                                        return malformed!(ModuleNameWithoutValue);
-                                    }
-                                }
-                            }
-                            IdentPart::Uncapitalized => {
-                                // This could be either a package name
-                                // or field access on a lookup.
-                                uncapitalized_prefix = Some(part);
-                                field_access_parts.push(part_str);
-                            }
-                            IdentPart::Malformed(problem) => {
-                                let problems = bumpalo::vec![in arena; problem];
-
-                                return Ident::Malformed(problems.into_bump_slice());
-                            }
-                        }
-                    }
-                }
-            }
-            (IdentPart::Malformed(problem), part) => {
-                let problems = bumpalo::vec![in arena; problem];
-
-                return Ident::Malformed(problems.into_bump_slice());
+            (IdentPart::Uncapitalized, part_str) => {
+                // So far this looks like an unqualified lookup.
+                // Later it may turn out to be a package qualifier instead.
+                var_name = part_str;
             }
         }
 
         for (part_type, part_str) in iter {
             match part_type {
                 IdentPart::AtCapitalized => {
-                    return malformed!(QualifiedTag);
+                    // e.g. `Foo.@Bar`
+                    return malformed(QualifiedTag);
                 }
                 IdentPart::Capitalized => {
                     // Any capitalized parts after the first part
                     // are definitely module parts.
-                    module_parts.push(part_str);
+                    module_name.push('.');
+                    module_name.push_str(part_str);
                 }
                 IdentPart::Uncapitalized => {
-                    field_access_parts.push(part_str);
+                    var_name = if module_name.is_empty() {
+                        part_str
+                    } else {
+                        // We already had a var_name, and then there was a
+                        // module name after it, so actually what appeared
+                        // to be a var name was a package name after all.
+                        package_name = Some(var_name);
 
-                    // From here on, everything must be field accesses.
-                    // It's not allowed to have anything else after our
-                    // first field access.
+                        part_str
+                    };
+
+                    // It's invalid to have anything other than field accesses
+                    // after the value!
                     for (part_type, part_str) in iter {
                         match part_type {
                             IdentPart::Uncapitalized => {
-                                field_access_parts.push(part_str);
+                                fields.push(part_str);
                             }
                             IdentPart::AtCapitalized => {
-                                return malformed!(AtSignInMiddle);
+                                return malformed(AtSignInMiddle);
                             }
                             IdentPart::Capitalized => {
-                                return malformed!(CapitalizedAfterValue);
+                                return malformed(CapitalizedAfterVar);
                             }
                             IdentPart::Malformed(problem) => {
-                                let problems = bumpalo::vec![in arena; problem];
-
-                                return Ident::Malformed(problems.into_bump_slice());
+                                return malformed(problem);
                             }
                         }
                     }
                 }
                 IdentPart::Malformed(problem) => {
-                    let problems = bumpalo::vec![in arena; problem];
-
-                    return Ident::Malformed(problems.into_bump_slice());
+                    return malformed(problem);
                 }
             }
         }
 
-        // Now we're left with a lookup and 1+ field accesses on it.
-        // First, canonicalize the lookup, then wrap it in however many
-        // Access expressions we need.
-        let (mut loc_expr, output) =
-            canonicalize_lookup(env, scope, package_part, module_parts, ident, region);
+        // e.g. (Foo.Bar.Baz)
+        if var_name.is_empty() {
+            debug_assert!(!module_name.is_empty());
 
-        for field in field_access_parts {
-            let expr = canonicalize_field_access(loc_expr, field, var_store);
-
-            loc_expr = todo!("re-wrap the expr in the right Region.");
+            return malformed(QualifiedTag);
         }
 
-        let answer = if is_accessor_fn {
-            // Handle accessor functions first because they have the strictest requirements.
-            // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
-            if capitalized_parts.is_empty() && noncapitalized_parts.len() == 1 && !is_private_tag {
-                let value = noncapitalized_parts.iter().next().unwrap();
-
-                Ident::AccessorFunction(value)
-            } else {
-                return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-            }
-        } else if noncapitalized_parts.is_empty() {
-            // We have capitalized parts only, so this must be a tag.
-            match capitalized_parts.first() {
-                Some(value) => {
-                    if capitalized_parts.len() == 1 {
-                        if is_private_tag {
-                            Ident::PrivateTag(value)
-                        } else {
-                            Ident::GlobalTag(value)
-                        }
-                    } else {
-                        // This is a qualified tag, which is not allowed!
-                        return malformed(
-                            None,
-                            arena,
-                            state,
-                            capitalized_parts,
-                            noncapitalized_parts,
-                        );
-                    }
-                }
-                None => {
-                    // We had neither capitalized nor noncapitalized parts,
-                    // yet we made it this far. The only explanation is that this was
-                    // a stray '.' drifting through the cosmos.
-                    return Err(unexpected(1, state, Attempting::Identifier));
-                }
-            }
-        } else if is_private_tag {
-            // This is qualified field access with an '@' in front, which does not make sense!
-            return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-        } else {
-            // We have multiple noncapitalized parts, so this must be field access.
-            Ident::Access {
-                module_name: join_module_parts(arena, capitalized_parts.into_bump_slice()),
-                parts: noncapitalized_parts.into_bump_slice(),
-            }
+        let mut answer = Ident::Lookup {
+            module_name: module_name.into_bump_str(),
+            var_name,
         };
 
-        (loc_expr.value, output)
+        // Wrap the answer in field accesses as necessary
+        for field in fields {
+            answer = Ident::Access(field, arena.alloc(answer));
+        }
+
+        answer
     }
 }
 
