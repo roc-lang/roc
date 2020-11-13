@@ -2171,17 +2171,22 @@ pub fn with_hole<'a>(
 
                 // a variable is aliased
                 if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
-                    substitute_in_exprs(env.arena, &mut stmt, symbol, original);
+                    // a variable is aliased, e.g.
+                    //
+                    //  foo = bar
+                    //
+                    // or
+                    //
+                    //  foo = RBTRee.empty
 
-                    // if the substituted variable is a function, make sure we specialize it
-                    stmt = reuse_function_symbol(
+                    stmt = handle_variable_aliasing(
                         env,
                         procs,
                         layout_cache,
-                        Some(def.expr_var),
+                        def.expr_var,
+                        symbol,
                         original,
                         stmt,
-                        original,
                     );
 
                     stmt
@@ -3583,19 +3588,23 @@ pub fn from_can<'a>(
 
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Var(original) => {
+                        // a variable is aliased, e.g.
+                        //
+                        //  foo = bar
+                        //
+                        // or
+                        //
+                        //  foo = RBTRee.empty
                         let mut rest = from_can(env, def.expr_var, cont.value, procs, layout_cache);
-                        // a variable is aliased
-                        substitute_in_exprs(env.arena, &mut rest, *symbol, original);
 
-                        // if the substituted variable is a function, make sure we specialize it
-                        rest = reuse_function_symbol(
+                        rest = handle_variable_aliasing(
                             env,
                             procs,
                             layout_cache,
-                            Some(def.expr_var),
+                            def.expr_var,
+                            *symbol,
                             original,
                             rest,
-                            original,
                         );
 
                         return rest;
@@ -4555,6 +4564,46 @@ fn possible_reuse_symbol<'a>(
     }
 }
 
+fn handle_variable_aliasing<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    variable: Variable,
+    left: Symbol,
+    right: Symbol,
+    mut result: Stmt<'a>,
+) -> Stmt<'a> {
+    let is_imported = left.module_id() != right.module_id();
+    // builtins are currently (re)defined in each module, so not really imported
+    let is_builtin = right.is_builtin();
+
+    if is_imported && !is_builtin {
+        // if this is an imported symbol, then we must make sure it is
+        // specialized, and wrap the original in a function pointer.
+        add_needed_external(procs, env, variable, right);
+
+        let layout = layout_cache
+            .from_var(env.arena, variable, env.subs)
+            .unwrap();
+
+        let expr = Expr::FunctionPointer(right, layout.clone());
+        Stmt::Let(left, expr, layout, env.arena.alloc(result))
+    } else {
+        substitute_in_exprs(env.arena, &mut result, left, right);
+
+        // if the substituted variable is a function, make sure we specialize it
+        reuse_function_symbol(
+            env,
+            procs,
+            layout_cache,
+            Some(variable),
+            right,
+            result,
+            right,
+        )
+    }
+}
+
 /// If the symbol is a function, make sure it is properly specialized
 fn reuse_function_symbol<'a>(
     env: &mut Env<'a, '_>,
@@ -4566,7 +4615,15 @@ fn reuse_function_symbol<'a>(
     original: Symbol,
 ) -> Stmt<'a> {
     match procs.partial_procs.get(&original) {
-        None => result,
+        None => {
+            // danger: a foreign symbol may not be specialized!
+            debug_assert!(
+                env.home == original.module_id() || original.module_id() == ModuleId::ATTR
+            );
+
+            result
+        }
+
         Some(partial_proc) => {
             let arg_var = arg_var.unwrap_or(partial_proc.annotation);
             // this symbol is a function, that is used by-name (e.g. as an argument to another
