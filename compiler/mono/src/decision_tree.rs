@@ -11,7 +11,7 @@ use roc_module::symbol::Symbol;
 /// COMPILE CASES
 
 type Label = u64;
-const RECORD_TAG_NAME: &'static str = "#Record";
+const RECORD_TAG_NAME: &str = "#Record";
 
 /// Users of this module will mainly interact with this function. It takes
 /// some normal branches and gives out a decision tree that has "labels" at all
@@ -1269,7 +1269,7 @@ fn compile_test<'a>(
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
 ) -> Stmt<'a> {
-    // `if test_symbol then cond else false_branch
+    // if test_symbol then cond else fail
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
@@ -1386,29 +1386,25 @@ fn decide_to_branching<'a>(
 
             debug_assert!(number_of_tests > 0);
 
-            let mut accum = pass_expr;
+            let fail = env.arena.alloc(fail_expr);
             if number_of_tests == 1 {
                 // if there is just one test, compile to a simple if-then-else
-                let fail = &*env.arena.alloc(fail_expr);
-
-                accum = compile_tests(env, ret_layout, tests, guard, fail, accum);
+                compile_tests(env, ret_layout, tests, guard, fail, pass_expr)
             } else {
                 // otherwise, we use a join point so the code for the `else` case
                 // is only generated once.
                 let fail_jp_id = JoinPointId(env.unique_symbol());
-                let fail = arena.alloc(Stmt::Jump(fail_jp_id, &[]));
+                let jump = arena.alloc(Stmt::Jump(fail_jp_id, &[]));
 
-                accum = compile_tests(env, ret_layout, tests, guard, fail, accum);
+                let test_stmt = compile_tests(env, ret_layout, tests, guard, jump, pass_expr);
 
-                accum = Stmt::Join {
+                Stmt::Join {
                     id: fail_jp_id,
                     parameters: &[],
-                    continuation: env.arena.alloc(fail_expr),
-                    remainder: arena.alloc(accum),
-                };
+                    continuation: fail,
+                    remainder: arena.alloc(test_stmt),
+                }
             }
-
-            accum
         }
         FanOut {
             path,
