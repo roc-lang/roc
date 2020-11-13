@@ -11,6 +11,7 @@ use roc_module::symbol::Symbol;
 /// COMPILE CASES
 
 type Label = u64;
+const RECORD_TAG_NAME: &'static str = "#Record";
 
 /// Users of this module will mainly interact with this function. It takes
 /// some normal branches and gives out a decision tree that has "labels" at all
@@ -189,7 +190,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
 fn is_complete(tests: &[Test]) -> bool {
     let length = tests.len();
     debug_assert!(length > 0);
-    match tests.get(length - 1) {
+    match tests.last() {
         None => unreachable!("should never happen"),
         Some(v) => match v {
             Test::IsCtor { union, .. } => length == union.alternatives.len(),
@@ -395,7 +396,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
-                            name: TagName::Global("#Record".into()),
+                            name: TagName::Global(RECORD_TAG_NAME.into()),
                             arity: destructs.len(),
                         }],
                     };
@@ -418,7 +419,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
 
                     all_tests.push(IsCtor {
                         tag_id: 0,
-                        tag_name: TagName::Global("#Record".into()),
+                        tag_name: TagName::Global(RECORD_TAG_NAME.into()),
                         union,
                         arguments,
                     });
@@ -538,7 +539,7 @@ fn to_relevant_branch_help<'a>(
                 tag_id,
                 ..
             } => {
-                debug_assert!(test_name == &TagName::Global("#Record".into()));
+                debug_assert!(test_name == &TagName::Global(RECORD_TAG_NAME.into()));
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
