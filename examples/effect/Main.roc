@@ -2,10 +2,11 @@ app Main provides [ main ] imports [ Effect, RBTree ]
 
 toAndFro : Int
 toAndFro =
-    empty : RBTree.Dict Int Int
+    empty : RBTree.Dict Int {}
     empty = RBTree.empty
 
     empty
+        |> (\d -> RBTree.insert 1 {} d)
         |> RBTree.toList
         |> List.len
 

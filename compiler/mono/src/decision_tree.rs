@@ -979,7 +979,7 @@ fn path_to_expr_help<'a>(
                     break;
                 }
                 Some(wrapped) => {
-                    let field_layouts = match layout {
+                    let field_layouts = match &layout {
                         Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
                             layouts[*tag_id as usize].to_vec()
                         }
@@ -987,9 +987,10 @@ fn path_to_expr_help<'a>(
                         other => vec![other.clone()],
                     };
 
-                    debug_assert!(*index < field_layouts.len() as u64);
-
-                    let inner_layout = field_layouts[*index as usize].clone();
+                    let inner_layout = match &field_layouts[*index as usize] {
+                        Layout::RecursivePointer => layout.clone(),
+                        other => other.clone(),
+                    };
 
                     let inner_expr = Expr::AccessAtIndex {
                         index: *index,
@@ -1057,7 +1058,7 @@ fn test_to_equality<'a>(
             let rhs_symbol = env.unique_symbol();
 
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-            stores.insert(0, (rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
+            stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
 
             (
                 stores,
@@ -1324,7 +1325,8 @@ fn decide_to_branching<'a>(
                     arena.alloc(cond),
                 );
 
-                for (symbol, layout, expr) in new_stores.into_iter() {
+                // stores are in top-to-bottom order, so we have to add them in reverse
+                for (symbol, layout, expr) in new_stores.into_iter().rev() {
                     cond = Stmt::Let(symbol, expr, layout, arena.alloc(cond));
                 }
 
