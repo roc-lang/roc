@@ -4,7 +4,7 @@ use crate::llvm::build_list::{
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
     list_reverse, list_set, list_single, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, str_split, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -24,8 +24,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
-    PointerValue, StructValue,
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
+    IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -2233,6 +2233,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_concat(env, inplace, scope, parent, args[0], args[1])
         }
+        StrSplit => {
+            // Str.split : Str, Str -> List Str
+            debug_assert_eq!(args.len(), 2);
+
+            let inplace = get_inplace_from_layout(layout);
+
+            str_split(env, scope, parent, inplace, args[0], args[1])
+        }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
             debug_assert_eq!(args.len(), 1);
@@ -2749,12 +2757,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(
-            NumPowInt,
-            env,
-            &[lhs.into(), rhs.into()],
-            &bitcode::NUM_POW_INT,
-        ),
+        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::NUM_POW_INT),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -2762,22 +2765,48 @@ fn build_int_binop<'a, 'ctx, 'env>(
 }
 
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
-    op: LowLevel,
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Did not get return value from bitcode function {:?}",
+                fn_name
+            )
+        })
+}
+
+pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> InstructionValue<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .right()
+        .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
+}
+
+fn call_bitcode_fn_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> CallSiteValue<'ctx> {
     let fn_val = env
-                .module
-                .get_function(fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+        .module
+        .get_function(fn_name)
+        .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+
+    dbg!(fn_val);
+
     let call = env.builder.build_call(fn_val, args, "call_builtin");
 
     call.set_call_convention(fn_val.get_call_conventions());
-
-    call.try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
+    call
 }
 
 fn build_float_binop<'a, 'ctx, 'env>(
@@ -2802,8 +2831,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::NUM_IS_FINITE)
-                    .into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -2824,8 +2852,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::NUM_IS_FINITE)
-                    .into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -2954,10 +2981,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::NUM_IS_FINITE),
-        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::NUM_ATAN),
-        NumAcos => call_bitcode_fn(NumAcos, env, &[arg.into()], &bitcode::NUM_ACOS),
-        NumAsin => call_bitcode_fn(NumAsin, env, &[arg.into()], &bitcode::NUM_ASIN),
+        NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE),
+        NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN),
+        NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS),
+        NumAsin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ASIN),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

@@ -1016,6 +1016,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Str module
 
+    // Str.split :
+    //     Attr * Str,
+    //     Attr * Str
+    //     -> Attr * (List (Attr * Str))
+    add_type(Symbol::STR_SPLIT, {
+        let_tvars! { star1, star2, star3, star4 };
+        unique_function(
+            vec![str_type(star1), str_type(star2)],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![str_type(star4)]),
+                ],
+            ),
+        )
+    });
+
     // isEmpty : Attr * Str -> Attr * Bool
     add_type(Symbol::STR_IS_EMPTY, {
         let_tvars! { star1, star2 };
