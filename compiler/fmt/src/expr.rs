@@ -805,7 +805,7 @@ pub fn fmt_record<'a>(
         }
 
         let is_multiline =
-            loc_fields.iter().any(|loc_field| loc_field.is_multiline()) || final_comments.len() > 0;
+            loc_fields.iter().any(|loc_field| loc_field.is_multiline()) || !final_comments.is_empty();
 
         if is_multiline {
             let field_indent = indent + INDENT;
