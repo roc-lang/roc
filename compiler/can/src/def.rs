@@ -470,14 +470,17 @@ pub fn sort_can_defs(
 
     // TODO also do the same `addDirects` check elm/compiler does, so we can
     // report an error if a recursive definition can't possibly terminate!
-    match topological_sort_into_groups(defined_symbols.as_slice(), all_successors_without_self) {
+    match ven_graph::topological_sort_into_groups(
+        defined_symbols.as_slice(),
+        all_successors_without_self,
+    ) {
         Ok(groups) => {
             let mut declarations = Vec::new();
 
             // groups are in reversed order
             for group in groups.into_iter().rev() {
                 group_to_declaration(
-                    group,
+                    &group,
                     &env.closures,
                     &mut all_successors_with_self,
                     &can_defs_by_symbol,
@@ -487,20 +490,9 @@ pub fn sort_can_defs(
 
             (Ok(declarations), output)
         }
-        Err((groups, nodes_in_cycle)) => {
+        Err((mut groups, nodes_in_cycle)) => {
             let mut declarations = Vec::new();
             let mut problems = Vec::new();
-
-            // groups are in reversed order
-            for group in groups.into_iter().rev() {
-                group_to_declaration(
-                    group,
-                    &env.closures,
-                    &mut all_successors_with_self,
-                    &can_defs_by_symbol,
-                    &mut declarations,
-                );
-            }
 
             // nodes_in_cycle are symbols that form a syntactic cycle. That isn't always a problem,
             // and in general it's impossible to decide whether it is. So we use a crude heuristic:
@@ -571,14 +563,59 @@ pub fn sort_can_defs(
                     declarations.push(Declaration::InvalidCycle(symbols_in_cycle, regions));
                 } else {
                     // slightly inefficient, because we know this becomes exactly one DeclareRec already
-                    group_to_declaration(
-                        cycle,
-                        &env.closures,
-                        &mut all_successors_with_self,
-                        &can_defs_by_symbol,
-                        &mut declarations,
-                    );
+                    groups.push(cycle);
                 }
+            }
+
+            // now we have a collection of groups whose dependencies are not cyclic.
+            // They are however not yet topologically sorted. Here we have to get a bit
+            // creative to get all the definitions in the correct sorted order.
+
+            let mut group_ids = Vec::with_capacity(groups.len());
+            let mut symbol_to_group_index = MutMap::default();
+            for (i, group) in groups.iter().enumerate() {
+                for symbol in group {
+                    symbol_to_group_index.insert(*symbol, i);
+                }
+
+                group_ids.push(i);
+            }
+
+            let successors_of_group = |group_id: &usize| {
+                let mut result = ImSet::default();
+
+                // for each symbol in this group
+                for symbol in &groups[*group_id] {
+                    // find its successors
+                    for succ in all_successors_without_self(symbol) {
+                        // and add its group to the result
+                        result.insert(symbol_to_group_index[&succ]);
+                    }
+                }
+
+                // don't introduce any cycles to self
+                result.remove(group_id);
+
+                result
+            };
+
+            match ven_graph::topological_sort_into_groups(&group_ids, successors_of_group) {
+                Ok(sorted_group_ids) => {
+                    for sorted_group in sorted_group_ids.iter().rev() {
+                        for group_id in sorted_group.iter().rev() {
+                            let group = &groups[*group_id];
+
+                            group_to_declaration(
+                                group,
+                                &env.closures,
+                                &mut all_successors_with_self,
+                                &can_defs_by_symbol,
+                                &mut declarations,
+                            );
+                        }
+                    }
+                }
+                Err(_) => unreachable!("there should be no cycles now!"),
             }
 
             for problem in problems {
@@ -591,7 +628,7 @@ pub fn sort_can_defs(
 }
 
 fn group_to_declaration(
-    group: Vec<Symbol>,
+    group: &[Symbol],
     closures: &MutMap<Symbol, References>,
     successors: &mut dyn FnMut(&Symbol) -> ImSet<Symbol>,
     can_defs_by_symbol: &MutMap<Symbol, Def>,

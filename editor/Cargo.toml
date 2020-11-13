@@ -5,6 +5,7 @@ authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
 description = "An editor for Roc"
 license = "Apache-2.0"
+exclude = ["src/shaders/*.spv"]
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }

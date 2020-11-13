@@ -414,6 +414,13 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
                 used.insert(v);
             }
         }
+        Store(tipe, var, _, _) => {
+            for v in tipe.variables() {
+                used.insert(v);
+            }
+
+            used.insert(*var);
+        }
         Lookup(_, expectation, _) => {
             for v in expectation.get_type_ref().variables() {
                 used.insert(v);

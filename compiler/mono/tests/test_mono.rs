@@ -1827,7 +1827,9 @@ mod test_mono {
                         let Test.8 = true;
                         let Test.10 = 0i64;
                         let Test.9 = Index 1 Test.2;
+                        inc Test.9;
                         let Test.11 = Index 0 Test.9;
+                        dec Test.9;
                         let Test.12 = lowlevel Eq Test.10 Test.11;
                         let Test.7 = lowlevel And Test.12 Test.8;
                         if Test.7 then

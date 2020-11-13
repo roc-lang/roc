@@ -3930,4 +3930,25 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn qualified_global_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo.Bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                The `Foo.Bar` identifier is malformed:
+
+                1│  Foo.Bar
+                    ^^^^^^^
+            "#
+            ),
+        )
+    }
 }

@@ -1369,7 +1369,10 @@ pub fn load_symbol<'a, 'ctx, 'env>(
         Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+        None => panic!(
+            "There was no entry for {:?} {} in scope {:?}",
+            symbol, symbol, scope
+        ),
     }
 }
 

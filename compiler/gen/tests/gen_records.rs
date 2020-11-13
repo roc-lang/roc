@@ -820,4 +820,28 @@ mod gen_records {
             i64
         );
     }
+
+    #[test]
+    fn booleans_in_record() {
+        assert_evals_to!(
+            indoc!("{ x: 1 == 1, y: 1 == 1 }"),
+            (true, true),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 != 1, y: 1 == 1 }"),
+            (false, true),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 == 1, y: 1 != 1 }"),
+            (true, false),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 != 1, y: 1 != 1 }"),
+            (false, false),
+            (bool, bool)
+        );
+    }
 }

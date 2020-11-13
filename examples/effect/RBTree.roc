@@ -1,4 +1,4 @@
-interface RBTree exposes [ Dict, empty, size, singleton ] imports []
+interface RBTree exposes [ Dict, empty, size, singleton, isEmpty, insert, remove, update, fromList, toList ] imports []
 
 # The color of a node. Leaves are considered Black.
 NodeColor : [ Red, Black ]
@@ -147,6 +147,8 @@ removeHelp = \targetKey, dict ->
 
 
 
+
+
 removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
 removeHelpPrepEQGT = \_, dict, color, key, value, left, right ->
   when left is
@@ -171,6 +173,7 @@ removeHelpPrepEQGT = \_, dict, color, key, value, left, right ->
 
 
 
+
 # When we find the node we are looking for, we can remove by replacing the key-value
 # pair with the key-value pair of the left-most node on the right side (the closest pair).
 removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
@@ -192,25 +195,28 @@ removeHelpEQGT = \targetKey, dict ->
 
 
 
+
 getMin : Dict k v -> Dict k v
 getMin = \dict ->
   when dict is
     # Node _ _ _ ((Node _ _ _ _ _) as left) _ ->
     Node _ _ _ left _ ->
-        when left is 
+        when left is
             Node _ _ _ _ _ -> getMin left
             _ -> dict
 
     _ ->
       dict
 
+
 moveRedLeft : Dict k v -> Dict k v
 moveRedLeft = \dict ->
   when dict is
     # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV ((Node Red rlK rlV rlL rlR) as rLeft) rRight) ->
-    Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
-        when rList is
-            Node Red rlK rlV rlL rlR -> 
+    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+    Node clr k v (Node _ lK lV lLeft lRight) (Node _ rK rV rLeft rRight) ->
+        when rLeft is
+            Node Red rlK rlV rlL rlR ->
               Node
                 Red
                 rlK
@@ -218,7 +224,7 @@ moveRedLeft = \dict ->
                 (Node Black k v (Node Red lK lV lLeft lRight) rlL)
                 (Node Black rK rV rlR rRight)
 
-            _ -> 
+            _ ->
               when clr is
                 Black ->
                   Node
@@ -242,7 +248,7 @@ moveRedLeft = \dict ->
 moveRedRight : Dict k v -> Dict k v
 moveRedRight = \dict ->
   when dict is
-    Node clr k v (Node lClr lK lV (Node Red llK llV llLeft llRight) lRight) (Node rClr rK rV rLeft rRight) ->
+    Node _ k v (Node _ lK lV (Node Red llK llV llLeft llRight) lRight) (Node _ rK rV rLeft rRight) ->
       Node
         Red
         lK
@@ -250,7 +256,7 @@ moveRedRight = \dict ->
         (Node Black llK llV llLeft llRight)
         (Node Black k v lRight (Node Red rK rV rLeft rRight))
 
-    Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+    Node clr k v (Node _ lK lV lLeft lRight) (Node _ rK rV rLeft rRight) ->
       when clr is
         Black ->
           Node
@@ -274,30 +280,34 @@ moveRedRight = \dict ->
 removeMin : Dict k v -> Dict k v
 removeMin = \dict ->
   when dict is
-    Node color key value ((Node lColor _ _ lLeft _) as left) right ->
-      when lColor is
-        Black ->
-          when lLeft is
-            Node Red _ _ _ _ ->
-              Node color key value (removeMin left) right
+    Node color key value left right ->
+        when left is
+            Node lColor _ _ lLeft _ ->
+              when lColor is
+                Black ->
+                  when lLeft is
+                    Node Red _ _ _ _ ->
+                      Node color key value (removeMin left) right
+
+                    _ ->
+                      when moveRedLeft dict is
+                        Node nColor nKey nValue nLeft nRight ->
+                          balance nColor nKey nValue (removeMin nLeft) nRight
+
+                        Empty ->
+                          Empty
+
+                _ ->
+                  Node color key value (removeMin left) right
 
             _ ->
-              when moveRedLeft dict is
-                Node nColor nKey nValue nLeft nRight ->
-                  balance nColor nKey nValue (removeMin nLeft) nRight
-
-                Empty ->
-                  Empty
-
-        _ ->
-          Node color key value (removeMin left) right
-
+                Empty
     _ ->
       Empty
 
 
 # Update the value of a dictionary for a specific key with a given function.
-update : Key k, (Maybe v, Maybe v), Dict (Key k) v -> Dict (Key k) v
+update : Key k, (Maybe v -> Maybe v), Dict (Key k) v -> Dict (Key k) v
 update = \targetKey, alter, dictionary ->
   when alter (get targetKey dictionary) is
     Just value ->
@@ -305,3 +315,38 @@ update = \targetKey, alter, dictionary ->
 
     Nothing ->
       remove targetKey dictionary
+
+get : Key k, Dict (Key k) v -> Maybe v
+get = \targetKey, dict ->
+  when dict is
+    Empty ->
+      Nothing
+
+    Node _ key value left right ->
+      when Num.compare targetKey key is
+        LT ->
+          get targetKey left
+
+        EQ ->
+          Just value
+
+        GT ->
+          get targetKey right
+
+fromList : List {key : Num k, value : v } -> Dict (Num k) v
+fromList = \xs ->
+    List.walkRight xs (\{key, value}, dict -> insert key value dict) empty
+
+foldr : (k, v, b -> b), b, Dict k v -> b
+foldr = \func, acc, t ->
+  when t is
+    Empty ->
+      acc
+
+    Node _ key value left right ->
+      foldr func (func key value (foldr func acc right)) left
+
+#  Convert a dictionary into an association list of key-value pairs, sorted by keys.
+toList : Dict k v -> List { key : k, value : v }
+toList = \dict ->
+  foldr (\key, value, list -> List.append list {key,value}) [] dict
