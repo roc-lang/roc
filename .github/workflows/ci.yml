@@ -10,23 +10,17 @@ jobs:
     steps:
       - uses: actions/checkout@v1
 
-      - name: Install CI Libraries
-        run: sudo ./ci/install-ci-libraries.sh 10
+      - name: Install Nix
+        uses: cachix/install-nix-action@v11
 
-      - name: Run Zig tests
-        run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
-
-      - name: Enable LLD
-        run: sudo ./ci/enable-lld.sh
-
-      - uses: actions-rs/toolchain@v1
-        name: Install Rust Toolchain
+      - name: Use Cachix
+        uses: cachix/cachix-action@v6
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          name: signingKey
+          authToken: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjJDIwNzgiLCJqdGkiOiI5MWM2NGQyZS04NjdjLTQzYjItOTAyYS1iMTgwOTlkYjc4ZDgiLCJzY29wZXMiOiJjYWNoZSJ9.jOFRg8JJfpnHv-82sryXdZKXSnLrDijysp6RKtpW2Fk'
 
-      - run: rustup component add rustfmt
+      # - name: Enable LLD
+        # run: sudo ./ci/enable-lld.sh
 
       - name: Cache cargo registry
         uses: actions/cache@v1
@@ -40,35 +34,7 @@ jobs:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Cache compiled valgrind
-        uses: actions/cache@v1
-        with:
-          path: ~/valgrind-3.6.1/
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - uses: actions-rs/cargo@v1
-        name: cargo fmt --check
-        with:
-          command: fmt
-          args: --all -- --check
-
-      - run: rustup component add clippy
-
-      - uses: actions-rs/cargo@v1
-        name: cargo clippy
-        with:
-          command: clippy
-          args: -- -D warnings
-
-      - uses: actions-rs/cargo@v1
-        name: cargo test -- --ignored
-        continue-on-error: true
-        with:
-          command: test
-          args: -- --ignored
-
-      - uses: actions-rs/cargo@v1
-        name: cargo test --release
-        with:
-          command: test
-          args: --release
+      - name: Run checks and tests
+        run: |
+          nix-shell \
+            --run "pushd compiler/builtins/bitcode; ./run-tests.sh; popd; cargo fmt --all -- --check; cargo clippy -- -D warnings; cargo test -- --release"
