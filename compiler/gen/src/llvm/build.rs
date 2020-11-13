@@ -993,8 +993,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     // bytes per element
     let bytes_len = len_type.const_int(value_bytes, false);
 
-    // TODO fix offset
-    let offset = (env.ptr_bytes as u64).max(value_bytes);
+    let offset = crate::llvm::refcounting::refcount_offset(env, layout);
 
     let ptr = {
         let len = bytes_len;

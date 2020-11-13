@@ -749,6 +749,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
             ],
         )
         .into_struct_value();
+
     let has_overflowed = builder
         .build_extract_value(add_with_overflow, 1, "has_overflowed")
         .unwrap();
@@ -759,6 +760,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
         ctx.bool_type().const_int(1 as u64, false),
         "has_overflowed",
     );
+
     // build blocks
     let then_block = ctx.append_basic_block(parent, "then");
     let else_block = ctx.append_basic_block(parent, "else");
@@ -780,6 +782,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
     // build else block
     {
         builder.position_at_end(else_block);
+
         let max = builder.build_int_compare(
             IntPredicate::EQ,
             refcount,
@@ -926,18 +929,19 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
-                // a *i64 pointer to the recursive data
-                // we need to cast this pointer to the appropriate type
-                let field_ptr = env
+                // this field has type `*i64`, but is really a pointer to the data we want
+                let ptr_as_i64_ptr = env
                     .builder
                     .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                     .unwrap();
 
-                // recursively decrement
+                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
+
+                // therefore we must cast it to our desired type
                 let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
                 let recursive_field_ptr = cast_basic_basic(
                     env.builder,
-                    field_ptr,
+                    ptr_as_i64_ptr,
                     union_type.ptr_type(AddressSpace::Generic).into(),
                 )
                 .into_pointer_value();
@@ -956,7 +960,7 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
                 // TODO do this decrement before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                decrement_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
+                decrement_refcount_ptr(env, parent, &layout, recursive_field_ptr);
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -1221,6 +1225,17 @@ fn get_refcount_ptr<'a, 'ctx, 'env>(
     get_refcount_ptr_help(env, layout, ptr_as_int)
 }
 
+pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> u64 {
+    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
+
+    match layout {
+        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
+        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
+        Layout::RecursivePointer | Layout::RecursiveUnion(_) => env.ptr_bytes as u64,
+        _ => (env.ptr_bytes as u64).max(value_bytes),
+    }
+}
+
 fn get_refcount_ptr_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
@@ -1229,12 +1244,7 @@ fn get_refcount_ptr_help<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
-    let offset = match layout {
-        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
-        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
-        _ => (env.ptr_bytes as u64).max(value_bytes),
-    };
+    let offset = refcount_offset(env, layout);
 
     // pointer to usize
     let refcount_type = ptr_int(ctx, env.ptr_bytes);
