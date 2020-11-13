@@ -935,80 +935,105 @@ pub fn optimize_when<'a>(
     )
 }
 
-fn path_to_expr_help<'a>(
-    env: &mut Env<'a, '_>,
-    mut symbol: Symbol,
-    mut path: &Path,
-    mut layout: Layout<'a>,
-) -> (Symbol, StoresVec<'a>, Layout<'a>) {
-    let mut stores = bumpalo::collections::Vec::new_in(env.arena);
+#[derive(Debug)]
+struct PathInstruction {
+    index: u64,
+    tag_id: u8,
+}
+
+fn reverse_path(mut path: &Path) -> Vec<PathInstruction> {
+    let mut result = Vec::new();
 
     loop {
         match path {
-            Path::Unbox(unboxed) => {
-                path = unboxed;
+            Path::Unbox(nested) => {
+                path = nested;
             }
             Path::Empty => break,
-
             Path::Index {
                 index,
                 tag_id,
                 path: nested,
-            } => match Wrapped::opt_from_layout(&layout) {
-                None => {
-                    // this MUST be an index into a single-element (hence unwrapped) record
+            } => {
+                result.push(PathInstruction {
+                    index: *index,
+                    tag_id: *tag_id,
+                });
+                path = nested;
+            }
+        }
+    }
 
-                    debug_assert_eq!(*index, 0);
-                    debug_assert_eq!(*tag_id, 0);
-                    debug_assert_eq!(**nested, Path::Empty);
+    result.reverse();
 
-                    let field_layouts = vec![layout.clone()];
+    result
+}
 
-                    debug_assert!(*index < field_layouts.len() as u64);
+fn path_to_expr_help<'a>(
+    env: &mut Env<'a, '_>,
+    mut symbol: Symbol,
+    path: &Path,
+    mut layout: Layout<'a>,
+) -> (Symbol, StoresVec<'a>, Layout<'a>) {
+    let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
-                    let inner_layout = field_layouts[*index as usize].clone();
-                    let inner_expr = Expr::AccessAtIndex {
-                        index: *index,
-                        field_layouts: env.arena.alloc(field_layouts),
-                        structure: symbol,
-                        wrapped: Wrapped::SingleElementRecord,
-                    };
+    let instructions = reverse_path(path);
+    let mut it = instructions.iter().peekable();
 
-                    symbol = env.unique_symbol();
-                    stores.push((symbol, inner_layout.clone(), inner_expr));
+    while let Some(PathInstruction { index, tag_id }) = it.next() {
+        match Wrapped::opt_from_layout(&layout) {
+            None => {
+                // this MUST be an index into a single-element (hence unwrapped) record
 
-                    break;
-                }
-                Some(wrapped) => {
-                    let field_layouts = match &layout {
-                        Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
-                            layouts[*tag_id as usize].to_vec()
-                        }
-                        Layout::Struct(layouts) => layouts.to_vec(),
-                        other => vec![other.clone()],
-                    };
+                debug_assert_eq!(*index, 0);
+                debug_assert_eq!(*tag_id, 0);
+                debug_assert!(it.peek().is_none());
 
-                    debug_assert!(*index < field_layouts.len() as u64);
+                let field_layouts = vec![layout.clone()];
 
-                    let inner_layout = match &field_layouts[*index as usize] {
-                        Layout::RecursivePointer => layout.clone(),
-                        other => other.clone(),
-                    };
+                debug_assert!(*index < field_layouts.len() as u64);
 
-                    let inner_expr = Expr::AccessAtIndex {
-                        index: *index,
-                        field_layouts: env.arena.alloc(field_layouts),
-                        structure: symbol,
-                        wrapped,
-                    };
+                let inner_layout = field_layouts[*index as usize].clone();
+                let inner_expr = Expr::AccessAtIndex {
+                    index: *index,
+                    field_layouts: env.arena.alloc(field_layouts),
+                    structure: symbol,
+                    wrapped: Wrapped::SingleElementRecord,
+                };
 
-                    symbol = env.unique_symbol();
-                    stores.push((symbol, inner_layout.clone(), inner_expr));
+                symbol = env.unique_symbol();
+                stores.push((symbol, inner_layout.clone(), inner_expr));
 
-                    layout = inner_layout;
-                    path = nested;
-                }
-            },
+                break;
+            }
+            Some(wrapped) => {
+                let field_layouts = match &layout {
+                    Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
+                        layouts[*tag_id as usize]
+                    }
+                    Layout::Struct(layouts) => layouts,
+                    other => env.arena.alloc([other.clone()]),
+                };
+
+                debug_assert!(*index < field_layouts.len() as u64);
+
+                let inner_layout = match &field_layouts[*index as usize] {
+                    Layout::RecursivePointer => layout.clone(),
+                    other => other.clone(),
+                };
+
+                let inner_expr = Expr::AccessAtIndex {
+                    index: *index,
+                    field_layouts,
+                    structure: symbol,
+                    wrapped,
+                };
+
+                symbol = env.unique_symbol();
+                stores.push((symbol, inner_layout.clone(), inner_expr));
+
+                layout = inner_layout;
+            }
         }
     }
 
