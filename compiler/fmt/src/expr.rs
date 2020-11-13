@@ -7,7 +7,7 @@ use crate::spaces::{
 use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
 use roc_parse::ast::StrSegment;
-use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch, TrailingComma};
+use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
 use roc_region::all::Located;
 
 impl<'a> Formattable<'a> for Expr<'a> {
@@ -230,8 +230,12 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
                 buf.push_str(string);
             }
-            Record { fields, update, trailing_comma } => {
-                fmt_record(buf, *update, fields, trailing_comma, indent);
+            Record {
+                fields,
+                update,
+                final_comments,
+            } => {
+                fmt_record(buf, *update, fields, final_comments, indent);
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -779,11 +783,11 @@ pub fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
     loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
-    trailing_comma: &TrailingComma<'a>,
+    final_comments: &[CommentOrNewline<'a>],
     indent: u16,
 ) {
     if loc_fields.is_empty() {
-        buf.push_str("{}");        
+        buf.push_str("{}");
     } else {
         buf.push('{');
 
@@ -800,10 +804,8 @@ pub fn fmt_record<'a>(
             }
         }
 
-        let is_multiline = loc_fields.iter().any(|loc_field| loc_field.is_multiline())
-            || trailing_comma.is_multiline();
-
-        
+        let is_multiline =
+            loc_fields.iter().any(|loc_field| loc_field.is_multiline()) || final_comments.len() > 0;
 
         if is_multiline {
             let field_indent = indent + INDENT;
@@ -812,14 +814,14 @@ pub fn fmt_record<'a>(
                 buf.push(',');
             }
             newline(buf, indent);
-       
-        } else { // is_multiline == false
+        } else {
+            // is_multiline == false
             buf.push(' ');
             let field_indent = indent;
             let mut iter = loc_fields.iter().peekable();
             while let Some(field) = iter.next() {
                 field.format_with_options(buf, Parens::NotNeeded, Newlines::No, field_indent);
-    
+
                 if iter.peek().is_some() {
                     buf.push_str(", ");
                 }

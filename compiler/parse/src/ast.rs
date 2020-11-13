@@ -196,12 +196,12 @@ pub enum Expr<'a> {
     AccessorFunction(&'a str),
 
     // Collection Literals
-    List (&'a [&'a Loc<Expr<'a>>]),
-    
+    List(&'a [&'a Loc<Expr<'a>>]),
+
     Record {
         update: Option<&'a Loc<Expr<'a>>>,
         fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
-        trailing_comma: &'a TrailingComma<'a>,
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     // Lookups
@@ -383,22 +383,6 @@ pub enum AssignedField<'a, Val> {
 
     /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum TrailingComma<'a> {
-    None,
-    FollowedBy(&'a [CommentOrNewline<'a>]),
-}
-
-impl<'a> TrailingComma<'a> {
-    pub fn is_multiline(&self) -> bool {
-        match self {
-            TrailingComma::None => false,
-            TrailingComma::FollowedBy(comments_or_newlines) =>
-                (*comments_or_newlines).len() > 1
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

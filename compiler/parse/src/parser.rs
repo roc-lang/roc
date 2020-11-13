@@ -604,6 +604,46 @@ where
     }
 }
 
+/// Parse zero or more values separated by a delimiter (e.g. a comma)
+/// with an optional trailing delimiter whose values are discarded
+pub fn trailing_sep_by0<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
+where
+    D: Parser<'a, ()>,
+    P: Parser<'a, Val>,
+{
+    move |arena, state: State<'a>| {        
+        match parser.parse(arena, state) {
+            Ok((first_output, next_state)) => {
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
+
+                buf.push(first_output);
+
+                loop {
+                    match delimiter.parse(arena, state) {
+                        Ok(((), next_state)) => {
+                            // If the delimiter passed, check the element parser.
+                            match parser.parse(arena, next_state) {
+                                Ok((next_output, next_state)) => {
+                                    state = next_state;
+                                    buf.push(next_output);
+                                }
+                                Err((_, old_state)) => {
+                                    // If the delimiter parsed, but the following
+                                    // element did not, that means we saw a trailing comma
+                                    return Ok((buf, old_state));
+                                }
+                            }
+                        }
+                        Err((_, old_state)) => return Ok((buf, old_state)),
+                    }
+                }
+            }
+            Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
+        }
+    }
+}
+
 /// Parse one or more values separated by a delimiter (e.g. a comma) whose
 /// values are discarded
 pub fn sep_by1<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
@@ -819,6 +859,42 @@ macro_rules! collection {
                     $crate::parser::sep_by0(
                         $delimiter,
                         $crate::blankspace::space0_around($elem, $min_indent)
+                    ),
+                    $closing_brace
+                )
+            )
+        )
+    };
+}
+
+/// Parse zero or more elements between two braces (e.g. square braces).
+/// Elements can be optionally surrounded by spaces, and are separated by a
+/// delimiter (e.g comma-separated) with optionally a trailing delimiter.
+/// Braces and delimiters get discarded.
+#[macro_export]
+macro_rules! collection_trailing_sep {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
+        skip_first!(
+            $opening_brace,
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // roc_collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!($crate::parser::ascii_char(b' ')),
+                skip_second!(
+                    and!(
+                        $crate::parser::trailing_sep_by0(
+                            $delimiter,
+                            $crate::blankspace::space0_around($elem, $min_indent)
+                        ), $crate::blankspace::spaces0($min_indent)
                     ),
                     $closing_brace
                 )
@@ -1126,12 +1202,14 @@ macro_rules! record {
                     // does not seem worth even the tiniest regression in compiler performance.
                     zero_or_more!($crate::parser::ascii_char(b' ')),
                     skip_second!(
-                        $crate::parser::sep_by0(
-                            $crate::parser::ascii_char(b','),
-                            $crate::blankspace::space0_around(
-                                loc!(record_field!($val_parser, $min_indent)),
-                                $min_indent
-                            )
+                        and!(
+                            $crate::parser::trailing_sep_by0(
+                                $crate::parser::ascii_char(b','),
+                                $crate::blankspace::space0_around(
+                                    loc!(record_field!($val_parser, $min_indent)),
+                                    $min_indent
+                                ),
+                            ), $crate::blankspace::space0($min_indent)
                         ),
                         $crate::parser::ascii_char(b'}')
                     )

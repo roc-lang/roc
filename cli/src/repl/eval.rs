@@ -6,8 +6,13 @@ use roc_gen::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+<<<<<<< HEAD
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionVariant};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral, TrailingComma};
+=======
+use roc_mono::layout::{Builtin, Layout};
+use roc_parse::ast::{AssignedField, Expr, StrLiteral};
+>>>>>>> correctly parse trailing commas in record
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
@@ -103,7 +108,7 @@ fn jit_to_ast_help<'a>(
             Expr::Record {
                 update: None,
                 fields: &[],
-                trailing_comma: env.arena.alloc(TrailingComma::None),
+                final_comments: env.arena.alloc([]),
             }
         }),
         Layout::Struct(field_layouts) => {
@@ -455,7 +460,7 @@ fn struct_to_ast<'a>(
         Expr::Record {
             update: None,
             fields: output,
-            trailing_comma: arena.alloc(TrailingComma::None),
+            trailing_comma: arena.alloc([]),
         }
     }
 }
@@ -499,7 +504,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     Expr::Record {
                         update: None,
                         fields: arena.alloc([loc_assigned_field]),
-                        trailing_comma: arena.alloc(TrailingComma::None),
+                        final_comments: arena.alloc([]),
                     }
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
@@ -727,7 +732,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     Expr::Record {
                         update: None,
                         fields: arena.alloc([loc_assigned_field]),
-                        trailing_comma: arena.alloc(TrailingComma::None),
+                        final_comments: arena.alloc([]),
                     }
                 }
                 FlatType::TagUnion(tags, _) => {
