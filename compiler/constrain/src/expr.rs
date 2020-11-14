@@ -1229,12 +1229,24 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                     )
                 }
 
-                _ => constrain_expr(
-                    &env,
-                    def.loc_expr.region,
-                    &def.loc_expr.value,
-                    annotation_expected,
-                ),
+                _ => {
+                    let expected = annotation_expected;
+
+                    let ret_constraint =
+                        constrain_expr(env, def.loc_expr.region, &def.loc_expr.value, expected);
+
+                    And(vec![
+                        Let(Box::new(LetConstraint {
+                            rigid_vars: Vec::new(),
+                            flex_vars: vec![],
+                            def_types: SendMap::default(),
+                            defs_constraint: True,
+                            ret_constraint,
+                        })),
+                        // Store type into AST vars. We use Store so errors aren't reported twice
+                        Store(signature, expr_var, std::file!(), std::line!()),
+                    ])
+                }
             }
         }
         None => {
