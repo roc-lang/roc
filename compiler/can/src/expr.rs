@@ -721,12 +721,18 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::MalformedClosure => {
             use roc_problem::can::RuntimeError::*;
+
             (RuntimeError(MalformedClosure(region)), Output::default())
         }
-        ast::Expr::MalformedIdent(name) => {
+        ast::Expr::MalformedIdent(problems) => {
             use roc_problem::can::RuntimeError::*;
+
+            let mut problems_vec = Vec::new();
+
+            problems_vec.clone_from_slice(problems);
+
             (
-                RuntimeError(MalformedIdentifier((*name).into(), region)),
+                RuntimeError(MalformedIdentifier(problems_vec, region)),
                 Output::default(),
             )
         }

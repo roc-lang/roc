@@ -4,6 +4,7 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::operator::BinOp;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
+use roc_parse::ident::IdentProblem;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Located, Region};
 
@@ -128,7 +129,7 @@ pub enum RuntimeError {
         region: Region,
     },
     InvalidPrecedence(PrecedenceProblem, Region),
-    MalformedIdentifier(Box<str>, Region),
+    MalformedIdentifier(Vec<(usize, IdentProblem)>, Region),
     MalformedClosure(Region),
     InvalidRecordUpdate {
         region: Region,

@@ -4,7 +4,6 @@ use crate::parser::{peek_utf8_char, unexpected, Fail, FailReason, ParseResult, P
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_collections::all::arena_join;
 use roc_region::all::Region;
 
 /// The parser accepts all of these in any position where any one of them could
@@ -41,7 +40,7 @@ enum IdentPart {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum IdentProblem {
+pub enum IdentProblem {
     ContainedUnderscore,
     AtSignInMiddle,
     UncapitalizedAt,
@@ -49,6 +48,13 @@ enum IdentProblem {
     DotAfterPrivateTag,
     CapitalizedAfterVar,
     QualifiedTag,
+    AccessorFunctionCapitalized,
+    /// Multiple dots e.g. (foo..bar) or, for accessor functions, perhaps (..foo)
+    MultipleDots,
+    /// Too many parts! e.g. (.foo.bar)
+    AccessorFunctionMultipleFields,
+    /// e.g. (.) - that's not an operator in Roc!
+    StandaloneDot,
 }
 
 impl<'a> Ident<'a> {
@@ -98,26 +104,30 @@ impl<'a> Ident<'a> {
         let mut iter = parts.into_iter().peekable();
         let mut fields: Vec<'_, &str> = bumpalo::collections::Vec::new_in(arena);
         let mut module_name: String<'_> = bumpalo::collections::String::new_in(arena);
-        let var_name = "";
-        let package_name: Option<&str>;
+        let mut var_name = "";
+        let mut package_name: Option<&str> = None;
 
-        let malformed = |problem| {
-            let mut offset = if module_name.is_empty() {
-                var_name.len()
-            } else {
-                // +1 for the dot
-                var_name.len() + module_name.len() + 1
-            };
+        macro_rules! malformed {
+            ($problem:expr) => {
+                {
+                    let mut offset = if module_name.is_empty() {
+                        var_name.len()
+                    } else {
+                        // +1 for the dot
+                        var_name.len() + module_name.len() + 1
+                    };
 
-            for part in fields.into_iter().chain(package_name.into_iter()) {
-                // +1 for the dot
-                offset += part.len() + 1;
+                    for part in fields.iter().chain(package_name.iter()) {
+                        // +1 for the dot
+                        offset += part.len() + 1;
+                    }
+
+                    let problems = bumpalo::vec![in arena; (offset, $problem)];
+
+                    Ident::Malformed(problems.into_bump_slice())
+                }
             }
-
-            let problems = bumpalo::vec![in arena; (offset, problem)];
-
-            Ident::Malformed(problems.into_bump_slice())
-        };
+        }
 
         // Start by examining the first part, because there are lots
         // of special cases on the first one!
@@ -127,7 +137,7 @@ impl<'a> Ident<'a> {
                 if iter.peek().is_none() {
                     return Ident::PrivateTag(part_str);
                 } else {
-                    return malformed(DotAfterPrivateTag);
+                    return malformed!(DotAfterPrivateTag);
                 }
             }
             (IdentPart::Capitalized, part_str) => {
@@ -147,13 +157,47 @@ impl<'a> Ident<'a> {
                 // Later it may turn out to be a package qualifier instead.
                 var_name = part_str;
             }
+            (IdentPart::Malformed(problem), _) => {
+                return malformed!(problem);
+            }
+            (IdentPart::Empty, _) => {
+                // This means a dot at the front, which is an accessor function.
+                match iter.next() {
+                    // An accessor function should have one uncapitalized
+                    // field followed by no other parts.
+                    Some((IdentPart::Uncapitalized, field_name)) => match iter.next() {
+                        None => {
+                            return Ident::AccessorFunction(field_name);
+                        }
+                        Some(_) => {
+                            // Too many parts! e.g. (.foo.bar)
+                            return malformed!(IdentProblem::AccessorFunctionMultipleFields);
+                        }
+                    },
+                    Some((IdentPart::Capitalized, _)) | Some((IdentPart::AtCapitalized, _)) => {
+                        // Capitalized accessor function, e.g. (.Foo) or (.@Foo)
+                        return malformed!(IdentProblem::AccessorFunctionCapitalized);
+                    }
+                    Some((IdentPart::Empty, _)) => {
+                        // Multiple dots in front, e.g. (..foo)
+                        return malformed!(IdentProblem::MultipleDots);
+                    }
+                    Some((IdentPart::Malformed(problem), _)) => {
+                        return malformed!(problem);
+                    }
+                    None => {
+                        // e.g. (.) - that's not an operator in Roc!
+                        return malformed!(IdentProblem::StandaloneDot);
+                    }
+                }
+            }
         }
 
-        for (part_type, part_str) in iter {
+        while let Some((part_type, part_str)) = iter.next() {
             match part_type {
                 IdentPart::AtCapitalized => {
                     // e.g. `Foo.@Bar`
-                    return malformed(QualifiedTag);
+                    return malformed!(QualifiedTag);
                 }
                 IdentPart::Capitalized => {
                     // Any capitalized parts after the first part
@@ -165,6 +209,8 @@ impl<'a> Ident<'a> {
                     var_name = if module_name.is_empty() {
                         part_str
                     } else {
+                        debug_assert!(package_name.is_none());
+
                         // We already had a var_name, and then there was a
                         // module name after it, so actually what appeared
                         // to be a var name was a package name after all.
@@ -175,25 +221,33 @@ impl<'a> Ident<'a> {
 
                     // It's invalid to have anything other than field accesses
                     // after the value!
-                    for (part_type, part_str) in iter {
+                    while let Some((part_type, part_str)) = iter.next() {
                         match part_type {
                             IdentPart::Uncapitalized => {
                                 fields.push(part_str);
                             }
                             IdentPart::AtCapitalized => {
-                                return malformed(AtSignInMiddle);
+                                return malformed!(AtSignInMiddle);
                             }
                             IdentPart::Capitalized => {
-                                return malformed(CapitalizedAfterVar);
+                                return malformed!(CapitalizedAfterVar);
                             }
                             IdentPart::Malformed(problem) => {
-                                return malformed(problem);
+                                return malformed!(problem);
+                            }
+                            IdentPart::Empty => {
+                                // Multiple dots, e.g. (foo..bar)
+                                return malformed!(IdentProblem::MultipleDots);
                             }
                         }
                     }
                 }
+                IdentPart::Empty => {
+                    // Multiple dots, e.g. (foo..bar)
+                    return malformed!(IdentProblem::MultipleDots);
+                }
                 IdentPart::Malformed(problem) => {
-                    return malformed(problem);
+                    return malformed!(problem);
                 }
             }
         }
@@ -202,7 +256,7 @@ impl<'a> Ident<'a> {
         if var_name.is_empty() {
             debug_assert!(!module_name.is_empty());
 
-            return malformed(QualifiedTag);
+            return malformed!(QualifiedTag);
         }
 
         let mut answer = Ident::Lookup {
@@ -221,18 +275,14 @@ impl<'a> Ident<'a> {
 
 /// Parse an identifier into a &[IdentPart] slice.
 ///
-/// This is separate from the `ident` Parser because string interpolation
-/// wants to use it this way.
-///
 /// By design, this does not check for reserved keywords like "if", "else", etc.
 /// Sometimes we may want to check for those later in the process, and give
 /// more contextually-aware error messages than "unexpected `if`" or the like.
 #[inline(always)]
-pub fn parse_ident<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a, Ident<'a>> {
+fn parse_ident<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a, Ident<'a>> {
     let mut parts = Vec::new_in(arena);
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut part_type = IdentPart::Empty;
-    let mut original_state_bytes_len = state.bytes.len();
 
     // After the first character, only these are allowed:
     //
@@ -260,21 +310,11 @@ pub fn parse_ident<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a,
                         // The very first character in the identifier may not be a number!
                         // If we see a number, this isn't an identifier after all.
                         if parts.is_empty() {
-                            return Err((
-                                Fail {
-                                    attempting: state.attempting,
-                                    reason: unexpected,
-                                },
-                                state,
-                            ));
+                            return Err(unexpected(0, state.attempting, state));
                         } else {
-                            let index = original_state_bytes_len - state.bytes.len();
-
                             // Parts may not start with numbers, so this
                             // is malformed.
-                            let problem = IdentProblem::PartBeginsWithNumber(index);
-
-                            part_type = IdentPart::Malformed(problem);
+                            part_type = IdentPart::Malformed(IdentProblem::PartBeginsWithNumber);
                         }
                     }
 
@@ -302,18 +342,12 @@ pub fn parse_ident<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a,
                         {
                             bytes_parsed += next_bytes_parsed;
 
-                            let index = original_state_bytes_len - state.bytes.len();
-                            let problem = IdentProblem::UncapitalizedAt(index);
-
-                            part_type = IdentPart::Malformed(problem);
+                            part_type = IdentPart::Malformed(IdentProblem::UncapitalizedAt);
                         }
-                        Ok((next_ch, next_bytes_parsed)) if !part_buf.is_empty() => {
+                        Ok((_, next_bytes_parsed)) => {
                             bytes_parsed += next_bytes_parsed;
 
-                            let index = original_state_bytes_len - state.bytes.len();
-                            let problem = IdentProblem::AtSignInMiddle(index);
-
-                            part_type = IdentPart::Malformed(problem);
+                            part_type = IdentPart::Malformed(IdentProblem::AtSignInMiddle);
                         }
                         Err(reason) => {
                             state = state.advance_without_indenting(bytes_parsed)?;
@@ -331,10 +365,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a,
                     // This is definitely malformed, but we can give a special
                     // error message about how idents can't have underscores
                     // in them (which is something many languages allow).
-                    let index = original_state_bytes_len - state.bytes.len();
-                    let problem = IdentProblem::ContainedUnderscore(index);
-
-                    part_type = IdentPart::Malformed(problem);
+                    part_type = IdentPart::Malformed(IdentProblem::ContainedUnderscore);
                 } else {
                     // This must be the end of the identifier. We're done!
 
@@ -353,307 +384,8 @@ pub fn parse_ident<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a,
     Ok((Ident::from_parts(arena, parts.into_iter()), state))
 }
 
-fn malformed<'a>(
-    opt_bad_char: Option<char>,
-    arena: &'a Bump,
-    mut state: State<'a>,
-    capitalized_parts: Vec<&'a str>,
-    noncapitalized_parts: Vec<&'a str>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
-    // Reconstruct the original string that we've been parsing.
-    let mut full_string = String::new_in(arena);
-
-    full_string
-        .push_str(arena_join(arena, &mut capitalized_parts.into_iter(), ".").into_bump_str());
-    full_string
-        .push_str(arena_join(arena, &mut noncapitalized_parts.into_iter(), ".").into_bump_str());
-
-    if let Some(bad_char) = opt_bad_char {
-        full_string.push(bad_char);
-    }
-
-    // Consume the remaining chars in the identifier.
-    let mut next_char = None;
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                // We can't use ch.is_alphanumeric() here because that passes for
-                // things that are "numeric" but not ASCII digits, like `¾`
-                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
-                    full_string.push(ch);
-                } else {
-                    next_char = Some(ch);
-
-                    break;
-                }
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            }
-            Err(reason) => return state.fail(reason),
-        }
-    }
-
-    Ok((
-        (Ident::Malformed(full_string.into_bump_str()), next_char),
-        state,
-    ))
-}
-
-/// Parse an identifier into a string.
-///
-/// This is separate from the `ident` Parser because string interpolation
-/// wants to use it this way.
-///
-/// By design, this does not check for reserved keywords like "if", "else", etc.
-/// Sometimes we may want to check for those later in the process, and give
-/// more contextually-aware error messages than "unexpected `if`" or the like.
-#[inline(always)]
-fn old_parse_ident<'a>(
-    arena: &'a Bump,
-    mut state: State<'a>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
-    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
-    let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
-    let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
-    let mut is_capitalized;
-    let is_accessor_fn;
-    let mut is_private_tag = false;
-
-    // Identifiers and accessor functions must start with either a letter or a dot.
-    // If this starts with neither, it must be something else!
-    match peek_utf8_char(&state) {
-        Ok((first_ch, bytes_parsed)) => {
-            if first_ch.is_alphabetic() {
-                part_buf.push(first_ch);
-
-                is_capitalized = first_ch.is_uppercase();
-                is_accessor_fn = false;
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            } else if first_ch == '.' {
-                is_capitalized = false;
-                is_accessor_fn = true;
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            } else if first_ch == '@' {
-                state = state.advance_without_indenting(bytes_parsed)?;
-
-                // '@' must always be followed by a capital letter!
-                match peek_utf8_char(&state) {
-                    Ok((next_ch, next_bytes_parsed)) => {
-                        if next_ch.is_uppercase() {
-                            state = state.advance_without_indenting(next_bytes_parsed)?;
-
-                            part_buf.push('@');
-                            part_buf.push(next_ch);
-
-                            is_private_tag = true;
-                            is_capitalized = true;
-                            is_accessor_fn = false;
-                        } else {
-                            return Err(unexpected(
-                                bytes_parsed + next_bytes_parsed,
-                                state,
-                                Attempting::Identifier,
-                            ));
-                        }
-                    }
-                    Err(reason) => return state.fail(reason),
-                }
-            } else {
-                return Err(unexpected(0, state, Attempting::Identifier));
-            }
-        }
-        Err(reason) => return state.fail(reason),
-    }
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                // After the first character, only these are allowed:
-                //
-                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                // * A dot ('.')
-                if ch.is_alphabetic() {
-                    if part_buf.is_empty() {
-                        // Capitalization is determined by the first character in the part.
-                        is_capitalized = ch.is_uppercase();
-                    }
-
-                    part_buf.push(ch);
-                } else if ch.is_ascii_digit() {
-                    // Parts may not start with numbers!
-                    if part_buf.is_empty() {
-                        return malformed(
-                            Some(ch),
-                            arena,
-                            state,
-                            capitalized_parts,
-                            noncapitalized_parts,
-                        );
-                    }
-
-                    part_buf.push(ch);
-                } else if ch == '.' {
-                    // There are two posssible errors here:
-                    //
-                    // 1. Having two consecutive dots is an error.
-                    // 2. Having capitalized parts after noncapitalized (e.g. `foo.Bar`) is an error.
-                    if part_buf.is_empty() || (is_capitalized && !noncapitalized_parts.is_empty()) {
-                        return malformed(
-                            Some(ch),
-                            arena,
-                            state,
-                            capitalized_parts,
-                            noncapitalized_parts,
-                        );
-                    }
-
-                    if is_capitalized {
-                        capitalized_parts.push(part_buf.into_bump_str());
-                    } else {
-                        noncapitalized_parts.push(part_buf.into_bump_str());
-                    }
-
-                    // Now that we've recorded the contents of the current buffer, reset it.
-                    part_buf = String::new_in(arena);
-                } else {
-                    // This must be the end of the identifier. We're done!
-
-                    break;
-                }
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            }
-            Err(reason) => return state.fail(reason),
-        }
-    }
-
-    if part_buf.is_empty() {
-        // We probably had a trailing dot, e.g. `Foo.bar.` - this is malformed!
-        //
-        // This condition might also occur if we encounter a malformed accessor like `.|`
-        //
-        // If we made it this far and don't have a next_char, then necessarily
-        // we have consumed a '.' char previously.
-        return malformed(
-            Some('.'),
-            arena,
-            state,
-            capitalized_parts,
-            noncapitalized_parts,
-        );
-    }
-
-    // Record the final parts.
-    if is_capitalized {
-        capitalized_parts.push(part_buf.into_bump_str());
-    } else {
-        noncapitalized_parts.push(part_buf.into_bump_str());
-    }
-
-    let answer = if is_accessor_fn {
-        // Handle accessor functions first because they have the strictest requirements.
-        // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
-        if capitalized_parts.is_empty() && noncapitalized_parts.len() == 1 && !is_private_tag {
-            let value = noncapitalized_parts.iter().next().unwrap();
-
-            Ident::AccessorFunction(value)
-        } else {
-            return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-        }
-    } else if noncapitalized_parts.is_empty() {
-        // We have capitalized parts only, so this must be a tag.
-        match capitalized_parts.first() {
-            Some(value) => {
-                if capitalized_parts.len() == 1 {
-                    if is_private_tag {
-                        Ident::PrivateTag(value)
-                    } else {
-                        Ident::GlobalTag(value)
-                    }
-                } else {
-                    // This is a qualified tag, which is not allowed!
-                    return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-                }
-            }
-            None => {
-                // We had neither capitalized nor noncapitalized parts,
-                // yet we made it this far. The only explanation is that this was
-                // a stray '.' drifting through the cosmos.
-                return Err(unexpected(1, state, Attempting::Identifier));
-            }
-        }
-    } else if is_private_tag {
-        // This is qualified field access with an '@' in front, which does not make sense!
-        return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-    } else {
-        // We have multiple noncapitalized parts, so this must be field access.
-        Ident::Access {
-            module_name: join_module_parts(arena, capitalized_parts.into_bump_slice()),
-            parts: noncapitalized_parts.into_bump_slice(),
-        }
-    };
-
-    Ok(((answer, None), state))
-}
-
-fn malformed<'a>(
-    opt_bad_char: Option<char>,
-    arena: &'a Bump,
-    mut state: State<'a>,
-    capitalized_parts: Vec<&'a str>,
-    noncapitalized_parts: Vec<&'a str>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
-    // Reconstruct the original string that we've been parsing.
-    let mut full_string = String::new_in(arena);
-
-    full_string
-        .push_str(arena_join(arena, &mut capitalized_parts.into_iter(), ".").into_bump_str());
-    full_string
-        .push_str(arena_join(arena, &mut noncapitalized_parts.into_iter(), ".").into_bump_str());
-
-    if let Some(bad_char) = opt_bad_char {
-        full_string.push(bad_char);
-    }
-
-    // Consume the remaining chars in the identifier.
-    let mut next_char = None;
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                // We can't use ch.is_alphanumeric() here because that passes for
-                // things that are "numeric" but not ASCII digits, like `¾`
-                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
-                    full_string.push(ch);
-                } else {
-                    next_char = Some(ch);
-
-                    break;
-                }
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            }
-            Err(reason) => return state.fail(reason),
-        }
-    }
-
-    Ok((
-        (Ident::Malformed(full_string.into_bump_str()), next_char),
-        state,
-    ))
-}
-
 pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
-        // Discard next_char; we don't need it.
-        let ((string, _), state) = parse_ident(arena, state)?;
-
-        Ok((string, state))
-    }
+    move |arena: &'a Bump, state: State<'a>| parse_ident(arena, state)
 }
 
 pub fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str>
@@ -665,7 +397,7 @@ where
         let (first_letter, bytes_parsed) = match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !pred(first_letter) {
-                    return Err(unexpected(0, state, Attempting::RecordFieldLabel));
+                    return Err(unexpected(0, Attempting::RecordFieldLabel, state));
                 }
 
                 (first_letter, bytes_parsed)

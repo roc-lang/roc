@@ -1104,10 +1104,9 @@ macro_rules! record {
                         // so that we have a Spaceable value to work with,
                         // and then in canonicalization verify that it's an Expr::Var
                         // (and not e.g. an `Expr::Access`) and extract its string.
-                        loc!(map_with_arena!(
-                            $crate::expr::ident(),
-                            $crate::expr::ident_to_expr
-                        )),
+                        loc!(map_with_arena!($crate::expr::ident(), |arena, ident| {
+                            $crate::expr::ident_to_expr(arena, &ident)
+                        })),
                         $min_indent
                     ),
                     $crate::parser::ascii_char(b'&')

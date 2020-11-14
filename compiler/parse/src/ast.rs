@@ -1,6 +1,5 @@
 use crate::header::{ModuleName, PackageName};
-use crate::ident::Ident;
-use bumpalo::collections::String;
+use crate::ident::{Ident, IdentProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
@@ -248,7 +247,7 @@ pub enum Expr<'a> {
     Nested(&'a Expr<'a>),
 
     // Problems
-    MalformedIdent(&'a str),
+    MalformedIdent(&'a [(usize, IdentProblem)]),
     MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
@@ -431,7 +430,7 @@ pub enum Pattern<'a> {
     SpaceAfter(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
 
     // Malformed
-    Malformed(&'a str),
+    Malformed(Ident<'a>),
     QualifiedIdentifier {
         module_name: &'a str,
         ident: &'a str,
@@ -451,43 +450,23 @@ impl<'a> Pattern<'a> {
         match ident {
             Ident::GlobalTag(string) => Pattern::GlobalTag(string),
             Ident::PrivateTag(string) => Pattern::PrivateTag(string),
-            Ident::Access { module_name, parts } => {
-                if parts.len() == 1 {
-                    // This is valid iff there is no module.
-                    let ident = parts.iter().next().unwrap();
-
-                    if module_name.is_empty() {
-                        Pattern::Identifier(ident)
-                    } else {
-                        Pattern::QualifiedIdentifier { module_name, ident }
-                    }
+            Ident::Lookup {
+                module_name,
+                var_name,
+            } => {
+                if module_name.is_empty() {
+                    Pattern::Identifier(var_name)
                 } else {
-                    // This is definitely malformed.
-                    let mut buf =
-                        String::with_capacity_in(module_name.len() + (2 * parts.len()), arena);
-                    let mut any_parts_printed = if module_name.is_empty() {
-                        false
-                    } else {
-                        buf.push_str(module_name);
-
-                        true
-                    };
-
-                    for part in parts.iter() {
-                        if any_parts_printed {
-                            buf.push('.');
-                        } else {
-                            any_parts_printed = true;
-                        }
-
-                        buf.push_str(part);
+                    Pattern::QualifiedIdentifier {
+                        module_name,
+                        ident: var_name,
                     }
-
-                    Pattern::Malformed(buf.into_bump_str())
                 }
             }
-            Ident::AccessorFunction(string) => Pattern::Malformed(string),
-            Ident::Malformed(string) => Pattern::Malformed(string),
+            Ident::Access(_, _) | Ident::AccessorFunction(_) | Ident::Malformed(_) => {
+                // This is definitely malformed.
+                Pattern::Malformed(ident)
+            }
         }
     }
 

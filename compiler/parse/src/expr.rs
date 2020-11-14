@@ -322,7 +322,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         }),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
-        Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
+        Expr::MalformedIdent(problems) => Ok(Pattern::Malformed(Ident::Malformed(problems))),
     }
 }
 
@@ -371,7 +371,10 @@ pub fn assigned_expr_field_to_pattern<'a>(
             arena.alloc(assigned_expr_field_to_pattern(arena, nested)?),
             spaces,
         ),
-        AssignedField::Malformed(string) => Pattern::Malformed(string),
+        AssignedField::Malformed(string) => Pattern::Malformed(Ident::Lookup {
+            module_name: "",
+            var_name: string,
+        }),
     })
 }
 
@@ -436,7 +439,13 @@ pub fn assigned_pattern_field_to_pattern<'a>(
                 Pattern::SpaceAfter(arena.alloc(can_nested.value), spaces),
             )
         }
-        AssignedField::Malformed(string) => Located::at(backup_region, Pattern::Malformed(string)),
+        AssignedField::Malformed(string) => Located::at(
+            backup_region,
+            Pattern::Malformed(Ident::Lookup {
+                module_name: "",
+                var_name: string,
+            }),
+        ),
     })
 }
 
@@ -1180,38 +1189,34 @@ fn loc_ident_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>
                     Ok((Located { region, value }, state))
                 }
             }
-            Ident::Access { module_name, parts } => {
+            Ident::Lookup {
+                module_name,
+                var_name,
+            } => {
                 // Plain identifiers (e.g. `foo`) are allowed in patterns, but
                 // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
-                if module_name.is_empty() && parts.len() == 1 {
+                if module_name.is_empty() {
                     Ok((
                         Located {
                             region: loc_ident.region,
-                            value: Pattern::Identifier(parts[0]),
+                            value: Pattern::Identifier(var_name),
                         },
                         state,
                     ))
                 } else {
-                    let malformed_str = if module_name.is_empty() {
-                        parts.join(".")
-                    } else {
-                        format!("{}.{}", module_name, parts.join("."))
-                    };
                     Ok((
                         Located {
                             region: loc_ident.region,
-                            value: Pattern::Malformed(
-                                String::from_str_in(&malformed_str, &arena).into_bump_str(),
-                            ),
+                            value: Pattern::Malformed(loc_ident.value),
                         },
                         state,
                     ))
                 }
             }
-            Ident::AccessorFunction(string) => Ok((
+            Ident::Access(_, _) | Ident::AccessorFunction(_) => Ok((
                 Located {
                     region: loc_ident.region,
-                    value: Pattern::Malformed(string),
+                    value: Pattern::Malformed(loc_ident.value),
                 },
                 state,
             )),
@@ -1593,7 +1598,7 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     // We got args and nothing else
                     let loc_expr = Located {
                         region: loc_ident.region,
-                        value: ident_to_expr(arena, loc_ident.value),
+                        value: ident_to_expr(arena, &loc_ident.value),
                     };
 
                     let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
@@ -1683,7 +1688,7 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     // We got nothin'
                     let ident = loc_ident.value.clone();
 
-                    Ok((ident_to_expr(arena, ident), state))
+                    Ok((ident_to_expr(arena, &ident), state))
                 }
             }
         },
@@ -1692,7 +1697,7 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
 pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
     then(loc!(ident()), move |arena, state, loc_ident| {
-        Ok((ident_to_expr(arena, loc_ident.value), state))
+        Ok((ident_to_expr(arena, &loc_ident.value), state))
     })
 }
 
@@ -1729,35 +1734,22 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
     }
 }
 
-pub fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
+pub fn ident_to_expr<'a>(arena: &'a Bump, src: &Ident<'a>) -> Expr<'a> {
     match src {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
         Ident::PrivateTag(string) => Expr::PrivateTag(string),
-        Ident::Access { module_name, parts } => {
-            let mut iter = parts.iter();
-
-            // The first value in the iterator is the variable name,
-            // e.g. `foo` in `foo.bar.baz`
-            let mut answer = match iter.next() {
-                Some(ident) => Expr::Var { module_name, ident },
-                None => {
-                    panic!("Parsed an Ident::Access with no parts");
-                }
-            };
-
-            // The remaining items in the iterator are record field accesses,
-            // e.g. `bar` in `foo.bar.baz`, followed by `baz`
-            for field in iter {
-                // Wrap the previous answer in the new one, so we end up
-                // with a nested Expr. That way, `foo.bar.baz` gets represented
-                // in the AST as if it had been written (foo.bar).baz all along.
-                answer = Expr::Access(arena.alloc(answer), field);
-            }
-
-            answer
+        Ident::Access(field, ident) => {
+            Expr::Access(arena.alloc(ident_to_expr(arena, ident)), field)
         }
+        Ident::Lookup {
+            module_name,
+            var_name,
+        } => Expr::Var {
+            module_name,
+            ident: var_name,
+        },
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
-        Ident::Malformed(string) => Expr::MalformedIdent(string),
+        Ident::Malformed(problems) => Expr::MalformedIdent(problems),
     }
 }
 
