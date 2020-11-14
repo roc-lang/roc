@@ -1,4 +1,6 @@
-use crate::llvm::build::{call_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope};
+use crate::llvm::build::{
+    call_bitcode_fn, call_void_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope,
+};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
@@ -8,11 +10,80 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
-use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
 pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
+
+/// Str.split : Str, Str -> List Str
+pub fn str_split<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    inplace: InPlace,
+    str_symbol: Symbol,
+    delimiter_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let str_ptr = ptr_from_symbol(scope, str_symbol);
+    let delimiter_ptr = ptr_from_symbol(scope, delimiter_symbol);
+
+    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+
+    load_str(
+        env,
+        parent,
+        *str_ptr,
+        str_wrapper_type,
+        |str_bytes_ptr, str_len, _str_smallness| {
+            load_str(
+                env,
+                parent,
+                *delimiter_ptr,
+                str_wrapper_type,
+                |delimiter_bytes_ptr, delimiter_len, _delimiter_smallness| {
+                    let segment_count = call_bitcode_fn(
+                        env,
+                        &[
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
+                            BasicValueEnum::IntValue(str_len),
+                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
+                            BasicValueEnum::IntValue(delimiter_len),
+                        ],
+                        &bitcode::STR_COUNT_SEGMENTS,
+                    )
+                    .into_int_value();
+
+                    let ret_list_ptr =
+                        allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
+
+                    let ret_list_ptr_u128s = builder.build_bitcast(
+                        ret_list_ptr,
+                        ctx.i128_type().ptr_type(AddressSpace::Generic),
+                        "ret_u128_list",
+                    );
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            ret_list_ptr_u128s,
+                            BasicValueEnum::IntValue(segment_count),
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
+                            BasicValueEnum::IntValue(str_len),
+                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
+                            BasicValueEnum::IntValue(delimiter_len),
+                        ],
+                        &bitcode::STR_STR_SPLIT_IN_PLACE,
+                    );
+
+                    store_list(env, ret_list_ptr, segment_count)
+                },
+            )
+        },
+    )
+}
 
 /// Str.concat : Str, Str -> Str
 pub fn str_concat<'a, 'ctx, 'env>(
@@ -613,7 +684,6 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
         ret_type,
         |str_ptr, str_len, _str_smallness| {
             call_bitcode_fn(
-                LowLevel::StrCountGraphemes,
                 env,
                 &[
                     BasicValueEnum::PointerValue(str_ptr),

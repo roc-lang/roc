@@ -13,7 +13,7 @@ comptime { exportNumFn(num.asin, "asin"); }
 // Str Module
 const str = @import("str.zig");
 comptime { exportStrFn(str.strSplitInPlace, "str_split_in_place"); }
-comptime { exportStrFn(str.countSegments, "count_segements"); }
+comptime { exportStrFn(str.countSegments, "count_segments"); }
 comptime { exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters"); }
 
 // Export helpers - Must be run inside a comptime
