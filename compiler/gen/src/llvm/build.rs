@@ -767,18 +767,13 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     if let Layout::RecursivePointer = tag_field_layout {
                         let ptr = allocate_with_refcount(env, &tag_layout, val);
 
-                        builder.build_store(ptr, val);
-
-                        let as_i64_ptr = cast_basic_basic(
-                            env.builder,
+                        let ptr = cast_basic_basic(
+                            builder,
                             ptr.into(),
-                            env.context
-                                .i64_type()
-                                .ptr_type(AddressSpace::Generic)
-                                .into(),
+                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
                         );
 
-                        field_vals.push(as_i64_ptr);
+                        field_vals.push(ptr);
                     } else {
                         field_vals.push(val);
                     }
