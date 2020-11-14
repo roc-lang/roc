@@ -765,7 +765,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     field_types.push(field_type);
 
                     if let Layout::RecursivePointer = tag_field_layout {
-                        let ptr = allocate_with_refcount(env, &tag_layout, val).into();
+                        let ptr = allocate_with_refcount(env, &tag_layout, val);
 
                         builder.build_store(ptr, val);
 
