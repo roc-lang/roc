@@ -17,7 +17,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
         match bytes.next() {
             Some(&byte) => {
                 if byte != b'"' {
-                    return Err(unexpected(0, state, Attempting::StrLiteral));
+                    return Err(unexpected(0, Attempting::StrLiteral, state));
                 }
             }
             None => {
@@ -134,8 +134,8 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                     // error starting from where the open quote appeared.
                     return Err(unexpected(
                         state.bytes.len() - 1,
-                        state,
                         Attempting::StrLiteral,
+                        state,
                     ));
                 }
                 b'\\' => {
@@ -224,8 +224,8 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             // escapable characters (\n, \t, \", \\, etc)
                             return Err(unexpected(
                                 state.bytes.len() - 1,
-                                state,
                                 Attempting::StrLiteral,
+                                state,
                             ));
                         }
                     }

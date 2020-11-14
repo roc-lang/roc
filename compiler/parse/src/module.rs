@@ -111,7 +111,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
         match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !first_letter.is_uppercase() {
-                    return Err(unexpected(0, state, Attempting::Module));
+                    return Err(unexpected(0, Attempting::Module, state));
                 };
 
                 let mut buf = String::with_capacity_in(4, arena);

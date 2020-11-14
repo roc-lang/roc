@@ -13,7 +13,7 @@ pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                 if first_byte == b'-' || (first_byte as char).is_ascii_digit() {
                     parse_number_literal(first_byte as char, bytes, state)
                 } else {
-                    Err(unexpected(1, state, Attempting::NumberLiteral))
+                    Err(unexpected(1, Attempting::NumberLiteral, state))
                 }
             }
             None => Err(unexpected_eof(0, state.attempting, state)),
@@ -43,8 +43,8 @@ where
         let err_unexpected = || {
             Err(unexpected(
                 bytes_parsed,
-                state.clone(),
                 Attempting::NumberLiteral,
+                state.clone(),
             ))
         };
 

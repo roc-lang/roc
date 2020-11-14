@@ -383,8 +383,8 @@ pub fn unexpected_eof(
 
 pub fn unexpected(
     chars_consumed: usize,
-    state: State<'_>,
     attempting: Attempting,
+    state: State<'_>,
 ) -> (Fail, State<'_>) {
     checked_unexpected(chars_consumed, state, |region| Fail {
         reason: FailReason::Unexpected(region),
@@ -456,7 +456,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
 
     move |_arena, state: State<'a>| match state.bytes.first() {
         Some(&actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
-        Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
+        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
 }
@@ -467,7 +467,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
 pub fn newline_char<'a>() -> impl Parser<'a, ()> {
     move |_arena, state: State<'a>| match state.bytes.first() {
         Some(b'\n') => Ok(((), state.newline()?)),
-        Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
+        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
 }
@@ -483,7 +483,7 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str> {
                 buf.push(byte as char);
             } else if buf.is_empty() {
                 // We didn't find any hex digits!
-                return Err(unexpected(0, state, Attempting::Keyword));
+                return Err(unexpected(0, Attempting::Keyword, state));
             } else {
                 let state = state.advance_without_indenting(buf.len())?;
 
@@ -548,7 +548,7 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
                 if next_str == keyword.as_bytes() {
                     Ok(((), state.advance_without_indenting(len)?))
                 } else {
-                    Err(unexpected(len, state, Attempting::Keyword))
+                    Err(unexpected(len, Attempting::Keyword, state))
                 }
             }
             _ => Err(unexpected_eof(0, Attempting::Keyword, state)),

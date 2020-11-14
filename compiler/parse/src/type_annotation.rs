@@ -280,7 +280,7 @@ fn parse_concrete_type<'a>(
             if first_letter.is_alphabetic() && first_letter.is_uppercase() {
                 part_buf.push(first_letter);
             } else {
-                return Err(unexpected(0, state, Attempting::ConcreteType));
+                return Err(unexpected(0, Attempting::ConcreteType, state));
             }
 
             state = state.advance_without_indenting(bytes_parsed)?;
@@ -349,7 +349,7 @@ fn parse_concrete_type<'a>(
         // We had neither capitalized nor noncapitalized parts,
         // yet we made it this far. The only explanation is that this was
         // a stray '.' drifting through the cosmos.
-        return Err(unexpected(1, state, Attempting::Identifier));
+        return Err(unexpected(1, Attempting::Identifier, state));
     }
 
     let answer = TypeAnnotation::Apply(
@@ -373,7 +373,7 @@ fn parse_type_variable<'a>(
             if first_letter.is_alphabetic() && first_letter.is_lowercase() {
                 buf.push(first_letter);
             } else {
-                return Err(unexpected(0, state, Attempting::TypeVariable));
+                return Err(unexpected(0, Attempting::TypeVariable, state));
             }
 
             state = state.advance_without_indenting(bytes_parsed)?;

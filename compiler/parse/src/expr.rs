@@ -1707,7 +1707,7 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
                     Some(&next_byte) if next_byte != b'=' && next_byte != b'>' => {
                         Ok((state.indent_col, state.advance_without_indenting(1)?))
                     }
-                    Some(_) => Err(unexpected(0, state, Attempting::Def)),
+                    Some(_) => Err(unexpected(0, Attempting::Def, state)),
                     None => Err(unexpected_eof(
                         1,
                         Attempting::Def,
@@ -1715,7 +1715,7 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
                     )),
                 }
             }
-            Some(_) => Err(unexpected(0, state, Attempting::Def)),
+            Some(_) => Err(unexpected(0, Attempting::Def, state)),
             None => Err(unexpected_eof(0, Attempting::Def, state)),
         }
     }
@@ -1724,7 +1724,7 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
 pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
     move |_arena, state: State<'a>| match state.bytes.first() {
         Some(&byte) if byte == b':' => Ok((state.indent_col, state.advance_without_indenting(1)?)),
-        Some(_) => Err(unexpected(0, state, Attempting::Def)),
+        Some(_) => Err(unexpected(0, Attempting::Def, state)),
         None => Err(unexpected_eof(0, Attempting::Def, state)),
     }
 }

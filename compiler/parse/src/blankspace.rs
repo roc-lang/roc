@@ -217,7 +217,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
         and!(ascii_char(b'#'), optional(ascii_string("# "))),
         |_arena: &'a Bump, state: State<'a>, (_, opt_doc)| {
             if opt_doc != None {
-                return Err(unexpected(3, state, Attempting::LineComment));
+                return Err(unexpected(3, Attempting::LineComment, state));
             }
             let mut length = 0;
 
@@ -259,11 +259,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
                     }
                 }
                 Ok(_) => {
-                    return Err(unexpected(
-                        spaces_seen.into(),
-                        state.clone(),
-                        state.attempting,
-                    ));
+                    return Err(unexpected(spaces_seen.into(), state.attempting, state));
                 }
 
                 Err(FailReason::BadUtf8) => {
@@ -274,11 +270,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
                     if spaces_seen == 0 {
                         return Err(unexpected_eof(0, state.attempting, state));
                     } else {
-                        return Err(unexpected(
-                            spaces_seen.into(),
-                            state.clone(),
-                            state.attempting,
-                        ));
+                        return Err(unexpected(spaces_seen.into(), state.attempting, state));
                     }
                 }
             }
@@ -287,11 +279,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
         if spaces_seen == 0 {
             Err(unexpected_eof(0, state.attempting, state))
         } else {
-            Err(unexpected(
-                spaces_seen.into(),
-                state.clone(),
-                state.attempting,
-            ))
+            Err(unexpected(spaces_seen.into(), state.attempting, state))
         }
     }
 }
@@ -351,7 +339,7 @@ fn spaces<'a>(
                                     return if require_at_least_one && bytes_parsed <= 1 {
                                         // We've parsed 1 char and it was not a space,
                                         // but we require parsing at least one space!
-                                        Err(unexpected(0, state.clone(), state.attempting))
+                                        Err(unexpected(0, state.attempting, state))
                                     } else {
                                         // First make sure we were indented enough!
                                         //
