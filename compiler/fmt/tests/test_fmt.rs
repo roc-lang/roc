@@ -617,6 +617,95 @@ mod test_fmt {
     }
 
     #[test]
+    fn final_comments_in_records() {
+        expr_formats_same(indoc!(
+            r#"
+            {
+                x: 42,
+                # comment
+            }"#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            {
+                x: 42,
+                # comment
+                # other comment
+            }"#
+        ));
+    }
+
+    #[test]
+    fn final_comments_without_comma_in_records() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {
+                y: 41,
+                # comment 1
+                x: 42 # comment 2
+            }"#
+            ),
+            indoc!(
+                r#"
+            {
+                y: 41,
+                # comment 1
+                x: 42,
+                # comment 2
+            }"#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiple_final_comments_without_comma_in_records() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42 # comment 1
+                # comment 2
+            }"#
+            ),
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42,
+                # comment 1
+                # comment 2
+            }"#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiple_final_comments_with_comma_in_records() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42, # comment 1
+                # comment 2
+            }"#
+            ),
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42,
+                # comment 1
+                # comment 2
+            }"#
+            ),
+        );
+    }
+
+    #[test]
     fn def_closure() {
         expr_formats_same(indoc!(
             r#"

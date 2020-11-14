@@ -92,6 +92,37 @@ where
     }
 }
 
+/// Similar to fmt_comments_only, but does not finish with a newline()
+/// and does not create new line if there only are newlines in spaces.
+/// Used to format final comments in collections (records, lists, ...).
+pub fn fmt_final_comments_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    use self::CommentOrNewline::*;
+
+    let mut iter = spaces.peekable();
+
+    while let Some(space) = iter.next() {
+        match space {
+            Newline => {}
+            LineComment(comment) => {
+                buf.push('#');
+                buf.push_str(comment);
+                if let Some(true) = iter.peek().map(|s| s.is_comment()) {
+                    newline(buf, indent);
+                }
+            }
+            DocComment(docs) => {
+                buf.push_str("##");
+                buf.push_str(docs);
+                if let Some(true) = iter.peek().map(|s| s.is_comment()) {
+                    newline(buf, indent);
+                }
+            }
+        }
+    }
+}
 /// Like format_spaces, but remove newlines and keep only comments.
 pub fn fmt_comments_only<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
 where

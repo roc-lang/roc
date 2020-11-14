@@ -2,7 +2,8 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
-    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline, INDENT,
+    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_final_comments_spaces, fmt_spaces,
+    newline, INDENT,
 };
 use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
@@ -783,7 +784,7 @@ pub fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
     loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
-    final_comments: &[CommentOrNewline<'a>],
+    final_comments: &'a [CommentOrNewline<'a>],
     indent: u16,
 ) {
     if loc_fields.is_empty() {
@@ -810,12 +811,17 @@ pub fn fmt_record<'a>(
         if is_multiline {
             let field_indent = indent + INDENT;
             for field in loc_fields.iter() {
-                field.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, field_indent);
-                buf.push(',');
+                format_field_multiline(buf, &field.value, field_indent, "");
+            }
+
+            if final_comments.iter().any(|s| s.is_comment()) {
+                newline(buf, field_indent);
+                fmt_final_comments_spaces(buf, final_comments.iter(), field_indent);
             }
             newline(buf, indent);
-        } else {
-            // is_multiline == false
+        } else
+        // is_multiline == false
+        {
             buf.push(' ');
             let field_indent = indent;
             let mut iter = loc_fields.iter().peekable();
@@ -827,7 +833,72 @@ pub fn fmt_record<'a>(
                 }
             }
             buf.push(' ');
+            // if we are here, that means that `final_comments` is empty, thus we don't have
+            // to add a comment. Anyway, it is not possible to have a single line record with
+            // a comment in it.
         };
+
+        // closes the initial bracket
         buf.push('}');
+    }
+}
+
+fn format_field_multiline<'a, T>(
+    buf: &mut String<'a>,
+    field: &AssignedField<'a, T>,
+    indent: u16,
+    separator_prefix: &str,
+) where
+    T: Formattable<'a>,
+{
+    use self::AssignedField::*;
+    match field {
+        RequiredValue(name, spaces, ann) => {
+            newline(buf, indent);
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(": ");
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
+        OptionalValue(name, spaces, ann) => {
+            newline(buf, indent);
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push('?');
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
+        LabelOnly(name) => {
+            newline(buf, indent);
+            buf.push_str(name.value);
+            buf.push(',');
+        }
+        AssignedField::SpaceBefore(sub_field, spaces) => {
+            if spaces.iter().any(|s| s.is_comment()) {
+                fmt_condition_spaces(buf, spaces.iter(), indent);
+            }
+            format_field_multiline(buf, sub_field, indent, separator_prefix);
+        }
+        AssignedField::SpaceAfter(sub_field, spaces) => {
+            format_field_multiline(buf, sub_field, indent, separator_prefix);
+            if spaces.iter().any(|s| s.is_comment()) {
+                newline(buf, indent);
+                fmt_condition_spaces(buf, spaces.iter(), indent);
+            }
+        }
+        Malformed(raw) => {
+            buf.push_str(raw);
+        }
     }
 }
