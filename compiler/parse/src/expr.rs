@@ -278,6 +278,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         Expr::Record {
             fields,
             update: None,
+            final_comments: _,
         } => {
             let mut loc_patterns = Vec::with_capacity_in(fields.len(), arena);
 
@@ -1871,13 +1872,14 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             ))
         ),
         move |arena, state, (loc_record, opt_def)| {
-            let (opt_update, loc_assigned_fields) = loc_record.value;
+            let (opt_update, loc_assigned_fields_with_comments) = loc_record.value;
             match opt_def {
                 None => {
                     // This is a record literal, not a destructure.
                     let mut value = Expr::Record {
                         update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
-                        fields: loc_assigned_fields.value.into_bump_slice(),
+                        fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                        final_comments: loc_assigned_fields_with_comments.value.1,
                     };
 
                     // there can be field access, e.g. `{ x : 4 }.x`
@@ -1900,8 +1902,8 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 }
                 Some((spaces_before_equals, Either::First(equals_indent))) => {
                     // This is a record destructure def.
-                    let region = loc_assigned_fields.region;
-                    let assigned_fields = loc_assigned_fields.value;
+                    let region = loc_assigned_fields_with_comments.region;
+                    let assigned_fields = loc_assigned_fields_with_comments.value.0;
                     let mut loc_patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
 
                     for loc_assigned_field in assigned_fields {
@@ -1938,8 +1940,8 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 }
                 Some((spaces_before_colon, Either::Second(colon_indent))) => {
                     // This is a record type annotation
-                    let region = loc_assigned_fields.region;
-                    let assigned_fields = loc_assigned_fields.value;
+                    let region = loc_assigned_fields_with_comments.region;
+                    let assigned_fields = loc_assigned_fields_with_comments.value.0;
                     let mut loc_patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
 
                     for loc_assigned_field in assigned_fields {
