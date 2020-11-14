@@ -817,9 +817,8 @@ pub fn fmt_record<'a>(
             fmt_final_comments_spaces(buf, final_comments.iter(), field_indent);
 
             newline(buf, indent);
-        } else
-        // is_multiline == false
-        {
+        } else {
+            // is_multiline == false
             buf.push(' ');
             let field_indent = indent;
             let mut iter = loc_fields.iter().peekable();
