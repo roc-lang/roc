@@ -2801,8 +2801,6 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
         .get_function(fn_name)
         .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
 
-    dbg!(fn_val);
-
     let call = env.builder.build_call(fn_val, args, "call_builtin");
 
     call.set_call_convention(fn_val.get_call_conventions());
