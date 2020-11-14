@@ -197,9 +197,11 @@ pub enum Expr<'a> {
 
     // Collection Literals
     List(&'a [&'a Loc<Expr<'a>>]),
+
     Record {
         update: Option<&'a Loc<Expr<'a>>>,
         fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     // Lookups
@@ -383,7 +385,7 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
