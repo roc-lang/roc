@@ -1119,8 +1119,11 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         name,
                         ..
                     },
-                    Type::Function(arg_types, _, _),
+                    Type::Function(arg_types, _closure_type, ret_type),
                 ) => {
+                    // NOTE if we ever have problems with the closure, the ignored `_closure_type`
+                    // is probably a good place to start the investigation!
+
                     let expected = annotation_expected;
                     let region = def.loc_expr.region;
 
@@ -1135,7 +1138,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                     let ret_var = *ret_var;
                     let closure_var = *closure_var;
                     let closure_ext_var = *closure_ext_var;
-                    let ret_type = Type::Variable(ret_var);
+                    let ret_type = *ret_type.clone();
 
                     vars.push(ret_var);
                     vars.push(closure_var);
@@ -1202,7 +1205,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         Box::new(Type::Variable(closure_var)),
                         Box::new(ret_type.clone()),
                     );
-                    let body_type = NoExpectation(ret_type);
+                    let body_type = NoExpectation(ret_type.clone());
                     let ret_constraint =
                         constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
 
@@ -1224,6 +1227,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                             // Store type into AST vars. We use Store so errors aren't reported twice
                             Store(signature.clone(), *fn_var, std::file!(), std::line!()),
                             Store(signature, expr_var, std::file!(), std::line!()),
+                            Store(ret_type, ret_var, std::file!(), std::line!()),
                             closure_constraint,
                         ]),
                     )
@@ -1452,8 +1456,11 @@ pub fn rec_defs_help(
                             name,
                             ..
                         },
-                        Type::Function(arg_types, _, _),
+                        Type::Function(arg_types, _closure_type, ret_type),
                     ) => {
+                        // NOTE if we ever have trouble with closure type unification, the ignored
+                        // `_closure_type` here is a good place to start investigating
+
                         let expected = annotation_expected;
                         let region = def.loc_expr.region;
 
@@ -1468,7 +1475,7 @@ pub fn rec_defs_help(
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
                         let closure_ext_var = *closure_ext_var;
-                        let ret_type = Type::Variable(ret_var);
+                        let ret_type = *ret_type.clone();
 
                         vars.push(ret_var);
                         vars.push(closure_var);
@@ -1535,7 +1542,7 @@ pub fn rec_defs_help(
                             Box::new(Type::Variable(closure_var)),
                             Box::new(ret_type.clone()),
                         );
-                        let body_type = NoExpectation(ret_type);
+                        let body_type = NoExpectation(ret_type.clone());
                         let expr_con = constrain_expr(
                             env,
                             loc_body_expr.region,
@@ -1560,6 +1567,7 @@ pub fn rec_defs_help(
                                 // Store type into AST vars. We use Store so errors aren't reported twice
                                 Store(signature.clone(), *fn_var, std::file!(), std::line!()),
                                 Store(signature, expr_var, std::file!(), std::line!()),
+                                Store(ret_type, ret_var, std::file!(), std::line!()),
                                 closure_constraint,
                             ]),
                         );
