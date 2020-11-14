@@ -103,6 +103,7 @@ fn jit_to_ast_help<'a>(
             Expr::Record {
                 update: None,
                 fields: &[],
+                final_comments: env.arena.alloc([]),
             }
         }),
         Layout::Struct(field_layouts) => {
@@ -419,6 +420,7 @@ fn struct_to_ast<'a>(
         Expr::Record {
             update: None,
             fields: output,
+            final_comments: &[],
         }
     } else {
         debug_assert_eq!(sorted_fields.len(), field_layouts.len());
@@ -454,6 +456,7 @@ fn struct_to_ast<'a>(
         Expr::Record {
             update: None,
             fields: output,
+            final_comments: &[],
         }
     }
 }
@@ -497,6 +500,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     Expr::Record {
                         update: None,
                         fields: arena.alloc([loc_assigned_field]),
+                        final_comments: arena.alloc([]),
                     }
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
@@ -609,6 +613,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                     Expr::Record {
                         update: None,
                         fields: arena.alloc([loc_assigned_field]),
+                        final_comments: &[],
                     }
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
@@ -724,6 +729,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     Expr::Record {
                         update: None,
                         fields: arena.alloc([loc_assigned_field]),
+                        final_comments: arena.alloc([]),
                     }
                 }
                 FlatType::TagUnion(tags, _) => {

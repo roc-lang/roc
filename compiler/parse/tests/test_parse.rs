@@ -419,6 +419,7 @@ mod test_parse {
         let expected = Record {
             fields: &[],
             update: None,
+            final_comments: &[],
         };
         let actual = parse_expr_with(&arena, "{}");
 
@@ -450,6 +451,7 @@ mod test_parse {
         let expected = Record {
             update: Some(&*arena.alloc(update_target)),
             fields,
+            final_comments: &[],
         };
 
         let actual = parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
