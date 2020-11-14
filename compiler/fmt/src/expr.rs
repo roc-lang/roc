@@ -814,10 +814,8 @@ pub fn fmt_record<'a>(
                 format_field_multiline(buf, &field.value, field_indent, "");
             }
 
-            if final_comments.iter().any(|s| s.is_comment()) {
-                newline(buf, field_indent);
-                fmt_final_comments_spaces(buf, final_comments.iter(), field_indent);
-            }
+            fmt_final_comments_spaces(buf, final_comments.iter(), field_indent);
+
             newline(buf, indent);
         } else
         // is_multiline == false
@@ -885,17 +883,12 @@ fn format_field_multiline<'a, T>(
             buf.push(',');
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
-            if spaces.iter().any(|s| s.is_comment()) {
-                fmt_condition_spaces(buf, spaces.iter(), indent);
-            }
+            fmt_final_comments_spaces(buf, spaces.iter(), indent);
             format_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
             format_field_multiline(buf, sub_field, indent, separator_prefix);
-            if spaces.iter().any(|s| s.is_comment()) {
-                newline(buf, indent);
-                fmt_condition_spaces(buf, spaces.iter(), indent);
-            }
+            fmt_final_comments_spaces(buf, spaces.iter(), indent);
         }
         Malformed(raw) => {
             buf.push_str(raw);

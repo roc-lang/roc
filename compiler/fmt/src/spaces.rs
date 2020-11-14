@@ -107,18 +107,14 @@ where
         match space {
             Newline => {}
             LineComment(comment) => {
+                newline(buf, indent);
                 buf.push('#');
                 buf.push_str(comment);
-                if let Some(true) = iter.peek().map(|s| s.is_comment()) {
-                    newline(buf, indent);
-                }
             }
             DocComment(docs) => {
+                newline(buf, indent);
                 buf.push_str("##");
                 buf.push_str(docs);
-                if let Some(true) = iter.peek().map(|s| s.is_comment()) {
-                    newline(buf, indent);
-                }
             }
         }
     }
