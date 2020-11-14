@@ -4398,6 +4398,7 @@ fn store_pattern<'a>(
                     field_layouts: arg_layouts.clone().into_bump_slice(),
                     structure: outer_symbol,
                 };
+
                 match argument {
                     Identifier(symbol) => {
                         // store immediately in the given symbol

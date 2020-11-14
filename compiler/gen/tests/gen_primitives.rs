@@ -1278,7 +1278,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_balance() {
         assert_non_opt_evals_to!(
             indoc!(
@@ -1289,18 +1288,38 @@ mod gen_primitives {
 
                 Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
 
-                Key k : Num k
-
                 balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
                 balance = \color, key, value, left, right ->
                   when right is
-                    Node Red lK lV (Node Red llK llV llLeft llRight) lRight -> Empty
-                    Empty -> Empty
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
 
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
 
-                main : Dict Int {}
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+                main : Dict Int Int
                 main =
-                    balance Red 0 {} Empty Empty
+                    balance Red 0 0 Empty Empty
                 "#
             ),
             1,
@@ -1309,7 +1328,33 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
+    fn linked_list_guarded_double_pattern_match() {
+        // the important part here is that the first case (with the nested Cons) does not match
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                balance : ConsList Int -> Int
+                balance = \right ->
+                  when right is
+                    Cons 1 (Cons 1 _) -> 3
+                    _ -> 3
+
+                main : Int
+                main =
+                    when balance Nil is
+                        _ -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
     fn linked_list_double_pattern_match() {
         assert_non_opt_evals_to!(
             indoc!(

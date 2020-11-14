@@ -752,31 +752,33 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_symbol, tag_field_layout) in
-                arguments.iter().zip(fields[*tag_id as usize].iter())
-            {
-                // note field_layout is the layout of the argument.
-                // tag_field_layout is the layout that the tag will store
-                // these are different for recursive tag unions
-                let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                let field_size = tag_field_layout.stack_size(ptr_size);
+            let tag_field_layouts = fields[*tag_id as usize];
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(env, scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
-                if field_size != 0 {
+                if !tag_field_layout.is_dropped_because_empty() {
                     let field_type =
                         basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
 
                     field_types.push(field_type);
 
                     if let Layout::RecursivePointer = tag_field_layout {
-                        let ptr = allocate_with_refcount(env, field_layout, val).into();
-                        let ptr = cast_basic_basic(
-                            builder,
-                            ptr,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        let ptr = allocate_with_refcount(env, &tag_layout, val).into();
+
+                        builder.build_store(ptr, val);
+
+                        let as_i64_ptr = cast_basic_basic(
+                            env.builder,
+                            ptr.into(),
+                            env.context
+                                .i64_type()
+                                .ptr_type(AddressSpace::Generic)
+                                .into(),
                         );
-                        field_vals.push(ptr);
+
+                        field_vals.push(as_i64_ptr);
                     } else {
                         field_vals.push(val);
                     }
@@ -1010,7 +1012,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     // We must return a pointer to the first element:
     let ptr_bytes = env.ptr_bytes;
     let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "allocate_refcount_pti");
     let incremented = builder.build_int_add(
         ptr_as_int,
         ctx.i64_type().const_int(offset, false),
@@ -1018,7 +1020,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     );
 
     let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "allocate_refcount_itp");
 
     // subtract ptr_size, to access the refcount
     let refcount_ptr = builder.build_int_sub(
