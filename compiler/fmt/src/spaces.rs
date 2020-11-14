@@ -101,9 +101,7 @@ where
 {
     use self::CommentOrNewline::*;
 
-    let mut iter = spaces.peekable();
-
-    while let Some(space) = iter.next() {
+    for space in spaces {
         match space {
             Newline => {}
             LineComment(comment) => {
