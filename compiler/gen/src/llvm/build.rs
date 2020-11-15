@@ -1,4 +1,3 @@
-use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
@@ -34,7 +33,7 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
-use roc_mono::layout::{Builtin, ClosureLayout, Layout, MemoryMode};
+use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
