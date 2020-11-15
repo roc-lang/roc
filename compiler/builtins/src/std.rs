@@ -474,6 +474,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // sum :  List (Num a) -> Num a
+    add_type(
+        Symbol::LIST_SUM,
+        top_level_function(
+            vec![list_type(num_type(flex(TVAR1)))],
+            Box::new(num_type(flex(TVAR1))),
+        ),
+    );
+
     // walkRight : List elem, (elem -> accum -> accum), accum -> accum
     add_type(
         Symbol::LIST_WALK_RIGHT,

@@ -1,6 +1,7 @@
 target
 .direnv
 *.rs.bk
+x
 
 #valgrind
 vgcore.*

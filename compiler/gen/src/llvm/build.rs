@@ -2,7 +2,7 @@ use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_walk_right,
+    list_reverse, list_set, list_single, list_sum, list_walk_right,
 };
 use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, str_split, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
@@ -2362,6 +2362,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                 default_layout,
             )
         }
+        ListSum => {
+            debug_assert_eq!(args.len(), 1);
+
+            let list = load_symbol(env, scope, &args[0]);
+
+            list_sum(env, parent, list, layout)
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -2512,40 +2519,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            match (lhs_layout, rhs_layout) {
-                (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
-                    if lhs_builtin == rhs_builtin =>
-                {
-                    use roc_mono::layout::Builtin::*;
-
-                    match lhs_builtin {
-                        Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
-                            env,
-                            parent,
-                            lhs_arg.into_int_value(),
-                            lhs_layout,
-                            rhs_arg.into_int_value(),
-                            rhs_layout,
-                            op,
-                        ),
-                        Float128 | Float64 | Float32 | Float16 => build_float_binop(
-                            env,
-                            parent,
-                            lhs_arg.into_float_value(),
-                            lhs_layout,
-                            rhs_arg.into_float_value(),
-                            rhs_layout,
-                            op,
-                        ),
-                        _ => {
-                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
-                        }
-                    }
-                }
-                _ => {
-                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
-                }
-            }
+            build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
         }
         Eq => {
             debug_assert_eq!(args.len(), 2);
@@ -2797,12 +2771,55 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
         .get_function(fn_name)
         .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
 
-    dbg!(fn_val);
-
     let call = env.builder.build_call(fn_val, args, "call_builtin");
 
     call.set_call_convention(fn_val.get_call_conventions());
     call
+}
+
+pub fn build_num_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    lhs_arg: BasicValueEnum<'ctx>,
+    lhs_layout: &Layout<'a>,
+    rhs_arg: BasicValueEnum<'ctx>,
+    rhs_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    match (lhs_layout, rhs_layout) {
+        (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+            if lhs_builtin == rhs_builtin =>
+        {
+            use roc_mono::layout::Builtin::*;
+
+            match lhs_builtin {
+                Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_int_value(),
+                    lhs_layout,
+                    rhs_arg.into_int_value(),
+                    rhs_layout,
+                    op,
+                ),
+                Float128 | Float64 | Float32 | Float16 => build_float_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_float_value(),
+                    lhs_layout,
+                    rhs_arg.into_float_value(),
+                    rhs_layout,
+                    op,
+                ),
+                _ => {
+                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
+                }
+            }
+        }
+        _ => {
+            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
+        }
+    }
 }
 
 fn build_float_binop<'a, 'ctx, 'env>(
