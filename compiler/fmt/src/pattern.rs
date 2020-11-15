@@ -154,7 +154,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             }
 
             // Malformed
-            Malformed(string) => buf.push_str(string),
+            Malformed(string) => todo!(),
             QualifiedIdentifier { module_name, ident } => {
                 if !module_name.is_empty() {
                     buf.push_str(module_name);

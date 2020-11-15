@@ -303,6 +303,9 @@ pub fn can_problem<'b>(
                 region
             );
         }
+        Problem::MalformedIdentifier(problems, region) => {
+            todo!()
+        }
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
@@ -428,14 +431,15 @@ fn pretty_runtime_error<'b>(
             unreachable!()
         }
         RuntimeError::MalformedIdentifier(box_str, region) => {
-            alloc.stack(vec![
-                alloc.concat(vec![
-                    alloc.reflow("The ")
-                    .append(format!("`{}`", box_str))
-                    .append(alloc.reflow(" identifier is malformed:")),
-                ]),
-                alloc.region(region),
-            ])
+            todo!()
+            // alloc.stack(vec![
+            //     alloc.concat(vec![
+            //         alloc.reflow("The ")
+            //         .append(format!("`{}`", box_str))
+            //         .append(alloc.reflow(" identifier is malformed:")),
+            //     ]),
+            //     alloc.region(region),
+            // ])
         }
         RuntimeError::MalformedClosure(_) => todo!(""),
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
