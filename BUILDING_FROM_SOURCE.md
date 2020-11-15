@@ -62,6 +62,14 @@ For macOS, you can run `brew install llvm` (but before you do so, check the vers
 
 There are also plenty of alternative options at http://releases.llvm.org/download.html
 
+You'll need to have a `llvm-as-10` command on your `PATH`. If you have
+`llvm-as` on your `PATH` (try `which llvm-as` to see if you have it), but not
+`llvm-as-10`, you can fix this by running:
+
+```
+$ ln -s $(which llvm-as) $(which llvm-as)-10
+```
+
 ## Using Nix
 
 ### Install
