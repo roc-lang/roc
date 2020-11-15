@@ -45,12 +45,14 @@ where
                 }
             }
             LineComment(comment) => {
-                fmt_comment(buf, comment, indent);
+                fmt_comment(buf, comment);
+                newline(buf, indent);
 
                 encountered_comment = true;
             }
             DocComment(docs) => {
-                fmt_docs(buf, docs, indent);
+                fmt_docs(buf, docs);
+                newline(buf, indent);
 
                 encountered_comment = true;
             }
@@ -72,12 +74,10 @@ where
         match space {
             Newline => {}
             LineComment(comment) => {
-                buf.push('#');
-                buf.push_str(comment);
+                fmt_comment(buf, comment);
             }
             DocComment(docs) => {
-                buf.push_str("##");
-                buf.push_str(docs);
+                fmt_docs(buf, docs);
             }
         }
         match iter.peek() {
@@ -106,13 +106,11 @@ where
             Newline => {}
             LineComment(comment) => {
                 newline(buf, indent);
-                buf.push('#');
-                buf.push_str(comment);
+                fmt_comment(buf, comment);
             }
             DocComment(docs) => {
                 newline(buf, indent);
-                buf.push_str("##");
-                buf.push_str(docs);
+                fmt_docs(buf, docs);                
             }
         }
     }
@@ -128,25 +126,23 @@ where
         match space {
             Newline => {}
             LineComment(comment) => {
-                fmt_comment(buf, comment, indent);
+                fmt_comment(buf, comment);
+                newline(buf, indent);
             }
             DocComment(docs) => {
-                fmt_docs(buf, docs, indent);
+                fmt_docs(buf, docs);
+                newline(buf, indent);
             }
         }
     }
 }
 
-fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str, indent: u16) {
+fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str) {
     buf.push('#');
-    buf.push_str(comment);
-
-    newline(buf, indent);
+    buf.push_str(comment);    
 }
 
-fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str, indent: u16) {
+fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str) {
     buf.push_str("##");
     buf.push_str(docs);
-
-    newline(buf, indent);
 }
