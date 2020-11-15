@@ -11,6 +11,7 @@ use roc_module::symbol::Symbol;
 /// COMPILE CASES
 
 type Label = u64;
+const RECORD_TAG_NAME: &str = "#Record";
 
 /// Users of this module will mainly interact with this function. It takes
 /// some normal branches and gives out a decision tree that has "labels" at all
@@ -189,7 +190,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
 fn is_complete(tests: &[Test]) -> bool {
     let length = tests.len();
     debug_assert!(length > 0);
-    match tests.get(length - 1) {
+    match tests.last() {
         None => unreachable!("should never happen"),
         Some(v) => match v {
             Test::IsCtor { union, .. } => length == union.alternatives.len(),
@@ -395,7 +396,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
-                            name: TagName::Global("#Record".into()),
+                            name: TagName::Global(RECORD_TAG_NAME.into()),
                             arity: destructs.len(),
                         }],
                     };
@@ -418,7 +419,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
 
                     all_tests.push(IsCtor {
                         tag_id: 0,
-                        tag_name: TagName::Global("#Record".into()),
+                        tag_name: TagName::Global(RECORD_TAG_NAME.into()),
                         union,
                         arguments,
                     });
@@ -538,7 +539,7 @@ fn to_relevant_branch_help<'a>(
                 tag_id,
                 ..
             } => {
-                debug_assert!(test_name == &TagName::Global("#Record".into()));
+                debug_assert!(test_name == &TagName::Global(RECORD_TAG_NAME.into()));
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
@@ -934,80 +935,105 @@ pub fn optimize_when<'a>(
     )
 }
 
-fn path_to_expr_help<'a>(
-    env: &mut Env<'a, '_>,
-    mut symbol: Symbol,
-    mut path: &Path,
-    mut layout: Layout<'a>,
-) -> (Symbol, StoresVec<'a>, Layout<'a>) {
-    let mut stores = bumpalo::collections::Vec::new_in(env.arena);
+#[derive(Debug)]
+struct PathInstruction {
+    index: u64,
+    tag_id: u8,
+}
+
+fn reverse_path(mut path: &Path) -> Vec<PathInstruction> {
+    let mut result = Vec::new();
 
     loop {
         match path {
-            Path::Unbox(unboxed) => {
-                path = unboxed;
+            Path::Unbox(nested) => {
+                path = nested;
             }
             Path::Empty => break,
-
             Path::Index {
                 index,
                 tag_id,
                 path: nested,
-            } => match Wrapped::opt_from_layout(&layout) {
-                None => {
-                    // this MUST be an index into a single-element (hence unwrapped) record
+            } => {
+                result.push(PathInstruction {
+                    index: *index,
+                    tag_id: *tag_id,
+                });
+                path = nested;
+            }
+        }
+    }
 
-                    debug_assert_eq!(*index, 0);
-                    debug_assert_eq!(*tag_id, 0);
-                    debug_assert_eq!(**nested, Path::Empty);
+    result.reverse();
 
-                    let field_layouts = vec![layout.clone()];
+    result
+}
 
-                    debug_assert!(*index < field_layouts.len() as u64);
+fn path_to_expr_help<'a>(
+    env: &mut Env<'a, '_>,
+    mut symbol: Symbol,
+    path: &Path,
+    mut layout: Layout<'a>,
+) -> (Symbol, StoresVec<'a>, Layout<'a>) {
+    let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
-                    let inner_layout = field_layouts[*index as usize].clone();
-                    let inner_expr = Expr::AccessAtIndex {
-                        index: *index,
-                        field_layouts: env.arena.alloc(field_layouts),
-                        structure: symbol,
-                        wrapped: Wrapped::SingleElementRecord,
-                    };
+    let instructions = reverse_path(path);
+    let mut it = instructions.iter().peekable();
 
-                    symbol = env.unique_symbol();
-                    stores.push((symbol, inner_layout.clone(), inner_expr));
+    while let Some(PathInstruction { index, tag_id }) = it.next() {
+        match Wrapped::opt_from_layout(&layout) {
+            None => {
+                // this MUST be an index into a single-element (hence unwrapped) record
 
-                    break;
-                }
-                Some(wrapped) => {
-                    let field_layouts = match &layout {
-                        Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
-                            layouts[*tag_id as usize].to_vec()
-                        }
-                        Layout::Struct(layouts) => layouts.to_vec(),
-                        other => vec![other.clone()],
-                    };
+                debug_assert_eq!(*index, 0);
+                debug_assert_eq!(*tag_id, 0);
+                debug_assert!(it.peek().is_none());
 
-                    debug_assert!(*index < field_layouts.len() as u64);
+                let field_layouts = vec![layout.clone()];
 
-                    let inner_layout = match &field_layouts[*index as usize] {
-                        Layout::RecursivePointer => layout.clone(),
-                        other => other.clone(),
-                    };
+                debug_assert!(*index < field_layouts.len() as u64);
 
-                    let inner_expr = Expr::AccessAtIndex {
-                        index: *index,
-                        field_layouts: env.arena.alloc(field_layouts),
-                        structure: symbol,
-                        wrapped,
-                    };
+                let inner_layout = field_layouts[*index as usize].clone();
+                let inner_expr = Expr::AccessAtIndex {
+                    index: *index,
+                    field_layouts: env.arena.alloc(field_layouts),
+                    structure: symbol,
+                    wrapped: Wrapped::SingleElementRecord,
+                };
 
-                    symbol = env.unique_symbol();
-                    stores.push((symbol, inner_layout.clone(), inner_expr));
+                symbol = env.unique_symbol();
+                stores.push((symbol, inner_layout.clone(), inner_expr));
 
-                    layout = inner_layout;
-                    path = nested;
-                }
-            },
+                break;
+            }
+            Some(wrapped) => {
+                let field_layouts = match &layout {
+                    Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
+                        layouts[*tag_id as usize]
+                    }
+                    Layout::Struct(layouts) => layouts,
+                    other => env.arena.alloc([other.clone()]),
+                };
+
+                debug_assert!(*index < field_layouts.len() as u64);
+
+                let inner_layout = match &field_layouts[*index as usize] {
+                    Layout::RecursivePointer => layout.clone(),
+                    other => other.clone(),
+                };
+
+                let inner_expr = Expr::AccessAtIndex {
+                    index: *index,
+                    field_layouts,
+                    structure: symbol,
+                    wrapped,
+                };
+
+                symbol = env.unique_symbol();
+                stores.push((symbol, inner_layout.clone(), inner_expr));
+
+                layout = inner_layout;
+            }
         }
     }
 
@@ -1143,6 +1169,159 @@ fn test_to_equality<'a>(
     }
 }
 
+type Tests<'a> = std::vec::Vec<(
+    bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    Symbol,
+    Symbol,
+    Layout<'a>,
+)>;
+
+fn stores_and_condition<'a>(
+    env: &mut Env<'a, '_>,
+    cond_symbol: Symbol,
+    cond_layout: &Layout<'a>,
+    test_chain: Vec<(Path, Test<'a>)>,
+) -> (Tests<'a>, Option<(Symbol, JoinPointId, Stmt<'a>)>) {
+    let mut tests = Vec::with_capacity(test_chain.len());
+
+    let mut guard = None;
+
+    // Assumption: there is at most 1 guard, and it is the outer layer.
+    for (path, test) in test_chain {
+        match test {
+            Test::Guarded {
+                opt_test,
+                id,
+                symbol,
+                stmt,
+            } => {
+                if let Some(nested) = opt_test {
+                    tests.push(test_to_equality(
+                        env,
+                        cond_symbol,
+                        &cond_layout,
+                        &path,
+                        *nested,
+                    ));
+                }
+
+                // let (stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+                guard = Some((symbol, id, stmt));
+            }
+
+            _ => tests.push(test_to_equality(
+                env,
+                cond_symbol,
+                &cond_layout,
+                &path,
+                test,
+            )),
+        }
+    }
+
+    (tests, guard)
+}
+
+fn compile_guard<'a>(
+    env: &mut Env<'a, '_>,
+    ret_layout: Layout<'a>,
+    id: JoinPointId,
+    stmt: &'a Stmt<'a>,
+    fail: &'a Stmt<'a>,
+    mut cond: Stmt<'a>,
+) -> Stmt<'a> {
+    // the guard is the final thing that we check, so needs to be layered on first!
+    let test_symbol = env.unique_symbol();
+    let arena = env.arena;
+
+    cond = Stmt::Cond {
+        cond_symbol: test_symbol,
+        cond_layout: Layout::Builtin(Builtin::Int1),
+        branching_symbol: test_symbol,
+        branching_layout: Layout::Builtin(Builtin::Int1),
+        pass: arena.alloc(cond),
+        fail,
+        ret_layout,
+    };
+
+    // calculate the guard value
+    let param = Param {
+        symbol: test_symbol,
+        layout: Layout::Builtin(Builtin::Int1),
+        borrow: false,
+    };
+
+    Stmt::Join {
+        id,
+        parameters: arena.alloc([param]),
+        remainder: stmt,
+        continuation: arena.alloc(cond),
+    }
+}
+
+fn compile_test<'a>(
+    env: &mut Env<'a, '_>,
+    ret_layout: Layout<'a>,
+    stores: bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    lhs: Symbol,
+    rhs: Symbol,
+    fail: &'a Stmt<'a>,
+    mut cond: Stmt<'a>,
+) -> Stmt<'a> {
+    // if test_symbol then cond else fail
+    let test_symbol = env.unique_symbol();
+    let arena = env.arena;
+
+    cond = Stmt::Cond {
+        cond_symbol: test_symbol,
+        cond_layout: Layout::Builtin(Builtin::Int1),
+        branching_symbol: test_symbol,
+        branching_layout: Layout::Builtin(Builtin::Int1),
+        pass: arena.alloc(cond),
+        fail,
+        ret_layout,
+    };
+
+    let test = Expr::RunLowLevel(LowLevel::Eq, arena.alloc([lhs, rhs]));
+
+    // write to the test symbol
+    cond = Stmt::Let(
+        test_symbol,
+        test,
+        Layout::Builtin(Builtin::Int1),
+        arena.alloc(cond),
+    );
+
+    // stores are in top-to-bottom order, so we have to add them in reverse
+    for (symbol, layout, expr) in stores.into_iter().rev() {
+        cond = Stmt::Let(symbol, expr, layout, arena.alloc(cond));
+    }
+
+    cond
+}
+
+fn compile_tests<'a>(
+    env: &mut Env<'a, '_>,
+    ret_layout: Layout<'a>,
+    tests: Tests<'a>,
+    opt_guard: Option<(Symbol, JoinPointId, Stmt<'a>)>,
+    fail: &'a Stmt<'a>,
+    mut cond: Stmt<'a>,
+) -> Stmt<'a> {
+    let arena = env.arena;
+
+    // the guard is the final thing that we check, so needs to be layered on first!
+    if let Some((_, id, stmt)) = opt_guard {
+        cond = compile_guard(env, ret_layout.clone(), id, arena.alloc(stmt), fail, cond);
+    }
+
+    for (new_stores, lhs, rhs, _layout) in tests.into_iter().rev() {
+        cond = compile_test(env, ret_layout.clone(), new_stores, lhs, rhs, fail, cond);
+    }
+    cond
+}
+
 // TODO procs and layout are currently unused, but potentially required
 // for defining optional fields?
 // if not, do remove
@@ -1160,6 +1339,8 @@ fn decide_to_branching<'a>(
     use Choice::*;
     use Decider::*;
 
+    let arena = env.arena;
+
     match decider {
         Leaf(Jump(label)) => {
             // we currently inline the jumps: does fewer jumps but produces a larger artifact
@@ -1175,7 +1356,7 @@ fn decide_to_branching<'a>(
             success,
             failure,
         } => {
-            // generate a switch based on the test chain
+            // generate a (nested) if-then-else
 
             let pass_expr = decide_to_branching(
                 env,
@@ -1199,150 +1380,31 @@ fn decide_to_branching<'a>(
                 jumps,
             );
 
-            let fail = &*env.arena.alloc(fail_expr);
-            let pass = &*env.arena.alloc(pass_expr);
+            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
 
-            let branching_symbol = env.unique_symbol();
-            let branching_layout = Layout::Builtin(Builtin::Int1);
+            let number_of_tests = tests.len() as i64 + guard.is_some() as i64;
 
-            let mut cond = Stmt::Cond {
-                cond_symbol,
-                cond_layout: cond_layout.clone(),
-                branching_symbol,
-                branching_layout,
-                pass,
-                fail,
-                ret_layout,
-            };
+            debug_assert!(number_of_tests > 0);
 
-            let true_symbol = env.unique_symbol();
+            let fail = env.arena.alloc(fail_expr);
+            if number_of_tests == 1 {
+                // if there is just one test, compile to a simple if-then-else
+                compile_tests(env, ret_layout, tests, guard, fail, pass_expr)
+            } else {
+                // otherwise, we use a join point so the code for the `else` case
+                // is only generated once.
+                let fail_jp_id = JoinPointId(env.unique_symbol());
+                let jump = arena.alloc(Stmt::Jump(fail_jp_id, &[]));
 
-            let mut tests = Vec::with_capacity(test_chain.len());
+                let test_stmt = compile_tests(env, ret_layout, tests, guard, jump, pass_expr);
 
-            let mut guard = None;
-
-            // Assumption: there is at most 1 guard, and it is the outer layer.
-            for (path, test) in test_chain {
-                match test {
-                    Test::Guarded {
-                        opt_test,
-                        id,
-                        symbol,
-                        stmt,
-                    } => {
-                        if let Some(nested) = opt_test {
-                            tests.push(test_to_equality(
-                                env,
-                                cond_symbol,
-                                &cond_layout,
-                                &path,
-                                *nested,
-                            ));
-                        }
-
-                        // let (stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                        guard = Some((symbol, id, stmt));
-                    }
-
-                    _ => tests.push(test_to_equality(
-                        env,
-                        cond_symbol,
-                        &cond_layout,
-                        &path,
-                        test,
-                    )),
+                Stmt::Join {
+                    id: fail_jp_id,
+                    parameters: &[],
+                    continuation: fail,
+                    remainder: arena.alloc(test_stmt),
                 }
             }
-
-            let mut current_symbol = branching_symbol;
-
-            // TODO There must be some way to remove this iterator/loop
-            let nr = (tests.len() as i64) - 1 + (guard.is_some() as i64);
-
-            let arena = env.arena;
-
-            let accum_symbols = std::iter::once(true_symbol)
-                .chain((0..nr).map(|_| env.unique_symbol()))
-                .rev()
-                .collect::<Vec<_>>();
-
-            let mut accum_it = accum_symbols.into_iter();
-
-            // the guard is the final thing that we check, so needs to be layered on first!
-            if let Some((_, id, stmt)) = guard {
-                let accum = accum_it.next().unwrap();
-                let test_symbol = env.unique_symbol();
-
-                let and_expr = Expr::RunLowLevel(LowLevel::And, arena.alloc([test_symbol, accum]));
-
-                // write to the branching symbol
-                cond = Stmt::Let(
-                    current_symbol,
-                    and_expr,
-                    Layout::Builtin(Builtin::Int1),
-                    arena.alloc(cond),
-                );
-
-                // calculate the guard value
-                let param = Param {
-                    symbol: test_symbol,
-                    layout: Layout::Builtin(Builtin::Int1),
-                    borrow: false,
-                };
-                cond = Stmt::Join {
-                    id,
-                    parameters: arena.alloc([param]),
-                    remainder: arena.alloc(stmt),
-                    continuation: arena.alloc(cond),
-                };
-
-                // load all the variables (the guard might need them);
-
-                current_symbol = accum;
-            }
-
-            for ((new_stores, lhs, rhs, _layout), accum) in tests.into_iter().rev().zip(accum_it) {
-                let test_symbol = env.unique_symbol();
-                let test = Expr::RunLowLevel(
-                    LowLevel::Eq,
-                    bumpalo::vec![in arena; lhs, rhs].into_bump_slice(),
-                );
-
-                let and_expr = Expr::RunLowLevel(LowLevel::And, arena.alloc([test_symbol, accum]));
-
-                // write to the branching symbol
-                cond = Stmt::Let(
-                    current_symbol,
-                    and_expr,
-                    Layout::Builtin(Builtin::Int1),
-                    arena.alloc(cond),
-                );
-
-                // write to the test symbol
-                cond = Stmt::Let(
-                    test_symbol,
-                    test,
-                    Layout::Builtin(Builtin::Int1),
-                    arena.alloc(cond),
-                );
-
-                // stores are in top-to-bottom order, so we have to add them in reverse
-                for (symbol, layout, expr) in new_stores.into_iter().rev() {
-                    cond = Stmt::Let(symbol, expr, layout, arena.alloc(cond));
-                }
-
-                current_symbol = accum;
-            }
-
-            cond = Stmt::Let(
-                true_symbol,
-                Expr::Literal(Literal::Bool(true)),
-                Layout::Builtin(Builtin::Int1),
-                arena.alloc(cond),
-            );
-
-            cond
         }
         FanOut {
             path,

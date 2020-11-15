@@ -1279,6 +1279,108 @@ mod gen_primitives {
 
     #[test]
     #[ignore]
+    fn rbtree_balance_inc_dec() {
+        // TODO does not define a variable correctly, but all is well with the type signature
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k : [ Node NodeColor k (Dict k)  (Dict k), Empty ]
+
+                # balance : NodeColor, k, Dict k,  Dict k -> Dict k
+                balance = \color, key, left, right ->
+                  when right is
+                    Node Red rK rLeft rRight ->
+                      when left is
+                        Node Red _ _ _ ->
+                          Node
+                            Red
+                            key
+                            Empty
+                            Empty
+
+                        _ ->
+                          Node color rK (Node Red key left rLeft) rRight
+
+                    _ ->
+                        Empty
+
+                main : Dict Int
+                main =
+                    balance Red 0 Empty Empty
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_3() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                    Node key left Empty
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_2() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k : [ Node NodeColor k (Dict k), Empty ]
+
+                balance : NodeColor, k, Dict k,  Dict k -> Dict k
+                balance = \color, key, left, right ->
+                  when right is
+                    Node Red rK _ ->
+                      when left is
+                        Node Red _ _  ->
+                          Node
+                            Red
+                            key
+                            Empty
+
+                        _ ->
+                          Node color rK (Node Red key left )
+
+                    _ ->
+                        Empty
+
+                main : Dict Int
+                main =
+                    balance Red 0 Empty Empty
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
     fn rbtree_balance() {
         assert_non_opt_evals_to!(
             indoc!(
@@ -1289,18 +1391,38 @@ mod gen_primitives {
 
                 Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
 
-                Key k : Num k
-
                 balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
                 balance = \color, key, value, left, right ->
                   when right is
-                    Node Red lK lV (Node Red llK llV llLeft llRight) lRight -> Empty
-                    Empty -> Empty
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
 
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
 
-                main : Dict Int {}
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+                main : Dict Int Int
                 main =
-                    balance Red 0 {} Empty Empty
+                    balance Red 0 0 Empty Empty
                 "#
             ),
             1,
@@ -1310,6 +1432,34 @@ mod gen_primitives {
 
     #[test]
     #[ignore]
+    fn linked_list_guarded_double_pattern_match() {
+        // the important part here is that the first case (with the nested Cons) does not match
+        // TODO this also has undefined behavior
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                balance : ConsList Int -> Int
+                balance = \right ->
+                  when right is
+                    Cons 1 (Cons 1 _) -> 3
+                    _ -> 3
+
+                main : Int
+                main =
+                    when balance Nil is
+                        _ -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
     fn linked_list_double_pattern_match() {
         assert_non_opt_evals_to!(
             indoc!(
