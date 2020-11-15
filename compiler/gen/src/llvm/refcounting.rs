@@ -89,46 +89,7 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
         RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
 
         Union(tags) => {
-            debug_assert!(!tags.is_empty());
-            let wrapper_struct = value.into_struct_value();
-
-            // read the tag_id
-            let tag_id = env
-                .builder
-                .build_extract_value(wrapper_struct, 0, "read_tag_id")
-                .unwrap()
-                .into_int_value();
-
-            // next, make a jump table for all possible values of the tag_id
-            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
-
-            let merge_block = env.context.append_basic_block(parent, "decrement_merge");
-
-            for (tag_id, field_layouts) in tags.iter().enumerate() {
-                let block = env.context.append_basic_block(parent, "tag_id_decrement");
-                env.builder.position_at_end(block);
-
-                for (i, field_layout) in field_layouts.iter().enumerate() {
-                    if field_layout.contains_refcounted() {
-                        let field_ptr = env
-                            .builder
-                            .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
-                            .unwrap();
-
-                        decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
-                    }
-                }
-
-                env.builder.build_unconditional_branch(merge_block);
-
-                cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
-            }
-
-            let (_, default_block) = cases.pop().unwrap();
-
-            env.builder.build_switch(tag_id, default_block, &cases);
-
-            env.builder.position_at_end(merge_block);
+            build_dec_union(env, layout_ids, tags, value);
         }
 
         RecursiveUnion(tags) => {
@@ -749,6 +710,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
             ],
         )
         .into_struct_value();
+
     let has_overflowed = builder
         .build_extract_value(add_with_overflow, 1, "has_overflowed")
         .unwrap();
@@ -759,6 +721,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
         ctx.bool_type().const_int(1 as u64, false),
         "has_overflowed",
     );
+
     // build blocks
     let then_block = ctx.append_basic_block(parent, "then");
     let else_block = ctx.append_basic_block(parent, "else");
@@ -780,6 +743,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
     // build else block
     {
         builder.position_at_end(else_block);
+
         let max = builder.build_int_compare(
             IntPredicate::EQ,
             refcount,
@@ -903,14 +867,20 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
     let wrapper_struct = arg_val.into_struct_value();
 
-    // let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
-
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
     let merge_block = env.context.append_basic_block(parent, "decrement_merge");
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
+        // if none of the fields are or contain anything refcounted, just move on
+        if !field_layouts
+            .iter()
+            .any(|x| x.is_refcounted() || x.contains_refcounted())
+        {
+            continue;
+        }
+
         let block = env.context.append_basic_block(parent, "tag_id_decrement");
         env.builder.position_at_end(block);
 
@@ -926,18 +896,19 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
-                // a *i64 pointer to the recursive data
-                // we need to cast this pointer to the appropriate type
-                let field_ptr = env
+                // this field has type `*i64`, but is really a pointer to the data we want
+                let ptr_as_i64_ptr = env
                     .builder
                     .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                     .unwrap();
 
-                // recursively decrement
+                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
+
+                // therefore we must cast it to our desired type
                 let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
                 let recursive_field_ptr = cast_basic_basic(
                     env.builder,
-                    field_ptr,
+                    ptr_as_i64_ptr,
                     union_type.ptr_type(AddressSpace::Generic).into(),
                 )
                 .into_pointer_value();
@@ -956,7 +927,7 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
                 // TODO do this decrement before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                decrement_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
+                decrement_refcount_ptr(env, parent, &layout, recursive_field_ptr);
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -977,8 +948,6 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
     cases.reverse();
 
-    let (_, default_block) = cases.pop().unwrap();
-
     env.builder.position_at_end(before_block);
 
     // read the tag_id
@@ -998,7 +967,7 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
     // switch on it
     env.builder
-        .build_switch(current_tag_id, default_block, &cases);
+        .build_switch(current_tag_id, merge_block, &cases);
 
     env.builder.position_at_end(merge_block);
 
@@ -1105,10 +1074,18 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
-    let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+    let merge_block = env.context.append_basic_block(parent, "increment_merge");
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
-        let block = env.context.append_basic_block(parent, "tag_id_decrement");
+        // if none of the fields are or contain anything refcounted, just move on
+        if !field_layouts
+            .iter()
+            .any(|x| x.is_refcounted() || x.contains_refcounted())
+        {
+            continue;
+        }
+
+        let block = env.context.append_basic_block(parent, "tag_id_increment");
         env.builder.position_at_end(block);
 
         let wrapper_type = basic_type_from_layout(
@@ -1123,18 +1100,19 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
-                // a *i64 pointer to the recursive data
-                // we need to cast this pointer to the appropriate type
-                let field_ptr = env
+                // this field has type `*i64`, but is really a pointer to the data we want
+                let ptr_as_i64_ptr = env
                     .builder
-                    .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                    .build_extract_value(wrapper_struct, i as u32, "increment_struct_field")
                     .unwrap();
 
-                // recursively increment
+                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
+
+                // therefore we must cast it to our desired type
                 let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
                 let recursive_field_ptr = cast_basic_basic(
                     env.builder,
-                    field_ptr,
+                    ptr_as_i64_ptr,
                     union_type.ptr_type(AddressSpace::Generic).into(),
                 )
                 .into_pointer_value();
@@ -1151,9 +1129,9 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
                 // Because it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
 
-                // TODO do this increment before the recursive call?
+                // TODO do this decrement before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                increment_refcount_ptr(env, &layout, field_ptr.into_pointer_value());
+                increment_refcount_ptr(env, &layout, recursive_field_ptr);
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -1169,12 +1147,10 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
         cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
     }
 
-    let (_, default_block) = cases.pop().unwrap();
-
     env.builder.position_at_end(before_block);
 
     env.builder
-        .build_switch(tag_id_u8.into_int_value(), default_block, &cases);
+        .build_switch(tag_id_u8.into_int_value(), merge_block, &cases);
 
     env.builder.position_at_end(merge_block);
 
@@ -1221,6 +1197,17 @@ fn get_refcount_ptr<'a, 'ctx, 'env>(
     get_refcount_ptr_help(env, layout, ptr_as_int)
 }
 
+pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> u64 {
+    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
+
+    match layout {
+        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
+        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
+        Layout::RecursivePointer | Layout::RecursiveUnion(_) => env.ptr_bytes as u64,
+        _ => (env.ptr_bytes as u64).max(value_bytes),
+    }
+}
+
 fn get_refcount_ptr_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
@@ -1229,12 +1216,7 @@ fn get_refcount_ptr_help<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
-    let offset = match layout {
-        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
-        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
-        _ => (env.ptr_bytes as u64).max(value_bytes),
-    };
+    let offset = refcount_offset(env, layout);
 
     // pointer to usize
     let refcount_type = ptr_int(ctx, env.ptr_bytes);

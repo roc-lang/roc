@@ -431,6 +431,7 @@ pub fn constrain_expr(
 
             match expected {
                 FromAnnotation(name, arity, _, tipe) => {
+                    let num_branches = branches.len() + 1;
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
                         let cond_con = constrain_expr(
                             env,
@@ -448,7 +449,7 @@ pub fn constrain_expr(
                                 arity,
                                 AnnotationSource::TypedIfBranch {
                                     index: Index::zero_based(index),
-                                    num_branches: branches.len(),
+                                    num_branches,
                                 },
                                 tipe.clone(),
                             ),
@@ -467,7 +468,7 @@ pub fn constrain_expr(
                             arity,
                             AnnotationSource::TypedIfBranch {
                                 index: Index::zero_based(branches.len()),
-                                num_branches: branches.len(),
+                                num_branches,
                             },
                             tipe.clone(),
                         ),
@@ -558,15 +559,12 @@ pub fn constrain_expr(
             constraints.push(expr_con);
 
             match &expected {
-                FromAnnotation(name, arity, _, typ) => {
-                    // record the  type of the whole expression in the AST
-                    let ast_con = Eq(
-                        Type::Variable(*expr_var),
-                        expected.clone(),
-                        Category::Storage(std::file!(), std::line!()),
-                        region,
-                    );
-                    constraints.push(ast_con);
+                FromAnnotation(name, arity, _, _typ) => {
+                    // NOTE deviation from elm.
+                    //
+                    // in elm, `_typ` is used, but because we have this `expr_var` too
+                    // and need to constrain it, this is what works and gives better error messages
+                    let typ = Type::Variable(*expr_var);
 
                     for (index, when_branch) in branches.iter().enumerate() {
                         let pattern_region =
@@ -595,6 +593,10 @@ pub fn constrain_expr(
 
                         constraints.push(branch_con);
                     }
+
+                    constraints.push(Eq(typ, expected, Category::When, region));
+
+                    return exists(vec![cond_var, *expr_var], And(constraints));
                 }
 
                 _ => {
@@ -1119,9 +1121,11 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         name,
                         ..
                     },
-                    Type::Function(arg_types, _, _),
+                    Type::Function(arg_types, _closure_type, ret_type),
                 ) => {
-                    let expected = annotation_expected;
+                    // NOTE if we ever have problems with the closure, the ignored `_closure_type`
+                    // is probably a good place to start the investigation!
+
                     let region = def.loc_expr.region;
 
                     let loc_body_expr = &**loc_body;
@@ -1135,7 +1139,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                     let ret_var = *ret_var;
                     let closure_var = *closure_var;
                     let closure_ext_var = *closure_ext_var;
-                    let ret_type = Type::Variable(ret_var);
+                    let ret_type = *ret_type.clone();
 
                     vars.push(ret_var);
                     vars.push(closure_var);
@@ -1197,12 +1201,15 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         &mut vars,
                     );
 
-                    let fn_type = Type::Function(
-                        pattern_types,
-                        Box::new(Type::Variable(closure_var)),
-                        Box::new(ret_type.clone()),
+                    let body_type = FromAnnotation(
+                        def.loc_pattern.clone(),
+                        arguments.len(),
+                        AnnotationSource::TypedBody {
+                            region: annotation.region,
+                        },
+                        ret_type.clone(),
                     );
-                    let body_type = NoExpectation(ret_type);
+
                     let ret_constraint =
                         constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
 
@@ -1219,22 +1226,32 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 defs_constraint,
                                 ret_constraint,
                             })),
-                            // "the closure's type is equal to expected type"
-                            Eq(fn_type, expected, Category::Lambda, region),
-                            // Store type into AST vars. We use Store so errors aren't reported twice
                             Store(signature.clone(), *fn_var, std::file!(), std::line!()),
                             Store(signature, expr_var, std::file!(), std::line!()),
+                            Store(ret_type, ret_var, std::file!(), std::line!()),
                             closure_constraint,
                         ]),
                     )
                 }
 
-                _ => constrain_expr(
-                    &env,
-                    def.loc_expr.region,
-                    &def.loc_expr.value,
-                    annotation_expected,
-                ),
+                _ => {
+                    let expected = annotation_expected;
+
+                    let ret_constraint =
+                        constrain_expr(env, def.loc_expr.region, &def.loc_expr.value, expected);
+
+                    And(vec![
+                        Let(Box::new(LetConstraint {
+                            rigid_vars: Vec::new(),
+                            flex_vars: vec![],
+                            def_types: SendMap::default(),
+                            defs_constraint: True,
+                            ret_constraint,
+                        })),
+                        // Store type into AST vars. We use Store so errors aren't reported twice
+                        Store(signature, expr_var, std::file!(), std::line!()),
+                    ])
+                }
             }
         }
         None => {
@@ -1440,8 +1457,11 @@ pub fn rec_defs_help(
                             name,
                             ..
                         },
-                        Type::Function(arg_types, _, _),
+                        Type::Function(arg_types, _closure_type, ret_type),
                     ) => {
+                        // NOTE if we ever have trouble with closure type unification, the ignored
+                        // `_closure_type` here is a good place to start investigating
+
                         let expected = annotation_expected;
                         let region = def.loc_expr.region;
 
@@ -1456,7 +1476,7 @@ pub fn rec_defs_help(
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
                         let closure_ext_var = *closure_ext_var;
-                        let ret_type = Type::Variable(ret_var);
+                        let ret_type = *ret_type.clone();
 
                         vars.push(ret_var);
                         vars.push(closure_var);
@@ -1523,7 +1543,7 @@ pub fn rec_defs_help(
                             Box::new(Type::Variable(closure_var)),
                             Box::new(ret_type.clone()),
                         );
-                        let body_type = NoExpectation(ret_type);
+                        let body_type = NoExpectation(ret_type.clone());
                         let expr_con = constrain_expr(
                             env,
                             loc_body_expr.region,
@@ -1548,6 +1568,7 @@ pub fn rec_defs_help(
                                 // Store type into AST vars. We use Store so errors aren't reported twice
                                 Store(signature.clone(), *fn_var, std::file!(), std::line!()),
                                 Store(signature, expr_var, std::file!(), std::line!()),
+                                Store(ret_type, ret_var, std::file!(), std::line!()),
                                 closure_constraint,
                             ]),
                         );
