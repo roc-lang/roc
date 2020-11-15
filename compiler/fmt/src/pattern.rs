@@ -1,5 +1,5 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::spaces::{fmt_comments_only, fmt_spaces, is_comment};
+use crate::spaces::{fmt_comments_only, fmt_spaces};
 use bumpalo::collections::String;
 use roc_parse::ast::{Base, Pattern};
 
@@ -19,7 +19,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
                 debug_assert!(!spaces.is_empty());
 
-                spaces.iter().any(|s| is_comment(s))
+                spaces.iter().any(|s| s.is_comment())
             }
 
             Pattern::Nested(nested_pat) => nested_pat.is_multiline(),

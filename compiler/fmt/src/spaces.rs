@@ -150,11 +150,3 @@ fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str, indent: u16) {
 
     newline(buf, indent);
 }
-
-pub fn is_comment<'a>(space: &'a CommentOrNewline<'a>) -> bool {
-    match space {
-        CommentOrNewline::Newline => false,
-        CommentOrNewline::LineComment(_) => true,
-        CommentOrNewline::DocComment(_) => true,
-    }
-}
