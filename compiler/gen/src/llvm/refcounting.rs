@@ -1,4 +1,3 @@
-use crate::layout_id::LayoutIds;
 use crate::llvm::build::{
     cast_basic_basic, cast_struct_struct, create_entry_block_alloca, set_name, Env, Scope,
     FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
@@ -12,7 +11,7 @@ use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, MemoryMode};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
 pub const REFCOUNT_MAX: usize = 0 as usize;
 
