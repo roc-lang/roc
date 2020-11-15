@@ -1431,8 +1431,10 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_guarded_double_pattern_match() {
         // the important part here is that the first case (with the nested Cons) does not match
+        // TODO this also has undefined behavior
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
