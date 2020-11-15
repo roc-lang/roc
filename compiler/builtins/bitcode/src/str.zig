@@ -76,13 +76,16 @@ const RocStr = struct {
 // Str.split
 
 pub fn strSplitInPlace(
-    array: [*]RocStr,
+    bytes_array: [*]u128,
     array_len: usize,
     str_bytes_ptrs: [*]u8,
     str_len: usize,
-    delimiter_bytes: [*]u8,
+    delimiter_bytes_ptrs: [*]u8,
     delimiter_len: usize
 ) callconv(.C) void {
+
+    var array = @ptrCast([*]RocStr, bytes_array);
+
     var ret_array_index : usize = 0;
 
     var sliceStart_index : usize = 0;
@@ -96,7 +99,7 @@ pub fn strSplitInPlace(
             var matches_delimiter = true;
 
             while (delimiter_index < delimiter_len) {
-                var delimiterChar = delimiter_bytes[delimiter_index];
+                var delimiterChar = delimiter_bytes_ptrs[delimiter_index];
                 var strChar = str_bytes_ptrs[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {
@@ -250,10 +253,10 @@ test "strSplitInPlace: three pieces" {
 pub fn countSegments(
     str_bytes_ptrs: [*]u8,
     str_len: usize,
-    delimiter_bytes: [*]u8,
+    delimiter_bytes_ptrs: [*]u8,
     delimiter_len: usize
-) callconv(.C) i64 {
-    var count: i64 = 1;
+) callconv(.C) usize {
+    var count: usize = 1;
 
     if (str_len > delimiter_len) {
         var str_index: usize = 0;
@@ -265,7 +268,7 @@ pub fn countSegments(
             var matches_delimiter = true;
 
             while (delimiter_index < delimiter_len) {
-                const delimiterChar = delimiter_bytes[delimiter_index];
+                const delimiterChar = delimiter_bytes_ptrs[delimiter_index];
                 const strChar = str_bytes_ptrs[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {

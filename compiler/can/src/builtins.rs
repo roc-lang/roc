@@ -51,6 +51,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_OR => bool_or,
         Symbol::BOOL_NOT => bool_not,
         Symbol::STR_CONCAT => str_concat,
+        Symbol::STR_SPLIT => str_split,
         Symbol::STR_IS_EMPTY => str_is_empty,
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::LIST_LEN => list_len,
@@ -251,8 +252,8 @@ fn num_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
     )
 }
 
-/// Num a, Num a -> Bool
-fn num_bool_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
+/// Num a, Num a -> b
+fn num_num_other_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
     let num_var = var_store.fresh();
     let bool_var = var_store.fresh();
     let body = RunLowLevel {
@@ -381,27 +382,27 @@ fn num_mul(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isGt : Num a, Num a -> Bool
 fn num_gt(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumGt)
+    num_num_other_binop(symbol, var_store, LowLevel::NumGt)
 }
 
 /// Num.isGte : Num a, Num a -> Bool
 fn num_gte(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumGte)
+    num_num_other_binop(symbol, var_store, LowLevel::NumGte)
 }
 
 /// Num.isLt : Num a, Num a -> Bool
 fn num_lt(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumLt)
+    num_num_other_binop(symbol, var_store, LowLevel::NumLt)
 }
 
-/// Num.isLte : Num a, Num a -> Num a
+/// Num.isLte : Num a, Num a -> Bool
 fn num_lte(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumLte)
+    num_num_other_binop(symbol, var_store, LowLevel::NumLte)
 }
 
 /// Num.compare : Num a, Num a -> [ LT, EQ, GT ]
 fn num_compare(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumCompare)
+    num_num_other_binop(symbol, var_store, LowLevel::NumCompare)
 }
 
 /// Num.sin : Float -> Float
@@ -903,6 +904,26 @@ fn list_reverse(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// Str.split : Str, Str -> List Str
+fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let ret_list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrSplit,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: ret_list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_list_var,
     )
 }
 

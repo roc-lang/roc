@@ -592,7 +592,7 @@ mod test_fmt {
             r#"
             { shoes &
                 rightShoe: newRightShoe,
-                leftShoe: newLeftShoe
+                leftShoe: newLeftShoe,
             }
             "#
         ));
@@ -609,7 +609,7 @@ mod test_fmt {
                 r#"
                 { shoes &
                     rightShoe: bareFoot,
-                    leftShoe: bareFoot
+                    leftShoe: bareFoot,
                 }
                 "#
             ),
@@ -1002,7 +1002,7 @@ mod test_fmt {
             r#"
             {
                 x: 4,
-                y: 42
+                y: 42,
             }
             "#
         ));
@@ -1028,7 +1028,7 @@ mod test_fmt {
                 r#"
                 pos = {
                         x: 5,
-                        y: 10
+                        y: 10,
                     }
 
                 pos
@@ -1039,7 +1039,7 @@ mod test_fmt {
                 pos =
                     {
                         x: 5,
-                        y: 10
+                        y: 10,
                     }
 
                 pos
@@ -1062,7 +1062,7 @@ mod test_fmt {
                 r#"
                 {
                     x: 4,
-                    y: 42
+                    y: 42,
                 }
                 "#
             ),

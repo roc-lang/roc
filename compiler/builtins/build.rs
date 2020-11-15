@@ -11,7 +11,9 @@ fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
 
     // "." is relative to where "build.rs" is
-    let src_path = Path::new(".").join("bitcode").join("src").join("main.zig");
+    let src_path = Path::new(".").join("bitcode").join("src");
+    let main_zig_path = src_path.join("main.zig");
+
     let src_path_str = src_path.to_str().expect("Invalid src path");
     println!("Building main.zig from: {}", src_path_str);
 
@@ -28,7 +30,7 @@ fn main() {
         "zig",
         &[
             "build-obj",
-            src_path_str,
+            main_zig_path.to_str().unwrap(),
             &emit_ir_arg,
             "-fno-emit-bin",
             "--strip",

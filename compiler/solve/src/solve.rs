@@ -154,9 +154,6 @@ pub fn run(
         constraint,
     );
 
-    //dbg!(&subs, &state.env.vars_by_symbol);
-    //panic!();
-
     (Solved(subs), state.env)
 }
 
@@ -242,6 +239,34 @@ fn solve(
                     introduce(subs, rank, pools, &vars);
 
                     problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+            }
+        }
+        Store(source, target, _filename, _linenr) => {
+            // a special version of Eq that is used to store types in the AST.
+            // IT DOES NOT REPORT ERRORS!
+            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+            let target = *target;
+
+            match unify(subs, actual, target) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, _actual_type, _expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
+
+                    state
+                }
+                BadType(vars, _problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
 
                     state
                 }
@@ -1139,29 +1164,47 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let mut desc = subs.get(var);
-    let mark = desc.mark;
+    let desc = subs.get(var);
 
-    if mark == young_mark {
-        desc.mark = visit_mark;
-
-        let content = desc.content.clone();
-        let mut marked_desc = desc.clone();
+    if desc.mark == young_mark {
+        let Descriptor {
+            content,
+            rank,
+            mark: _,
+            copy,
+        } = desc;
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
-        subs.set(var, desc);
+        subs.set(
+            var,
+            Descriptor {
+                content: content.clone(),
+                rank,
+                mark: visit_mark,
+                copy,
+            },
+        );
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
-        marked_desc.rank = max_rank;
+        let max_rank =
+            adjust_rank_content(subs, young_mark, visit_mark, group_rank, content.clone());
 
-        debug_assert_eq!(marked_desc.mark, visit_mark);
-
-        subs.set(var, marked_desc);
+        subs.set(
+            var,
+            Descriptor {
+                content,
+                rank: max_rank,
+                mark: visit_mark,
+                copy,
+            },
+        );
 
         max_rank
-    } else if mark == visit_mark {
+    } else if desc.mark == visit_mark {
+        // nothing changes
         desc.rank
     } else {
+        let mut desc = desc;
+
         let min_rank = group_rank.min(desc.rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?

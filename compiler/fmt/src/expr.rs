@@ -230,8 +230,12 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
                 buf.push_str(string);
             }
-            Record { fields, update } => {
-                fmt_record(buf, *update, fields, indent);
+            Record {
+                fields,
+                update,
+                final_comments,
+            } => {
+                fmt_record(buf, *update, fields, final_comments, indent);
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -779,60 +783,51 @@ pub fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
     loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
+    final_comments: &[CommentOrNewline<'a>],
     indent: u16,
 ) {
-    buf.push('{');
-
-    match update {
-        None => {}
-        // We are presuming this to be a Var()
-        // If it wasnt a Var() we would not have made
-        // it this far. For example "{ 4 & hello = 9 }"
-        // doesnt make sense.
-        Some(record_var) => {
-            buf.push(' ');
-            record_var.format(buf, indent);
-            buf.push_str(" &");
-        }
-    }
-
-    let is_multiline = loc_fields.iter().any(|loc_field| loc_field.is_multiline());
-
-    let mut iter = loc_fields.iter().peekable();
-    let field_indent = if is_multiline {
-        indent + INDENT
+    if loc_fields.is_empty() {
+        buf.push_str("{}");
     } else {
-        if !loc_fields.is_empty() {
-            buf.push(' ');
-        }
+        buf.push('{');
 
-        indent
-    };
-
-    // we abuse the `Newlines` type to decide between multiline or single-line layout
-    let newlines = if is_multiline {
-        Newlines::Yes
-    } else {
-        Newlines::No
-    };
-
-    while let Some(field) = iter.next() {
-        field.format_with_options(buf, Parens::NotNeeded, newlines, field_indent);
-
-        if iter.peek().is_some() {
-            buf.push(',');
-
-            if !is_multiline {
+        match update {
+            None => {}
+            // We are presuming this to be a Var()
+            // If it wasnt a Var() we would not have made
+            // it this far. For example "{ 4 & hello = 9 }"
+            // doesnt make sense.
+            Some(record_var) => {
                 buf.push(' ');
+                record_var.format(buf, indent);
+                buf.push_str(" &");
             }
         }
-    }
 
-    if is_multiline {
-        newline(buf, indent)
-    } else if !loc_fields.is_empty() {
-        buf.push(' ');
-    }
+        let is_multiline = loc_fields.iter().any(|loc_field| loc_field.is_multiline())
+            || !final_comments.is_empty();
 
-    buf.push('}');
+        if is_multiline {
+            let field_indent = indent + INDENT;
+            for field in loc_fields.iter() {
+                field.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, field_indent);
+                buf.push(',');
+            }
+            newline(buf, indent);
+        } else {
+            // is_multiline == false
+            buf.push(' ');
+            let field_indent = indent;
+            let mut iter = loc_fields.iter().peekable();
+            while let Some(field) = iter.next() {
+                field.format_with_options(buf, Parens::NotNeeded, Newlines::No, field_indent);
+
+                if iter.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+            buf.push(' ');
+        };
+        buf.push('}');
+    }
 }

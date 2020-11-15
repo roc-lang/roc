@@ -315,7 +315,10 @@ impl<'a> Layout<'a> {
 
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
-            RecursionVar { .. } => todo!("recursion var"),
+            RecursionVar { structure, .. } => {
+                let structure_content = env.subs.get_without_compacting(structure).content;
+                Self::new_help(env, structure, structure_content)
+            }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(Symbol::NUM_INT, args, _) => {
@@ -751,7 +754,7 @@ fn layout_from_flat_type<'a>(
             // Determine the layouts of the fields, maintaining sort order
             let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
 
-            for (_, field) in sorted_fields {
+            for (label, field) in sorted_fields {
                 use LayoutProblem::*;
 
                 let field_var = {
@@ -776,7 +779,14 @@ fn layout_from_flat_type<'a>(
                             layouts.push(layout);
                         }
                     }
-                    Err(UnresolvedTypeVar(_)) | Err(Erroneous) => {
+                    Err(UnresolvedTypeVar(v)) => {
+                        // Invalid field!
+                        panic!(
+                            r"I hit an unresolved type var {:?} when determining the layout of {:?} of record field: {:?} : {:?}",
+                            field_var, v, label, field
+                        );
+                    }
+                    Err(Erroneous) => {
                         // Invalid field!
                         panic!("TODO gracefully handle record with invalid field.var");
                     }
@@ -936,7 +946,7 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
-fn union_sorted_tags_help<'a>(
+pub fn union_sorted_tags_help<'a>(
     arena: &'a Bump,
     mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
     opt_rec_var: Option<Variable>,

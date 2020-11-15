@@ -11,6 +11,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Category, PReason, PatternCategory, Reason, RecordField, Type};
 
+#[derive(Default)]
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
     pub vars: Vec<Variable>,
@@ -271,7 +272,7 @@ pub fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(record_type),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
@@ -315,7 +316,7 @@ pub fn constrain_pattern(
                     vec![(tag_name.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),
                 )),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 

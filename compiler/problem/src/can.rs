@@ -65,6 +65,7 @@ pub enum Problem {
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
     InvalidUnicodeCodePoint(Region),
+    MalformedIdentifier(Vec<(usize, IdentProblem)>, Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]

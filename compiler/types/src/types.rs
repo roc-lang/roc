@@ -1007,7 +1007,7 @@ pub enum Category {
     StrInterpolation,
 
     // storing variables in the ast
-    Storage,
+    Storage(&'static str, u32),
 
     // control flow
     If,

@@ -4,16 +4,16 @@ use std::alloc::Layout;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "makeClosure_1_exposed"]
+    #[link_name = "Main_makeClosure_1_exposed"]
     fn make_closure(output: *mut u8) -> ();
 
-    #[link_name = "makeClosure_1_size"]
+    #[link_name = "Main_makeClosure_1_size"]
     fn closure_size() -> i64;
 
-    #[link_name = "makeClosure_1_MyClosure_caller"]
+    #[link_name = "Main_makeClosure_1_MyClosure_caller"]
     fn call_MyClosure(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
 
-    #[link_name = "makeClosure_1_MyClosure_size"]
+    #[link_name = "Main_makeClosure_1_MyClosure_size"]
     fn size_MyClosure() -> i64;
 }
 

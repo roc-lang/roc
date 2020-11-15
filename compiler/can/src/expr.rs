@@ -208,6 +208,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Record {
             fields,
             update: Some(loc_update),
+            final_comments: _,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
@@ -255,6 +256,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Record {
             fields,
             update: None,
+            final_comments: _,
         } => {
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
@@ -730,6 +732,8 @@ pub fn canonicalize_expr<'a>(
             let mut problems_vec = Vec::new();
 
             problems_vec.clone_from_slice(problems);
+
+            env.problem(Problem::MalformedIdentifier(problems_vec.clone(), region));
 
             (
                 RuntimeError(MalformedIdentifier(problems_vec, region)),

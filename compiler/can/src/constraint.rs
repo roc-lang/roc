@@ -8,6 +8,7 @@ use roc_types::types::{Category, PatternCategory, Type};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Category, Region),
+    Store(Type, Variable, &'static str, u32),
     Lookup(Symbol, Expected<Type>, Region),
     Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
