@@ -2,8 +2,8 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
-    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_comments_only_bis, fmt_spaces,
-    newline, INDENT, NewlineAt
+    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline,
+    NewlineAt, INDENT,
 };
 use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
@@ -109,7 +109,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 if format_newlines {
                     fmt_spaces(buf, spaces.iter(), indent);
                 } else {
-                    fmt_comments_only(buf, spaces.iter(), indent);
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 }
                 sub_expr.format_with_options(buf, parens, newlines, indent);
             }
@@ -118,7 +118,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 if format_newlines {
                     fmt_spaces(buf, spaces.iter(), indent);
                 } else {
-                    fmt_comments_only(buf, spaces.iter(), indent);
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 }
             }
             ParensAround(sub_expr) => {
@@ -417,7 +417,12 @@ pub fn fmt_list<'a>(buf: &mut String<'a>, loc_items: &[&Located<Expr<'a>>], inde
             match &item.value {
                 Expr::SpaceBefore(expr_below, spaces_above_expr) => {
                     newline(buf, item_indent);
-                    fmt_comments_only(buf, spaces_above_expr.iter(), item_indent);
+                    fmt_comments_only(
+                        buf,
+                        spaces_above_expr.iter(),
+                        NewlineAt::Bottom,
+                        item_indent,
+                    );
 
                     match &expr_below {
                         Expr::SpaceAfter(expr_above, spaces_below_expr) => {
@@ -586,7 +591,7 @@ fn fmt_when<'a>(
         add_spaces(buf, indent + (INDENT * 2));
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
-                fmt_comments_only(buf, spaces.iter(), indent + (INDENT * 2));
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + (INDENT * 2));
                 nested.format_with_options(
                     buf,
                     Parens::NotNeeded,
@@ -676,7 +681,7 @@ fn fmt_if<'a>(
             Expr::SpaceBefore(expr_below, spaces_below) => {
                 // we want exactly one newline, user-inserted extra newlines are ignored.
                 newline(buf, return_indent);
-                fmt_comments_only(buf, spaces_below.iter(), return_indent);
+                fmt_comments_only(buf, spaces_below.iter(), NewlineAt::Bottom, return_indent);
 
                 match &expr_below {
                     Expr::SpaceAfter(expr_above, spaces_above) => {
@@ -814,10 +819,10 @@ pub fn fmt_record<'a>(
                 format_field_multiline(buf, &field.value, field_indent, "");
             }
 
-            fmt_comments_only_bis(buf, final_comments.iter(), NewlineAt::Top, field_indent);
+            fmt_comments_only(buf, final_comments.iter(), NewlineAt::Top, field_indent);
 
             newline(buf, indent);
-        } else        {
+        } else {
             // is_multiline == false */
             buf.push(' ');
             let field_indent = indent;
@@ -882,12 +887,12 @@ fn format_field_multiline<'a, T>(
             buf.push(',');
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
-            fmt_comments_only_bis(buf, spaces.iter(),NewlineAt::Top, indent);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
             format_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
             format_field_multiline(buf, sub_field, indent, separator_prefix);
-            fmt_comments_only_bis(buf, spaces.iter(), NewlineAt::Top,indent);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
         }
         Malformed(raw) => {
             buf.push_str(raw);

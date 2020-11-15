@@ -92,91 +92,57 @@ where
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug)]
 pub enum NewlineAt {
     Top,
     Bottom,
     Both,
-    None
+    None,
 }
 
-/// Similar to fmt_comments_only, but does not finish with a newline()
-/// and does not create new line if there only are newlines in spaces.
-/// Used to format final comments in collections (records, lists, ...).
-pub fn fmt_comments_only_bis<'a, I>(buf: &mut String<'a>, spaces: I, new_line_at: NewlineAt, indent: u16)
-where
+/// Like format_spaces, but remove newlines and keep only comments.
+/// The `new_line_at` argument describe how new lines should be inserted
+/// if there is some comment in the `spaces` argument.
+pub fn fmt_comments_only<'a, I>(
+    buf: &mut String<'a>,
+    spaces: I,
+    new_line_at: NewlineAt,
+    indent: u16,
+) where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
     use NewlineAt::*;
-
-    let mut iter = spaces;
+    
     let mut comment_seen = false;
-    // For the first space, don't add newline before it
-    if let Some(space) = iter.next() {
-        match space {
-            Newline => {}
-            LineComment(comment) => {
-                if new_line_at == Top || new_line_at == Both {
-                    newline(buf, indent);
-                }
-                fmt_comment(buf, comment);
-                comment_seen = true;
-            }
-            DocComment(docs) => {
-                if new_line_at == Top || new_line_at == Both {
-                    newline(buf, indent);
-                }
-                fmt_docs(buf, docs);    
-                comment_seen = true;            
-            }
-        }
-    }
-    // For the following spaces, add a newline before them
-    for space in iter {
-        match space {
-            Newline => {}
-            LineComment(comment) => {
-                newline(buf, indent);
-                fmt_comment(buf, comment);
-                comment_seen = true;
-            }
-            DocComment(docs) => {
-                newline(buf, indent);
-                fmt_docs(buf, docs);  
-                comment_seen = true;              
-            }
-        }
-    }
-    if comment_seen && (new_line_at == Bottom  || new_line_at == Both ) {
-        newline(buf, indent);
-    }
-}
-/// Like format_spaces, but remove newlines and keep only comments.
-pub fn fmt_comments_only<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
-where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
-{
-    use self::CommentOrNewline::*;
 
     for space in spaces {
         match space {
             Newline => {}
             LineComment(comment) => {
+                if comment_seen || new_line_at == Top || new_line_at == Both {
+                    newline(buf, indent);
+                }
                 fmt_comment(buf, comment);
-                newline(buf, indent);
+                comment_seen = true;
             }
             DocComment(docs) => {
+                if comment_seen || new_line_at == Top || new_line_at == Both {
+                    newline(buf, indent);
+                }
                 fmt_docs(buf, docs);
-                newline(buf, indent);
+                comment_seen = true;
             }
         }
+    }
+    if comment_seen && (new_line_at == Bottom || new_line_at == Both) {
+        newline(buf, indent);
     }
 }
 
 fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str) {
     buf.push('#');
-    buf.push_str(comment);    
+    buf.push_str(comment);
 }
 
 fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str) {
