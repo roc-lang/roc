@@ -1,10 +1,7 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
-use crate::spaces::{
-    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline,
-    NewlineAt, INDENT,
-};
+use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
 use roc_parse::ast::StrSegment;
@@ -432,7 +429,12 @@ pub fn fmt_list<'a>(buf: &mut String<'a>, loc_items: &[&Located<Expr<'a>>], inde
                                 buf.push(',');
                             }
 
-                            fmt_condition_spaces(buf, spaces_below_expr.iter(), item_indent);
+                            fmt_comments_only(
+                                buf,
+                                spaces_below_expr.iter(),
+                                NewlineAt::Top,
+                                item_indent,
+                            );
                         }
                         _ => {
                             expr_below.format(buf, item_indent);
@@ -452,7 +454,7 @@ pub fn fmt_list<'a>(buf: &mut String<'a>, loc_items: &[&Located<Expr<'a>>], inde
                         buf.push(',');
                     }
 
-                    fmt_condition_spaces(buf, spaces.iter(), item_indent);
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, item_indent);
                 }
 
                 _ => {
@@ -527,12 +529,22 @@ fn fmt_when<'a>(
 
         match &loc_condition.value {
             Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                fmt_condition_spaces(buf, spaces_above_expr.iter(), condition_indent);
+                fmt_comments_only(
+                    buf,
+                    spaces_above_expr.iter(),
+                    NewlineAt::Top,
+                    condition_indent,
+                );
                 newline(buf, condition_indent);
                 match &expr_below {
                     Expr::SpaceAfter(expr_above, spaces_below_expr) => {
                         expr_above.format(buf, condition_indent);
-                        fmt_condition_spaces(buf, spaces_below_expr.iter(), condition_indent);
+                        fmt_comments_only(
+                            buf,
+                            spaces_below_expr.iter(),
+                            NewlineAt::Top,
+                            condition_indent,
+                        );
                         newline(buf, indent);
                     }
                     _ => {
@@ -639,13 +651,18 @@ fn fmt_if<'a>(
     if is_multiline_condition {
         match &loc_condition.value {
             Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                fmt_condition_spaces(buf, spaces_above_expr.iter(), return_indent);
+                fmt_comments_only(buf, spaces_above_expr.iter(), NewlineAt::Top, return_indent);
                 newline(buf, return_indent);
 
                 match &expr_below {
                     Expr::SpaceAfter(expr_above, spaces_below_expr) => {
                         expr_above.format(buf, return_indent);
-                        fmt_condition_spaces(buf, spaces_below_expr.iter(), return_indent);
+                        fmt_comments_only(
+                            buf,
+                            spaces_below_expr.iter(),
+                            NewlineAt::Top,
+                            return_indent,
+                        );
                         newline(buf, indent);
                     }
 
@@ -658,7 +675,7 @@ fn fmt_if<'a>(
             Expr::SpaceAfter(expr_above, spaces_below_expr) => {
                 newline(buf, return_indent);
                 expr_above.format(buf, return_indent);
-                fmt_condition_spaces(buf, spaces_below_expr.iter(), return_indent);
+                fmt_comments_only(buf, spaces_below_expr.iter(), NewlineAt::Top, return_indent);
                 newline(buf, indent);
             }
 
@@ -687,7 +704,7 @@ fn fmt_if<'a>(
                     Expr::SpaceAfter(expr_above, spaces_above) => {
                         expr_above.format(buf, return_indent);
 
-                        fmt_condition_spaces(buf, spaces_above.iter(), return_indent);
+                        fmt_comments_only(buf, spaces_above.iter(), NewlineAt::Top, return_indent);
                         newline(buf, indent);
                     }
 

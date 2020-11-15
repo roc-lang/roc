@@ -1,7 +1,4 @@
-use crate::spaces::{
-    fmt_comments_only,fmt_condition_spaces, fmt_spaces, newline, NewlineAt,
-    INDENT,
-};
+use crate::spaces::{fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
@@ -466,9 +463,10 @@ macro_rules! implement_format_sequence {
                                         buf.push(',');
                                     }
 
-                                    fmt_condition_spaces(
+                                    fmt_comments_only(
                                         buf,
                                         spaces_below_expr.iter(),
+                                        NewlineAt::Top,
                                         item_indent,
                                     );
                                 }
@@ -489,7 +487,7 @@ macro_rules! implement_format_sequence {
                                 buf.push(',');
                             }
 
-                            fmt_condition_spaces(buf, spaces.iter(), item_indent);
+                            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, item_indent);
                         }
 
                         _ => {

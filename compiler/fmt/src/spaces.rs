@@ -60,38 +60,6 @@ where
     }
 }
 
-/// Similar to fmt_comments_only, but does not finish with a newline()
-/// Used to format when and if statement conditions
-pub fn fmt_condition_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
-where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
-{
-    use self::CommentOrNewline::*;
-
-    let mut iter = spaces.peekable();
-
-    while let Some(space) = iter.next() {
-        match space {
-            Newline => {}
-            LineComment(comment) => {
-                fmt_comment(buf, comment);
-            }
-            DocComment(docs) => {
-                fmt_docs(buf, docs);
-            }
-        }
-        match iter.peek() {
-            None => {}
-            Some(next_space) => match next_space {
-                Newline => {}
-                LineComment(_) | DocComment(_) => {
-                    newline(buf, indent);
-                }
-            },
-        }
-    }
-}
-
 #[derive(Eq, PartialEq, Debug)]
 pub enum NewlineAt {
     Top,
@@ -101,8 +69,9 @@ pub enum NewlineAt {
 }
 
 /// Like format_spaces, but remove newlines and keep only comments.
-/// The `new_line_at` argument describe how new lines should be inserted
-/// if there is some comment in the `spaces` argument.
+/// The `new_line_at` argument describes how new lines should be inserted
+/// at the beginning or at the end of the block
+/// in the case of there is some comment in the `spaces` argument.
 pub fn fmt_comments_only<'a, I>(
     buf: &mut String<'a>,
     spaces: I,
@@ -113,7 +82,7 @@ pub fn fmt_comments_only<'a, I>(
 {
     use self::CommentOrNewline::*;
     use NewlineAt::*;
-    
+
     let mut comment_seen = false;
 
     for space in spaces {
