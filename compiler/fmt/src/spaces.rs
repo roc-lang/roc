@@ -92,27 +92,64 @@ where
     }
 }
 
+#[derive(Eq, PartialEq)]
+pub enum NewlineAt {
+    Top,
+    Bottom,
+    Both,
+    None
+}
+
 /// Similar to fmt_comments_only, but does not finish with a newline()
 /// and does not create new line if there only are newlines in spaces.
 /// Used to format final comments in collections (records, lists, ...).
-pub fn fmt_final_comments_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+pub fn fmt_comments_only_bis<'a, I>(buf: &mut String<'a>, spaces: I, new_line_at: NewlineAt, indent: u16)
 where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
+    use NewlineAt::*;
 
-    for space in spaces {
+    let mut iter = spaces;
+    let mut comment_seen = false;
+    // For the first space, don't add newline before it
+    if let Some(space) = iter.next() {
+        match space {
+            Newline => {}
+            LineComment(comment) => {
+                if new_line_at == Top || new_line_at == Both {
+                    newline(buf, indent);
+                }
+                fmt_comment(buf, comment);
+                comment_seen = true;
+            }
+            DocComment(docs) => {
+                if new_line_at == Top || new_line_at == Both {
+                    newline(buf, indent);
+                }
+                fmt_docs(buf, docs);    
+                comment_seen = true;            
+            }
+        }
+    }
+    // For the following spaces, add a newline before them
+    for space in iter {
         match space {
             Newline => {}
             LineComment(comment) => {
                 newline(buf, indent);
                 fmt_comment(buf, comment);
+                comment_seen = true;
             }
             DocComment(docs) => {
                 newline(buf, indent);
-                fmt_docs(buf, docs);                
+                fmt_docs(buf, docs);  
+                comment_seen = true;              
             }
         }
+    }
+    if comment_seen && (new_line_at == Bottom  || new_line_at == Both ) {
+        newline(buf, indent);
     }
 }
 /// Like format_spaces, but remove newlines and keep only comments.

@@ -2,8 +2,8 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
-    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_final_comments_spaces, fmt_spaces,
-    newline, INDENT,
+    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_comments_only_bis, fmt_spaces,
+    newline, INDENT, NewlineAt
 };
 use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
@@ -814,11 +814,11 @@ pub fn fmt_record<'a>(
                 format_field_multiline(buf, &field.value, field_indent, "");
             }
 
-            fmt_final_comments_spaces(buf, final_comments.iter(), field_indent);
+            fmt_comments_only_bis(buf, final_comments.iter(), NewlineAt::Top, field_indent);
 
             newline(buf, indent);
-        } else {
-            // is_multiline == false
+        } else        {
+            // is_multiline == false */
             buf.push(' ');
             let field_indent = indent;
             let mut iter = loc_fields.iter().peekable();
@@ -882,12 +882,12 @@ fn format_field_multiline<'a, T>(
             buf.push(',');
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
-            fmt_final_comments_spaces(buf, spaces.iter(), indent);
+            fmt_comments_only_bis(buf, spaces.iter(),NewlineAt::Top, indent);
             format_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
             format_field_multiline(buf, sub_field, indent, separator_prefix);
-            fmt_final_comments_spaces(buf, spaces.iter(), indent);
+            fmt_comments_only_bis(buf, spaces.iter(), NewlineAt::Top,indent);
         }
         Malformed(raw) => {
             buf.push_str(raw);
