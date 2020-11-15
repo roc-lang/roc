@@ -70,7 +70,6 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
         Symbol::LIST_KEEP_IF => list_keep_if,
-        Symbol::LIST_SUM => list_sum,
         Symbol::LIST_WALK_RIGHT => list_walk_right,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
