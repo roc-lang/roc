@@ -1278,6 +1278,109 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
+    fn rbtree_balance_inc_dec() {
+        // TODO does not define a variable correctly, but all is well with the type signature
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k : [ Node NodeColor k (Dict k)  (Dict k), Empty ]
+
+                # balance : NodeColor, k, Dict k,  Dict k -> Dict k
+                balance = \color, key, left, right ->
+                  when right is
+                    Node Red rK rLeft rRight ->
+                      when left is
+                        Node Red _ _ _ ->
+                          Node
+                            Red
+                            key
+                            Empty
+                            Empty
+
+                        _ ->
+                          Node color rK (Node Red key left rLeft) rRight
+
+                    _ ->
+                        Empty
+
+                main : Dict Int
+                main =
+                    balance Red 0 Empty Empty
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_3() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                    Node key left Empty
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_2() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k : [ Node NodeColor k (Dict k), Empty ]
+
+                balance : NodeColor, k, Dict k,  Dict k -> Dict k
+                balance = \color, key, left, right ->
+                  when right is
+                    Node Red rK _ ->
+                      when left is
+                        Node Red _ _  ->
+                          Node
+                            Red
+                            key
+                            Empty
+
+                        _ ->
+                          Node color rK (Node Red key left )
+
+                    _ ->
+                        Empty
+
+                main : Dict Int
+                main =
+                    balance Red 0 Empty Empty
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
     fn rbtree_balance() {
         assert_non_opt_evals_to!(
             indoc!(
