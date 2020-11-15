@@ -59,9 +59,9 @@ pub fn build_module<'a>(
             }
 
             // Build procedures.
-            let mut backend: X86_64Backend = Backend::new();
+            let mut backend: X86_64Backend = Backend::new(env);
             for (proc_id, proc) in procs {
-                let proc_data = backend.build_proc(env, proc);
+                let proc_data = backend.build_proc(proc);
                 output.add_symbol_data(proc_id, text, proc_data, 16);
             }
             Ok(output)

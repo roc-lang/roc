@@ -15,7 +15,15 @@ mod gen_num {
 
     #[test]
     fn i64_values() {
-        assert_evals_to!("6", 6, i64);
+        assert_evals_to!("0", 0, i64);
+        assert_evals_to!("-0", 0, i64);
+        assert_evals_to!("-1", -1, i64);
+        assert_evals_to!("1", 1, i64);
+        assert_evals_to!("9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to!("-9_000_000_000_000", -9_000_000_000_000, i64);
+        assert_evals_to!("0b1010", 0b1010, i64);
+        assert_evals_to!("0o17", 0o17, i64);
+        assert_evals_to!("0x1000_0000_0000_0000", 0x1000_0000_0000_0000, i64);
     }
     /*
     #[test]
@@ -44,12 +52,10 @@ mod gen_num {
         assert_evals_to!("Num.abs -4.7", 4.7, f64);
         assert_evals_to!("Num.abs 5.8", 5.8, f64);
     }
-    */
 
     #[test]
     fn i64_abs() {
         //assert_evals_to!("Num.abs -6", 6, i64);
-        /*
         assert_evals_to!("Num.abs 7", 7, i64);
         assert_evals_to!("Num.abs 0", 0, i64);
         assert_evals_to!("Num.abs -0", 0, i64);
@@ -57,10 +63,8 @@ mod gen_num {
         assert_evals_to!("Num.abs 1", 1, i64);
         assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
         assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
-        */
     }
 
-    /*
     #[test]
     fn gen_if_fn() {
         assert_evals_to!(
