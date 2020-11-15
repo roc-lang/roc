@@ -27,6 +27,7 @@ mod test_parse {
         self, Attempting, Def, EscapedChar, InterfaceHeader, Spaceable, TypeAnnotation, WhenBranch,
     };
     use roc_parse::header::ModuleName;
+    use roc_parse::ident::{Ident, IdentProblem};
     use roc_parse::module::{interface_header, module_defs};
     use roc_parse::parser::{Fail, FailReason, Parser, State};
     use roc_parse::test_helpers::parse_expr_with;
@@ -908,7 +909,7 @@ mod test_parse {
     #[test]
     fn qualified_global_tag() {
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("One.Two.Whee");
+        let expected = Expr::MalformedIdent(&[(0, IdentProblem::QualifiedTag)]);
         let actual = parse_expr_with(&arena, "One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
@@ -938,7 +939,7 @@ mod test_parse {
     #[test]
     fn private_qualified_tag() {
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("@One.Two.Whee");
+        let expected = Expr::MalformedIdent(&[(0, IdentProblem::QualifiedTag)]);
         let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
@@ -2467,7 +2468,12 @@ mod test_parse {
         // See https://github.com/rtfeldman/roc/issues/399
         let arena = Bump::new();
         let newlines = &[Newline];
-        let pattern1 = Pattern::SpaceBefore(arena.alloc(Pattern::Malformed("bar.and")), newlines);
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(Pattern::Malformed(Ident::Malformed(
+                bumpalo::vec![in &arena; (0, IdentProblem::QualifiedTag)].into_bump_slice(),
+            ))),
+            newlines,
+        );
         let loc_pattern1 = Located::new(1, 1, 4, 11, pattern1);
         let expr1 = Num("1");
         let loc_expr1 = Located::new(1, 1, 15, 16, expr1);
@@ -2512,7 +2518,12 @@ mod test_parse {
         // See https://github.com/rtfeldman/roc/issues/399
         let arena = Bump::new();
         let newlines = &[Newline];
-        let pattern1 = Pattern::SpaceBefore(arena.alloc(Pattern::Malformed("Foo.and")), newlines);
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(Pattern::Malformed(Ident::Malformed(
+                bumpalo::vec![in &arena; (0, IdentProblem::QualifiedTag)].into_bump_slice(),
+            ))),
+            newlines,
+        );
         let loc_pattern1 = Located::new(1, 1, 4, 11, pattern1);
         let expr1 = Num("1");
         let loc_expr1 = Located::new(1, 1, 15, 16, expr1);
