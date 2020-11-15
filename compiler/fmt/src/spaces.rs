@@ -111,10 +111,16 @@ pub fn fmt_comments_only<'a, I>(
 
 fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str) {
     buf.push('#');
+    if !comment.starts_with(" ") {
+        buf.push(' ');
+    }
     buf.push_str(comment);
 }
 
 fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str) {
     buf.push_str("##");
+    if !docs.starts_with(" ") {
+        buf.push(' ');
+    }
     buf.push_str(docs);
 }

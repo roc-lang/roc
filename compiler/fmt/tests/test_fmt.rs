@@ -130,6 +130,24 @@ mod test_fmt {
     }
 
     #[test]
+    fn force_space_at_begining_of_comment() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                #comment
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                # comment
+                f
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn func_def() {
         expr_formats_same(indoc!(
             r#"
@@ -704,7 +722,7 @@ mod test_fmt {
                 r#"
             {
                 z: 44,
-                #comment 0
+                # comment 0
                 y: 41,
                 # comment 1
                 # comment 2
