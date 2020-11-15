@@ -4,15 +4,51 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 
+
 const RocStr = struct {
     str_bytes_ptrs: [*]u8,
     str_len: usize,
 
-    pub fn init(bytes: [*]u8, len: usize) RocStr {
+    pub fn get_small_str_ptr(self: *RocStr) *u8 {
+        const small_str_ptr = @ptrCast(*u8, self);
+        return small_str_ptr;
+    }
+
+    pub fn empty() RocStr {
         return RocStr {
-            .str_bytes_ptrs = bytes,
-            .str_len = len
+            .str_len = 0,
+            .str_bytes_ptrs = undefined
         };
+    }
+
+    pub fn init(bytes: [*]u8, len: usize) RocStr {
+        const rocStrSize = @sizeOf(RocStr);
+
+        if (len < rocStrSize) {
+            var empty_roc_str = RocStr.empty();
+
+            const target_ptr = @ptrToInt(empty_roc_str.get_small_str_ptr());
+
+            var index : u8 = 0;
+
+            while (index < len) {
+                var offset_ptr = @intToPtr(*usize, target_ptr + index);
+                offset_ptr.* = bytes[index];
+                index += 1;
+            }
+            const final_byte_ptr = @intToPtr(*usize, target_ptr + index);
+            final_byte_ptr.* = rocStrSize ^ 0b10000000;
+            empty_roc_str.str_len = target_ptr;
+
+            return empty_roc_str;
+        } else {
+            return RocStr {
+                .str_bytes_ptrs = bytes,
+                .str_len = len
+            };
+        }
+
+
     }
 
     pub fn eq(self: *RocStr, other: RocStr) bool {
@@ -111,7 +147,8 @@ pub fn strSplitInPlace(
             }
 
             if (matches_delimiter) {
-                array[ret_array_index] = RocStr.init(str_bytes_ptrs + sliceStart_index, str_index - sliceStart_index);
+                const segment_len : usize = str_index - sliceStart_index;
+                array[ret_array_index] = RocStr.init(str_bytes_ptrs + sliceStart_index, segment_len);
                 sliceStart_index = str_index + delimiter_len;
                 ret_array_index += 1;
                 str_index += delimiter_len;
