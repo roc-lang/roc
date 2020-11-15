@@ -438,7 +438,7 @@ fn unify_tag_union(
     let recursion_var = match recursion {
         (None, None) => None,
         (Some(v), None) | (None, Some(v)) => Some(v),
-        (Some(v1), Some(v2)) => Some(v1),
+        (Some(v1), Some(_v2)) => Some(v1),
     };
 
     if unique_tags1.is_empty() {
@@ -1239,8 +1239,5 @@ fn gather_tags(
 }
 
 fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
-    match subs.get_without_compacting(var).content {
-        Content::RecursionVar { .. } => true,
-        _ => false,
-    }
+    matches!(subs.get_without_compacting(var).content, Content::RecursionVar { .. })
 }
