@@ -536,6 +536,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListKeepIf => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListWalkRight => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
+        ListSum => arena.alloc_slice_copy(&[borrowed]),
 
         Eq | NotEq | And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumMul | NumGt
         | NumGte | NumLt | NumLte | NumCompare | NumDivUnchecked | NumRemUnchecked | NumPow
