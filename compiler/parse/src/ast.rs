@@ -446,7 +446,7 @@ pub enum Base {
 }
 
 impl<'a> Pattern<'a> {
-    pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
+    pub fn from_ident(_arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
         match ident {
             Ident::GlobalTag(string) => Pattern::GlobalTag(string),
             Ident::PrivateTag(string) => Pattern::PrivateTag(string),
