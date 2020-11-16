@@ -427,6 +427,11 @@ mod gen_str {
     }
 
     #[test]
+    fn str_count_graphemes_three_js() {
+        assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
+    }
+
+    #[test]
     fn str_count_graphemes_big_str() {
         assert_evals_to!(
             r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
