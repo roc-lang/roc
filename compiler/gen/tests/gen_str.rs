@@ -212,7 +212,7 @@ mod gen_str {
                 "#
             ),
             &[small_str("1"), small_str("2"), small_str("")],
-            &'static [[u8; 16]]
+            &'static [[u8; ROC_STR_MEM_SIZE]]
         );
     }
 
@@ -227,7 +227,7 @@ mod gen_str {
                 "#
             ),
             &[small_str("3"), small_str("4"), small_str("")],
-            &'static [[u8; 16]]
+            &'static [[u8; ROC_STR_MEM_SIZE]]
         );
     }
 
