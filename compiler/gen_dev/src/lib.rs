@@ -11,7 +11,7 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-use bumpalo::{collections::Vec, Bump};
+use bumpalo::Bump;
 use object::write::Object;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
@@ -59,26 +59,25 @@ trait Backend<'a> {
     fn build_proc(&mut self, proc: Proc<'a>) -> &'a [u8] {
         self.reset();
         // TODO: let the backend know of all the arguments.
-        let mut buf = bumpalo::vec!(in self.env().arena);
-        self.build_stmt(&mut buf, &proc.body);
-        self.wrap_proc(buf).into_bump_slice()
+        self.build_stmt(&proc.body);
+        self.finalize()
     }
 
-    /// wrap_proc does any setup and cleanup that should happen around the procedure.
+    /// finalize does any setup and cleanup that should happen around the procedure.
+    /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pionter and setup stack space.
-    /// wrap_proc is run at the end of build_proc when all internal code is finalized.
-    /// wrap_proc returns a Vec because it is expected to prepend data.
-    fn wrap_proc(&mut self, buf: Vec<'a, u8>) -> Vec<'a, u8>;
+    /// finalize is run at the end of build_proc when all internal code is finalized.
+    fn finalize(&mut self) -> &'a [u8];
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, buf: &mut Vec<'a, u8>, stmt: &Stmt<'a>) {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
-                self.build_expr(buf, sym, expr, layout);
-                self.build_stmt(buf, following);
+                self.build_expr(sym, expr, layout);
+                self.build_stmt(following);
             }
             Stmt::Ret(sym) => {
-                self.return_symbol(buf, sym);
+                self.return_symbol(sym);
             }
             x => unimplemented!("the statement, {:?}, is not yet implemented", x),
         }
@@ -87,13 +86,7 @@ trait Backend<'a> {
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be refered to later.
     /// In many cases values can be lazy loaded, like literals.
-    fn build_expr(
-        &mut self,
-        _buf: &mut Vec<'a, u8>,
-        sym: &Symbol,
-        expr: &Expr<'a>,
-        layout: &Layout<'a>,
-    ) {
+    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &Layout<'a>) {
         match expr {
             Expr::Literal(lit) => {
                 self.set_symbol_to_lit(sym, lit, layout);
@@ -107,5 +100,5 @@ trait Backend<'a> {
     fn set_symbol_to_lit(&mut self, sym: &Symbol, lit: &Literal<'a>, layout: &Layout<'a>);
 
     /// return_symbol moves a symbol to the correct return location for the backend.
-    fn return_symbol(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol);
+    fn return_symbol(&mut self, sym: &Symbol);
 }
