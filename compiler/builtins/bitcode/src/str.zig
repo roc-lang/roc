@@ -133,7 +133,7 @@ pub fn strSplitInPlace(
     var str_index : usize = 0;
 
     if (str_len > delimiter_len) {
-        const end_index : usize = str_len - delimiter_len;
+        const end_index : usize = str_len - delimiter_len + 1;
         while (str_index <= end_index) {
             var delimiter_index : usize = 0;
             var matches_delimiter = true;
@@ -301,7 +301,7 @@ pub fn countSegments(
 
     if (str_len > delimiter_len) {
         var str_index: usize = 0;
-        const end_cond: usize = str_len - delimiter_len;
+        const end_cond: usize = str_len - delimiter_len + 1;
 
         while (str_index < end_cond) {
             var delimiter_index: usize = 0;

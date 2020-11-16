@@ -163,30 +163,69 @@ mod gen_str {
     }
 
     #[test]
-    fn str_split_small_str_big_delimiter() {
-        // assert_evals_to!(
-        //     indoc!(
-        //         r#"
-        //             Str.split
-        //                 "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
-        //                 "---- ---- ---- ---- ----"
-        //         "#
-        //     ),
-        //     &[small_str("1"), small_str("2"), small_str("")],
-        //     &'static [[u8; 16]]
-        // );
+    fn str_split_empty_strs() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "" ""
+                "#
+            ),
+            &[small_str("")],
+            &'static [[u8; 16]]
+        )
+    }
 
-        // assert_evals_to!(
-        //     indoc!(
-        //         r#"
-        //             Str.split
-        //                 "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
-        //                 "|-- -- -- -- -- -- |"
-        //         "#
-        //     ),
-        //     &[small_str("3"), small_str("4"), small_str("")],
-        //     &'static [[u8; 16]]
-        // );
+    #[test]
+    fn str_split_minimal_example() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "a," ","
+                "#
+            ),
+            &[small_str("a"), small_str("")],
+            &'static [[u8; 16]]
+        )
+    }
+
+    #[test]
+    fn str_split_small_str_big_delimiter() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split
+                        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
+                        "---- ---- ---- ---- ----"
+                        |> List.len
+                "#
+            ),
+            3,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split
+                        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
+                        "---- ---- ---- ---- ----"
+                "#
+            ),
+            &[small_str("1"), small_str("2"), small_str("")],
+            &'static [[u8; 16]]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split
+                        "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
+                        "|-- -- -- -- -- -- |"
+                "#
+            ),
+            &[small_str("3"), small_str("4"), small_str("")],
+            &'static [[u8; 16]]
+        );
     }
 
     #[test]
