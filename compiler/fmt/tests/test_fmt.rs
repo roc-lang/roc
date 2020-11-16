@@ -130,6 +130,24 @@ mod test_fmt {
     }
 
     #[test]
+    fn force_space_at_begining_of_comment() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                #comment
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                # comment
+                f
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn func_def() {
         expr_formats_same(indoc!(
             r#"
@@ -612,6 +630,129 @@ mod test_fmt {
                     leftShoe: bareFoot,
                 }
                 "#
+            ),
+        );
+    }
+
+    #[test]
+    fn final_comments_in_records() {
+        expr_formats_same(indoc!(
+            r#"
+            {
+                x: 42,
+                # comment
+            }"#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            {
+                x: 42,
+                # comment
+                # other comment
+            }"#
+        ));
+    }
+
+    #[test]
+    fn final_comments_without_comma_in_records() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {
+                y: 41,
+                # comment 1
+                x: 42 # comment 2
+            }"#
+            ),
+            indoc!(
+                r#"
+            {
+                y: 41,
+                # comment 1
+                x: 42,
+                # comment 2
+            }"#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiple_final_comments_without_comma_in_records() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42 # comment 1
+                # comment 2
+            }"#
+            ),
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42,
+                # comment 1
+                # comment 2
+            }"#
+            ),
+        );
+    }
+
+    #[test]
+    fn comments_with_newlines_in_records() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {
+                z: 44 #comment 0
+                ,
+                y: 41, # comment 1
+
+                # comment 2
+                x: 42
+                
+                # comment 3
+                
+                # comment 4
+            }"#
+            ),
+            indoc!(
+                r#"
+            {
+                z: 44,
+                # comment 0
+                y: 41,
+                # comment 1
+                # comment 2
+                x: 42,
+                # comment 3
+                # comment 4
+            }"#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiple_final_comments_with_comma_in_records() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42, # comment 1
+                # comment 2
+            }"#
+            ),
+            indoc!(
+                r#"
+            {
+                y: 41,
+                x: 42,
+                # comment 1
+                # comment 2
+            }"#
             ),
         );
     }

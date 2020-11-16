@@ -1,6 +1,6 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
-use crate::spaces::{fmt_spaces, is_comment, newline, INDENT};
+use crate::spaces::{fmt_spaces, newline, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{Def, Expr, Pattern};
 
@@ -17,7 +17,7 @@ impl<'a> Formattable<'a> for Def<'a> {
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
             AnnotatedBody { .. } => true,
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
-                spaces.iter().any(|s| is_comment(s)) || sub_def.is_multiline()
+                spaces.iter().any(|s| s.is_comment()) || sub_def.is_multiline()
             }
             Nested(def) => def.is_multiline(),
             NotYetImplemented(s) => todo!("{}", s),

@@ -1,4 +1,4 @@
-use crate::llvm::build::{Env, InPlace};
+use crate::llvm::build::{build_num_binop, Env, InPlace};
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
 use inkwell::builder::Builder;
@@ -726,6 +726,81 @@ pub fn list_len<'ctx>(
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
         .unwrap()
         .into_int_value()
+}
+
+/// List.sum : List (Num a) -> Num a
+pub fn list_sum<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    default_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let list_wrapper = list.into_struct_value();
+    let len = list_len(env.builder, list_wrapper);
+
+    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
+    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
+
+    let default: BasicValueEnum = match accum_type {
+        BasicTypeEnum::IntType(int_type) => int_type.const_zero().into(),
+        BasicTypeEnum::FloatType(float_type) => float_type.const_zero().into(),
+        _ => unreachable!(""),
+    };
+
+    builder.build_store(accum_alloca, default);
+
+    let then_block = ctx.append_basic_block(parent, "then");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    let condition = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "list_non_empty",
+    );
+
+    builder.build_conditional_branch(condition, then_block, cont_block);
+
+    builder.position_at_end(then_block);
+
+    let elem_ptr_type = get_ptr_type(&accum_type, AddressSpace::Generic);
+    let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+
+    let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
+        // load current accumulator
+        let current = builder.build_load(accum_alloca, "retrieve_accum");
+
+        let new_current = build_num_binop(
+            env,
+            parent,
+            current,
+            default_layout,
+            elem,
+            default_layout,
+            roc_module::low_level::LowLevel::NumAdd,
+        );
+
+        builder.build_store(accum_alloca, new_current);
+    };
+
+    incrementing_elem_loop(
+        builder,
+        ctx,
+        parent,
+        list_ptr,
+        len,
+        "#index",
+        walk_right_loop,
+    );
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    builder.build_load(accum_alloca, "load_final_acum")
 }
 
 /// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum

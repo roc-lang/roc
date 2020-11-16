@@ -262,6 +262,13 @@ mod repl_eval {
     }
 
     #[test]
+    fn list_sum() {
+        expect_success("List.sum []", "0 : Num *");
+        expect_success("List.sum [ 1, 2, 3 ]", "6 : Num *");
+        expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : Float");
+    }
+
+    #[test]
     fn empty_record() {
         expect_success("{}", "{} : {}");
     }
