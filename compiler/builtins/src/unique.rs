@@ -683,6 +683,23 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![list_type(star1, a), flex(a)], bool_type(star2))
     });
 
+    // sum : Attr * (List (Attr u (Num (Attr u num))))
+    //     -> Attr v (Num (Attr v num))
+    add_type(Symbol::LIST_SUM, {
+        let_tvars! { star1, u, v, num };
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star1),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![num_type(u, num)]),
+                ],
+            )],
+            num_type(v, num),
+        )
+    });
+
     // join : Attr * (List (Attr * (List a)))
     //     -> Attr * (List a)
     add_type(Symbol::LIST_JOIN, {

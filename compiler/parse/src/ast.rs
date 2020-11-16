@@ -392,6 +392,17 @@ pub enum CommentOrNewline<'a> {
     DocComment(&'a str),
 }
 
+impl<'a> CommentOrNewline<'a> {
+    pub fn is_comment(&self) -> bool {
+        use CommentOrNewline::*;
+        match self {
+            Newline => false,
+            LineComment(_) => true,
+            DocComment(_) => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier

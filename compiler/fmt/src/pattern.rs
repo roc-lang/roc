@@ -1,5 +1,5 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::spaces::{fmt_comments_only, fmt_spaces, is_comment};
+use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
 use bumpalo::collections::String;
 use roc_parse::ast::{Base, Pattern};
 
@@ -19,7 +19,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
                 debug_assert!(!spaces.is_empty());
 
-                spaces.iter().any(|s| is_comment(s))
+                spaces.iter().any(|s| s.is_comment())
             }
 
             Pattern::Nested(nested_pat) => nested_pat.is_multiline(),
@@ -133,7 +133,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             // Space
             SpaceBefore(sub_pattern, spaces) => {
                 if !sub_pattern.is_multiline() {
-                    fmt_comments_only(buf, spaces.iter(), indent)
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent)
                 } else {
                     fmt_spaces(buf, spaces.iter(), indent);
                 }
@@ -143,7 +143,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 sub_pattern.format_with_options(buf, parens, newlines, indent);
                 // if only_comments {
                 if !sub_pattern.is_multiline() {
-                    fmt_comments_only(buf, spaces.iter(), indent)
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent)
                 } else {
                     fmt_spaces(buf, spaces.iter(), indent);
                 }

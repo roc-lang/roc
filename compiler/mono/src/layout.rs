@@ -436,6 +436,7 @@ impl<'a> Layout<'a> {
         match self {
             Layout::Builtin(Builtin::List(_, _)) => true,
             Layout::RecursiveUnion(_) => true,
+            Layout::RecursivePointer => true,
             _ => false,
         }
     }

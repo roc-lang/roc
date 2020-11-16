@@ -3519,4 +3519,99 @@ mod solve_expr {
             "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
         );
     }
+
+    #[test]
+    fn rbtree_old_balance_simplified() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                    Node key left Empty
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            "Dict Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_simplified() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                node = \x,y,z -> Node x y z
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                    node key left Empty
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            "Dict Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_balance() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+                main : Dict Int Int
+                main =
+                    balance Red 0 0 Empty Empty
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
 }

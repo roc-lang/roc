@@ -65,6 +65,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_REVERSE => list_reverse,
         Symbol::LIST_CONCAT => list_concat,
         Symbol::LIST_CONTAINS => list_contains,
+        Symbol::LIST_SUM => list_sum,
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
@@ -1317,6 +1318,26 @@ fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         accum_var,
+    )
+}
+
+/// List.sum : List (Num a) -> Num a
+fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListSum,
+        args: vec![(list_var, Var(Symbol::ARG_1))],
+        ret_var: result_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        result_var,
     )
 }
 
