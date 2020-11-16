@@ -171,7 +171,7 @@ mod gen_str {
                 "#
             ),
             &[small_str("")],
-            &'static [[u8; 16]]
+            &'static [[u8; ROC_STR_MEM_SIZE]]
         )
     }
 
@@ -184,7 +184,7 @@ mod gen_str {
                 "#
             ),
             &[small_str("a"), small_str("")],
-            &'static [[u8; 16]]
+            &'static [[u8; ROC_STR_MEM_SIZE]]
         )
     }
 
