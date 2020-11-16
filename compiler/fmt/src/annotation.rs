@@ -1,4 +1,4 @@
-use crate::spaces::{fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline, INDENT};
+use crate::spaces::{fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
@@ -333,7 +333,7 @@ fn format_assigned_field_help<'a, T>(
             buf.push_str(name.value);
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
-            fmt_comments_only(buf, spaces.iter(), indent);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             format_assigned_field_help(
                 sub_field,
                 buf,
@@ -352,7 +352,7 @@ fn format_assigned_field_help<'a, T>(
                 separator_prefix,
                 is_multiline,
             );
-            fmt_comments_only(buf, spaces.iter(), indent);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
         Malformed(raw) => {
             buf.push_str(raw);
@@ -448,7 +448,12 @@ macro_rules! implement_format_sequence {
                     match &item.value {
                         $t::SpaceBefore(expr_below, spaces_above_expr) => {
                             newline(buf, item_indent);
-                            fmt_comments_only(buf, spaces_above_expr.iter(), item_indent);
+                            fmt_comments_only(
+                                buf,
+                                spaces_above_expr.iter(),
+                                NewlineAt::Bottom,
+                                item_indent,
+                            );
 
                             match &expr_below {
                                 $t::SpaceAfter(expr_above, spaces_below_expr) => {
@@ -458,9 +463,10 @@ macro_rules! implement_format_sequence {
                                         buf.push(',');
                                     }
 
-                                    fmt_condition_spaces(
+                                    fmt_comments_only(
                                         buf,
                                         spaces_below_expr.iter(),
+                                        NewlineAt::Top,
                                         item_indent,
                                     );
                                 }
@@ -481,7 +487,7 @@ macro_rules! implement_format_sequence {
                                 buf.push(',');
                             }
 
-                            fmt_condition_spaces(buf, spaces.iter(), item_indent);
+                            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, item_indent);
                         }
 
                         _ => {

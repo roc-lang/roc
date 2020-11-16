@@ -165,7 +165,7 @@ pub fn helper<'a>(
         exposed_to_host: MutSet::default(),
     };
 
-    let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
+    let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut headers = Vec::with_capacity(procedures.len());
 
     // Add all the Proc headers to the module.

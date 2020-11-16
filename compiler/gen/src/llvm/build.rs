@@ -1,8 +1,7 @@
-use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_walk_right,
+    list_reverse, list_set, list_single, list_sum, list_walk_right,
 };
 use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, str_split, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
@@ -34,7 +33,7 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
-use roc_mono::layout::{Builtin, ClosureLayout, Layout, MemoryMode};
+use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -752,30 +751,27 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_symbol, tag_field_layout) in
-                arguments.iter().zip(fields[*tag_id as usize].iter())
-            {
-                // note field_layout is the layout of the argument.
-                // tag_field_layout is the layout that the tag will store
-                // these are different for recursive tag unions
-                let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                let field_size = tag_field_layout.stack_size(ptr_size);
+            let tag_field_layouts = fields[*tag_id as usize];
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(env, scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
-                if field_size != 0 {
+                if !tag_field_layout.is_dropped_because_empty() {
                     let field_type =
                         basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
 
                     field_types.push(field_type);
 
                     if let Layout::RecursivePointer = tag_field_layout {
-                        let ptr = allocate_with_refcount(env, field_layout, val).into();
+                        let ptr = allocate_with_refcount(env, &tag_layout, val);
+
                         let ptr = cast_basic_basic(
                             builder,
-                            ptr,
+                            ptr.into(),
                             ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
                         );
+
                         field_vals.push(ptr);
                     } else {
                         field_vals.push(val);
@@ -993,8 +989,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     // bytes per element
     let bytes_len = len_type.const_int(value_bytes, false);
 
-    // TODO fix offset
-    let offset = (env.ptr_bytes as u64).max(value_bytes);
+    let offset = crate::llvm::refcounting::refcount_offset(env, layout);
 
     let ptr = {
         let len = bytes_len;
@@ -1011,7 +1006,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     // We must return a pointer to the first element:
     let ptr_bytes = env.ptr_bytes;
     let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "allocate_refcount_pti");
     let incremented = builder.build_int_add(
         ptr_as_int,
         ctx.i64_type().const_int(offset, false),
@@ -1019,7 +1014,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     );
 
     let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "allocate_refcount_itp");
 
     // subtract ptr_size, to access the refcount
     let refcount_ptr = builder.build_int_sub(
@@ -2366,6 +2361,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                 default_layout,
             )
         }
+        ListSum => {
+            debug_assert_eq!(args.len(), 1);
+
+            let list = load_symbol(env, scope, &args[0]);
+
+            list_sum(env, parent, list, layout)
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -2516,40 +2518,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            match (lhs_layout, rhs_layout) {
-                (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
-                    if lhs_builtin == rhs_builtin =>
-                {
-                    use roc_mono::layout::Builtin::*;
-
-                    match lhs_builtin {
-                        Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
-                            env,
-                            parent,
-                            lhs_arg.into_int_value(),
-                            lhs_layout,
-                            rhs_arg.into_int_value(),
-                            rhs_layout,
-                            op,
-                        ),
-                        Float128 | Float64 | Float32 | Float16 => build_float_binop(
-                            env,
-                            parent,
-                            lhs_arg.into_float_value(),
-                            lhs_layout,
-                            rhs_arg.into_float_value(),
-                            rhs_layout,
-                            op,
-                        ),
-                        _ => {
-                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
-                        }
-                    }
-                }
-                _ => {
-                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
-                }
-            }
+            build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
         }
         Eq => {
             debug_assert_eq!(args.len(), 2);
@@ -2805,6 +2774,51 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
     call.set_call_convention(fn_val.get_call_conventions());
     call
+}
+
+pub fn build_num_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    lhs_arg: BasicValueEnum<'ctx>,
+    lhs_layout: &Layout<'a>,
+    rhs_arg: BasicValueEnum<'ctx>,
+    rhs_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    match (lhs_layout, rhs_layout) {
+        (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+            if lhs_builtin == rhs_builtin =>
+        {
+            use roc_mono::layout::Builtin::*;
+
+            match lhs_builtin {
+                Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_int_value(),
+                    lhs_layout,
+                    rhs_arg.into_int_value(),
+                    rhs_layout,
+                    op,
+                ),
+                Float128 | Float64 | Float32 | Float16 => build_float_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_float_value(),
+                    lhs_layout,
+                    rhs_arg.into_float_value(),
+                    rhs_layout,
+                    op,
+                ),
+                _ => {
+                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
+                }
+            }
+        }
+        _ => {
+            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
+        }
+    }
 }
 
 fn build_float_binop<'a, 'ctx, 'env>(

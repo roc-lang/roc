@@ -693,6 +693,7 @@ define_builtins! {
         16 LIST_JOIN: "join"
         17 LIST_KEEP_IF: "keepIf"
         18 LIST_CONTAINS: "contains"
+        19 LIST_SUM: "sum"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -180,7 +180,8 @@ fn unify_alias(
             // Alias wins
             merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
         }
-        RecursionVar { .. } | RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
+        RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure),
+        RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
         Alias(other_symbol, other_args, other_real_var) => {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
@@ -240,7 +241,8 @@ fn unify_structure(
 
                 problems
             }
-            FlatType::RecursiveTagUnion(_, _, _) => {
+            FlatType::RecursiveTagUnion(rec, _, _) => {
+                debug_assert!(is_recursion_var(subs, *rec));
                 let structure_rank = subs.get(*structure).rank;
                 let self_rank = subs.get(ctx.first).rank;
                 let other_rank = subs.get(ctx.second).rank;
@@ -593,7 +595,7 @@ fn unify_tag_union_not_recursive_recursive(
 
             tag_problems
         } else {
-            let flat_type = FlatType::RecursiveTagUnion(recursion_var, unique_tags2, rec2.ext);
+            let flat_type = FlatType::TagUnion(unique_tags2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
 
@@ -616,7 +618,7 @@ fn unify_tag_union_not_recursive_recursive(
             tag_problems
         }
     } else if unique_tags2.is_empty() {
-        let flat_type = FlatType::RecursiveTagUnion(recursion_var, unique_tags1, rec1.ext);
+        let flat_type = FlatType::TagUnion(unique_tags1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
 
@@ -641,8 +643,8 @@ fn unify_tag_union_not_recursive_recursive(
         let other_tags = union(unique_tags1.clone(), &unique_tags2);
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-        let flat_type1 = FlatType::RecursiveTagUnion(recursion_var, unique_tags1, ext);
-        let flat_type2 = FlatType::RecursiveTagUnion(recursion_var, unique_tags2, ext);
+        let flat_type1 = FlatType::TagUnion(unique_tags1, ext);
+        let flat_type2 = FlatType::TagUnion(unique_tags2, ext);
 
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
@@ -855,6 +857,7 @@ fn unify_shared_tags(
         new_tags.extend(fields.into_iter());
 
         let flat_type = if let Some(rec) = recursion_var {
+            debug_assert!(is_recursion_var(subs, rec));
             FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
         } else {
             FlatType::TagUnion(new_tags, new_ext_var)
@@ -924,6 +927,7 @@ fn unify_flat_type(
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
+            debug_assert!(is_recursion_var(subs, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -939,6 +943,7 @@ fn unify_flat_type(
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
+            debug_assert!(is_recursion_var(subs, *recursion_var));
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
@@ -946,6 +951,8 @@ fn unify_flat_type(
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
+            debug_assert!(is_recursion_var(subs, *rec1));
+            debug_assert!(is_recursion_var(subs, *rec2));
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
@@ -1153,13 +1160,16 @@ fn unify_recursion(
             // unify the structure variable with this Structure
             unify_pool(subs, pool, structure, ctx.second)
         }
+        RigidVar(_) => mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other),
 
-        FlexVar(_) | RigidVar(_) => {
-            // TODO special-case boolean here
-            // In all other cases, if left is flex, defer to right.
-            // (This includes using right's name if both are flex and named.)
-            merge(subs, ctx, other.clone())
-        }
+        FlexVar(_) => merge(
+            subs,
+            ctx,
+            RecursionVar {
+                structure,
+                opt_name: opt_name.clone(),
+            },
+        ),
 
         Alias(_, _, actual) => {
             // look at the type the alias stands for
@@ -1226,4 +1236,8 @@ fn gather_tags(
 
         _ => TagUnionStructure { tags, ext: var },
     }
+}
+
+fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
+    matches!(subs.get_without_compacting(var).content, Content::RecursionVar { .. })
 }

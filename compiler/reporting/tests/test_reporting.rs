@@ -1047,7 +1047,7 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                Something is off with the 1st branch of this `if` expression:
+                Something is off with the `then` branch of this `if` expression:
 
                 2│  x = if True then 3.14 else 4
                                      ^^^^
@@ -1084,12 +1084,14 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                Something is off with the 1st branch of this `when` expression:
+                Something is off with the body of the `x` definition:
 
-                4│          _ -> 3.14
-                                 ^^^^
+                1│   x : Int
+                2│   x =
+                3│>      when True is
+                4│>          _ -> 3.14
 
-                The 1st branch is a float of type:
+                This `when`expression produces:
 
                     Float
 
@@ -1123,15 +1125,15 @@ mod test_reporting {
 
                 1│  x : Int -> Int
                 2│  x = \_ -> 3.14
-                        ^^^^^^^^^^
+                              ^^^^
 
-                The body is an anonymous function of type:
+                The body is a float of type:
 
-                    Int -> Float
+                    Float
 
                 But the type annotation on `x` says it should be:
 
-                    Int -> Int
+                    Int
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1664,7 +1666,7 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This `if` has an `else` branch with a different type from its `then` branch:
+                Something is off with the `else` branch of this `if` expression:
 
                 2│  f = \x, y -> if True then x else y
                                                      ^
@@ -1673,11 +1675,9 @@ mod test_reporting {
 
                     b
 
-                but the `then` branch has the type:
+                But the type annotation on `f` says it should be:
 
                     a
-
-                I need all branches in an `if` to have the same type!
 
                 Tip: Your type annotation uses `b` and `a` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
@@ -1707,15 +1707,15 @@ mod test_reporting {
 
                 1│  f : Bool -> msg
                 2│  f = \_ -> Foo
-                        ^^^^^^^^^
+                              ^^^
 
-                The body is an anonymous function of type:
+                This `Foo` global tag has the type:
 
-                    Bool -> [ Foo ]a
+                    [ Foo ]a
 
                 But the type annotation on `f` says it should be:
 
-                    Bool -> msg
+                    msg
 
                 Tip: The type annotation uses the type variable `msg` to say that this
                 definition can produce any type of value. But in the body I see that
@@ -1829,19 +1829,20 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
-                1│   f : Bool -> Int
-                2│>  f = \_ ->
-                3│>      ok = 3
-                4│>
-                5│>      Ok
+                1│  f : Bool -> Int
+                2│  f = \_ ->
+                3│      ok = 3
+                4│
+                5│      Ok
+                        ^^
 
-                The body is an anonymous function of type:
+                This `Ok` global tag has the type:
 
-                    Bool -> [ Ok ]a
+                    [ Ok ]a
 
                 But the type annotation on `f` says it should be:
 
-                    Bool -> Int
+                    Int
                 "#
             ),
         )
@@ -2141,15 +2142,15 @@ mod test_reporting {
 
                 1│  f : [ A ] -> [ A, B ]
                 2│  f = \a -> a
-                        ^^^^^^^
+                              ^
 
-                The body is an anonymous function of type:
+                This `a` value is a:
 
-                    [ A ] -> [ A ]
+                    [ A ]
 
                 But the type annotation on `f` says it should be:
 
-                    [ A ] -> [ A, B ]
+                    [ A, B ]
 
                 Tip: Looks like a closed tag union does not have the `B` tag.
 
@@ -2179,15 +2180,15 @@ mod test_reporting {
 
                 1│  f : [ A ] -> [ A, B, C ]
                 2│  f = \a -> a
-                        ^^^^^^^
+                              ^
 
-                The body is an anonymous function of type:
+                This `a` value is a:
 
-                    [ A ] -> [ A ]
+                    [ A ]
 
                 But the type annotation on `f` says it should be:
 
-                    [ A ] -> [ A, B, C ]
+                    [ A, B, C ]
 
                 Tip: Looks like a closed tag union does not have the `C` and `B` tags.
 
