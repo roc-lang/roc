@@ -25,30 +25,34 @@ const RocStr = struct {
         const rocStrSize = @sizeOf(RocStr);
 
         if (len < rocStrSize) {
-            var empty_roc_str = RocStr.empty();
+            var ret_small_str = RocStr.empty();
 
-            const target_ptr = @ptrToInt(empty_roc_str.get_small_str_ptr());
+            const target_ptr = @ptrToInt(ret_small_str.get_small_str_ptr());
 
             var index : u8 = 0;
+            // Zero out the data, just to be safe
+            while (index < rocStrSize) {
+                var offset_ptr = @intToPtr(*usize, target_ptr + index);
+                offset_ptr.* = 0;
+                index += 1;
+            }
 
+            index = 0;
             while (index < len) {
                 var offset_ptr = @intToPtr(*usize, target_ptr + index);
                 offset_ptr.* = bytes[index];
                 index += 1;
             }
-            const final_byte_ptr = @intToPtr(*usize, target_ptr + index);
-            final_byte_ptr.* = rocStrSize ^ 0b10000000;
-            empty_roc_str.str_len = target_ptr;
+            const final_byte_ptr = @intToPtr(*usize, target_ptr + rocStrSize - 1);
+            final_byte_ptr.* = len ^ 0b10000000;
 
-            return empty_roc_str;
+            return ret_small_str;
         } else {
             return RocStr {
                 .str_bytes_ptrs = bytes,
                 .str_len = len
             };
         }
-
-
     }
 
     pub fn eq(self: *RocStr, other: RocStr) bool {
