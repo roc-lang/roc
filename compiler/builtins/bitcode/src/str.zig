@@ -178,7 +178,7 @@ test "strSplitInPlace: no delimiter" {
     const array_ptr: [*]RocStr = &array;
 
     strSplitInPlace(
-        array_ptr,
+        @ptrCast([*]u128, array_ptr),
         1,
         str_ptr,
         3,
@@ -192,6 +192,49 @@ test "strSplitInPlace: no delimiter" {
 
     expectEqual(array.len, expected.len);
     expect(array[0].eq(expected[0]));
+}
+
+test "strSplitInPlace: empty end" {
+    const str_len: usize = 50;
+    var str: [str_len]u8 = "1---- ---- ---- ---- ----2---- ---- ---- ---- ----".*;
+    const str_ptr: [*]u8 = &str;
+
+    const delimiter_len = 24;
+    const delimiter: [delimiter_len]u8 = "---- ---- ---- ---- ----";
+    const delimiter_ptr: [*]u8 = &delimiter;
+
+    const array_len : usize = 3;
+    var array: [array_len]RocStr = [_]RocStr {
+        undefined,
+        undefined,
+        undefined,
+    };
+    const array_ptr: [*]RocStr = &array;
+
+        strSplitInPlace(
+            array_ptr,
+            array_len,
+            str_ptr,
+            str_len,
+            delimiter_ptr,
+            delimiter_len
+        );
+
+        const first_expected_str_len: usize = 1;
+        var first_expected_str: [first_expected_str_len]u8 = "1".*;
+        const first_expected_str_ptr: [*]u8 = &first_expected_str;
+        var firstExpectedRocStr = RocStr.init(first_expected_str_ptr, first_expected_str_len);
+
+        const second_expected_str_len: usize = 1;
+        var second_expected_str: [second_expected_str_len]u8 = "2".*;
+        const second_expected_str_ptr: [*]u8 = &second_expected_str;
+        var secondExpectedRocStr = RocStr.init(second_expected_str_ptr, second_expected_str_len);
+
+        expectEqual(array.len, 3);
+        expectEqual(array[0].str_len, 0);
+        expect(array[0].eq(firstExpectedRocStr));
+        expect(array[1].eq(secondExpectedRocStr));
+        expectEqual(array[2].str_len, 0);
 }
 
 test "strSplitInPlace: delimiter on sides" {
