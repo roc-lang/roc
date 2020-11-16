@@ -6,7 +6,6 @@ use roc_mono::ir::Literal;
 use roc_mono::layout::Layout;
 
 mod asm;
-
 use asm::Register;
 
 const RETURN_REG: Register = Register::RAX;
