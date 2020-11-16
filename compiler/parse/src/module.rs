@@ -251,16 +251,31 @@ fn provides<'a>() -> impl Parser<
         Vec<'a, Located<ExposesEntry<'a>>>,
     ),
 > {
-    and!(
-        and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
-        collection!(
-            ascii_char(b'['),
-            loc!(exposes_entry()),
-            ascii_char(b','),
-            ascii_char(b']'),
-            1
-        )
-    )
+    map!(
+                            and!(
+                                and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
+                                collection!(
+                                    ascii_char(b'['),
+                                    loc!(exposes_entry()),
+                                    ascii_char(b','),
+                                    ascii_char(b']'),
+                                    1
+                                )
+                            )
+                            ,
+                            |((before_provides_keyword, after_provides_keyword), provides_entries| {
+                                Provides {
+                                    provides_entries,
+                                    to,
+                                    before_provides_keyword,
+                                    after_provides_keyword,
+                                    before_to_keyword,
+                                    after_to_keyword,
+                                }
+                            }
+                        )
+    }
+    }
 }
 
 #[inline(always)]
