@@ -22,7 +22,8 @@ pub enum Register {
     R15,
 }
 
-const REX_W: u8 = 0x48;
+const REX: u8 = 0x40;
+const REX_W: u8 = REX + 0x8;
 
 fn add_rm_extension(reg: Register, byte: u8) -> u8 {
     if reg as u8 > 7 {
@@ -67,4 +68,28 @@ pub fn mov_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: Register,
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, 0x89, 0xC0 + dst_mod + src_mod]);
+}
+
+pub fn ret_near<'a>(buf: &mut Vec<'a, u8>) {
+    buf.push(0xC3);
+}
+
+pub fn pop_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: Register) {
+    if reg as u8 > 7 {
+        let rex = add_reg_extension(reg, REX);
+        let reg_mod = reg as u8 % 8;
+        buf.extend(&[rex, 0x58 + reg_mod]);
+    } else {
+        buf.push(0x50 + reg as u8);
+    }
+}
+
+pub fn push_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: Register) {
+    if reg as u8 > 7 {
+        let rex = add_reg_extension(reg, REX);
+        let reg_mod = reg as u8 % 8;
+        buf.extend(&[rex, 0x50 + reg_mod]);
+    } else {
+        buf.push(0x50 + reg as u8);
+    }
 }

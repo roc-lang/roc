@@ -57,19 +57,15 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
         // TODO: handle allocating and cleaning up data on the stack.
         let mut out = bumpalo::vec![in self.env.arena];
         if !self.leaf_proc {
-            // push rbp     (0x55)
-            // mov rbp, rsp (0x48, 0x89, 0xE5)
-            out.extend(&[0x55]);
-            asm::mov_register64bit_register64bit(&mut out, Register::RBP, Register::RSP)
+            asm::push_register64bit(&mut out, Register::RBP);
+            asm::mov_register64bit_register64bit(&mut out, Register::RBP, Register::RSP);
         }
         out.extend(&self.buf);
 
         if !self.leaf_proc {
-            // pop rbp
-            out.push(0x5D);
+            asm::pop_register64bit(&mut out, Register::RBP);
         }
-        // ret
-        out.push(0xC3);
+        asm::ret_near(&mut out);
 
         out.into_bump_slice()
     }
