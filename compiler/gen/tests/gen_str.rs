@@ -13,6 +13,31 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_str {
+    use std::cmp::min;
+
+    fn small_str(str: &str) -> [u8; 16] {
+        let mut bytes: [u8; 16] = Default::default();
+
+        let mut index: usize = 0;
+        while index < 16 {
+            bytes[index] = 0;
+            index += 1;
+        }
+
+        let str_bytes = str.as_bytes();
+
+        let output_len: usize = min(str_bytes.len(), 16);
+        index = 0;
+        while index < output_len {
+            bytes[index] = str_bytes[index];
+            index += 1;
+        }
+
+        bytes[15] = 0b1000_0000 ^ (output_len as u8);
+
+        bytes
+    }
+
     #[test]
     fn str_split_bigger_delimiter_small_str() {
         assert_evals_to!(
@@ -29,12 +54,12 @@ mod gen_str {
             indoc!(
                 r#"
                     when List.first (Str.split "JJJ" "JJJJ there") is
-                        Ok str -> 
+                        Ok str ->
                             Str.countGraphemes str
-                            
+        
                         _ ->
                             -1
-                            
+        
                 "#
             ),
             3,
@@ -62,18 +87,23 @@ mod gen_str {
         // );
     }
 
-    // #[test]
-    // fn str_split_small_str_big_delimiter() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 Str.split "JJJ" "0123456789abcdefghi"
-    //             "#
-    //         ),
-    //         &["JJJ"],
-    //         &'static [&'static str]
-    //     );
-    // }
+    #[test]
+    fn str_split_small_str_bigger_delimiter() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when
+                        List.first
+                            (Str.split "JJJ" "0123456789abcdefghi")
+                    is 
+                        Ok str -> str
+                        _ -> ""
+                "#
+            ),
+            small_str("JJJ"),
+            [u8; 16]
+        );
+    }
 
     #[test]
     fn str_split_big_str_small_delimiter() {
@@ -98,21 +128,21 @@ mod gen_str {
         );
     }
 
-    // #[test]
-    // fn str_split_small_str_small_delimiter() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 Str.split "J!J!J" "!"
-    //             "#
-    //         ),
-    //         &["J", "J", "J"],
-    //         &'static [&'static str]
-    //     );
-    // }
+    #[test]
+    fn str_split_small_str_small_delimiter() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "J!J!J" "!"
+                "#
+            ),
+            &[small_str("J"), small_str("J"), small_str("J")],
+            &'static [[u8; 16]]
+        );
+    }
 
     #[test]
-    fn str_split_bigger_delimiter_big_str() {
+    fn str_split_bigger_delimiter_big_strs() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -126,20 +156,32 @@ mod gen_str {
         );
     }
 
-    // #[test]
-    // fn str_split_big_str() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 Str.split
-    //                     "hello 0123456789abcdef there 0123456789abcdef "
-    //                     " 0123456789abcdef "
-    //             "#
-    //         ),
-    //         &["hello", "there"],
-    //         &'static [&'static str]
-    //     );
-    // }
+    #[test]
+    fn str_split_small_str_big_delimiter() {
+        // assert_evals_to!(
+        //     indoc!(
+        //         r#"
+        //             Str.split
+        //                 "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
+        //                 "---- ---- ---- ---- ----"
+        //         "#
+        //     ),
+        //     &[small_str("1"), small_str("2"), small_str("")],
+        //     &'static [[u8; 16]]
+        // );
+
+        // assert_evals_to!(
+        //     indoc!(
+        //         r#"
+        //             Str.split
+        //                 "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
+        //                 "|-- -- -- -- -- -- |"
+        //         "#
+        //     ),
+        //     &[small_str("3"), small_str("4"), small_str("")],
+        //     &'static [[u8; 16]]
+        // );
+    }
 
     #[test]
     fn str_concat_big_to_big() {
