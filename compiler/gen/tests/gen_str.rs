@@ -107,7 +107,7 @@ mod gen_str {
                 "#
             ),
             small_str("JJJ"),
-            [u8; 16]
+            [u8; ROC_STR_MEM_SIZE]
         );
     }
 
@@ -143,7 +143,7 @@ mod gen_str {
                 "#
             ),
             &[small_str("J"), small_str("J"), small_str("J")],
-            &'static [[u8; 16]]
+            &'static [[u8; ROC_STR_MEM_SIZE]]
         );
     }
 
