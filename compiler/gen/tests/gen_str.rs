@@ -214,7 +214,10 @@ mod gen_str {
             &[small_str("1"), small_str("2"), small_str("")],
             &'static [[u8; 16]]
         );
+    }
 
+    #[test]
+    fn str_split_small_str_20_char_delimiter() {
         assert_evals_to!(
             indoc!(
                 r#"
