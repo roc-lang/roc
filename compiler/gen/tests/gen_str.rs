@@ -8,32 +8,38 @@ extern crate inkwell;
 extern crate libc;
 extern crate roc_gen;
 
+use core;
+use roc_std::RocStr;
+
 #[macro_use]
 mod helpers;
 
+const ROC_STR_MEM_SIZE: usize = core::mem::size_of::<RocStr>();
+
 #[cfg(test)]
 mod gen_str {
+    use crate::ROC_STR_MEM_SIZE;
     use std::cmp::min;
 
-    fn small_str(str: &str) -> [u8; 16] {
-        let mut bytes: [u8; 16] = Default::default();
+    fn small_str(str: &str) -> [u8; ROC_STR_MEM_SIZE] {
+        let mut bytes: [u8; ROC_STR_MEM_SIZE] = Default::default();
 
         let mut index: usize = 0;
-        while index < 16 {
+        while index < ROC_STR_MEM_SIZE {
             bytes[index] = 0;
             index += 1;
         }
 
         let str_bytes = str.as_bytes();
 
-        let output_len: usize = min(str_bytes.len(), 16);
+        let output_len: usize = min(str_bytes.len(), ROC_STR_MEM_SIZE);
         index = 0;
         while index < output_len {
             bytes[index] = str_bytes[index];
             index += 1;
         }
 
-        bytes[15] = 0b1000_0000 ^ (output_len as u8);
+        bytes[ROC_STR_MEM_SIZE - 1] = 0b1000_0000 ^ (output_len as u8);
 
         bytes
     }
