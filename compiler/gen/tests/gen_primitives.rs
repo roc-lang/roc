@@ -1342,46 +1342,8 @@ mod gen_primitives {
     }
 
     #[test]
-    fn rbtree_balance_2() {
-        assert_non_opt_evals_to!(
-            indoc!(
-                r#"
-                app Test provides [ main ] imports []
-
-                NodeColor : [ Red, Black ]
-
-                Dict k : [ Node NodeColor k (Dict k), Empty ]
-
-                balance : NodeColor, k, Dict k,  Dict k -> Dict k
-                balance = \color, key, left, right ->
-                  when right is
-                    Node Red rK _ ->
-                      when left is
-                        Node Red _ _  ->
-                          Node
-                            Red
-                            key
-                            Empty
-
-                        _ ->
-                          Node color rK (Node Red key left )
-
-                    _ ->
-                        Empty
-
-                main : Dict Int
-                main =
-                    balance Red 0 Empty Empty
-                "#
-            ),
-            0,
-            i64
-        );
-    }
-
-    #[test]
     #[ignore]
-    fn rbtree_balance() {
+    fn rbtree_balance_full() {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
@@ -1431,7 +1393,59 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
+    fn nested_pattern_match_two_ways() {
+        // exposed an issue in the ordering of pattern match checks when ran with `--release` mode
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                balance : ConsList Int -> Int
+                balance = \right ->
+                  when right is
+                    Cons 1 foo ->
+                        when foo is
+                            Cons 1 _ -> 3
+                            _ -> 3
+                    _ -> 3
+
+                main : Int
+                main =
+                    when balance Nil is
+                        _ -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                balance : ConsList Int -> Int
+                balance = \right ->
+                  when right is
+                    Cons 1 (Cons 1 _) -> 3
+                    _ -> 3
+
+                main : Int
+                main =
+                    when balance Nil is
+                        _ -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
     fn linked_list_guarded_double_pattern_match() {
         // the important part here is that the first case (with the nested Cons) does not match
         // TODO this also has undefined behavior
@@ -1445,7 +1459,10 @@ mod gen_primitives {
                 balance : ConsList Int -> Int
                 balance = \right ->
                   when right is
-                    Cons 1 (Cons 1 _) -> 3
+                    Cons 1 foo ->
+                        when foo is
+                            Cons 1 _ -> 3
+                            _ -> 3
                     _ -> 3
 
                 main : Int
