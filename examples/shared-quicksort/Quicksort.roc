@@ -1,11 +1,11 @@
-app Quicksort provides [ quicksort ] imports []
+app "quicksort" provides [ quicksort ] to "./platform"
 
 quicksort : List Int -> List Int
 quicksort = \originalList -> helper originalList
 
 helper : List Int -> List Int
 helper = \originalList ->
-    
+
     quicksortHelp : List (Num a), Int, Int -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
@@ -66,4 +66,3 @@ helper = \originalList ->
         # Absolutely make the `originalList` Shared by using it again here
         # but this branch is not evaluated, so should not affect performance
         List.set originalList 0 (List.len originalList)
-
