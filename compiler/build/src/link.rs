@@ -263,6 +263,7 @@ fn link_macos(
             .args(&[
                 // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
                 // for discussion and further references
+                "-L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib",
                 "-lSystem",
                 "-lresolv",
                 "-lpthread",

@@ -1612,4 +1612,11 @@ mod gen_list {
 
         assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
     }
+
+    #[test]
+    fn list_sum() {
+        assert_evals_to!("List.sum []", 0, i64);
+        assert_evals_to!("List.sum [ 1, 2, 3 ]", 6, i64);
+        assert_evals_to!("List.sum [ 1.1, 2.2, 3.3 ]", 6.6, f64);
+    }
 }
