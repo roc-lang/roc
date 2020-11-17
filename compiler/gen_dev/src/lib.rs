@@ -46,7 +46,7 @@ pub fn build_module<'a>(
 
 trait Backend<'a> {
     /// new creates a new backend that will output to the specific Object.
-    fn new(env: &'a Env) -> Self;
+    fn new(env: &'a Env, target: &Triple) -> Self;
 
     fn env(&self) -> &'a Env<'a>;
 

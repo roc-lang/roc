@@ -1,9 +1,10 @@
 use crate::{Backend, Env};
 use bumpalo::collections::Vec;
-use roc_collections::all::MutMap;
+use roc_collections::all::{ImSet, MutMap};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Literal;
 use roc_mono::layout::Layout;
+use target_lexicon::{CallingConvention, Triple};
 
 mod asm;
 use asm::Register;
@@ -32,49 +33,81 @@ pub struct X86_64Backend<'a> {
     // Probably need to encode stack parameter knowledge here too.
     // return parameter register. This includes dealing with multiple value returns.
     gp_param_regs: &'static [Register],
-    caller_saved_regs: &'static [Register],
-    callee_saved_regs: &'static [Register],
+    caller_saved_regs: ImSet<Register>,
+    callee_saved_regs: ImSet<Register>,
     shadow_space_size: u8,
     red_zone_size: u8,
 }
 
 impl<'a> Backend<'a> for X86_64Backend<'a> {
-    fn new(env: &'a Env) -> Self {
-        X86_64Backend {
-            env,
-            leaf_proc: true,
-            buf: bumpalo::vec!(in env.arena),
-            symbols_map: MutMap::default(),
-            gp_param_regs: &[
-                Register::RDI,
-                Register::RSI,
-                Register::RDX,
-                Register::RCX,
-                Register::R8,
-                Register::R9,
-            ],
-            caller_saved_regs: &[
-                Register::RAX,
-                Register::RCX,
-                Register::RDX,
-                Register::RSP,
-                Register::RSI,
-                Register::RDI,
-                Register::R8,
-                Register::R9,
-                Register::R10,
-                Register::R11,
-            ],
-            callee_saved_regs: &[
-                Register::RBX,
-                Register::RBP,
-                Register::R12,
-                Register::R13,
-                Register::R14,
-                Register::R15,
-            ],
-            shadow_space_size: 0,
-            red_zone_size: 128,
+    fn new(env: &'a Env, target: &Triple) -> Self {
+        match target.default_calling_convention() {
+            Ok(CallingConvention::SystemV) => X86_64Backend {
+                env,
+                leaf_proc: true,
+                buf: bumpalo::vec!(in env.arena),
+                symbols_map: MutMap::default(),
+                gp_param_regs: &[
+                    Register::RDI,
+                    Register::RSI,
+                    Register::RDX,
+                    Register::RCX,
+                    Register::R8,
+                    Register::R9,
+                ],
+                caller_saved_regs: im_rc::hashset![
+                    Register::RAX,
+                    Register::RCX,
+                    Register::RDX,
+                    Register::RSP,
+                    Register::RSI,
+                    Register::RDI,
+                    Register::R8,
+                    Register::R9,
+                    Register::R10,
+                    Register::R11,
+                ],
+                callee_saved_regs: im_rc::hashset![
+                    Register::RBX,
+                    Register::RBP,
+                    Register::R12,
+                    Register::R13,
+                    Register::R14,
+                    Register::R15,
+                ],
+                shadow_space_size: 0,
+                red_zone_size: 128,
+            },
+            Ok(CallingConvention::WindowsFastcall) => X86_64Backend {
+                env,
+                leaf_proc: true,
+                buf: bumpalo::vec!(in env.arena),
+                symbols_map: MutMap::default(),
+                gp_param_regs: &[Register::RCX, Register::RDX, Register::R8, Register::R9],
+                caller_saved_regs: im_rc::hashset![
+                    Register::RAX,
+                    Register::RCX,
+                    Register::RDX,
+                    Register::R8,
+                    Register::R9,
+                    Register::R10,
+                    Register::R11,
+                ],
+                callee_saved_regs: im_rc::hashset![
+                    Register::RBX,
+                    Register::RBP,
+                    Register::RSI,
+                    Register::RSP,
+                    Register::RDI,
+                    Register::R12,
+                    Register::R13,
+                    Register::R14,
+                    Register::R15,
+                ],
+                shadow_space_size: 32,
+                red_zone_size: 0,
+            },
+            x => panic!("unsupported backend: {:?}", x),
         }
     }
 
