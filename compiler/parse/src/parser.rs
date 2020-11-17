@@ -1193,14 +1193,6 @@ macro_rules! record {
                     // We specifically allow space characters inside here, so that
                     // `{  }` can be successfully parsed as an empty record, and then
                     // changed by the formatter back into `{}`.
-                    //
-                    // We don't allow newlines or comments in the middle of empty
-                    // roc_collections because those are normally stored in an Expr,
-                    // and there's no Expr in which to store them in an empty collection!
-                    //
-                    // We could change the AST to add extra storage specifically to
-                    // support empty literals containing newlines or comments, but this
-                    // does not seem worth even the tiniest regression in compiler performance.
                     zero_or_more!($crate::parser::ascii_char(b' ')),
                     skip_second!(
                         and!(

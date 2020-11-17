@@ -758,6 +758,26 @@ mod test_fmt {
     }
 
     #[test]
+    fn trailing_comma_in_record_annotation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                f: {
+                    y : Int, 
+                    x : Int
+                }"#
+            ),
+            indoc!(
+                r#"
+                f: {
+                    y : Int, 
+                    x : Int,
+                }"#
+            ),
+        );
+    }
+
+    #[test]
     fn def_closure() {
         expr_formats_same(indoc!(
             r#"
