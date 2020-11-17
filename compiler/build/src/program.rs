@@ -67,6 +67,7 @@ pub fn gen_from_mono_module(
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(&context, "app"));
     let builder = context.create_builder();
+    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -75,6 +76,8 @@ pub fn gen_from_mono_module(
     let env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
         context: &context,
         interns: loaded.interns,
         module,

@@ -133,10 +133,14 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput
         let (module_pass, function_pass) =
             roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
+        let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
+
         // Compile and add all the Procs before adding main
         let env = roc_gen::llvm::build::Env {
             arena: &arena,
             builder: &builder,
+            dibuilder: &dibuilder,
+            compile_unit: &compile_unit,
             context: &context,
             interns,
             module,
