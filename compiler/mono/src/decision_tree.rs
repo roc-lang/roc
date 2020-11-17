@@ -1316,7 +1316,7 @@ fn compile_tests<'a>(
         cond = compile_guard(env, ret_layout.clone(), id, arena.alloc(stmt), fail, cond);
     }
 
-    for (new_stores, lhs, rhs, _layout) in tests.into_iter().rev() {
+    for (new_stores, lhs, rhs, _layout) in tests.into_iter() {
         cond = compile_test(env, ret_layout.clone(), new_stores, lhs, rhs, fail, cond);
     }
     cond
