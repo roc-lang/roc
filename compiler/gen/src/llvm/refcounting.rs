@@ -32,6 +32,11 @@ pub struct PointerToRefcount<'ctx> {
 }
 
 impl<'ctx> PointerToRefcount<'ctx> {
+    /// # Safety
+    ///
+    /// the invariant is that the given pointer really points to the refcount,
+    /// not the data, and only is the start of the malloced buffer if the alignment
+    /// works out that way.
     pub unsafe fn from_ptr<'a, 'env>(env: &Env<'a, 'ctx, 'env>, ptr: PointerValue<'ctx>) -> Self {
         // must make sure it's a pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
