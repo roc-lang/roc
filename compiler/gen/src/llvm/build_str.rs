@@ -537,7 +537,9 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
 
             // Copy the bytes from the original array into the new
             // one we just malloc'd.
-            builder.build_memcpy(clone_ptr, ptr_bytes, bytes_ptr, ptr_bytes, len);
+            builder
+                .build_memcpy(clone_ptr, ptr_bytes, bytes_ptr, ptr_bytes, len)
+                .unwrap();
 
             // Create a fresh wrapper struct for the newly populated array
             let struct_type = collection(ctx, env.ptr_bytes);
