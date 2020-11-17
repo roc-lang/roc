@@ -3,7 +3,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::list_len;
-use crate::llvm::convert::{basic_type_from_layout, block_of_memory, get_ptr_type, ptr_int};
+use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -505,8 +505,8 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(increment_block);
 
-    let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
-    increment_refcount_help(env, refcount_ptr);
+    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
+    refcount_ptr.increment(env);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -700,8 +700,9 @@ fn build_inc_str_help<'a, 'ctx, 'env>(
     builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
     builder.position_at_end(decrement_block);
 
-    let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
-    increment_refcount_help(env, refcount_ptr);
+    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, str_wrapper);
+    refcount_ptr.increment(env);
+
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
@@ -803,44 +804,6 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
 
     // this function returns void
     builder.build_return(None);
-}
-
-fn increment_refcount_ptr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
-    field_ptr: PointerValue<'ctx>,
-) {
-    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
-    increment_refcount_help(env, refcount_ptr);
-}
-
-fn increment_refcount_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    refcount_ptr: PointerValue<'ctx>,
-) {
-    let builder = env.builder;
-    let ctx = env.context;
-    let refcount_type = ptr_int(ctx, env.ptr_bytes);
-
-    let refcount = env
-        .builder
-        .build_load(refcount_ptr, "get_refcount")
-        .into_int_value();
-
-    let max = builder.build_int_compare(
-        IntPredicate::EQ,
-        refcount,
-        refcount_type.const_int(REFCOUNT_MAX as u64, false),
-        "refcount_max_check",
-    );
-    let incremented = builder.build_int_add(
-        refcount,
-        refcount_type.const_int(1 as u64, false),
-        "increment_refcount",
-    );
-    let selected = builder.build_select(max, refcount, incremented, "select_refcount");
-
-    builder.build_store(refcount_ptr, selected);
 }
 
 fn decrement_refcount_ptr<'a, 'ctx, 'env>(
@@ -1303,7 +1266,8 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
                 // TODO do this decrement before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                increment_refcount_ptr(env, &layout, recursive_field_ptr);
+                let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, recursive_field_ptr);
+                refcount_ptr.increment(env);
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
