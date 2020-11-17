@@ -1203,7 +1203,9 @@ pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layou
     match layout {
         Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
         Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
-        Layout::RecursivePointer | Layout::RecursiveUnion(_) => env.ptr_bytes as u64,
+        Layout::RecursivePointer | Layout::Union(_) | Layout::RecursiveUnion(_) => {
+            env.ptr_bytes as u64
+        }
         _ => (env.ptr_bytes as u64).max(value_bytes),
     }
 }

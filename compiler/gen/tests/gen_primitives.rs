@@ -1342,7 +1342,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_balance_full() {
         assert_non_opt_evals_to!(
             indoc!(
