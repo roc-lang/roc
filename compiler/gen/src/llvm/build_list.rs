@@ -185,7 +185,9 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
+        builder
+            .build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -626,7 +628,9 @@ pub fn list_append<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
+        builder
+            .build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -1816,7 +1820,9 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size);
+        builder
+            .build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -1872,7 +1878,9 @@ pub fn clone_list<'a, 'ctx, 'env>(
     );
 
     // copy old elements in
-    builder.build_memcpy(new_ptr, ptr_bytes, old_ptr, ptr_bytes, bytes);
+    builder
+        .build_memcpy(new_ptr, ptr_bytes, old_ptr, ptr_bytes, bytes)
+        .unwrap();
 
     new_ptr
 }
