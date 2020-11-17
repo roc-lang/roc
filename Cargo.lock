@@ -1195,25 +1195,25 @@ dependencies = [
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release2#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release3#57e9f00d98fc99486e737c314e56a59498c5dbbb"
 dependencies = [
  "either",
  "inkwell_internals",
  "libc",
  "llvm-sys",
  "once_cell",
- "parking_lot 0.10.2",
+ "parking_lot 0.11.0",
  "regex",
 ]
 
 [[package]]
 name = "inkwell_internals"
-version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release2#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
+version = "0.2.0"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release3#57e9f00d98fc99486e737c314e56a59498c5dbbb"
 dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
+ "proc-macro2 1.0.21",
+ "quote 1.0.7",
+ "syn 1.0.40",
 ]
 
 [[package]]
