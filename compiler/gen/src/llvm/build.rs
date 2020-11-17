@@ -10,7 +10,7 @@ use crate::llvm::convert::{
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, list_get_refcount_ptr,
-    refcount_is_one_comparison,
+    refcount_is_one_comparison, PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -2654,12 +2654,8 @@ where
 
             let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
 
-            let refcount_ptr = list_get_refcount_ptr(env, list_layout, original_wrapper);
-
-            let refcount = env
-                .builder
-                .build_load(refcount_ptr, "get_refcount")
-                .into_int_value();
+            let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
+            let refcount = refcount_ptr.get_refcount(env);
 
             let comparison = refcount_is_one_comparison(env, refcount);
 
