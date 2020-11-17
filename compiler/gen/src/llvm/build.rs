@@ -9,8 +9,8 @@ use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, list_get_refcount_ptr,
-    refcount_is_one_comparison, PointerToRefcount,
+    decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
+    PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
