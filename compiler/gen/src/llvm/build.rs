@@ -17,7 +17,7 @@ use bumpalo::Bump;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::debug_info::{DICompileUnit, DebugInfoBuilder};
+use inkwell::debug_info::{DICompileUnit, DISubprogram, DebugInfoBuilder};
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
@@ -197,6 +197,44 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             /* dwo_id */ 0,
             /* split_debug_inling */ false,
             /* debug_info_for_profiling */ false,
+        )
+    }
+
+    pub fn new_subprogram(&self, function_name: &str) -> DISubprogram<'ctx> {
+        use inkwell::debug_info::AsDIScope;
+        use inkwell::debug_info::DIFlagsConstants;
+
+        let dibuilder = self.dibuilder;
+        let compile_unit = self.compile_unit;
+
+        let ditype = dibuilder
+            .create_basic_type(
+                "type_name",
+                0_u64,
+                0x00,
+                inkwell::debug_info::DIFlags::PUBLIC,
+            )
+            .unwrap();
+
+        let subroutine_type = dibuilder.create_subroutine_type(
+            compile_unit.get_file(),
+            /* return type */ Some(ditype.as_type()),
+            /* parameter types */ &[],
+            inkwell::debug_info::DIFlags::PUBLIC,
+        );
+
+        dibuilder.create_function(
+            /* scope */ compile_unit.as_debug_info_scope(),
+            /* func name */ function_name,
+            /* linkage_name */ None,
+            /* file */ compile_unit.get_file(),
+            /* line_no */ 0,
+            /* DIType */ subroutine_type,
+            /* is_local_to_unit */ true,
+            /* is_definition */ true,
+            /* scope_line */ 0,
+            /* flags */ inkwell::debug_info::DIFlags::PUBLIC,
+            /* is_optimized */ false,
         )
     }
 }
