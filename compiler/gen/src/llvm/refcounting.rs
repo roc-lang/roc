@@ -3,7 +3,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::list_len;
-use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
+use crate::llvm::convert::{basic_type_from_layout, block_of_memory, get_ptr_type, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -28,7 +28,7 @@ pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
     }
 }
 
-struct PointerToRefcount<'ctx> {
+pub struct PointerToRefcount<'ctx> {
     value: PointerValue<'ctx>,
 }
 
@@ -37,7 +37,10 @@ struct PointerToMalloced<'ctx> {
 }
 
 impl<'ctx> PointerToRefcount<'ctx> {
-    fn from_ptr_to_data<'a, 'env>(env: &Env<'a, 'ctx, 'env>, data_ptr: PointerValue<'ctx>) -> Self {
+    pub fn from_ptr_to_data<'a, 'env>(
+        env: &Env<'a, 'ctx, 'env>,
+        data_ptr: PointerValue<'ctx>,
+    ) -> Self {
         // pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
 
@@ -62,13 +65,29 @@ impl<'ctx> PointerToRefcount<'ctx> {
         }
     }
 
-    fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
+    pub fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
+        let ptr_as_int = env
+            .builder
+            .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
+            .unwrap()
+            .into_int_value();
+
+        let ptr = env.builder.build_int_to_ptr(
+            ptr_as_int,
+            env.context.i64_type().ptr_type(AddressSpace::Generic),
+            "list_int_to_ptr",
+        );
+
+        Self::from_ptr_to_data(env, ptr)
+    }
+
+    pub fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         env.builder
             .build_load(self.value, "get_refcount")
             .into_int_value()
     }
 
-    fn set_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, refcount: IntValue<'ctx>) {
+    pub fn set_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, refcount: IntValue<'ctx>) {
         env.builder.build_store(self.value, refcount);
     }
 
@@ -102,6 +121,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         parent: FunctionValue<'ctx>,
         _layout: &Layout<'a>,
     ) {
+        panic!();
         let builder = env.builder;
         let ctx = env.context;
         let refcount_type = ptr_int(ctx, env.ptr_bytes);
