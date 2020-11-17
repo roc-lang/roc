@@ -19,9 +19,8 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
-use roc_parse::ast::{
-    self, Attempting, ExposesEntry, ImportsEntry, PlatformHeader, TypeAnnotation, TypedIdent,
-};
+use roc_parse::ast::{self, Attempting, TypeAnnotation};
+use roc_parse::header::{ExposesEntry, ImportsEntry, PlatformHeader, TypedIdent};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
@@ -2087,7 +2086,7 @@ fn load_from_str<'a>(
 fn send_header<'a>(
     name: Located<roc_parse::header::ModuleName<'a>>,
     filename: PathBuf,
-    exposes: &'a [Located<ExposesEntry<'a>>],
+    exposes: &'a [Located<ExposesEntry<'a, &'a str>>],
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<ModuleIds>>,
@@ -2737,7 +2736,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 }
 
 fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
-    use roc_parse::ast::ImportsEntry::*;
+    use roc_parse::header::ImportsEntry::*;
 
     match entry {
         Module(module_name, exposes) => {
@@ -2757,11 +2756,11 @@ fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
     }
 }
 
-fn ident_from_exposed(entry: &ExposesEntry<'_>) -> Ident {
-    use roc_parse::ast::ExposesEntry::*;
+fn ident_from_exposed(entry: &ExposesEntry<'_, &str>) -> Ident {
+    use roc_parse::header::ExposesEntry::*;
 
     match entry {
-        Ident(ident) => (*ident).into(),
+        Exposed(ident) => (*ident).into(),
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => ident_from_exposed(sub_entry),
     }
 }
