@@ -431,9 +431,33 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn alignment_bytes(&self) -> u32 {
+        match self {
+            Layout::Struct(fields) => fields
+                .iter()
+                .map(|x| x.alignment_bytes())
+                .max()
+                .unwrap_or(0),
+            Layout::Union(tags) | Layout::RecursiveUnion(tags) => tags
+                .iter()
+                .map(|x| x.iter())
+                .flatten()
+                .map(|x| x.alignment_bytes())
+                .max()
+                .unwrap_or(0),
+            Layout::Builtin(builtin) => builtin.alignment_bytes(),
+            Layout::PhantomEmptyStruct => 0,
+            Layout::RecursivePointer => std::mem::align_of::<*const u8>() as u32,
+            Layout::FunctionPointer(_, _) => std::mem::align_of::<*const u8>() as u32,
+            Layout::Pointer(_) => std::mem::align_of::<*const u8>() as u32,
+            Layout::Closure(_, _, _) => todo!(),
+        }
+    }
+
     pub fn is_refcounted(&self) -> bool {
         match self {
             Layout::Builtin(Builtin::List(_, _)) => true,
+            Layout::Builtin(Builtin::Str) => true,
             Layout::RecursiveUnion(_) => true,
             Layout::RecursivePointer => true,
             _ => false,
@@ -628,6 +652,29 @@ impl<'a> Builtin<'a> {
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
             List(_, _) | EmptyList => Builtin::LIST_WORDS * pointer_size,
+        }
+    }
+
+    pub fn alignment_bytes(&self) -> u32 {
+        use std::mem::align_of;
+        use Builtin::*;
+
+        match self {
+            Int128 => align_of::<i128>() as u32,
+            Int64 => align_of::<i64>() as u32,
+            Int32 => align_of::<i32>() as u32,
+            Int16 => align_of::<i16>() as u32,
+            Int8 => align_of::<i8>() as u32,
+            Int1 => align_of::<bool>() as u32,
+            Float128 => align_of::<i128>() as u32,
+            Float64 => align_of::<f64>() as u32,
+            Float32 => align_of::<f32>() as u32,
+            Float16 => align_of::<i16>() as u32,
+            Str | EmptyStr => align_of::<char>() as u32,
+            Map(_, _) | EmptyMap => todo!(),
+            Set(_) | EmptySet => todo!(),
+            EmptyList => 0,
+            List(_, element_layout) => element_layout.alignment_bytes(),
         }
     }
 
