@@ -28,6 +28,159 @@ pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
     }
 }
 
+struct PointerToRefcount<'ctx> {
+    value: PointerValue<'ctx>,
+}
+
+struct PointerToMalloced<'ctx> {
+    value: PointerValue<'ctx>,
+}
+
+impl<'ctx> PointerToRefcount<'ctx> {
+    fn from_ptr_to_data<'a, 'env>(env: &Env<'a, 'ctx, 'env>, data_ptr: PointerValue<'ctx>) -> Self {
+        // pointer to usize
+        let refcount_type = ptr_int(env.context, env.ptr_bytes);
+
+        let ptr_as_int =
+            cast_basic_basic(env.builder, data_ptr.into(), refcount_type.into()).into_int_value();
+
+        // subtract offset, to access the refcount
+        let refcount_ptr_as_int = env.builder.build_int_sub(
+            ptr_as_int,
+            refcount_type.const_int(env.ptr_bytes as u64, false),
+            "make_refcount_ptr",
+        );
+
+        let refcount_ptr = env.builder.build_int_to_ptr(
+            refcount_ptr_as_int,
+            refcount_type.ptr_type(AddressSpace::Generic),
+            "get_refcount_ptr",
+        );
+
+        Self {
+            value: refcount_ptr,
+        }
+    }
+
+    fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
+        env.builder
+            .build_load(self.value, "get_refcount")
+            .into_int_value()
+    }
+
+    fn set_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, refcount: IntValue<'ctx>) {
+        env.builder.build_store(self.value, refcount);
+    }
+
+    fn increment<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) {
+        let refcount = self.get_refcount(env);
+        let builder = env.builder;
+        let refcount_type = ptr_int(env.context, env.ptr_bytes);
+
+        let max = builder.build_int_compare(
+            IntPredicate::EQ,
+            refcount,
+            refcount_type.const_int(REFCOUNT_MAX as u64, false),
+            "refcount_max_check",
+        );
+        let incremented = builder.build_int_add(
+            refcount,
+            refcount_type.const_int(1 as u64, false),
+            "increment_refcount",
+        );
+
+        let new_refcount = builder
+            .build_select(max, refcount, incremented, "select_refcount")
+            .into_int_value();
+
+        self.set_refcount(env, new_refcount);
+    }
+
+    fn decrement<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        parent: FunctionValue<'ctx>,
+        _layout: &Layout<'a>,
+    ) {
+        let builder = env.builder;
+        let ctx = env.context;
+        let refcount_type = ptr_int(ctx, env.ptr_bytes);
+
+        let merge_block = ctx.append_basic_block(parent, "merge");
+
+        let refcount_ptr = self.value;
+
+        let refcount = env
+            .builder
+            .build_load(refcount_ptr, "get_refcount")
+            .into_int_value();
+
+        let add_with_overflow = env
+            .call_intrinsic(
+                LLVM_SADD_WITH_OVERFLOW_I64,
+                &[
+                    refcount.into(),
+                    refcount_type.const_int((-1 as i64) as u64, true).into(),
+                ],
+            )
+            .into_struct_value();
+
+        let has_overflowed = builder
+            .build_extract_value(add_with_overflow, 1, "has_overflowed")
+            .unwrap();
+
+        let has_overflowed_comparison = builder.build_int_compare(
+            IntPredicate::EQ,
+            has_overflowed.into_int_value(),
+            ctx.bool_type().const_int(1 as u64, false),
+            "has_overflowed",
+        );
+
+        // build blocks
+        let then_block = ctx.append_basic_block(parent, "then");
+        let else_block = ctx.append_basic_block(parent, "else");
+
+        // TODO what would be most optimial for the branch predictor
+        //
+        // are most refcounts 1 most of the time? or not?
+        builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
+
+        // build then block
+        {
+            builder.position_at_end(then_block);
+            if !env.leak {
+                builder.build_free(self.value);
+            }
+            builder.build_unconditional_branch(merge_block);
+        }
+
+        // build else block
+        {
+            builder.position_at_end(else_block);
+
+            let max = builder.build_int_compare(
+                IntPredicate::EQ,
+                refcount,
+                refcount_type.const_int(REFCOUNT_MAX as u64, false),
+                "refcount_max_check",
+            );
+            let decremented = builder
+                .build_extract_value(add_with_overflow, 0, "decrement_refcount")
+                .unwrap()
+                .into_int_value();
+            let selected = builder.build_select(max, refcount, decremented, "select_refcount");
+
+            env.builder.build_store(refcount_ptr, selected);
+            // self.set_refcount(env, selected);
+
+            builder.build_unconditional_branch(merge_block);
+        }
+
+        // emit merge block
+        builder.position_at_end(merge_block);
+    }
+}
+
 pub fn decrement_refcount_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
