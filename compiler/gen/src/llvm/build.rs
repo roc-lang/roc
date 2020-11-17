@@ -989,57 +989,54 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     // bytes per element
     let bytes_len = len_type.const_int(value_bytes, false);
 
-    let offset = crate::llvm::refcounting::refcount_offset(env, layout);
+    let extra_bytes = layout.alignment_bytes(env.ptr_bytes);
+    let extra_bytes_intvalue = len_type.const_int(extra_bytes as u64, false);
 
     let ptr = {
         let len = bytes_len;
-        let len =
-            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+        let len = builder.build_int_add(len, extra_bytes_intvalue, "add_alignment_space");
 
         env.builder
-            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
+            .build_array_malloc(ctx.i8_type(), len, "create_ptr")
             .unwrap()
 
         // TODO check if malloc returned null; if so, runtime error for OOM!
     };
 
     // We must return a pointer to the first element:
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "allocate_refcount_pti");
-    let incremented = builder.build_int_add(
-        ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
-        "increment_list_ptr",
-    );
+    let data_ptr = {
+        let int_type = ptr_int(ctx, env.ptr_bytes);
+        let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "calculate_data_ptr_pti");
+        let incremented = builder.build_int_add(
+            ptr_as_int,
+            extra_bytes_intvalue,
+            "calculate_data_ptr_increment",
+        );
 
-    let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "allocate_refcount_itp");
+        let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
+        builder.build_int_to_ptr(incremented, ptr_type, "calculate_data_ptr")
+    };
 
-    // subtract ptr_size, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        incremented,
-        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
-        "refcount_ptr",
-    );
+    let refcount_ptr = match extra_bytes {
+        n if n == env.ptr_bytes => {
+            // the malloced pointer is the same as the refcounted pointer
+            unsafe { PointerToRefcount::from_ptr(env, ptr) }
+        }
+        n if n == 2 * env.ptr_bytes => {
+            // the refcount is stored just before the start of the actual data
+            // but in this case (because of alignment) not at the start of the malloced buffer
+            PointerToRefcount::from_ptr_to_data(env, data_ptr)
+        }
+        n => unreachable!("invalid extra_bytes {}", n),
+    };
 
-    let refcount_ptr = builder.build_int_to_ptr(
-        refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
-        "make ptr",
-    );
-
-    // the refcount of a new allocation is initially 1
-    // we assume that the allocation is indeed used (dead variables are eliminated)
-    builder.build_store(
-        refcount_ptr,
-        crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes),
-    );
+    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    refcount_ptr.set_refcount(env, rc1);
 
     // store the value in the pointer
-    builder.build_store(list_element_ptr, value);
+    builder.build_store(data_ptr, value);
 
-    list_element_ptr
+    data_ptr
 }
 
 fn list_literal<'a, 'ctx, 'env>(

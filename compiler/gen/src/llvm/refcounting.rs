@@ -5,7 +5,6 @@ use crate::llvm::build::{
 use crate::llvm::build_list::list_len;
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
-use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -33,6 +32,20 @@ pub struct PointerToRefcount<'ctx> {
 }
 
 impl<'ctx> PointerToRefcount<'ctx> {
+    pub unsafe fn from_ptr<'a, 'env>(env: &Env<'a, 'ctx, 'env>, ptr: PointerValue<'ctx>) -> Self {
+        // must make sure it's a pointer to usize
+        let refcount_type = ptr_int(env.context, env.ptr_bytes);
+
+        let value = cast_basic_basic(
+            env.builder,
+            ptr.into(),
+            refcount_type.ptr_type(AddressSpace::Generic).into(),
+        )
+        .into_pointer_value();
+
+        Self { value }
+    }
+
     pub fn from_ptr_to_data<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
         data_ptr: PointerValue<'ctx>,
