@@ -10,6 +10,9 @@ jobs:
     steps:
       - uses: actions/checkout@v1
 
+      - name: Output CPU info
+        run: sudo cat /proc/cpuinfo
+
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
 
@@ -22,8 +25,6 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
-
-      - run: rustup component add rustfmt
 
       - name: Cache cargo registry
         uses: actions/cache@v1
@@ -38,28 +39,7 @@ jobs:
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
       - uses: actions-rs/cargo@v1
-        name: cargo fmt --check
-        with:
-          command: fmt
-          args: --all -- --check
-
-      - run: rustup component add clippy
-
-      - uses: actions-rs/cargo@v1
-        name: cargo clippy
-        with:
-          command: clippy
-          args: -- -D warnings
-
-      - uses: actions-rs/cargo@v1
-        name: cargo test -- --ignored
-        continue-on-error: true
-        with:
-          command: test
-          args: -- --ignored
-
-      - uses: actions-rs/cargo@v1
         name: cargo test --release
         with:
           command: test
-          args: --release
+          args: str_split_bigger_delimiter_small_str --release
