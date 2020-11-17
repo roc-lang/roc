@@ -67,7 +67,29 @@ pub fn gen_from_mono_module(
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(&context, "app"));
     let builder = context.create_builder();
-    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+
+    let debug_metadata_version = context.i32_type().const_int(3, false);
+    module.add_basic_value_flag(
+        "Debug Info Version",
+        inkwell::module::FlagBehavior::Warning,
+        debug_metadata_version,
+    );
+
+    let (dibuilder, compile_unit) = module.create_debug_info_builder(
+        true,
+        /* language */ inkwell::debug_info::DWARFSourceLanguage::C,
+        /* filename */ "source_file",
+        /* directory */ ".",
+        /* producer */ "my llvm compiler frontend",
+        /* is_optimized */ false,
+        /* compiler command line flags */ "",
+        /* runtime_ver */ 0,
+        /* split_name */ "",
+        /* kind */ inkwell::debug_info::DWARFEmissionKind::Full,
+        /* dwo_id */ 0,
+        /* split_debug_inling */ false,
+        /* debug_info_for_profiling */ false,
+    );
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
@@ -76,6 +98,8 @@ pub fn gen_from_mono_module(
         arena: &arena,
         builder: &builder,
         context: &context,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
         interns: loaded.interns,
         module,
         ptr_bytes,
@@ -112,6 +136,7 @@ pub fn gen_from_mono_module(
         // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
         build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
+        /*
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
         } else {
@@ -122,11 +147,13 @@ pub fn gen_from_mono_module(
                 "Non-main function failed LLVM verification. Uncomment the above println to debug!"
             );
         }
+        */
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
     mpm.run_on(module);
 
     // Verify the module
@@ -135,7 +162,7 @@ pub fn gen_from_mono_module(
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
     // Emit the .o file
 

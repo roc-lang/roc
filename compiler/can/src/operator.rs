@@ -218,6 +218,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
                 let alternatives = alternatives.into_bump_slice();
 
+                debug_assert_eq!(branch.patterns.len(), alternatives.len());
+
                 desugared_branches.push(&*arena.alloc(WhenBranch {
                     patterns: alternatives,
                     value: Located {
@@ -229,6 +231,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             }
 
             let desugared_branches = desugared_branches.into_bump_slice();
+
+            debug_assert_eq!(branches.len(), desugared_branches.len());
 
             arena.alloc(Located {
                 value: When(loc_desugared_cond, desugared_branches),

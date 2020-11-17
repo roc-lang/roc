@@ -10,7 +10,7 @@ use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, list_get_refcount_ptr,
+    decrement_refcount_layout, increment_refcount_layout, list_get_refcount,
     refcount_is_one_comparison,
 };
 use bumpalo::collections::Vec;
@@ -97,6 +97,8 @@ pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
+    pub dibuilder: &'env inkwell::debug_info::DebugInfoBuilder<'ctx>,
+    pub compile_unit: &'env inkwell::debug_info::DICompileUnit<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub ptr_bytes: u32,
@@ -188,6 +190,8 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
+
+    let module = ctx.create_module("bin");
 
     // Add LLVM intrinsics.
     add_intrinsics(ctx, &module);
@@ -332,7 +336,8 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Normal => {
             pmb.set_optimization_level(OptimizationLevel::None);
         }
-        OptLevel::Optimize => {
+        // OptLevel::Optimize => {
+        _ => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
             pmb.set_inliner_with_threshold(275);
@@ -987,60 +992,22 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
 
     let len_type = env.ptr_int();
-    // bytes per element
-    let bytes_len = len_type.const_int(value_bytes, false);
-
-    let offset = crate::llvm::refcounting::refcount_offset(env, layout);
-
-    let ptr = {
-        let len = bytes_len;
-        let len =
-            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
-
-        env.builder
-            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
-    };
-
-    // We must return a pointer to the first element:
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "allocate_refcount_pti");
-    let incremented = builder.build_int_add(
-        ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
-        "increment_list_ptr",
-    );
+    let number_of_bytes = len_type.const_int(value_bytes, false);
 
     let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "allocate_refcount_itp");
-
-    // subtract ptr_size, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        incremented,
-        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
-        "refcount_ptr",
-    );
-
-    let refcount_ptr = builder.build_int_to_ptr(
-        refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
-        "make ptr",
-    );
-
-    // the refcount of a new allocation is initially 1
-    // we assume that the allocation is indeed used (dead variables are eliminated)
-    builder.build_store(
-        refcount_ptr,
-        crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes),
+    let initial_refcount = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    let data_ptr = crate::llvm::refcounting::MallocedPointerValue::allocate(
+        env,
+        layout,
+        number_of_bytes,
+        ptr_type,
+        initial_refcount,
     );
 
     // store the value in the pointer
-    builder.build_store(list_element_ptr, value);
+    builder.build_store(data_ptr, value);
 
-    list_element_ptr
+    data_ptr
 }
 
 fn list_literal<'a, 'ctx, 'env>(
@@ -1960,6 +1927,44 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         expose_function_to_host(env, fn_val);
     }
 
+    let dibuilder = env.dibuilder;
+    let compile_unit = env.compile_unit;
+
+    use inkwell::debug_info::AsDIScope;
+    use inkwell::debug_info::DIFlagsConstants;
+    use inkwell::debug_info::DISubprogram;
+    let ditype = dibuilder
+        .create_basic_type(
+            "type_name",
+            0_u64,
+            0x00,
+            inkwell::debug_info::DIFlags::PUBLIC,
+        )
+        .unwrap();
+    let subroutine_type = dibuilder.create_subroutine_type(
+        compile_unit.get_file(),
+        /* return type */ Some(ditype.as_type()),
+        /* parameter types */ &[],
+        inkwell::debug_info::DIFlags::PUBLIC,
+    );
+    let func_scope: DISubprogram<'_> = dibuilder.create_function(
+        /* scope */ compile_unit.as_debug_info_scope(),
+        /* func name */ fn_name.as_str(),
+        /* linkage_name */ Some(fn_name.as_str()),
+        /* file */ compile_unit.get_file(),
+        /* line_no */ 0,
+        /* DIType */ subroutine_type,
+        /* is_local_to_unit */ false,
+        /* is_definition */ true,
+        /* scope_line */ 0,
+        /* flags */ inkwell::debug_info::DIFlags::PUBLIC,
+        /* is_optimized */ false,
+    );
+
+    fn_val.set_subprogram(func_scope);
+
+    env.dibuilder.finalize();
+
     fn_val
 }
 
@@ -2207,7 +2212,8 @@ pub fn get_call_conventions(cc: CallingConvention) -> u32 {
 
 /// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
 pub static C_CALL_CONV: u32 = 0;
-pub static FAST_CALL_CONV: u32 = 8;
+//pub static FAST_CALL_CONV: u32 = 8;
+pub static FAST_CALL_CONV: u32 = 0;
 pub static COLD_CALL_CONV: u32 = 9;
 
 fn run_low_level<'a, 'ctx, 'env>(
@@ -2681,12 +2687,7 @@ where
 
             let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
 
-            let refcount_ptr = list_get_refcount_ptr(env, list_layout, original_wrapper);
-
-            let refcount = env
-                .builder
-                .build_load(refcount_ptr, "get_refcount")
-                .into_int_value();
+            let refcount = list_get_refcount(env, original_wrapper);
 
             let comparison = refcount_is_one_comparison(env, refcount);
 

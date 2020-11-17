@@ -6,7 +6,6 @@ use crate::llvm::build::{
 use crate::llvm::build_list::list_len;
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
-use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -26,6 +25,292 @@ pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
             "Invalid target: Roc does't support compiling to {}-bit systems.",
             ptr_bytes * 8
         ),
+    }
+}
+
+pub struct MallocedPointerValue;
+
+impl MallocedPointerValue {
+    pub fn allocate<'a, 'ctx, 'env>(
+        env: &Env<'a, 'ctx, 'env>,
+        layout: &Layout<'a>,
+        data_bytes: IntValue<'ctx>,
+        pointer_type: inkwell::types::PointerType<'ctx>,
+        initial_refcount: IntValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let builder = env.builder;
+        let ctx = env.context;
+        let len_type = env.ptr_int();
+
+        let extra_bytes = Self::space_for_refcount_and_alignment(env, layout);
+
+        let len = builder.build_int_add(
+            data_bytes,
+            len_type.const_int(extra_bytes, false),
+            "add_refcount_space",
+        );
+
+        let malloced_ptr = env
+            .builder
+            .build_array_malloc(env.context.i8_type(), len, "create_list_ptr")
+            .unwrap();
+
+        let int_type = ptr_int(ctx, env.ptr_bytes);
+        let malloced_ptr_as_int =
+            builder.build_ptr_to_int(malloced_ptr, int_type, "malloced_ptr_as_int");
+        let incremented = builder.build_int_add(
+            malloced_ptr_as_int,
+            env.context.i64_type().const_int(extra_bytes, false),
+            "increment_malloced_ptr",
+        );
+
+        let data_pointer = builder.build_int_to_ptr(incremented, pointer_type, "make_data_ptr");
+
+        let refcounted = RefcountedPointerValue {
+            value: data_pointer,
+        };
+
+        refcounted.set_refcount(env, initial_refcount);
+
+        data_pointer
+    }
+
+    fn space_for_refcount_and_alignment<'a, 'ctx, 'env>(
+        env: &Env<'a, 'ctx, 'env>,
+        layout: &Layout<'a>,
+    ) -> u64 {
+        let extra_bytes = layout.alignment_bytes().max(env.ptr_bytes as u32) as u64;
+
+        match env.ptr_bytes {
+            4 => {
+                // a 32-bit system we use 4 bytes for the refcount,
+                // but might add another 4 bytes for alignment
+                debug_assert!(extra_bytes == 4 || extra_bytes == 8);
+            }
+            8 => {
+                // a 32-bit system we use 8 bytes for the refcount,
+                // but might add another 8 bytes for alignment
+                debug_assert!(extra_bytes == 8 || extra_bytes == 16);
+            }
+            n => unreachable!(
+                "Roc does not support platforms where pointers are {} bytes in size",
+                n
+            ),
+        }
+
+        extra_bytes
+    }
+
+    fn free<'a, 'ctx, 'env>(
+        env: &Env<'a, 'ctx, 'env>,
+        layout: &Layout<'a>,
+        data_ptr: PointerValue<'ctx>,
+    ) {
+        let builder = env.builder;
+        let ctx = env.context;
+
+        let int_type = ptr_int(ctx, env.ptr_bytes);
+        let data_ptr_as_int = builder.build_ptr_to_int(data_ptr, int_type, "list_cast_ptr");
+
+        let extra_bytes = Self::space_for_refcount_and_alignment(env, layout);
+
+        let malloced_ptr_as_int = builder.build_int_sub(
+            data_ptr_as_int,
+            int_type.const_int(extra_bytes, false),
+            "add_refcount_space",
+        );
+
+        let pointer_type = int_type.ptr_type(AddressSpace::Generic);
+        let malloced_ptr =
+            builder.build_int_to_ptr(malloced_ptr_as_int, pointer_type, "list_cast_ptr");
+
+        builder.build_free(malloced_ptr);
+    }
+}
+
+struct RefcountedPointerValue<'ctx> {
+    /// A pointer to the ACTUAL data
+    value: PointerValue<'ctx>,
+}
+
+impl<'ctx> RefcountedPointerValue<'ctx> {
+    fn from_pointer_value(value: PointerValue<'ctx>) -> Self {
+        RefcountedPointerValue { value }
+    }
+
+    fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
+        let ptr_as_int = env
+            .builder
+            .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
+            .unwrap()
+            .into_int_value();
+
+        let ptr = env.builder.build_int_to_ptr(
+            ptr_as_int,
+            env.context.i64_type().ptr_type(AddressSpace::Generic),
+            "list_int_to_ptr",
+        );
+
+        RefcountedPointerValue { value: ptr }
+    }
+
+    fn _get_refcount_ptr<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
+        // pointer to usize
+        let refcount_type = ptr_int(env.context, env.ptr_bytes);
+
+        let ptr_as_int =
+            cast_basic_basic(env.builder, self.value.into(), refcount_type.into()).into_int_value();
+
+        // subtract offset, to access the refcount
+        let refcount_ptr_as_int = env.builder.build_int_sub(
+            ptr_as_int,
+            refcount_type.const_int(env.ptr_bytes as u64, false),
+            "make_refcount_ptr",
+        );
+
+        env.builder.build_int_to_ptr(
+            refcount_ptr_as_int,
+            refcount_type.ptr_type(AddressSpace::Generic),
+            "get_refcount_ptr",
+        )
+    }
+
+    fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
+        let refcount_ptr = self._get_refcount_ptr(env);
+
+        env.builder
+            .build_load(refcount_ptr, "get_refcount")
+            .into_int_value()
+    }
+
+    fn set_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, refcount: IntValue<'ctx>) {
+        let refcount_ptr = self._get_refcount_ptr(env);
+
+        env.builder.build_store(refcount_ptr, refcount);
+    }
+
+    fn modify_refcount<'a, 'env, F>(&self, env: &Env<'a, 'ctx, 'env>, function: F)
+    where
+        F: Fn(IntValue<'ctx>) -> IntValue<'ctx>,
+    {
+        let refcount_ptr = self._get_refcount_ptr(env);
+
+        let initial = env
+            .builder
+            .build_load(refcount_ptr, "get_refcount")
+            .into_int_value();
+
+        let new = function(initial);
+
+        env.builder.build_store(refcount_ptr, new);
+    }
+
+    fn increment<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) {
+        self.modify_refcount(env, |refcount| {
+            let builder = env.builder;
+            let refcount_type = ptr_int(env.context, env.ptr_bytes);
+
+            let max = builder.build_int_compare(
+                IntPredicate::EQ,
+                refcount,
+                refcount_type.const_int(REFCOUNT_MAX as u64, false),
+                "refcount_max_check",
+            );
+            let incremented = builder.build_int_add(
+                refcount,
+                refcount_type.const_int(1 as u64, false),
+                "increment_refcount",
+            );
+
+            builder
+                .build_select(max, refcount, incremented, "select_refcount")
+                .into_int_value()
+        })
+    }
+
+    fn decrement<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        parent: FunctionValue<'ctx>,
+        layout: &Layout<'a>,
+    ) {
+        let builder = env.builder;
+        let ctx = env.context;
+        let refcount_type = ptr_int(ctx, env.ptr_bytes);
+
+        let merge_block = ctx.append_basic_block(parent, "merge");
+
+        let refcount_ptr = self._get_refcount_ptr(env);
+
+        let refcount = env
+            .builder
+            .build_load(refcount_ptr, "get_refcount")
+            .into_int_value();
+        // let refcount = refcount_type.const_int(34, false);
+
+        let add_with_overflow = env
+            .call_intrinsic(
+                LLVM_SADD_WITH_OVERFLOW_I64,
+                &[
+                    refcount.into(),
+                    refcount_type.const_int((-1 as i64) as u64, true).into(),
+                ],
+            )
+            .into_struct_value();
+
+        let has_overflowed = builder
+            .build_extract_value(add_with_overflow, 1, "has_overflowed")
+            .unwrap();
+
+        let has_overflowed_comparison = builder.build_int_compare(
+            IntPredicate::EQ,
+            has_overflowed.into_int_value(),
+            ctx.bool_type().const_int(1 as u64, false),
+            "has_overflowed",
+        );
+
+        // build blocks
+        let then_block = ctx.append_basic_block(parent, "then");
+        let else_block = ctx.append_basic_block(parent, "else");
+
+        // TODO what would be most optimial for the branch predictor
+        //
+        // are most refcounts 1 most of the time? or not?
+        builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
+
+        // build then block
+        {
+            builder.position_at_end(then_block);
+            if !env.leak {
+                MallocedPointerValue::free(env, layout, self.value);
+            }
+            builder.build_unconditional_branch(merge_block);
+        }
+
+        // build else block
+        {
+            builder.position_at_end(else_block);
+
+            let max = builder.build_int_compare(
+                IntPredicate::EQ,
+                refcount,
+                refcount_type.const_int(REFCOUNT_MAX as u64, false),
+                "refcount_max_check",
+            );
+            let decremented = builder
+                .build_extract_value(add_with_overflow, 0, "decrement_refcount")
+                .unwrap()
+                .into_int_value();
+            let selected = builder.build_select(max, refcount, decremented, "select_refcount");
+
+            env.builder.build_store(refcount_ptr, selected);
+            // self.set_refcount(env, selected);
+
+            builder.build_unconditional_branch(merge_block);
+        }
+
+        // emit merge block
+        builder.position_at_end(merge_block);
     }
 }
 
@@ -333,8 +618,8 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(increment_block);
 
-    let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
-    increment_refcount_help(env, refcount_ptr);
+    let refcounted_ptr = RefcountedPointerValue::from_list_wrapper(env, original_wrapper);
+    refcounted_ptr.increment(env);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -430,11 +715,17 @@ fn build_dec_list_help<'a, 'ctx, 'env>(
     // if the length is 0, we're done and jump to the continuation block
     // otherwise, actually read and check the refcount
     builder.build_conditional_branch(is_non_empty, decrement_block, cont_block);
-    builder.position_at_end(decrement_block);
 
-    let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
+    {
+        builder.position_at_end(decrement_block);
 
-    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
+        let refcounted_ptr = RefcountedPointerValue::from_list_wrapper(env, original_wrapper);
+        refcounted_ptr.decrement(env, parent, layout);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    builder.position_at_end(cont_block);
 
     // this function returns void
     builder.build_return(None);
@@ -528,8 +819,9 @@ fn build_inc_str_help<'a, 'ctx, 'env>(
     builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
     builder.position_at_end(decrement_block);
 
-    let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
-    increment_refcount_help(env, refcount_ptr);
+    let refcounted_ptr = RefcountedPointerValue::from_list_wrapper(env, str_wrapper);
+    refcounted_ptr.increment(env);
+
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
@@ -624,144 +916,20 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
     let decrement_block = ctx.append_basic_block(parent, "decrement_block");
 
     builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
-    builder.position_at_end(decrement_block);
 
-    let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
-    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
+    {
+        builder.position_at_end(decrement_block);
+
+        let refcounted_ptr = RefcountedPointerValue::from_list_wrapper(env, str_wrapper);
+        refcounted_ptr.decrement(env, parent, layout);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    builder.position_at_end(cont_block);
 
     // this function returns void
     builder.build_return(None);
-}
-
-fn increment_refcount_ptr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
-    field_ptr: PointerValue<'ctx>,
-) {
-    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
-    increment_refcount_help(env, refcount_ptr);
-}
-
-fn increment_refcount_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    refcount_ptr: PointerValue<'ctx>,
-) {
-    let builder = env.builder;
-    let ctx = env.context;
-    let refcount_type = ptr_int(ctx, env.ptr_bytes);
-
-    let refcount = env
-        .builder
-        .build_load(refcount_ptr, "get_refcount")
-        .into_int_value();
-
-    let max = builder.build_int_compare(
-        IntPredicate::EQ,
-        refcount,
-        refcount_type.const_int(REFCOUNT_MAX as u64, false),
-        "refcount_max_check",
-    );
-    let incremented = builder.build_int_add(
-        refcount,
-        refcount_type.const_int(1 as u64, false),
-        "increment_refcount",
-    );
-    let selected = builder.build_select(max, refcount, incremented, "select_refcount");
-
-    builder.build_store(refcount_ptr, selected);
-}
-
-fn decrement_refcount_ptr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    layout: &Layout<'a>,
-    field_ptr: PointerValue<'ctx>,
-) {
-    let ctx = env.context;
-
-    // the block we'll always jump to when we're done
-    let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
-
-    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
-    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
-}
-
-fn decrement_refcount_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    refcount_ptr: PointerValue<'ctx>,
-    cont_block: BasicBlock,
-) {
-    let builder = env.builder;
-    let ctx = env.context;
-    let refcount_type = ptr_int(ctx, env.ptr_bytes);
-
-    let refcount = env
-        .builder
-        .build_load(refcount_ptr, "get_refcount")
-        .into_int_value();
-
-    let add_with_overflow = env
-        .call_intrinsic(
-            LLVM_SADD_WITH_OVERFLOW_I64,
-            &[
-                refcount.into(),
-                refcount_type.const_int((-1 as i64) as u64, true).into(),
-            ],
-        )
-        .into_struct_value();
-
-    let has_overflowed = builder
-        .build_extract_value(add_with_overflow, 1, "has_overflowed")
-        .unwrap();
-
-    let has_overflowed_comparison = builder.build_int_compare(
-        IntPredicate::EQ,
-        has_overflowed.into_int_value(),
-        ctx.bool_type().const_int(1 as u64, false),
-        "has_overflowed",
-    );
-
-    // build blocks
-    let then_block = ctx.append_basic_block(parent, "then");
-    let else_block = ctx.append_basic_block(parent, "else");
-
-    // TODO what would be most optimial for the branch predictor
-    //
-    // are most refcounts 1 most of the time? or not?
-    builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
-
-    // build then block
-    {
-        builder.position_at_end(then_block);
-        if !env.leak {
-            builder.build_free(refcount_ptr);
-        }
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    // build else block
-    {
-        builder.position_at_end(else_block);
-
-        let max = builder.build_int_compare(
-            IntPredicate::EQ,
-            refcount,
-            refcount_type.const_int(REFCOUNT_MAX as u64, false),
-            "refcount_max_check",
-        );
-        let decremented = builder
-            .build_extract_value(add_with_overflow, 0, "decrement_refcount")
-            .unwrap()
-            .into_int_value();
-        let selected = builder.build_select(max, refcount, decremented, "select_refcount");
-        builder.build_store(refcount_ptr, selected);
-
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    // emit merge block
-    builder.position_at_end(cont_block);
 }
 
 /// Build an increment or decrement function for a specific layout
@@ -806,9 +974,47 @@ pub fn build_dec_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, fn_name);
+            let function_value = build_header(env, &layout, fn_name.clone());
 
             build_dec_union_help(env, layout_ids, fields, function_value);
+
+            let dibuilder = env.dibuilder;
+            let compile_unit = env.compile_unit;
+
+            use inkwell::debug_info::AsDIScope;
+            use inkwell::debug_info::DIFlagsConstants;
+            use inkwell::debug_info::DISubprogram;
+            let ditype = dibuilder
+                .create_basic_type(
+                    "type_name",
+                    0_u64,
+                    0x00,
+                    inkwell::debug_info::DIFlags::PUBLIC,
+                )
+                .unwrap();
+            let subroutine_type = dibuilder.create_subroutine_type(
+                compile_unit.get_file(),
+                /* return type */ Some(ditype.as_type()),
+                /* parameter types */ &[],
+                inkwell::debug_info::DIFlags::PUBLIC,
+            );
+            let func_scope: DISubprogram<'_> = dibuilder.create_function(
+                /* scope */ compile_unit.as_debug_info_scope(),
+                /* func name */ fn_name.as_str(),
+                /* linkage_name */ Some(fn_name.as_str()),
+                /* file */ compile_unit.get_file(),
+                /* line_no */ 0,
+                /* DIType */ subroutine_type,
+                /* is_local_to_unit */ false,
+                /* is_definition */ true,
+                /* scope_line */ 0,
+                /* flags */ inkwell::debug_info::DIFlags::PUBLIC,
+                /* is_optimized */ false,
+            );
+
+            function_value.set_subprogram(func_scope);
+
+            env.dibuilder.finalize();
 
             function_value
         }
@@ -913,6 +1119,7 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
                 )
                 .into_pointer_value();
 
+                /*
                 let recursive_field = env
                     .builder
                     .build_load(recursive_field_ptr, "load_recursive_field");
@@ -924,10 +1131,13 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
                 // Because it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
+                */
 
                 // TODO do this decrement before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                decrement_refcount_ptr(env, parent, &layout, recursive_field_ptr);
+                let refcounted_ptr =
+                    RefcountedPointerValue::from_pointer_value(recursive_field_ptr);
+                refcounted_ptr.decrement(env, parent, &layout);
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -1129,9 +1339,11 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
                 // Because it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
 
-                // TODO do this decrement before the recursive call?
+                // TODO do this increment before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                increment_refcount_ptr(env, &layout, recursive_field_ptr);
+                let refcounted_ptr =
+                    RefcountedPointerValue::from_pointer_value(recursive_field_ptr);
+                refcounted_ptr.increment(env);
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -1170,67 +1382,11 @@ pub fn refcount_is_one_comparison<'a, 'ctx, 'env>(
     )
 }
 
-pub fn list_get_refcount_ptr<'a, 'ctx, 'env>(
+pub fn list_get_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
     list_wrapper: StructValue<'ctx>,
-) -> PointerValue<'ctx> {
-    // fetch the pointer to the array data, as an integer
-    let ptr_as_int = env
-        .builder
-        .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
-        .unwrap()
-        .into_int_value();
+) -> IntValue<'ctx> {
+    let ptr = RefcountedPointerValue::from_list_wrapper(env, list_wrapper);
 
-    get_refcount_ptr_help(env, layout, ptr_as_int)
-}
-
-fn get_refcount_ptr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
-    ptr: PointerValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let refcount_type = ptr_int(env.context, env.ptr_bytes);
-    let ptr_as_int =
-        cast_basic_basic(env.builder, ptr.into(), refcount_type.into()).into_int_value();
-
-    get_refcount_ptr_help(env, layout, ptr_as_int)
-}
-
-pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> u64 {
-    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
-
-    match layout {
-        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
-        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
-        Layout::RecursivePointer | Layout::RecursiveUnion(_) => env.ptr_bytes as u64,
-        _ => (env.ptr_bytes as u64).max(value_bytes),
-    }
-}
-
-fn get_refcount_ptr_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
-    ptr_as_int: IntValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let offset = refcount_offset(env, layout);
-
-    // pointer to usize
-    let refcount_type = ptr_int(ctx, env.ptr_bytes);
-
-    // subtract offset, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        ptr_as_int,
-        refcount_type.const_int(offset, false),
-        "make_refcount_ptr",
-    );
-
-    builder.build_int_to_ptr(
-        refcount_ptr,
-        refcount_type.ptr_type(AddressSpace::Generic),
-        "get_refcount_ptr",
-    )
+    ptr.get_refcount(env)
 }

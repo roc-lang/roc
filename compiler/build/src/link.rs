@@ -63,15 +63,18 @@ pub fn rebuild_host(host_input_path: &Path) {
     if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let libhost_dir = cargo_dir.join("target").join("release");
+        // let libhost_dir = cargo_dir.join("target").join("release");
+        let libhost_dir = cargo_dir.join("target").join("debug");
 
         let output = Command::new("cargo")
-            .args(&["build", "--release"])
+            // .args(&["build", "--release"])
+            .args(&["build"])
             .current_dir(cargo_dir)
             .output()
             .unwrap();
 
-        validate_output("host.rs", "cargo build --release", output);
+        // validate_output("host.rs", "cargo build --release", output);
+        validate_output("host.rs", "cargo build", output);
 
         let output = Command::new("ld")
             .env_clear()

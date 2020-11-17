@@ -5332,6 +5332,7 @@ pub fn from_can_pattern<'a>(
 
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     // disregard the tag discriminant layout
+                    // debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((

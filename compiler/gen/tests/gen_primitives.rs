@@ -1342,7 +1342,56 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
+    fn rbtree_balance_full_2() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+                main : Dict Int Int
+                main =
+                    balance Red 0 0 Empty Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
     fn rbtree_balance_full() {
         assert_non_opt_evals_to!(
             indoc!(

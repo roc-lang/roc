@@ -261,6 +261,22 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
         let builder = context.create_builder();
 
+        let (dibuilder, compile_unit) = module.create_debug_info_builder(
+            true,
+            /* language */ inkwell::debug_info::DWARFSourceLanguage::C,
+            /* filename */ "source_file",
+            /* directory */ ".",
+            /* producer */ "my llvm compiler frontend",
+            /* is_optimized */ false,
+            /* compiler command line flags */ "",
+            /* runtime_ver */ 0,
+            /* split_name */ "",
+            /* kind */ inkwell::debug_info::DWARFEmissionKind::Full,
+            /* dwo_id */ 0,
+            /* split_debug_inling */ false,
+            /* debug_info_for_profiling */ false,
+        );
+
         debug_assert_eq!(exposed_to_host.len(), 1);
         let (main_fn_symbol, main_fn_var) = exposed_to_host.iter().next().unwrap();
         let main_fn_symbol = *main_fn_symbol;
@@ -288,6 +304,8 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             arena: &arena,
             builder: &builder,
             context: &context,
+            dibuilder: &dibuilder,
+            compile_unit: &compile_unit,
             interns,
             module,
             ptr_bytes,
