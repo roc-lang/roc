@@ -31,6 +31,11 @@ pub struct X86_64Backend<'a> {
     // function parameter registers listed by order. Need to know the float equivalent registers as well.
     // Probably need to encode stack parameter knowledge here too.
     // return parameter register. This includes dealing with multiple value returns.
+    gp_param_regs: &'static [Register],
+    caller_saved_regs: &'static [Register],
+    callee_saved_regs: &'static [Register],
+    shadow_space_size: u8,
+    red_zone_size: u8,
 }
 
 impl<'a> Backend<'a> for X86_64Backend<'a> {
@@ -40,6 +45,36 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
             leaf_proc: true,
             buf: bumpalo::vec!(in env.arena),
             symbols_map: MutMap::default(),
+            gp_param_regs: &[
+                Register::RDI,
+                Register::RSI,
+                Register::RDX,
+                Register::RCX,
+                Register::R8,
+                Register::R9,
+            ],
+            caller_saved_regs: &[
+                Register::RAX,
+                Register::RCX,
+                Register::RDX,
+                Register::RSP,
+                Register::RSI,
+                Register::RDI,
+                Register::R8,
+                Register::R9,
+                Register::R10,
+                Register::R11,
+            ],
+            callee_saved_regs: &[
+                Register::RBX,
+                Register::RBP,
+                Register::R12,
+                Register::R13,
+                Register::R14,
+                Register::R15,
+            ],
+            shadow_space_size: 0,
+            red_zone_size: 128,
         }
     }
 
