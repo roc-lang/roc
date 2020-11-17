@@ -1342,6 +1342,53 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
+    fn rbtree_balance_mono_problem() {
+        // because of how the function is written, only `Red` is used and so in the function's
+        // type, the first argument is a unit and dropped. Apparently something is weird with
+        // constraint generation where the specialization required by `main` does not fix the
+        // problem. As a result, the first argument is dropped and we run into issues down the line
+        //
+        // concretely, the `rRight` symbol will not be defined
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                        Empty
+
+                main : Dict Int Int
+                main =
+                    balance Red 0 0 Empty Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
     fn rbtree_balance_full() {
         assert_non_opt_evals_to!(
             indoc!(
