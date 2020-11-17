@@ -75,7 +75,7 @@ pub fn main() -> io::Result<()> {
                 } else if prev_line_blank {
                     // After two blank lines in a row, give up and try parsing it
                     // even though it's going to fail. This way you don't get stuck.
-                    match print_output(pending_src.as_str()) {
+                    match eval_and_format(pending_src.as_str()) {
                         Ok(output) => {
                             println!("{}", output);
                         }
@@ -97,12 +97,12 @@ pub fn main() -> io::Result<()> {
             }
             _ => {
                 let result = if pending_src.is_empty() {
-                    print_output(line)
+                    eval_and_format(line)
                 } else {
                     pending_src.push('\n');
                     pending_src.push_str(line);
 
-                    print_output(pending_src.as_str())
+                    eval_and_format(pending_src.as_str())
                 };
 
                 match result {
@@ -117,7 +117,7 @@ pub fn main() -> io::Result<()> {
                         // If we hit an eof, and we're allowed to keep going,
                         // append the str to the src we're building up and continue.
                         // (We only need to append it here if it was empty before;
-                        // otherwise, we already appended it before calling print_output.)
+                        // otherwise, we already appended it before calling eval_and_format.)
 
                         if pending_src.is_empty() {
                             pending_src.push_str(line);
@@ -141,7 +141,7 @@ fn report_parse_error(fail: Fail) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 
-fn print_output(src: &str) -> Result<String, Fail> {
+fn eval_and_format(src: &str) -> Result<String, Fail> {
     gen(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|output| match output {
         ReplOutput::NoProblems { expr, expr_type } => {
             format!("\n{} \u{001b}[35m:\u{001b}[0m {}", expr, expr_type)
