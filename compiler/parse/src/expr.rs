@@ -666,7 +666,7 @@ fn annotation_or_alias<'a>(
         NumLiteral(_) | NonBase10Literal { .. } | FloatLiteral(_) | StrLiteral(_) => {
             Def::NotYetImplemented("TODO gracefully handle trying to annotate a litera")
         }
-        Underscore => {
+        Underscore(_) => {
             Def::NotYetImplemented("TODO gracefully handle trying to give a type annotation to an undrscore")
         }
         Malformed(_) => {
@@ -1086,7 +1086,9 @@ fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map!(ascii_char(b'_'), |_| Pattern::Underscore)
+    map_with_arena!(ascii_char(b'_'), |_arena, _thing| {
+        Pattern::Underscore(&"_")
+    })
 }
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {

@@ -1414,7 +1414,7 @@ mod test_parse {
     #[test]
     fn single_underscore_closure() {
         let arena = Bump::new();
-        let pattern = Located::new(0, 0, 1, 2, Underscore);
+        let pattern = Located::new(0, 0, 1, 2, Underscore(&"_"));
         let patterns = &[pattern];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 6, 8, Num("42"))));
         let actual = parse_expr_with(&arena, "\\_ -> 42");
@@ -1464,8 +1464,8 @@ mod test_parse {
     #[test]
     fn closure_with_underscores() {
         let arena = Bump::new();
-        let underscore1 = Located::new(0, 0, 1, 2, Underscore);
-        let underscore2 = Located::new(0, 0, 4, 5, Underscore);
+        let underscore1 = Located::new(0, 0, 1, 2, Underscore(&"_"));
+        let underscore2 = Located::new(0, 0, 4, 5, Underscore(&"_"));
         let patterns = bumpalo::vec![in &arena; underscore1, underscore2];
         let expected = Closure(
             arena.alloc(patterns),
@@ -2477,7 +2477,7 @@ mod test_parse {
             guard: None,
         });
         let newlines = &[Newline];
-        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore), newlines);
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore(&"_")), newlines);
         let loc_pattern2 = Located::new(2, 2, 4, 5, pattern2);
         let expr2 = Num("4");
         let loc_expr2 = Located::new(2, 2, 9, 10, expr2);
@@ -2522,7 +2522,7 @@ mod test_parse {
             guard: None,
         });
         let newlines = &[Newline];
-        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore), newlines);
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore(&"_")), newlines);
         let loc_pattern2 = Located::new(2, 2, 4, 5, pattern2);
         let expr2 = Num("4");
         let loc_expr2 = Located::new(2, 2, 9, 10, expr2);
