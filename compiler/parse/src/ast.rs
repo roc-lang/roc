@@ -555,7 +555,7 @@ impl<'a> Pattern<'a> {
             (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
             // TODO do we want to compare anything here?
-            (Underscore(_), Underscore(_)) => true,
+            (Underscore(x), Underscore(y)) => x == y,
 
             // Space
             (SpaceBefore(x, _), SpaceBefore(y, _)) => x.equivalent(y),
