@@ -55,7 +55,8 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                     Register::R8,
                     Register::R9,
                 ],
-                caller_saved_regs: im_rc::hashset![
+                // TODO: stop using vec! here. I was just have trouble with some errors, but it shouldn't be needed.
+                caller_saved_regs: ImSet::from(vec![
                     Register::RAX,
                     Register::RCX,
                     Register::RDX,
@@ -66,15 +67,15 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                     Register::R9,
                     Register::R10,
                     Register::R11,
-                ],
-                callee_saved_regs: im_rc::hashset![
+                ]),
+                callee_saved_regs: ImSet::from(vec![
                     Register::RBX,
                     Register::RBP,
                     Register::R12,
                     Register::R13,
                     Register::R14,
                     Register::R15,
-                ],
+                ]),
                 shadow_space_size: 0,
                 red_zone_size: 128,
             },
@@ -84,7 +85,7 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 buf: bumpalo::vec!(in env.arena),
                 symbols_map: MutMap::default(),
                 gp_param_regs: &[Register::RCX, Register::RDX, Register::R8, Register::R9],
-                caller_saved_regs: im_rc::hashset![
+                caller_saved_regs: ImSet::from(vec![
                     Register::RAX,
                     Register::RCX,
                     Register::RDX,
@@ -92,8 +93,8 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                     Register::R9,
                     Register::R10,
                     Register::R11,
-                ],
-                callee_saved_regs: im_rc::hashset![
+                ]),
+                callee_saved_regs: ImSet::from(vec![
                     Register::RBX,
                     Register::RBP,
                     Register::RSI,
@@ -103,7 +104,7 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                     Register::R13,
                     Register::R14,
                     Register::R15,
-                ],
+                ]),
                 shadow_space_size: 32,
                 red_zone_size: 0,
             },
