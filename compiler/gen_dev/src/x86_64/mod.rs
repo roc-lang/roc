@@ -33,6 +33,9 @@ pub struct X86_64Backend<'a> {
     // Probably need to encode stack parameter knowledge here too.
     // return parameter register. This includes dealing with multiple value returns.
     gp_param_regs: &'static [Register],
+
+    // A linear scan of an array may be faster than a set technically.
+    // That being said, fastest would likely be a trait based on calling convention/register.
     caller_saved_regs: ImSet<Register>,
     callee_saved_regs: ImSet<Register>,
     shadow_space_size: u8,
