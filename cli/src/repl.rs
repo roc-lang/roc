@@ -1,18 +1,28 @@
+use const_format::concatcp;
 use gen::{gen_and_eval, ReplOutput};
 use roc_gen::llvm::build::OptLevel;
 use roc_parse::parser::{Fail, FailReason};
 use std::io::{self, Write};
 use target_lexicon::Triple;
-use const_format::concatcp;
 
 const BLUE: &str = "\u{001b}[36m";
 const PINK: &str = "\u{001b}[35m";
 const END_COL: &str = "\u{001b}[0m";
 
-const WELCOME_MESSAGE: &str = concatcp!("\n  The rockin’ ", BLUE, "roc repl", END_COL, "\n", PINK, "────────────────────────", END_COL, "\n\n");
+const WELCOME_MESSAGE: &str = concatcp!(
+    "\n  The rockin’ ",
+    BLUE,
+    "roc repl",
+    END_COL,
+    "\n",
+    PINK,
+    "────────────────────────",
+    END_COL,
+    "\n\n"
+);
 const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
-const ELLIPSIS: &str = concatcp!(BLUE,"…", END_COL, " ");
+const ELLIPSIS: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 mod eval;
 mod gen;
