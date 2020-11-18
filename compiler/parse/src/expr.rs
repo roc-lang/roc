@@ -1093,7 +1093,7 @@ fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 
         match output {
             Some(name) => Ok((Pattern::Underscore(name), final_state)),
-            None => Ok((Pattern::Underscore(&"_"), final_state)),
+            None => Ok((Pattern::Underscore(&""), final_state)),
         }
     }
 }

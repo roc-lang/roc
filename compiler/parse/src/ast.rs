@@ -554,7 +554,6 @@ impl<'a> Pattern<'a> {
             ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
             (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
-            // TODO do we want to compare anything here?
             (Underscore(x), Underscore(y)) => x == y,
 
             // Space

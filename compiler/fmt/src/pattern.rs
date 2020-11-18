@@ -128,7 +128,10 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
             }
-            Underscore(name) => buf.push_str(name),
+            Underscore(name) => {
+                buf.push('_');
+                buf.push_str(name);
+            }
 
             // Space
             SpaceBefore(sub_pattern, spaces) => {
