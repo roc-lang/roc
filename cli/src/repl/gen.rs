@@ -17,7 +17,7 @@ pub enum ReplOutput {
     NoProblems { expr: String, expr_type: String },
 }
 
-pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fail> {
+pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fail> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
@@ -201,6 +201,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput
                 );
             }
         }
+
         let (main_fn_name, main_fn) = roc_gen::llvm::build::promote_to_main_function(
             &env,
             &mut layout_ids,

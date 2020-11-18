@@ -1,13 +1,18 @@
-use gen::{gen, ReplOutput};
+use gen::{gen_and_eval, ReplOutput};
 use roc_gen::llvm::build::OptLevel;
 use roc_parse::parser::{Fail, FailReason};
 use std::io::{self, Write};
 use target_lexicon::Triple;
+use const_format::concatcp;
 
-pub const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
-pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit.\n";
-pub const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
-pub const ELLIPSIS: &str = "\u{001b}[36m…\u{001b}[0m ";
+const BLUE: &str = "\u{001b}[36m";
+const PINK: &str = "\u{001b}[35m";
+const END_COL: &str = "\u{001b}[0m";
+
+const WELCOME_MESSAGE: &str = concatcp!("\n  The rockin’ ", BLUE, "roc repl", END_COL, "\n", PINK, "────────────────────────", END_COL, "\n\n");
+const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
+const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
+const ELLIPSIS: &str = concatcp!(BLUE,"…", END_COL, " ");
 
 mod eval;
 mod gen;
@@ -43,7 +48,7 @@ pub fn main() -> io::Result<()> {
 
         match line.to_lowercase().as_str() {
             ":help" => {
-                println!("Use :exit to exit.");
+                println!("Use :exit or :q to exit.");
             }
             "" => {
                 if pending_src.is_empty() {
@@ -69,6 +74,9 @@ pub fn main() -> io::Result<()> {
                 }
             }
             ":exit" => {
+                break;
+            }
+            ":q" => {
                 break;
             }
             _ => {
@@ -118,9 +126,9 @@ fn report_parse_error(fail: Fail) {
 }
 
 fn eval_and_format(src: &str) -> Result<String, Fail> {
-    gen(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|output| match output {
+    gen_and_eval(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|output| match output {
         ReplOutput::NoProblems { expr, expr_type } => {
-            format!("\n{} \u{001b}[35m:\u{001b}[0m {}", expr, expr_type)
+            format!("\n{} {}:{} {}", expr, PINK, END_COL, expr_type)
         }
         ReplOutput::Problems(lines) => format!("\n{}\n", lines.join("\n\n")),
     })
