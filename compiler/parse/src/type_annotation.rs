@@ -21,7 +21,7 @@ macro_rules! tag_union {
     ($min_indent:expr) => {
         map!(
             and!(
-                collection!(
+                collection_trailing_sep!(
                     ascii_char(b'['),
                     loc!(tag_type($min_indent)),
                     ascii_char(b','),
@@ -33,12 +33,13 @@ macro_rules! tag_union {
                     move |arena, state| allocated(term($min_indent)).parse(arena, state)
                 )
             ),
-            |(tags, ext): (
-                Vec<'a, Located<Tag<'a>>>,
+            |((tags, final_comments), ext): (
+                (Vec<'a, Located<Tag<'a>>>, &'a [CommentOrNewline<'a>]),
                 Option<&'a Located<TypeAnnotation<'a>>>,
             )| TypeAnnotation::TagUnion {
                 tags: tags.into_bump_slice(),
                 ext,
+                final_comments
             }
         )
     };
@@ -168,13 +169,14 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
         |((fields, final_comments), ext): (
             (
                 Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>,
-                &[CommentOrNewline<'a>]
+                &'a [CommentOrNewline<'a>]
             ),
             Option<&'a Located<TypeAnnotation<'a>>>,
         )| {
             Record {
                 fields: fields.into_bump_slice(),
                 ext,
+                final_comments,
             }
         }
     )

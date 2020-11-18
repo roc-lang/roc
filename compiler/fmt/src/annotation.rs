@@ -105,7 +105,11 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
             As(lhs, _, rhs) => lhs.value.is_multiline() || rhs.value.is_multiline(),
 
-            Record { fields, ext } => {
+            Record {
+                fields,
+                ext,
+                final_comments: _,
+            } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
@@ -114,7 +118,11 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 fields.iter().any(|field| field.value.is_multiline())
             }
 
-            TagUnion { tags, ext } => {
+            TagUnion {
+                tags,
+                ext,
+                final_comments: _,
+            } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
@@ -197,7 +205,11 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             BoundVariable(v) => buf.push_str(v),
             Wildcard => buf.push('*'),
 
-            TagUnion { tags, ext } => {
+            TagUnion {
+                tags,
+                ext,
+                final_comments: _,
+            } => {
                 tags.format(buf, indent);
 
                 if let Some(loc_ext_ann) = *ext {
@@ -205,7 +217,11 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 }
             }
 
-            Record { fields, ext } => {
+            Record {
+                fields,
+                ext,
+                final_comments: _,
+            } => {
                 fields.format(buf, indent);
 
                 if let Some(loc_ext_ann) = *ext {
@@ -431,11 +447,10 @@ macro_rules! implement_format_sequence {
             _newlines: Newlines,
             indent: u16,
         ) {
-            
             if self.is_multiline() {
                 let braces_indent = indent + INDENT;
                 let item_indent = braces_indent + INDENT;
-                
+
                 newline(buf, braces_indent);
                 buf.push($start);
 
