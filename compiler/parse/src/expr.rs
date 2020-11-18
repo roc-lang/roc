@@ -1089,14 +1089,12 @@ fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         let (_, next_state) = ascii_char(b'_').parse(arena, state)?;
 
-        let (output, final_state) = lowercase_ident().parse(arena, next_state)?;
+        let (output, final_state) = optional(lowercase_ident()).parse(arena, next_state)?;
 
-        let mut name = String::new_in(arena);
-
-        name.push('_');
-        name.push_str(output);
-
-        Ok((Pattern::Underscore(&"_"), final_state))
+        match output {
+            Some(name) => Ok((Pattern::Underscore(name), final_state)),
+            None => Ok((Pattern::Underscore(&"_"), final_state)),
+        }
     }
 }
 

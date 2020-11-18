@@ -1465,13 +1465,13 @@ mod test_parse {
     fn closure_with_underscores() {
         let arena = Bump::new();
         let underscore1 = Located::new(0, 0, 1, 2, Underscore(&"_"));
-        let underscore2 = Located::new(0, 0, 4, 5, Underscore(&"_"));
+        let underscore2 = Located::new(0, 0, 4, 9, Underscore(&"name"));
         let patterns = bumpalo::vec![in &arena; underscore1, underscore2];
         let expected = Closure(
             arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 9, 11, Num("42"))),
+            arena.alloc(Located::new(0, 0, 13, 15, Num("42"))),
         );
-        let actual = parse_expr_with(&arena, "\\_, _ -> 42");
+        let actual = parse_expr_with(&arena, "\\_, _name -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
