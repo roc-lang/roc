@@ -6,6 +6,7 @@ use crate::llvm::build_list::list_len;
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
+use inkwell::debug_info::AsDIScope;
 use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
@@ -55,24 +56,22 @@ impl<'ctx> PointerToRefcount<'ctx> {
         env: &Env<'a, 'ctx, 'env>,
         data_ptr: PointerValue<'ctx>,
     ) -> Self {
+        let builder = env.builder;
         // pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
 
-        let ptr_as_int =
-            cast_basic_basic(env.builder, data_ptr.into(), refcount_type.into()).into_int_value();
+        let ptr_as_usize_ptr = cast_basic_basic(
+            builder,
+            data_ptr.into(),
+            refcount_type.ptr_type(AddressSpace::Generic).into(),
+        )
+        .into_pointer_value();
 
-        // subtract offset, to access the refcount
-        let refcount_ptr_as_int = env.builder.build_int_sub(
-            ptr_as_int,
-            refcount_type.const_int(env.ptr_bytes as u64, false),
-            "make_refcount_ptr",
-        );
-
-        let refcount_ptr = env.builder.build_int_to_ptr(
-            refcount_ptr_as_int,
-            refcount_type.ptr_type(AddressSpace::Generic),
-            "get_refcount_ptr",
-        );
+        // get a pointer to index -1
+        let index_intvalue = refcount_type.const_int((-1 as i64) as u64, false);
+        let refcount_ptr = unsafe {
+            builder.build_in_bounds_gep(ptr_as_usize_ptr, &[index_intvalue], "get_rc_ptr")
+        };
 
         Self {
             value: refcount_ptr,
@@ -132,6 +131,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
         let context = env.context;
         let block = env.builder.get_insert_block().expect("to be in a function");
+        let di_location = env.builder.get_current_debug_location().unwrap();
 
         let alignment = layout.alignment_bytes(env.ptr_bytes);
 
@@ -153,6 +153,9 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 // Because it's an internal-only function, it should use the fast calling convention.
                 function_value.set_call_conventions(FAST_CALL_CONV);
 
+                let subprogram = env.new_subprogram(fn_name);
+                function_value.set_subprogram(subprogram);
+
                 Self::_build_decrement_function_body(env, function_value, alignment);
 
                 function_value
@@ -162,6 +165,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let refcount_ptr = self.value;
 
         env.builder.position_at_end(block);
+        env.builder
+            .set_current_debug_location(env.context, di_location);
         let call = env
             .builder
             .build_call(function, &[refcount_ptr.into()], fn_name);
@@ -180,6 +185,24 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         let entry = ctx.append_basic_block(parent, "entry");
         builder.position_at_end(entry);
+
+        let subprogram = parent.get_subprogram().unwrap();
+        let lexical_block = env.dibuilder.create_lexical_block(
+            /* scope */ subprogram.as_debug_info_scope(),
+            /* file */ env.compile_unit.get_file(),
+            /* line_no */ 0,
+            /* column_no */ 0,
+        );
+
+        let loc = env.dibuilder.create_debug_location(
+            &ctx,
+            /* line */ 0,
+            /* column */ 0,
+            /* current_scope */ lexical_block.as_debug_info_scope(),
+            /* inlined_at */ None,
+        );
+
+        env.builder.set_current_debug_location(&ctx, loc);
 
         let refcount_ptr = {
             let raw_refcount_ptr = parent.get_nth_param(0).unwrap();
@@ -490,6 +513,7 @@ pub fn build_inc_list<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
 ) {
     let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::INC;
     let fn_name = layout_ids
@@ -499,7 +523,7 @@ pub fn build_inc_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, fn_name);
+            let function_value = build_header(env, &layout, &fn_name);
 
             build_inc_list_help(env, layout_ids, layout, function_value);
 
@@ -508,6 +532,8 @@ pub fn build_inc_list<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
         .build_call(function, &[original_wrapper.into()], "increment_list");
@@ -528,6 +554,23 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
     let entry = ctx.append_basic_block(fn_val, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        ctx,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&ctx, loc);
 
     let mut scope = Scope::default();
 
@@ -586,6 +629,7 @@ pub fn build_dec_list<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
 ) {
     let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::DEC;
     let fn_name = layout_ids
@@ -595,7 +639,7 @@ pub fn build_dec_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, fn_name);
+            let function_value = build_header(env, &layout, &fn_name);
 
             build_dec_list_help(env, layout_ids, layout, function_value);
 
@@ -604,6 +648,8 @@ pub fn build_dec_list<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
         .build_call(function, &[original_wrapper.into()], "decrement_list");
@@ -623,6 +669,23 @@ fn build_dec_list_help<'a, 'ctx, 'env>(
     let entry = ctx.append_basic_block(fn_val, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        ctx,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&ctx, loc);
 
     let mut scope = Scope::default();
 
@@ -685,6 +748,7 @@ pub fn build_inc_str<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
 ) {
     let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::INC;
     let fn_name = layout_ids
@@ -694,7 +758,7 @@ pub fn build_inc_str<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, fn_name);
+            let function_value = build_header(env, &layout, &fn_name);
 
             build_inc_str_help(env, layout_ids, layout, function_value);
 
@@ -703,6 +767,8 @@ pub fn build_inc_str<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
         .build_call(function, &[original_wrapper.into()], "increment_str");
@@ -722,6 +788,23 @@ fn build_inc_str_help<'a, 'ctx, 'env>(
     let entry = ctx.append_basic_block(fn_val, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        ctx,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&ctx, loc);
 
     let mut scope = Scope::default();
 
@@ -784,6 +867,7 @@ pub fn build_dec_str<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
 ) {
     let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::DEC;
     let fn_name = layout_ids
@@ -793,7 +877,7 @@ pub fn build_dec_str<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, fn_name);
+            let function_value = build_header(env, &layout, &fn_name);
 
             build_dec_str_help(env, layout_ids, layout, function_value);
 
@@ -802,6 +886,8 @@ pub fn build_dec_str<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
         .build_call(function, &[original_wrapper.into()], "decrement_str");
@@ -821,6 +907,23 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
     let entry = ctx.append_basic_block(fn_val, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        ctx,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&ctx, loc);
 
     let mut scope = Scope::default();
 
@@ -880,7 +983,7 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
 pub fn build_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
-    fn_name: String,
+    fn_name: &str,
 ) -> FunctionValue<'ctx> {
     let arena = env.arena;
     let context = &env.context;
@@ -892,10 +995,15 @@ pub fn build_header<'a, 'ctx, 'env>(
 
     let fn_val = env
         .module
-        .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
+        .add_function(fn_name, fn_type, Some(Linkage::Private));
 
     // Because it's an internal-only function, it should use the fast calling convention.
     fn_val.set_call_conventions(FAST_CALL_CONV);
+
+    let subprogram = env.new_subprogram(&fn_name);
+    fn_val.set_subprogram(subprogram);
+
+    env.dibuilder.finalize();
 
     fn_val
 }
@@ -909,6 +1017,7 @@ pub fn build_dec_union<'a, 'ctx, 'env>(
     let layout = Layout::Union(fields);
 
     let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::DEC;
     let fn_name = layout_ids
@@ -918,7 +1027,7 @@ pub fn build_dec_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, fn_name);
+            let function_value = build_header(env, &layout, &fn_name);
 
             build_dec_union_help(env, layout_ids, fields, function_value);
 
@@ -927,6 +1036,9 @@ pub fn build_dec_union<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
     let call = env
         .builder
         .build_call(function, &[value], "decrement_union");
@@ -952,11 +1064,29 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&context, loc);
+
     let mut scope = Scope::default();
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
     let layout = Layout::Union(tags);
+
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
     set_name(arg_val, arg_symbol.ident_string(&env.interns));
@@ -983,6 +1113,8 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
     let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+
+    builder.set_current_debug_location(&context, loc);
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
@@ -1097,6 +1229,7 @@ pub fn build_inc_union<'a, 'ctx, 'env>(
     let layout = Layout::Union(fields);
 
     let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::INC;
     let fn_name = layout_ids
@@ -1106,7 +1239,7 @@ pub fn build_inc_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, fn_name);
+            let function_value = build_header(env, &layout, &fn_name);
 
             build_inc_union_help(env, layout_ids, fields, function_value);
 
@@ -1115,6 +1248,8 @@ pub fn build_inc_union<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
         .build_call(function, &[value], "increment_union");
@@ -1139,6 +1274,23 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
     let entry = context.append_basic_block(fn_val, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&context, loc);
 
     let mut scope = Scope::default();
 

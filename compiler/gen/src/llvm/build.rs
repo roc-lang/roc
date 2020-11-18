@@ -1711,6 +1711,9 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
         env.module
             .add_function(c_function_name, c_function_type, Some(Linkage::External));
 
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
     // STEP 2: build the exposed function's body
     let builder = env.builder;
     let context = env.context;
@@ -1718,6 +1721,23 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
     let entry = context.append_basic_block(c_function, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = c_function.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        env.context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(env.context, loc);
 
     // drop the final argument, which is the pointer we write the result into
     let args = c_function.get_params();

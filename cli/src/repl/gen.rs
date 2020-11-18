@@ -180,6 +180,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput
 
             build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
+            // call finalize() before any code generation/verification
+            env.dibuilder.finalize();
+
             if fn_val.verify(true) {
                 function_pass.run_on(&fn_val);
             } else {
@@ -211,6 +214,8 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput
             main_fn_symbol,
             &main_fn_layout,
         );
+
+        env.dibuilder.finalize();
 
         // Uncomment this to see the module's un-optimized LLVM instruction output:
         // env.module.print_to_stderr();
