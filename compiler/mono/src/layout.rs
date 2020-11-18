@@ -432,26 +432,28 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub fn alignment_bytes(&self) -> u32 {
+    pub fn alignment_bytes(&self, pointer_size: u32) -> u32 {
         match self {
             Layout::Struct(fields) => fields
                 .iter()
-                .map(|x| x.alignment_bytes())
+                .map(|x| x.alignment_bytes(pointer_size))
                 .max()
                 .unwrap_or(0),
             Layout::Union(tags) | Layout::RecursiveUnion(tags) => tags
                 .iter()
                 .map(|x| x.iter())
                 .flatten()
-                .map(|x| x.alignment_bytes())
+                .map(|x| x.alignment_bytes(pointer_size))
                 .max()
                 .unwrap_or(0),
-            Layout::Builtin(builtin) => builtin.alignment_bytes(),
+            Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::PhantomEmptyStruct => 0,
-            Layout::RecursivePointer => std::mem::align_of::<*const u8>() as u32,
-            Layout::FunctionPointer(_, _) => std::mem::align_of::<*const u8>() as u32,
-            Layout::Pointer(_) => std::mem::align_of::<*const u8>() as u32,
-            Layout::Closure(_, _, _) => todo!(),
+            Layout::RecursivePointer => pointer_size,
+            Layout::FunctionPointer(_, _) => pointer_size,
+            Layout::Pointer(_) => pointer_size,
+            Layout::Closure(_, captured, _) => {
+                pointer_size.max(captured.layout.alignment_bytes(pointer_size))
+            }
         }
     }
 
@@ -656,10 +658,13 @@ impl<'a> Builtin<'a> {
         }
     }
 
-    pub fn alignment_bytes(&self) -> u32 {
+    pub fn alignment_bytes(&self, pointer_size: u32) -> u32 {
         use std::mem::align_of;
         use Builtin::*;
 
+        // for our data structures, what counts is the alignment of the `( ptr, len )` tuple, and
+        // since both of those are one pointer size, the alignment of that structure is a pointer
+        // size
         match self {
             Int128 => align_of::<i128>() as u32,
             Int64 => align_of::<i64>() as u32,
@@ -671,11 +676,10 @@ impl<'a> Builtin<'a> {
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
             Float16 => align_of::<i16>() as u32,
-            Str | EmptyStr => align_of::<char>() as u32,
-            Map(_, _) | EmptyMap => todo!(),
-            Set(_) | EmptySet => todo!(),
-            EmptyList => 0,
-            List(_, element_layout) => element_layout.alignment_bytes(),
+            Str | EmptyStr => pointer_size,
+            Map(_, _) | EmptyMap => pointer_size,
+            Set(_) | EmptySet => pointer_size,
+            List(_, _) | EmptyList => pointer_size,
         }
     }
 
