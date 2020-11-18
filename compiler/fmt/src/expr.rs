@@ -925,7 +925,7 @@ fn format_field_multiline<'a, T>(
             // ```
             // field # comment
             // , otherfield
-            // ``` 
+            // ```
             // we'd like to transform it into:
             // ```
             // field,

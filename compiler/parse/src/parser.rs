@@ -895,7 +895,7 @@ macro_rules! collection_trailing_sep {
                             $delimiter,
                             $crate::blankspace::space0_around($elem, $min_indent)
                         ),
-                        $crate::blankspace::spaces0($min_indent)
+                        $crate::blankspace::space0($min_indent)
                     ),
                     $closing_brace
                 )
@@ -1157,7 +1157,7 @@ macro_rules! record_field {
 #[macro_export]
 macro_rules! record_without_update {
     ($val_parser:expr, $min_indent:expr) => {
-        collection!(
+        collection_trailing_sep!(
             ascii_char(b'{'),
             loc!(record_field!($val_parser, $min_indent)),
             ascii_char(b','),

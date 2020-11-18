@@ -762,17 +762,21 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                f: {
-                    y : Int, 
-                    x : Int
-                }"#
+                f: {                    y : Int,
+                                         x : Int ,
+                   }
+                
+                f"#
             ),
             indoc!(
                 r#"
-                f: {
-                    y : Int, 
-                    x : Int,
-                }"#
+                f : 
+                    {
+                        y : Int,
+                        x : Int,
+                    }
+
+                f"#
             ),
         );
     }
@@ -2282,6 +2286,23 @@ mod test_fmt {
             "#
         ));
     }
+
+    // This raises a parse error:
+    // NotYetImplemented("TODO the : in this declaration seems outdented")
+    // #[test]
+    // fn multiline_tag_union_annotation() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         b :
+    //             [
+    //                 True,
+    //                 False,
+    //             ]
+
+    //         b
+    //         "#
+    //     ));
+    // }
 
     #[test]
     fn tag_union() {

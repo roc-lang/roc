@@ -165,12 +165,17 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
                 move |arena, state| allocated(term(min_indent)).parse(arena, state)
             )
         ),
-        |(fields, ext): (
-            Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>,
+        |((fields, final_comments), ext): (
+            (
+                Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>,
+                &[CommentOrNewline<'a>]
+            ),
             Option<&'a Located<TypeAnnotation<'a>>>,
-        )| Record {
-            fields: fields.into_bump_slice(),
-            ext
+        )| {
+            Record {
+                fields: fields.into_bump_slice(),
+                ext,
+            }
         }
     )
 }

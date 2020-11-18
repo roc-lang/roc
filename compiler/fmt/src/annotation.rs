@@ -431,21 +431,16 @@ macro_rules! implement_format_sequence {
             _newlines: Newlines,
             indent: u16,
         ) {
-            buf.push($start);
+            
+            if self.is_multiline() {
+                let braces_indent = indent + INDENT;
+                let item_indent = braces_indent + INDENT;
+                
+                newline(buf, braces_indent);
+                buf.push($start);
 
-            let mut iter = self.iter().peekable();
-
-            let is_multiline = self.is_multiline();
-
-            let item_indent = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            while let Some(item) = iter.next() {
-                if is_multiline {
-                    match &item.value {
+                for item in self.iter() {
+                    match item.value {
                         $t::SpaceBefore(expr_below, spaces_above_expr) => {
                             newline(buf, item_indent);
                             fmt_comments_only(
@@ -459,9 +454,7 @@ macro_rules! implement_format_sequence {
                                 $t::SpaceAfter(expr_above, spaces_below_expr) => {
                                     expr_above.format(buf, item_indent);
 
-                                    if iter.peek().is_some() {
-                                        buf.push(',');
-                                    }
+                                    buf.push(',');
 
                                     fmt_comments_only(
                                         buf,
@@ -472,49 +465,44 @@ macro_rules! implement_format_sequence {
                                 }
                                 _ => {
                                     expr_below.format(buf, item_indent);
-                                    if iter.peek().is_some() {
-                                        buf.push(',');
-                                    }
+                                    buf.push(',');
                                 }
                             }
                         }
 
                         $t::SpaceAfter(sub_expr, spaces) => {
                             newline(buf, item_indent);
-
                             sub_expr.format(buf, item_indent);
-                            if iter.peek().is_some() {
-                                buf.push(',');
-                            }
-
+                            buf.push(',');
                             fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, item_indent);
                         }
 
                         _ => {
                             newline(buf, item_indent);
                             item.format(buf, item_indent);
-                            if iter.peek().is_some() {
-                                buf.push(',');
-                            }
+                            buf.push(',');
                         }
                     }
-                } else {
+                }
+                newline(buf, braces_indent);
+                buf.push($end);
+            } else {
+                // is_multiline == false
+                buf.push($start);
+                let mut iter = self.iter().peekable();
+                while let Some(item) = iter.next() {
                     buf.push(' ');
-                    item.format(buf, item_indent);
+                    item.format(buf, indent);
                     if iter.peek().is_some() {
                         buf.push(',');
                     }
                 }
-            }
 
-            if is_multiline {
-                newline(buf, indent);
+                if !self.is_empty() {
+                    buf.push(' ');
+                }
+                buf.push($end);
             }
-
-            if !self.is_empty() && !is_multiline {
-                buf.push(' ');
-            }
-            buf.push($end);
         }
     };
 }
