@@ -21,13 +21,13 @@ mod test_parse {
     use roc_parse::ast::CommentOrNewline::*;
     use roc_parse::ast::Expr::{self, *};
     use roc_parse::ast::Pattern::{self, *};
-    use roc_parse::ast::StrLiteral::*;
+    use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
         self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
     };
-    use roc_parse::header::{InterfaceHeader, ModuleName};
-    use roc_parse::module::{interface_header, module_defs};
+    use roc_parse::header::{AppHeader, InterfaceHeader, ModuleName};
+    use roc_parse::module::{app_header, interface_header, module_defs};
     use roc_parse::parser::{Fail, FailReason, Parser, State};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
@@ -2200,7 +2200,43 @@ mod test_parse {
     // MODULE
 
     #[test]
-    fn empty_module() {
+    fn empty_app_header() {
+        let arena = Bump::new();
+        let packages = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let provides = Vec::new_in(&arena);
+        let module_name = StrLiteral::PlainLine("test-app");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 14, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(0, 0, 53, 57, "blah"),
+            after_app_keyword: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "test-app" packages {} imports [] provides [] to blah
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn empty_interface_header() {
         let arena = Bump::new();
         let exposes = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);

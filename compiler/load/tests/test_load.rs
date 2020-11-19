@@ -238,31 +238,31 @@ mod test_load {
                 "RBTree",
                 indoc!(
                     r#"
-                interface RBTree exposes [ Dict, empty ] imports []
+                        interface RBTree exposes [ Dict, empty ] imports []
 
-                # The color of a node. Leaves are considered Black.
-                NodeColor : [ Red, Black ]
+                        # The color of a node. Leaves are considered Black.
+                        NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                        Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
 
-                # Create an empty dictionary.
-                empty : Dict k v
-                empty =
-                    Empty
-                "#
+                        # Create an empty dictionary.
+                        empty : Dict k v
+                        empty =
+                            Empty
+                    "#
                 ),
             ),
             (
                 "Main",
                 indoc!(
                     r#"
-                app Test provides [ main ] imports [ RBTree ]
+                        app "test-app" provides [ main ] imports [ RBTree ]
 
-                empty : RBTree.Dict Int Int
-                empty = RBTree.empty
+                        empty : RBTree.Dict Int Int
+                        empty = RBTree.empty
 
-                main = empty
-                "#
+                        main = empty
+                    "#
                 ),
             ),
         ];

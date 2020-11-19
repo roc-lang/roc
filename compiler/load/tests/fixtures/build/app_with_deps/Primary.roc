@@ -1,4 +1,4 @@
-app Primary
+app "primary"
     provides [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay ]
     imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res ]
 

@@ -174,7 +174,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
 }
 
 #[inline(always)]
-fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
+pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
     parser::map(
         and!(
             skip_first!(
