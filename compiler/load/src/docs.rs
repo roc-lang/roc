@@ -137,7 +137,7 @@ fn comments_or_new_lines_to_docs<'a>(
         match comment_or_new_line {
             DocComment(doc_str) => {
                 docs.push_str(doc_str);
-                docs.push_str("\n");
+                docs.push('\n');
             }
             Newline | LineComment(_) => {}
         }

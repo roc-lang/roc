@@ -1263,7 +1263,7 @@ fn patterns_to_when<'a>(
                 // Even if the body was Ok, replace it with this Err.
                 // If it was already an Err, leave it at that Err, so the first
                 // RuntimeError we encountered remains the first.
-                body = body.and_then(|_| {
+                body = body.and({
                     Err(Located {
                         region: pattern.region,
                         value,
