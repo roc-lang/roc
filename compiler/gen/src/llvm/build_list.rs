@@ -1,6 +1,7 @@
 use crate::llvm::build::{allocate_with_refcount_help, build_num_binop, Env, InPlace};
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
+use crate::llvm::refcounting::PointerToRefcount;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
