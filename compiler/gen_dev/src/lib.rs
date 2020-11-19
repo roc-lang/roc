@@ -14,6 +14,7 @@
 use bumpalo::Bump;
 use object::write::Object;
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::Layout;
@@ -199,11 +200,28 @@ where
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::Reuse { .. } => {
-                        // Not sure what this is used for so leaving it blank for now.
+                    Expr::Reuse {
+                        symbol,
+                        arguments,
+                        tag_name,
+                        ..
+                    } => {
+                        self.set_last_seen(*symbol, stmt);
+                        match tag_name {
+                            TagName::Closure(sym) => {
+                                self.set_last_seen(*sym, stmt);
+                            }
+                            TagName::Private(sym) => {
+                                self.set_last_seen(*sym, stmt);
+                            }
+                            TagName::Global(_) => {}
+                        }
+                        for sym in *arguments {
+                            self.set_last_seen(*sym, stmt);
+                        }
                     }
-                    Expr::Reset(_sym) => {
-                        // Not sure what this is used for so leaving it blank for now.
+                    Expr::Reset(sym) => {
+                        self.set_last_seen(*sym, stmt);
                     }
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
