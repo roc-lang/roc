@@ -91,7 +91,7 @@ where
         // TODO: let the backend know of all the arguments.
         self.calculate_last_seen(&proc.body);
         //println!("{:?}", self.last_seen_map());
-        self.build_stmt(&proc.body);
+        self.build_stmt(&proc.body)?;
         self.finalize()
     }
 
@@ -99,13 +99,13 @@ where
     fn build_stmt(&mut self, stmt: &Stmt<'a>) -> Result<(), String> {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
-                self.build_expr(sym, expr, layout);
+                self.build_expr(sym, expr, layout)?;
                 self.maybe_free_symbol(sym, stmt);
-                self.build_stmt(following);
+                self.build_stmt(following)?;
                 Ok(())
             }
             Stmt::Ret(sym) => {
-                self.return_symbol(sym);
+                self.return_symbol(sym)?;
                 self.maybe_free_symbol(sym, stmt);
                 Ok(())
             }
