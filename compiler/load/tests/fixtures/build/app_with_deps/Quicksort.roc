@@ -1,5 +1,6 @@
 app "quicksort"
     packages { base: "./platform" }
+    imports []
     provides [ swap, partition, partitionHelp, quicksort ] to base
 
 quicksort : List (Num a), Int, Int -> List (Num a)
