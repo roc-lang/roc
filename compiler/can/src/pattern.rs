@@ -197,7 +197,7 @@ pub fn canonicalize_pattern<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        Underscore => match pattern_type {
+        Underscore(_) => match pattern_type {
             WhenBranch | FunctionArg => Pattern::Underscore,
             ptype => unsupported_pattern(env, ptype, region),
         },

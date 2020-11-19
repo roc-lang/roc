@@ -437,7 +437,7 @@ pub enum Pattern<'a> {
     },
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
-    Underscore,
+    Underscore(&'a str),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -554,7 +554,7 @@ impl<'a> Pattern<'a> {
             ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
             (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
-            (Underscore, Underscore) => true,
+            (Underscore(x), Underscore(y)) => x == y,
 
             // Space
             (SpaceBefore(x, _), SpaceBefore(y, _)) => x.equivalent(y),
