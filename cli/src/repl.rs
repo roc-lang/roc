@@ -9,7 +9,7 @@ const BLUE: &str = "\u{001b}[36m";
 const PINK: &str = "\u{001b}[35m";
 const END_COL: &str = "\u{001b}[0m";
 
-const WELCOME_MESSAGE: &str = concatcp!(
+pub const WELCOME_MESSAGE: &str = concatcp!(
     "\n  The rockin’ ",
     BLUE,
     "roc repl",
@@ -20,8 +20,8 @@ const WELCOME_MESSAGE: &str = concatcp!(
     END_COL,
     "\n\n"
 );
-const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
-const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
+pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
+pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 const ELLIPSIS: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 mod eval;
