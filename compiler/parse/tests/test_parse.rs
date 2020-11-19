@@ -2272,6 +2272,42 @@ mod test_parse {
     }
 
     #[test]
+    fn full_app_header() {
+        let arena = Bump::new();
+        let packages = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let provides = Vec::new_in(&arena);
+        let module_name = StrLiteral::PlainLine("test-app");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 14, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(0, 0, 30, 34, "blah"),
+            after_app_keyword: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "quicksort" packages { base: "./platform" } provides [ quicksort ] to base
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn empty_interface_header() {
         let arena = Bump::new();
         let exposes = Vec::new_in(&arena);

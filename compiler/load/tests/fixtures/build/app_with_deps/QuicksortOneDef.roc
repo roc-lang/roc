@@ -1,4 +1,4 @@
-app "quicksort-one-def" provides [ quicksort ] imports []
+app "quicksort" packages { base: "./platform" } provides [ quicksort ] to base
 
 quicksort = \originalList ->
     quicksortHelp : List (Num a), Int, Int -> List (Num a)

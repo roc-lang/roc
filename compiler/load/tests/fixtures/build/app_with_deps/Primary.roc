@@ -1,6 +1,7 @@
 app "primary"
-    provides [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay ]
+    packages { blah: "./blah" }
     imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res ]
+    provides [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay ] to blah
 
 blah2 = Dep2.two
 blah3 = bar
@@ -12,7 +13,7 @@ alwaysThree = \_ -> "foo"
 
 identity = \a -> a
 
-z = identity (Primary.alwaysThree {})
+z = identity (alwaysThree {})
 
 w : Dep1.Identity {}
 w = Identity {}

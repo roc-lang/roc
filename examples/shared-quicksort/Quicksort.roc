@@ -1,4 +1,4 @@
-app "quicksort" provides [ quicksort ] to "./platform"
+app "quicksort" packages { base: "./platform" } provides [ quicksort ] to base
 
 quicksort : List Int -> List Int
 quicksort = \originalList -> helper originalList
