@@ -37,7 +37,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             | Pattern::NonBase10Literal { .. }
             | Pattern::FloatLiteral(_)
             | Pattern::StrLiteral(_)
-            | Pattern::Underscore
+            | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::QualifiedIdentifier { .. } => false,
         }
@@ -128,7 +128,10 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
             }
-            Underscore => buf.push('_'),
+            Underscore(name) => {
+                buf.push('_');
+                buf.push_str(name);
+            }
 
             // Space
             SpaceBefore(sub_pattern, spaces) => {
