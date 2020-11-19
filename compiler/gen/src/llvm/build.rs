@@ -1682,10 +1682,7 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
 ) {
     let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
 
-    let result = expose_function_to_host_help(env, roc_function, &c_function_name);
-
-    let subprogram = env.new_subprogram(&c_function_name);
-    result.set_subprogram(subprogram);
+    expose_function_to_host_help(env, roc_function, &c_function_name);
 }
 
 fn expose_function_to_host_help<'a, 'ctx, 'env>(
@@ -1771,9 +1768,29 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
         Some(Linkage::External),
     );
 
+    let subprogram = env.new_subprogram(&size_function_name);
+    size_function.set_subprogram(subprogram);
+
     let entry = context.append_basic_block(size_function, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = size_function.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        env.context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(env.context, loc);
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
@@ -1969,6 +1986,9 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         env.module
             .add_function(&wrapper_function_name, wrapper_function_type, None);
 
+    let subprogram = env.new_subprogram(wrapper_function_name);
+    wrapper_function.set_subprogram(subprogram);
+
     // our exposed main function adheres to the C calling convention
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
 
@@ -1977,6 +1997,23 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 
     let basic_block = context.append_basic_block(wrapper_function, "entry");
     builder.position_at_end(basic_block);
+
+    let func_scope = wrapper_function.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        env.context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(env.context, loc);
 
     let result = invoke_and_catch(
         env,
