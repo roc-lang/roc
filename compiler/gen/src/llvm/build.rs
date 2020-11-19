@@ -9,14 +9,15 @@ use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, list_get_refcount_ptr,
-    refcount_is_one_comparison,
+    decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
+    PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::debug_info::{AsDIScope, DICompileUnit, DISubprogram, DebugInfoBuilder};
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
@@ -96,6 +97,8 @@ pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
+    pub dibuilder: &'env DebugInfoBuilder<'ctx>,
+    pub compile_unit: &'env DICompileUnit<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub ptr_bytes: u32,
@@ -176,6 +179,61 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
                 length.into(),
                 false_val.into(),
             ],
+        )
+    }
+
+    pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
+        module.create_debug_info_builder(
+            true,
+            /* language */ inkwell::debug_info::DWARFSourceLanguage::C,
+            /* filename */ "roc_app",
+            /* directory */ ".",
+            /* producer */ "my llvm compiler frontend",
+            /* is_optimized */ false,
+            /* compiler command line flags */ "",
+            /* runtime_ver */ 0,
+            /* split_name */ "",
+            /* kind */ inkwell::debug_info::DWARFEmissionKind::Full,
+            /* dwo_id */ 0,
+            /* split_debug_inling */ false,
+            /* debug_info_for_profiling */ false,
+        )
+    }
+
+    pub fn new_subprogram(&self, function_name: &str) -> DISubprogram<'ctx> {
+        use inkwell::debug_info::DIFlagsConstants;
+
+        let dibuilder = self.dibuilder;
+        let compile_unit = self.compile_unit;
+
+        let ditype = dibuilder
+            .create_basic_type(
+                "type_name",
+                0_u64,
+                0x00,
+                inkwell::debug_info::DIFlags::PUBLIC,
+            )
+            .unwrap();
+
+        let subroutine_type = dibuilder.create_subroutine_type(
+            compile_unit.get_file(),
+            /* return type */ Some(ditype.as_type()),
+            /* parameter types */ &[],
+            inkwell::debug_info::DIFlags::PUBLIC,
+        );
+
+        dibuilder.create_function(
+            /* scope */ compile_unit.as_debug_info_scope(),
+            /* func name */ function_name,
+            /* linkage_name */ None,
+            /* file */ compile_unit.get_file(),
+            /* line_no */ 0,
+            /* DIType */ subroutine_type,
+            /* is_local_to_unit */ true,
+            /* is_definition */ true,
+            /* scope_line */ 0,
+            /* flags */ inkwell::debug_info::DIFlags::PUBLIC,
+            /* is_optimized */ false,
         )
     }
 }
@@ -983,63 +1041,77 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
-    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
+    let value_bytes = layout.stack_size(env.ptr_bytes);
 
     let len_type = env.ptr_int();
-    // bytes per element
-    let bytes_len = len_type.const_int(value_bytes, false);
 
-    let offset = crate::llvm::refcounting::refcount_offset(env, layout);
+    let extra_bytes = layout.alignment_bytes(env.ptr_bytes);
 
     let ptr = {
-        let len = bytes_len;
-        let len =
-            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+        let len = value_bytes as u64 + extra_bytes as u64;
+
+        // bytes per element
+        let bytes_len = len_type.const_int(len, false);
 
         env.builder
-            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
+            .build_array_malloc(ctx.i8_type(), bytes_len, "create_ptr")
             .unwrap()
 
         // TODO check if malloc returned null; if so, runtime error for OOM!
     };
 
     // We must return a pointer to the first element:
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "allocate_refcount_pti");
-    let incremented = builder.build_int_add(
-        ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
-        "increment_list_ptr",
-    );
+    let data_ptr = {
+        let int_type = ptr_int(ctx, env.ptr_bytes);
+        let as_usize_ptr = cast_basic_basic(
+            env.builder,
+            ptr.into(),
+            int_type.ptr_type(AddressSpace::Generic).into(),
+        )
+        .into_pointer_value();
 
-    let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "allocate_refcount_itp");
+        let index = match extra_bytes {
+            n if n == env.ptr_bytes => 1,
+            n if n == 2 * env.ptr_bytes => 2,
+            _ => unreachable!("invalid extra_bytes"),
+        };
 
-    // subtract ptr_size, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        incremented,
-        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
-        "refcount_ptr",
-    );
+        let index_intvalue = int_type.const_int(index, false);
 
-    let refcount_ptr = builder.build_int_to_ptr(
-        refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
-        "make ptr",
-    );
+        let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
 
-    // the refcount of a new allocation is initially 1
-    // we assume that the allocation is indeed used (dead variables are eliminated)
-    builder.build_store(
-        refcount_ptr,
-        crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes),
-    );
+        unsafe {
+            cast_basic_basic(
+                env.builder,
+                env.builder
+                    .build_in_bounds_gep(as_usize_ptr, &[index_intvalue], "get_data_ptr")
+                    .into(),
+                ptr_type.into(),
+            )
+            .into_pointer_value()
+        }
+    };
+
+    let refcount_ptr = match extra_bytes {
+        n if n == env.ptr_bytes => {
+            // the malloced pointer is the same as the refcounted pointer
+            unsafe { PointerToRefcount::from_ptr(env, ptr) }
+        }
+        n if n == 2 * env.ptr_bytes => {
+            // the refcount is stored just before the start of the actual data
+            // but in this case (because of alignment) not at the start of the malloced buffer
+            PointerToRefcount::from_ptr_to_data(env, data_ptr)
+        }
+        n => unreachable!("invalid extra_bytes {}", n),
+    };
+
+    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    refcount_ptr.set_refcount(env, rc1);
 
     // store the value in the pointer
-    builder.build_store(list_element_ptr, value);
+    builder.build_store(data_ptr, value);
 
-    list_element_ptr
+    data_ptr
 }
 
 fn list_literal<'a, 'ctx, 'env>(
@@ -1610,7 +1682,10 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
 ) {
     let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
 
-    expose_function_to_host_help(env, roc_function, &c_function_name);
+    let result = expose_function_to_host_help(env, roc_function, &c_function_name);
+
+    let subprogram = env.new_subprogram(&c_function_name);
+    result.set_subprogram(subprogram);
 }
 
 fn expose_function_to_host_help<'a, 'ctx, 'env>(
@@ -1636,6 +1711,9 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
         env.module
             .add_function(c_function_name, c_function_type, Some(Linkage::External));
 
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
     // STEP 2: build the exposed function's body
     let builder = env.builder;
     let context = env.context;
@@ -1643,6 +1721,23 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
     let entry = context.append_basic_block(c_function, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = c_function.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        env.context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(env.context, loc);
 
     // drop the final argument, which is the pointer we write the result into
     let args = c_function.get_params();
@@ -1955,6 +2050,9 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
     fn_val.set_call_conventions(FAST_CALL_CONV);
 
+    let subprogram = env.new_subprogram(&fn_name);
+    fn_val.set_subprogram(subprogram);
+
     if env.exposed_to_host.contains(&symbol) {
         expose_function_to_host(env, fn_val);
     }
@@ -2093,6 +2191,24 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+
+    builder.set_current_debug_location(&context, loc);
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
@@ -2654,12 +2770,8 @@ where
 
             let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
 
-            let refcount_ptr = list_get_refcount_ptr(env, list_layout, original_wrapper);
-
-            let refcount = env
-                .builder
-                .build_load(refcount_ptr, "get_refcount")
-                .into_int_value();
+            let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
+            let refcount = refcount_ptr.get_refcount(env);
 
             let comparison = refcount_is_one_comparison(env, refcount);
 

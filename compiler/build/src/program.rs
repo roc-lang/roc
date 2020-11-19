@@ -66,7 +66,12 @@ pub fn gen_from_mono_module(
 
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(&context, "app"));
+
+    // strip Zig debug stuff
+    // module.strip_debug_info();
+
     let builder = context.create_builder();
+    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -75,6 +80,8 @@ pub fn gen_from_mono_module(
     let env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
         context: &context,
         interns: loaded.interns,
         module,
@@ -112,6 +119,9 @@ pub fn gen_from_mono_module(
         // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
         build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
+        // call finalize() before any code generation/verification
+        env.dibuilder.finalize();
+
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
         } else {
@@ -123,6 +133,8 @@ pub fn gen_from_mono_module(
             );
         }
     }
+
+    env.dibuilder.finalize();
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();

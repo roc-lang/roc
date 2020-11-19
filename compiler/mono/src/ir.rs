@@ -5332,6 +5332,10 @@ pub fn from_can_pattern<'a>(
 
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     // disregard the tag discriminant layout
+
+                    // TODO make this assert pass, it currently does not because
+                    // 0-sized values are dropped out
+                    // debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((

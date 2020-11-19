@@ -152,10 +152,14 @@ pub fn helper<'a>(
     let (module_pass, function_pass) =
         roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
+    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
+
     // Compile and add all the Procs before adding main
     let env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
         context,
         interns,
         module,
@@ -195,6 +199,9 @@ pub fn helper<'a>(
 
         build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
+        // call finalize() before any code generation/verification
+        env.dibuilder.finalize();
+
         if fn_val.verify(true) {
             function_pass.run_on(&fn_val);
         } else {
@@ -227,6 +234,8 @@ pub fn helper<'a>(
         main_fn_symbol,
         &main_fn_layout,
     );
+
+    env.dibuilder.finalize();
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
