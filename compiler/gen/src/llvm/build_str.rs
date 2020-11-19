@@ -56,9 +56,11 @@ pub fn str_split<'a, 'ctx, 'env>(
                     )
                     .into_int_value();
 
+                    // a pointer to the elements
                     let ret_list_ptr =
                         allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
 
+                    // convert `*mut RocStr` to `*mut i128`
                     let ret_list_ptr_u128s = builder.build_bitcast(
                         ret_list_ptr,
                         ctx.i128_type().ptr_type(AddressSpace::Generic),
