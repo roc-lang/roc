@@ -1,8 +1,8 @@
-use crate::{Backend, Env};
+use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_collections::all::{ImSet, MutMap};
 use roc_module::symbol::Symbol;
-use roc_mono::ir::Literal;
+use roc_mono::ir::{Literal, Stmt};
 use roc_mono::layout::Layout;
 use target_lexicon::{CallingConvention, Triple};
 
@@ -10,6 +10,13 @@ mod asm;
 use asm::Register;
 
 const RETURN_REG: Register = Register::RAX;
+
+#[derive(Clone, Debug, PartialEq)]
+enum SymbolStorage<'a> {
+    Literal(Literal<'a>),
+    Register(Register, Layout<'a>),
+    Stack(u32, Layout<'a>),
+}
 
 pub struct X86_64Backend<'a> {
     env: &'a Env<'a>,
@@ -19,8 +26,9 @@ pub struct X86_64Backend<'a> {
     /// If that is the case, we can skip emitting the frame pointer and updating the stack.
     leaf_proc: bool,
 
+    last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
     // This will need to hold info a symbol is held in a register or on the stack as well.
-    symbols_map: MutMap<Symbol, (Literal<'a>, Layout<'a>)>,
+    symbols_map: MutMap<Symbol, SymbolStorage<'a>>,
     // This is gonna need to include a lot of data. Right now I can think of quite a few.
     // Registers order by priority with info of what data is stored in them.
     // Scope with knows were all variables are currently stored.X86_64Backend
@@ -40,15 +48,19 @@ pub struct X86_64Backend<'a> {
     callee_saved_regs: ImSet<Register>,
     shadow_space_size: u8,
     red_zone_size: u8,
+
+    // not sure how big this should be u16 is 64k. I hope no function uses that much stack.
+    stack_size: u16,
 }
 
 impl<'a> Backend<'a> for X86_64Backend<'a> {
-    fn new(env: &'a Env, target: &Triple) -> Self {
+    fn new(env: &'a Env, target: &Triple) -> Result<Self, String> {
         match target.default_calling_convention() {
-            Ok(CallingConvention::SystemV) => X86_64Backend {
+            Ok(CallingConvention::SystemV) => Ok(X86_64Backend {
                 env,
                 leaf_proc: true,
                 buf: bumpalo::vec!(in env.arena),
+                last_seen_map: MutMap::default(),
                 symbols_map: MutMap::default(),
                 gp_param_regs: &[
                     Register::RDI,
@@ -81,11 +93,13 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 ]),
                 shadow_space_size: 0,
                 red_zone_size: 128,
-            },
-            Ok(CallingConvention::WindowsFastcall) => X86_64Backend {
+                stack_size: 0,
+            }),
+            Ok(CallingConvention::WindowsFastcall) => Ok(X86_64Backend {
                 env,
                 leaf_proc: true,
                 buf: bumpalo::vec!(in env.arena),
+                last_seen_map: MutMap::default(),
                 symbols_map: MutMap::default(),
                 gp_param_regs: &[Register::RCX, Register::RDX, Register::R8, Register::R9],
                 caller_saved_regs: ImSet::from(vec![
@@ -110,8 +124,9 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 ]),
                 shadow_space_size: 32,
                 red_zone_size: 0,
-            },
-            x => panic!("unsupported backend: {:?}", x),
+                stack_size: 0,
+            }),
+            x => Err(format!("unsupported backend: {:?}", x)),
         }
     }
 
@@ -124,48 +139,63 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
         self.buf.clear();
     }
 
-    fn finalize(&mut self) -> &'a [u8] {
+    fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>> {
+        &mut self.last_seen_map
+    }
+
+    fn set_symbol_to_lit(&mut self, sym: &Symbol, lit: &Literal<'a>) {
+        self.symbols_map
+            .insert(*sym, SymbolStorage::Literal(lit.clone()));
+    }
+
+    fn free_symbol(&mut self, sym: &Symbol) {
+        self.symbols_map.remove(sym);
+    }
+
+    fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
+        self.load_symbol(RETURN_REG, sym)
+    }
+
+    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
         // TODO: handle allocating and cleaning up data on the stack.
         let mut out = bumpalo::vec![in self.env.arena];
-        if !self.leaf_proc {
+        if self.requires_stack_modification() {
             asm::push_register64bit(&mut out, Register::RBP);
             asm::mov_register64bit_register64bit(&mut out, Register::RBP, Register::RSP);
         }
         out.extend(&self.buf);
 
-        if !self.leaf_proc {
+        if self.requires_stack_modification() {
             asm::pop_register64bit(&mut out, Register::RBP);
         }
         asm::ret_near(&mut out);
 
-        out.into_bump_slice()
-    }
-
-    fn set_symbol_to_lit(&mut self, sym: &Symbol, lit: &Literal<'a>, layout: &Layout<'a>) {
-        self.symbols_map.insert(*sym, (lit.clone(), layout.clone()));
-    }
-
-    fn return_symbol(&mut self, sym: &Symbol) {
-        self.load_symbol(RETURN_REG, sym);
+        Ok((out.into_bump_slice(), &[]))
     }
 }
 
 /// This impl block is for ir related instructions that need backend specific information.
 /// For example, loading a symbol for doing a computation.
 impl<'a> X86_64Backend<'a> {
-    fn load_symbol(&mut self, dst: Register, sym: &Symbol) {
+    fn requires_stack_modification(&self) -> bool {
+        !self.leaf_proc
+            || self.stack_size < self.shadow_space_size as u16 + self.red_zone_size as u16
+    }
+
+    fn load_symbol(&mut self, dst: Register, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.get(sym);
         match val {
-            Some((Literal::Int(x), _)) => {
+            Some(SymbolStorage::Literal(Literal::Int(x))) => {
                 let val = *x;
                 if val <= i32::MAX as i64 && val >= i32::MIN as i64 {
                     asm::mov_register64bit_immediate32bit(&mut self.buf, dst, val as i32);
                 } else {
                     asm::mov_register64bit_immediate64bit(&mut self.buf, dst, val);
                 }
+                Ok(())
             }
-            Some(x) => unimplemented!("symbol, {:?}, is not yet implemented", x),
-            None => panic!("Unknown return symbol: {}", sym),
+            Some(x) => Err(format!("symbol, {:?}, is not yet implemented", x)),
+            None => Err(format!("Unknown return symbol: {}", sym)),
         }
     }
 }
