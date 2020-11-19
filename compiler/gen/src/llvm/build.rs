@@ -1067,7 +1067,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
     let len_type = env.ptr_int();
 
-    let extra_bytes = layout.alignment_bytes(env.ptr_bytes);
+    let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
 
     let ptr = {
         // number of bytes we will allocated
@@ -1097,7 +1097,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
         let index = match extra_bytes {
             n if n == env.ptr_bytes => 1,
             n if n == 2 * env.ptr_bytes => 2,
-            _ => unreachable!("invalid extra_bytes"),
+            _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
         };
 
         let index_intvalue = int_type.const_int(index, false);
