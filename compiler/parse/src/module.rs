@@ -175,27 +175,50 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
 
 #[inline(always)]
 pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
-    parser::map(
+    map_with_arena!(
         and!(
             skip_first!(
                 ascii_string("app"),
                 and!(space1(1), loc!(string_literal::parse()))
             ),
-            and!(packages(), and!(imports(), provides_to()))
+            and!(
+                optional(packages()),
+                and!(optional(imports()), provides_to())
+            )
         ),
-        |(
-            (after_app_keyword, name),
-            (packages, (((before_imports, after_imports), imports), provides)),
-        )| {
+        |arena, ((after_app_keyword, name), (opt_pkgs, (opt_imports, provides)))| {
+            let (before_packages, after_packages, package_entries) = match opt_pkgs {
+                Some(pkgs) => {
+                    let pkgs: Packages<'a> = pkgs; // rustc must be told the type here
+
+                    (
+                        pkgs.before_packages_keyword,
+                        pkgs.after_packages_keyword,
+                        pkgs.entries,
+                    )
+                }
+                None => (&[] as _, &[] as _, Vec::new_in(arena)),
+            };
+
+            // rustc must be told the type here
+            let opt_imports: Option<(
+                (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+                Vec<'a, Located<ImportsEntry<'a>>>,
+            )> = opt_imports;
+
+            let ((before_imports, after_imports), imports) =
+                opt_imports.unwrap_or_else(|| ((&[] as _, &[] as _), Vec::new_in(arena)));
+            let provides: ProvidesTo<'a> = provides; // rustc must be told the type here
+
             AppHeader {
                 name,
-                packages: packages.entries,
+                packages: package_entries,
                 imports,
                 provides: provides.entries,
                 to: provides.to,
                 after_app_keyword,
-                before_packages: packages.before_packages_keyword,
-                after_packages: packages.after_packages_keyword,
+                before_packages,
+                after_packages,
                 before_imports,
                 after_imports,
                 before_provides: provides.before_provides_keyword,
@@ -203,7 +226,7 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
                 before_to: provides.before_to_keyword,
                 after_to: provides.after_to_keyword,
             }
-        },
+        }
     )
 }
 
