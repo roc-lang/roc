@@ -375,6 +375,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "const_format"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a49b6cb3f7a62b0a488baa8692286b25b69648f1dae69a598b1a9faa166d56d"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8df496e1bbc93814d728a8036ff054cd95830afe9cf2275c9326688c02eff936"
+dependencies = [
+ "proc-macro2 1.0.21",
+ "quote 1.0.7",
+ "unicode-xid 0.2.1",
+]
+
+[[package]]
 name = "copyless"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2325,6 +2345,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "clap 3.0.0-beta.1",
+ "const_format",
  "im",
  "im-rc",
  "indoc",
