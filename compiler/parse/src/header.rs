@@ -77,12 +77,18 @@ pub struct InterfaceHeader<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum To<'a> {
+    ExistingPackage(&'a str),
+    NewPackage(PackageOrPath<'a>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
     pub name: Loc<StrLiteral<'a>>,
     pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
     pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
-    pub to: Loc<&'a str>,
+    pub to: Loc<To<'a>>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub after_app_keyword: &'a [CommentOrNewline<'a>],
@@ -256,7 +262,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>> {
     }
 }
 
-fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>> {
+pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>> {
     map!(
         either!(
             string_literal::parse(),

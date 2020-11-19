@@ -26,7 +26,9 @@ mod test_parse {
     use roc_parse::ast::{
         self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
     };
-    use roc_parse::header::{AppHeader, InterfaceHeader, ModuleName};
+    use roc_parse::header::{
+        AppHeader, ExposesEntry, InterfaceHeader, ModuleName, PackageEntry, PackageOrPath, To,
+    };
     use roc_parse::module::{app_header, interface_header, module_defs};
     use roc_parse::parser::{Fail, FailReason, Parser, State};
     use roc_parse::test_helpers::parse_expr_with;
@@ -2211,7 +2213,7 @@ mod test_parse {
             packages,
             imports,
             provides,
-            to: Located::new(0, 0, 53, 57, "blah"),
+            to: Located::new(0, 0, 53, 57, To::ExistingPackage("blah")),
             after_app_keyword: &[],
             before_packages: &[],
             after_packages: &[],
@@ -2237,6 +2239,8 @@ mod test_parse {
 
     #[test]
     fn minimal_app_header() {
+        use PackageOrPath::Path;
+
         let arena = Bump::new();
         let packages = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);
@@ -2247,7 +2251,7 @@ mod test_parse {
             packages,
             imports,
             provides,
-            to: Located::new(0, 0, 30, 34, "blah"),
+            to: Located::new(0, 0, 30, 38, To::NewPackage(Path(PlainLine("./blah")))),
             after_app_keyword: &[],
             before_packages: &[],
             after_packages: &[],
@@ -2261,7 +2265,7 @@ mod test_parse {
 
         let src = indoc!(
             r#"
-                app "test-app" provides [] to blah
+                app "test-app" provides [] to "./blah"
             "#
         );
         let actual = app_header()
@@ -2273,17 +2277,27 @@ mod test_parse {
 
     #[test]
     fn full_app_header() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "base",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(0, 0, 33, 45, Path(PlainLine("./platform"))),
+        };
+        let loc_pkg_entry = Located::new(0, 0, 27, 45, pkg_entry);
         let arena = Bump::new();
-        let packages = Vec::new_in(&arena);
+        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
         let imports = Vec::new_in(&arena);
-        let provides = Vec::new_in(&arena);
-        let module_name = StrLiteral::PlainLine("test-app");
+        let provide_entry = Located::new(0, 0, 59, 68, Exposed("quicksort"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let module_name = StrLiteral::PlainLine("quicksort");
         let expected = AppHeader {
-            name: Located::new(0, 0, 4, 14, module_name),
+            name: Located::new(0, 0, 4, 15, module_name),
             packages,
             imports,
             provides,
-            to: Located::new(0, 0, 30, 34, "blah"),
+            to: Located::new(0, 0, 74, 78, To::ExistingPackage("base")),
             after_app_keyword: &[],
             before_packages: &[],
             after_packages: &[],

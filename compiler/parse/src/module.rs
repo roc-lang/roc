@@ -2,13 +2,14 @@ use crate::ast::{Attempting, CommentOrNewline, Def, Module};
 use crate::blankspace::{space0, space0_around, space0_before, space1};
 use crate::expr::def;
 use crate::header::{
-    package_entry, AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName,
-    PackageEntry, PackageName, PlatformHeader, TypedIdent,
+    package_entry, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
+    InterfaceHeader, ModuleName, PackageEntry, PackageName, PackageOrPath, PlatformHeader, To,
+    TypedIdent,
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::{
     self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
-    unexpected_eof, ParseResult, Parser, State,
+    unexpected_eof, Either, ParseResult, Parser, State,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -293,7 +294,7 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
 
 struct ProvidesTo<'a> {
     entries: Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
-    to: Located<&'a str>,
+    to: Located<To<'a>>,
 
     before_provides_keyword: &'a [CommentOrNewline<'a>],
     after_provides_keyword: &'a [CommentOrNewline<'a>],
@@ -316,14 +317,30 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
                 ),
                 and!(
                     space1(1),
-                    skip_first!(ascii_string("to"), and!(space1(1), loc!(lowercase_ident())))
+                    skip_first!(
+                        ascii_string("to"),
+                        and!(
+                            space1(1),
+                            loc!(either!(lowercase_ident(), package_or_path()))
+                        )
+                    )
                 )
             )
         ),
         |(
             (before_provides_keyword, after_provides_keyword),
-            (entries, (before_to_keyword, (after_to_keyword, to))),
+            (entries, (before_to_keyword, (after_to_keyword, loc_to))),
         )| {
+            let loc_to: Located<Either<&'a str, PackageOrPath<'a>>> = loc_to;
+            let to_val = match loc_to.value {
+                Either::First(pkg) => To::ExistingPackage(pkg),
+                Either::Second(pkg) => To::NewPackage(pkg),
+            };
+            let to = Located {
+                value: to_val,
+                region: loc_to.region,
+            };
+
             ProvidesTo {
                 entries,
                 to,
