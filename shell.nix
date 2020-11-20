@@ -41,9 +41,7 @@ let
   ] else
     [ ];
 
-  llvmPkg = pkgs.llvm_10;
-  lldPkg = pkgs.lld_10; # this should match llvm's version
-  clangPkg = pkgs.clang_10; # this should match llvm's version
+  llvmPkgs = pkgs.llvmPackages_10;
   zig = import ./nix/zig.nix { inherit pkgs isMacOS; };
   inputs = [
     # build libraries
@@ -54,8 +52,8 @@ let
     cmake
     git
     python3
-    llvmPkg
-    clangPkg
+    llvmPkgs.llvm
+    llvmPkgs.clang
     valgrind
     pkg-config
     zig
@@ -64,7 +62,7 @@ let
     libxml2
     zlib
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
-    lldPkg
+    llvmPkgs.lld
     # dev tools
     rust-analyzer
     # (import ./nix/zls.nix { inherit pkgs zig; })
@@ -73,10 +71,10 @@ let
 
 in mkShell {
   buildInputs = inputs ++ darwin-frameworks ++ linux-only;
-  LLVM_SYS_100_PREFIX = "${llvmPkg}";
+  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
 
   APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
-    ([ pkgconfig libcxx libcxxabi libunwind ] ++ linux-only);
+    ([ pkgconfig llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-only);
 
   # Aliases don't work cross shell, so we do this
   shellHook = ''
