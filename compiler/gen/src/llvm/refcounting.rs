@@ -133,7 +133,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let block = env.builder.get_insert_block().expect("to be in a function");
         let di_location = env.builder.get_current_debug_location().unwrap();
 
-        let alignment = layout.alignment_bytes(env.ptr_bytes);
+        let alignment = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
 
         let fn_name = &format!("decrement_refcounted_ptr_{}", alignment);
 
