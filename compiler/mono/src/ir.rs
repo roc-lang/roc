@@ -1263,7 +1263,7 @@ fn patterns_to_when<'a>(
                 // Even if the body was Ok, replace it with this Err.
                 // If it was already an Err, leave it at that Err, so the first
                 // RuntimeError we encountered remains the first.
-                body = body.and_then(|_| {
+                body = body.and({
                     Err(Located {
                         region: pattern.region,
                         value,
@@ -5332,6 +5332,10 @@ pub fn from_can_pattern<'a>(
 
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     // disregard the tag discriminant layout
+
+                    // TODO make this assert pass, it currently does not because
+                    // 0-sized values are dropped out
+                    // debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((

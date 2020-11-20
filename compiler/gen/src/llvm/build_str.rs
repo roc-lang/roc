@@ -56,9 +56,11 @@ pub fn str_split<'a, 'ctx, 'env>(
                     )
                     .into_int_value();
 
+                    // a pointer to the elements
                     let ret_list_ptr =
                         allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
 
+                    // convert `*mut RocStr` to `*mut i128`
                     let ret_list_ptr_u128s = builder.build_bitcast(
                         ret_list_ptr,
                         ctx.i128_type().ptr_type(AddressSpace::Generic),
@@ -537,7 +539,9 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
 
             // Copy the bytes from the original array into the new
             // one we just malloc'd.
-            builder.build_memcpy(clone_ptr, ptr_bytes, bytes_ptr, ptr_bytes, len);
+            builder
+                .build_memcpy(clone_ptr, ptr_bytes, bytes_ptr, ptr_bytes, len)
+                .unwrap();
 
             // Create a fresh wrapper struct for the newly populated array
             let struct_type = collection(ctx, env.ptr_bytes);

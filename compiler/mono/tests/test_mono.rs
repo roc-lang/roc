@@ -524,14 +524,14 @@ mod test_mono {
                         let Test.8 = 1i64;
                         ret Test.8;
                     in
-                    let Test.9 = Index 1 Test.2;
-                    let Test.10 = 0i64;
-                    let Test.11 = Index 0 Test.9;
-                    let Test.16 = lowlevel Eq Test.10 Test.11;
+                    let Test.12 = 0i64;
+                    let Test.13 = Index 0 Test.2;
+                    let Test.16 = lowlevel Eq Test.12 Test.13;
                     if Test.16 then
-                        let Test.12 = 0i64;
-                        let Test.13 = Index 0 Test.2;
-                        let Test.15 = lowlevel Eq Test.12 Test.13;
+                        let Test.9 = Index 1 Test.2;
+                        let Test.10 = 0i64;
+                        let Test.11 = Index 0 Test.9;
+                        let Test.15 = lowlevel Eq Test.10 Test.11;
                         if Test.15 then
                             let Test.7 = Index 1 Test.2;
                             let Test.3 = Index 1 Test.7;
@@ -571,13 +571,13 @@ mod test_mono {
                         let Test.5 = CallByName Num.14 Test.1 Test.2;
                         ret Test.5;
                     in
-                    let Test.7 = Index 0 Test.3;
-                    let Test.8 = 4i64;
-                    let Test.13 = lowlevel Eq Test.8 Test.7;
+                    let Test.9 = Index 1 Test.3;
+                    let Test.10 = 3i64;
+                    let Test.13 = lowlevel Eq Test.10 Test.9;
                     if Test.13 then
-                        let Test.9 = Index 1 Test.3;
-                        let Test.10 = 3i64;
-                        let Test.12 = lowlevel Eq Test.10 Test.9;
+                        let Test.7 = Index 0 Test.3;
+                        let Test.8 = 4i64;
+                        let Test.12 = lowlevel Eq Test.8 Test.7;
                         if Test.12 then
                             let Test.4 = 9i64;
                             ret Test.4;
@@ -1328,15 +1328,15 @@ mod test_mono {
                         let Test.18 = Array [];
                         ret Test.18;
                     in
-                    let Test.19 = Index 0 Test.7;
-                    let Test.20 = 1i64;
-                    let Test.21 = Index 0 Test.19;
-                    let Test.27 = lowlevel Eq Test.20 Test.21;
+                    let Test.22 = Index 1 Test.7;
+                    let Test.23 = 1i64;
+                    let Test.24 = Index 0 Test.22;
+                    let Test.27 = lowlevel Eq Test.23 Test.24;
                     if Test.27 then
-                        let Test.22 = Index 1 Test.7;
-                        let Test.23 = 1i64;
-                        let Test.24 = Index 0 Test.22;
-                        let Test.26 = lowlevel Eq Test.23 Test.24;
+                        let Test.19 = Index 0 Test.7;
+                        let Test.20 = 1i64;
+                        let Test.21 = Index 0 Test.19;
+                        let Test.26 = lowlevel Eq Test.20 Test.21;
                         if Test.26 then
                             let Test.17 = Index 0 Test.7;
                             let Test.3 = Index 1 Test.17;
@@ -2019,14 +2019,14 @@ mod test_mono {
                         let Test.8 = 1i64;
                         ret Test.8;
                     in
-                    let Test.9 = Index 1 Test.2;
-                    let Test.10 = 0i64;
-                    let Test.11 = Index 0 Test.9;
-                    let Test.16 = lowlevel Eq Test.10 Test.11;
+                    let Test.12 = 0i64;
+                    let Test.13 = Index 0 Test.2;
+                    let Test.16 = lowlevel Eq Test.12 Test.13;
                     if Test.16 then
-                        let Test.12 = 0i64;
-                        let Test.13 = Index 0 Test.2;
-                        let Test.15 = lowlevel Eq Test.12 Test.13;
+                        let Test.9 = Index 1 Test.2;
+                        let Test.10 = 0i64;
+                        let Test.11 = Index 0 Test.9;
+                        let Test.15 = lowlevel Eq Test.10 Test.11;
                         if Test.15 then
                             let Test.7 = Index 1 Test.2;
                             let Test.3 = Index 1 Test.7;
@@ -2155,15 +2155,15 @@ mod test_mono {
                         let Test.21 = Array [];
                         ret Test.21;
                     in
-                    let Test.22 = Index 0 Test.12;
-                    let Test.23 = 1i64;
-                    let Test.24 = Index 0 Test.22;
-                    let Test.30 = lowlevel Eq Test.23 Test.24;
+                    let Test.25 = Index 1 Test.12;
+                    let Test.26 = 1i64;
+                    let Test.27 = Index 0 Test.25;
+                    let Test.30 = lowlevel Eq Test.26 Test.27;
                     if Test.30 then
-                        let Test.25 = Index 1 Test.12;
-                        let Test.26 = 1i64;
-                        let Test.27 = Index 0 Test.25;
-                        let Test.29 = lowlevel Eq Test.26 Test.27;
+                        let Test.22 = Index 0 Test.12;
+                        let Test.23 = 1i64;
+                        let Test.24 = Index 0 Test.22;
+                        let Test.29 = lowlevel Eq Test.23 Test.24;
                         if Test.29 then
                             let Test.20 = Index 0 Test.12;
                             let Test.5 = Index 1 Test.20;

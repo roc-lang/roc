@@ -342,7 +342,7 @@ fn parse_concrete_type<'a>(
         //
         // If we made it this far and don't have a next_char, then necessarily
         // we have consumed a '.' char previously.
-        return malformed(next_char.or_else(|| Some('.')), arena, state, parts);
+        return malformed(next_char.or(Some('.')), arena, state, parts);
     }
 
     if part_buf.is_empty() {

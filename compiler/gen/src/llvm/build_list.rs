@@ -1,4 +1,4 @@
-use crate::llvm::build::{build_num_binop, Env, InPlace};
+use crate::llvm::build::{allocate_with_refcount_help, build_num_binop, Env, InPlace};
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
 use inkwell::builder::Builder;
@@ -185,7 +185,9 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
+        builder
+            .build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -626,7 +628,9 @@ pub fn list_append<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
+        builder
+            .build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -1816,7 +1820,9 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size);
+        builder
+            .build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -1872,7 +1878,9 @@ pub fn clone_list<'a, 'ctx, 'env>(
     );
 
     // copy old elements in
-    builder.build_memcpy(new_ptr, ptr_bytes, old_ptr, ptr_bytes, bytes);
+    builder
+        .build_memcpy(new_ptr, ptr_bytes, old_ptr, ptr_bytes, bytes)
+        .unwrap();
 
     new_ptr
 }
@@ -1886,53 +1894,13 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
     let len_type = env.ptr_int();
-    // bytes per element
-    let bytes_len = len_type.const_int(elem_bytes, false);
-    let offset = (env.ptr_bytes as u64).max(elem_bytes);
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+    let bytes_per_element = len_type.const_int(elem_bytes, false);
 
-    let ptr = {
-        let len = builder.build_int_mul(bytes_len, length, "data_length");
-        let len =
-            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+    let number_of_data_bytes = builder.build_int_mul(bytes_per_element, length, "data_length");
 
-        env.builder
-            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
-    };
-
-    // We must return a pointer to the first element:
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-    let incremented = builder.build_int_add(
-        ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
-        "increment_list_ptr",
-    );
-
-    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
-
-    // subtract ptr_size, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        incremented,
-        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
-        "refcount_ptr",
-    );
-
-    let refcount_ptr = builder.build_int_to_ptr(
-        refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
-        "make ptr",
-    );
-
-    let ref_count_one = match inplace {
+    let rc1 = match inplace {
         InPlace::InPlace => length,
         InPlace::Clone => {
             // the refcount of a new list is initially 1
@@ -1941,9 +1909,7 @@ pub fn allocate_list<'a, 'ctx, 'env>(
         }
     };
 
-    builder.build_store(refcount_ptr, ref_count_one);
-
-    list_element_ptr
+    allocate_with_refcount_help(env, elem_layout, number_of_data_bytes, rc1)
 }
 
 pub fn store_list<'a, 'ctx, 'env>(

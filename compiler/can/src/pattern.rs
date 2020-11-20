@@ -197,7 +197,7 @@ pub fn canonicalize_pattern<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        Underscore => match pattern_type {
+        Underscore(_) => match pattern_type {
             WhenBranch | FunctionArg => Pattern::Underscore,
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -361,7 +361,7 @@ pub fn canonicalize_pattern<'a>(
 
             // If we encountered an erroneous pattern (e.g. one with shadowing),
             // use the resulting RuntimeError. Otherwise, return a successful record destructure.
-            opt_erroneous.unwrap_or_else(|| Pattern::RecordDestructure {
+            opt_erroneous.unwrap_or(Pattern::RecordDestructure {
                 whole_var,
                 ext_var,
                 destructs,

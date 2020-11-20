@@ -3614,4 +3614,33 @@ mod solve_expr {
             "Dict Int Int",
         );
     }
+
+    #[test]
+    #[ignore]
+    fn pattern_rigid_problem() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                      when left is
+                        Node _ _ lRight ->
+                            Node key lRight Empty
+
+                        _ ->
+                            Empty
+
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            "Dict Int",
+        );
+    }
 }
