@@ -32,19 +32,21 @@ const RocStr = struct {
             var index : u8 = 0;
             // Zero out the data, just to be safe
             while (index < rocStrSize) {
-                var offset_ptr = @intToPtr(*usize, target_ptr + index);
+                var offset_ptr = @intToPtr(*u8, target_ptr + index);
                 offset_ptr.* = 0;
                 index += 1;
             }
 
             index = 0;
             while (index < len) {
-                var offset_ptr = @intToPtr(*usize, target_ptr + index);
+                var offset_ptr = @intToPtr(*u8, target_ptr + index);
                 offset_ptr.* = bytes[index];
                 index += 1;
             }
-            const final_byte_ptr = @intToPtr(*usize, target_ptr + rocStrSize - 1);
-            final_byte_ptr.* = len ^ 0b10000000;
+
+            // set the final byte to be the length
+            const final_byte_ptr = @intToPtr(*u8, target_ptr + rocStrSize - 1);
+            final_byte_ptr.* = @truncate(u8, len) ^ 0b10000000;
 
             return ret_small_str;
         } else {
