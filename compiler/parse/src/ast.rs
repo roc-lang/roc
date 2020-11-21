@@ -322,6 +322,7 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// A tag union, e.g. `[
@@ -330,6 +331,7 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
         /// This is None if it's a closed tag union like `[ Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// The `*` type variable, e.g. in (List *)

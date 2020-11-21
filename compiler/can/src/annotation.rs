@@ -380,7 +380,7 @@ fn can_annotation_help(
             }
         },
 
-        Record { fields, ext } => {
+        Record { fields, ext, .. } => {
             let field_types = can_assigned_fields(
                 env,
                 fields,
@@ -408,7 +408,7 @@ fn can_annotation_help(
 
             Type::Record(field_types, Box::new(ext_type))
         }
-        TagUnion { tags, ext } => {
+        TagUnion { tags, ext, .. } => {
             let tag_types = can_tags(
                 env,
                 tags,
