@@ -154,7 +154,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
-
+    type Fields<'a> = Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>;
     map!(
         and!(
             record_without_update!(
@@ -168,7 +168,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
         ),
         |((fields, final_comments), ext): (
             (
-                Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>,
+                Fields<'a>,
                 &'a [CommentOrNewline<'a>]
             ),
             Option<&'a Located<TypeAnnotation<'a>>>,
