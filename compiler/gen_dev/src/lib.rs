@@ -137,7 +137,7 @@ where
     ) -> Result<(), String> {
         match expr {
             Expr::Literal(lit) => {
-                self.load_literal(sym, lit, layout);
+                self.load_literal(sym, lit, layout)?;
                 Ok(())
             }
             Expr::FunctionCall {
@@ -149,6 +149,10 @@ where
                     Symbol::NUM_ABS => {
                         // Instead of calling the function, just inline it.
                         self.build_expr(sym, &Expr::RunLowLevel(LowLevel::NumAbs, args), layout)
+                    }
+                    Symbol::NUM_ADD => {
+                        // Instead of calling the function, just inline it.
+                        self.build_expr(sym, &Expr::RunLowLevel(LowLevel::NumAdd, args), layout)
                     }
                     x => Err(format!("the function, {:?}, is not yet implemented", x)),
                 }
@@ -170,28 +174,38 @@ where
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match lowlevel {
-            LowLevel::NumAbs => self.build_num_abs(sym, &args[0], layout),
+            LowLevel::NumAbs => {
+                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
+                match layout {
+                    Layout::Builtin(Builtin::Int64) => self.build_num_abs_i64(sym, &args[0]),
+                    x => Err(format!("layout, {:?}, not implemented yet", x)),
+                }
+            }
+            LowLevel::NumAdd => {
+                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
+                match layout {
+                    Layout::Builtin(Builtin::Int64) => {
+                        self.build_num_add_i64(sym, &args[0], &args[1])
+                    }
+                    x => Err(format!("layout, {:?}, not implemented yet", x)),
+                }
+            }
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
 
-    /// build_num_abs stores the absolute value of src into dst.
-    fn build_num_abs(
-        &mut self,
-        dst: &Symbol,
-        src: &Symbol,
-        layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        // TODO: when this is expanded to flaots. deal with typecasting here, and then call correct low level method.
-        match layout {
-            Layout::Builtin(Builtin::Int64) => self.build_num_abs_i64(dst, src),
-            x => Err(format!("layout, {:?}, not implemented yet", x)),
-        }
-    }
-
-    /// build_num_abs stores the absolute value of src into dst.
+    /// build_num_abs_i64 stores the absolute value of src into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
+
+    /// build_num_add_i64 stores the absolute value of src into dst.
+    /// It only deals with inputs and outputs of i64 type.
+    fn build_num_add_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String>;
 
     /// free_symbols will free all symbols for the given statement.
     fn free_symbols(&mut self, stmt: &Stmt<'a>) {

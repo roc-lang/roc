@@ -267,6 +267,25 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
         Ok(())
     }
 
+    fn build_num_add_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String> {
+        let dst_reg = self.claim_gp_reg()?;
+        self.gp_used_regs.push((dst_reg, *dst));
+        self.symbols_map.insert(
+            *dst,
+            SymbolStorage::GPReg(dst_reg, Layout::Builtin(Builtin::Int64)),
+        );
+        let src1_reg = self.load_to_reg(src1)?;
+        asm::mov_register64bit_register64bit(&mut self.buf, dst_reg, src1_reg);
+        let src2_reg = self.load_to_reg(src2)?;
+        asm::add_register64bit_register64bit(&mut self.buf, dst_reg, src2_reg);
+        Ok(())
+    }
+
     fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
         // TODO: handle allocating and cleaning up data on the stack.
         let mut out = bumpalo::vec![in self.env.arena];
@@ -299,7 +318,7 @@ impl<'a> X86_64Backend<'a> {
             Ok(self.gp_free_regs.pop().unwrap())
         } else if self.gp_used_regs.len() > 0 {
             let (reg, sym) = self.gp_used_regs.remove(0);
-            self.free_to_stack(&sym);
+            self.free_to_stack(&sym)?;
             Ok(reg)
         } else {
             Err(format!("completely out of registers"))

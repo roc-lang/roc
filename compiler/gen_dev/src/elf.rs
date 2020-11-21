@@ -38,7 +38,7 @@ pub fn build_module<'a>(
             let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
             for ((sym, layout), proc) in procedures {
                 // This is temporary until we support passing args to functions.
-                if sym == symbol::Symbol::NUM_ABS {
+                if [symbol::Symbol::NUM_ABS, symbol::Symbol::NUM_ADD].contains(&sym) {
                     continue;
                 }
 

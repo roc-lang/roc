@@ -26,18 +26,18 @@ mod gen_num {
         assert_evals_to!("0x1000_0000_0000_0000", 0x1000_0000_0000_0000, i64);
     }
 
-    // #[test]
-    // fn gen_add_i64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1 + 2 + 3
-    //             "#
-    //         ),
-    //         6,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_add_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 2 + 3
+                "#
+            ),
+            6,
+            i64
+        );
+    }
 
     #[test]
     fn i64_abs() {

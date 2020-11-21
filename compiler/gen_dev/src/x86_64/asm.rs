@@ -51,6 +51,15 @@ fn add_reg_extension(reg: GPReg, byte: u8) -> u8 {
 // Unit tests are added at the bottom of the file to ensure correct asm generation.
 // Please keep these in alphanumeric order.
 
+/// `ADD r/m64,r64` -> Add r64 to r/m64.
+pub fn add_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
+    let dst_mod = dst as u8 % 8;
+    let src_mod = (src as u8 % 8) << 3;
+    buf.extend(&[rex, 0x01, 0xC0 + dst_mod + src_mod]);
+}
+
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
 pub fn cmovl_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg) {
     let rex = add_reg_extension(dst, REX_W);
@@ -129,6 +138,22 @@ mod tests {
 
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x12345678_9ABCDEF0;
+
+    #[test]
+    fn test_add_register64bit_register64bit() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((in1, in2), expected) in &[
+            ((GPReg::RAX, GPReg::RAX), [0x48, 0x01, 0xC0]),
+            ((GPReg::RAX, GPReg::R15), [0x4C, 0x01, 0xF8]),
+            ((GPReg::R15, GPReg::RAX), [0x49, 0x01, 0xC7]),
+            ((GPReg::R15, GPReg::R15), [0x4D, 0x01, 0xFF]),
+        ] {
+            buf.clear();
+            add_register64bit_register64bit(&mut buf, *in1, *in2);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
 
     #[test]
     fn test_cmovl_register64bit_register64bit() {
