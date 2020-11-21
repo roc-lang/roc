@@ -29,10 +29,20 @@ pub struct X86_64Backend<'a> {
 
     gp_param_regs: &'static [GPReg],
     gp_return_regs: &'static [GPReg],
-    shadow_space_size: u8,
-    red_zone_size: u8,
+
+    // This should probably be smarter than a vec.
+    // There are certain registers we should always use first. With pushing and poping, this could get mixed.
+    gp_free_regs: Vec<'a, GPReg>,
+
+    // The last major thing we need is a way to decide what reg to free when all of them are full.
+    // Theoretically we want a basic lru cache for the currently loaded symbols.
+    // For now just a vec of used registers and the symbols they contain.
+    gp_used_regs: Vec<'a, (GPReg, Symbol)>,
+
     // not sure how big this should be u16 is 64k. I hope no function uses that much stack.
     stack_size: u16,
+    shadow_space_size: u8,
+    red_zone_size: u8,
 
     // A linear scan of an array may be faster than a set technically.
     // That being said, fastest would likely be a trait based on calling convention/register.
@@ -57,10 +67,33 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                     GPReg::R8,
                     GPReg::R9,
                 ],
-                gp_return_regs: &[GPReg::RAX],
+                gp_return_regs: &[GPReg::RAX, GPReg::RDX],
+                gp_free_regs: bumpalo::vec![in env.arena;
+                    // The regs we want to use first should be at the end of this vec.
+                    // We will use pop to get which reg to use next
+                    // Use callee saved regs last.
+                    GPReg::RBX,
+                    // Don't use frame pointer: GPReg::RBP,
+                    GPReg::R12,
+                    GPReg::R13,
+                    GPReg::R14,
+                    GPReg::R15,
+                    // Use caller saved regs first.
+                    GPReg::RAX,
+                    GPReg::RCX,
+                    GPReg::RDX,
+                    // Don't use stack pionter: GPReg::RSP,
+                    GPReg::RSI,
+                    GPReg::RDI,
+                    GPReg::R8,
+                    GPReg::R9,
+                    GPReg::R10,
+                    GPReg::R11,
+                ],
+                gp_used_regs: bumpalo::vec![in env.arena],
+                stack_size: 0,
                 shadow_space_size: 0,
                 red_zone_size: 128,
-                stack_size: 0,
                 // TODO: stop using vec! here. I was just have trouble with some errors, but it shouldn't be needed.
                 caller_saved_regs: ImSet::from(vec![
                     GPReg::RAX,
@@ -90,10 +123,33 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 last_seen_map: MutMap::default(),
                 symbols_map: MutMap::default(),
                 gp_param_regs: &[GPReg::RCX, GPReg::RDX, GPReg::R8, GPReg::R9],
-                gp_return_regs: &[GPReg::RAX, GPReg::RDX],
+                gp_return_regs: &[GPReg::RAX],
+                gp_free_regs: bumpalo::vec![in env.arena;
+                    // The regs we want to use first should be at the end of this vec.
+                    // We will use pop to get which reg to use next
+                    // Use callee saved regs last.
+                    GPReg::RBX,
+                    // Don't use frame pointer: GPReg::RBP,
+                    GPReg::RSI,
+                    // Don't use stack pionter: GPReg::RSP,
+                    GPReg::RDI,
+                    GPReg::R12,
+                    GPReg::R13,
+                    GPReg::R14,
+                    GPReg::R15,
+                    // Use caller saved regs first.
+                    GPReg::RAX,
+                    GPReg::RCX,
+                    GPReg::RDX,
+                    GPReg::R8,
+                    GPReg::R9,
+                    GPReg::R10,
+                    GPReg::R11,
+                ],
+                gp_used_regs: bumpalo::vec![in env.arena],
+                stack_size: 0,
                 shadow_space_size: 32,
                 red_zone_size: 0,
-                stack_size: 0,
                 caller_saved_regs: ImSet::from(vec![
                     GPReg::RAX,
                     GPReg::RCX,
