@@ -781,6 +781,26 @@ mod test_fmt {
         );
     }
 
+    // // TODO This raises a parse error:
+    // // NotYetImplemented("TODO the : in this declaration seems outdented")
+    // #[test]
+    // fn comments_in_record_annotation() {
+    //     expr_formats_to(
+    //         indoc!(
+    //             r#"
+    //             f :
+    //                 {}
+
+    //             f"#
+    //         ),
+    //         indoc!(
+    //             r#"
+    //             f : b {}
+    //             f"#
+    //         ),
+    //     );
+    // }
+
     #[test]
     fn def_closure() {
         expr_formats_same(indoc!(
@@ -2287,7 +2307,7 @@ mod test_fmt {
         ));
     }
 
-    // This raises a parse error:
+    // TODO This raises a parse error:
     // NotYetImplemented("TODO the : in this declaration seems outdented")
     // #[test]
     // fn multiline_tag_union_annotation() {
