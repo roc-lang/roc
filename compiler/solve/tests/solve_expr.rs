@@ -3500,7 +3500,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [ partitionHelp ] to "./platform"
 
                 swap : Int, Int, List a -> List a
                 swap = \i, j, list ->
