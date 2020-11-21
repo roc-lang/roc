@@ -63,7 +63,8 @@ apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clan
 
 wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
 tar -xf valgrind-3.16.1.tar.bz2
-pushd valgrind-3.16.1
+mv valgrind-3.16.1 ~
+pushd ~/valgrind-3.16.1
 apt-get install -y autotools-dev automake
 ./autogen.sh
 ./configure
