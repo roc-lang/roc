@@ -418,6 +418,44 @@ mod test_reporting {
     }
 
     #[test]
+    fn unused_undefined_argument() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = { x: 1 == 1, y: 0x4 }
+
+                baz = 3
+
+                main : Str
+                main =
+                    when foo.y is
+                        4 -> bar baz "yay"
+                        _ -> "nay"
+
+                main
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+               
+                I cannot find a `bar` value
+               
+                8│          4 -> bar baz "yay"
+                                 ^^^
+
+                these names seem close though:
+
+                    baz
+                    Map
+                    Str
+                    main
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn report_precedence_problem_multiline() {
         report_problem_as(
             indoc!(
