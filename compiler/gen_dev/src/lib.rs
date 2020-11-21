@@ -90,8 +90,11 @@ where
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
         // TODO: let the backend know of all the arguments.
+        // let start = std::time::Instant::now();
         self.calculate_last_seen(&proc.body);
-        //println!("{:?}", self.last_seen_map());
+        // let duration = start.elapsed();
+        // println!("Time to calculate lifetimes: {:?}", duration);
+        // println!("{:?}", self.last_seen_map());
         self.build_stmt(&proc.body)?;
         self.finalize()
     }
