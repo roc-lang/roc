@@ -164,7 +164,7 @@ pub struct ValgrindErrorXWhat {
 pub fn extract_valgrind_errors(xml: &str) -> Vec<ValgrindError> {
     let parsed_xml: ValgrindOutput =
         from_str(xml).unwrap_or_else(|err|
-            panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nRaw valgrind output was:\n\n{}", err, xml));
+            panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nRaw valgrind output was:\n\n{:?}", err, xml));
     parsed_xml
         .fields
         .iter()
