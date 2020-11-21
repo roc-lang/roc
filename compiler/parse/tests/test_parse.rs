@@ -27,9 +27,10 @@ mod test_parse {
         self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
     };
     use roc_parse::header::{
-        AppHeader, ExposesEntry, InterfaceHeader, ModuleName, PackageEntry, PackageOrPath, To,
+        AppHeader, Effects, ExposesEntry, InterfaceHeader, ModuleName, PackageEntry, PackageName,
+        PackageOrPath, PlatformHeader, To,
     };
-    use roc_parse::module::{app_header, interface_header, module_defs};
+    use roc_parse::module::{app_header, interface_header, module_defs, platform_header};
     use roc_parse::parser::{Fail, FailReason, Parser, State};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
@@ -2315,6 +2316,116 @@ mod test_parse {
             "#
         );
         let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn empty_platform_header() {
+        let pkg_name = PackageName {
+            account: "rtfeldman",
+            pkg: "blah",
+        };
+        let arena = Bump::new();
+        let effects = Effects {
+            type_name: "Blah",
+            entries: Vec::new_in(&arena),
+            spaces_before_effects_keyword: &[],
+            spaces_after_effects_keyword: &[],
+            spaces_after_type_name: &[],
+        };
+        let expected = PlatformHeader {
+            name: Located::new(0, 0, 9, 23, pkg_name),
+            requires: Vec::new_in(&arena),
+            exposes: Vec::new_in(&arena),
+            packages: Vec::new_in(&arena),
+            imports: Vec::new_in(&arena),
+            provides: Vec::new_in(&arena),
+            effects,
+            after_platform_keyword: &[],
+            before_requires: &[],
+            after_requires: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+        };
+
+        let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects Blah {}";
+        let actual = platform_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn nonempty_platform_header() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let newlines = &[Newline];
+        let pkg_name = PackageName {
+            account: "foo",
+            pkg: "barbaz",
+        };
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "foo",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(3, 3, 20, 27, Path(PlainLine("./foo"))),
+        };
+        let loc_pkg_entry = Located::new(3, 3, 15, 27, pkg_entry);
+        let arena = Bump::new();
+        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let imports = Vec::new_in(&arena);
+        let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let effects = Effects {
+            type_name: "Effect",
+            entries: Vec::new_in(&arena),
+            spaces_before_effects_keyword: newlines,
+            spaces_after_effects_keyword: &[],
+            spaces_after_type_name: &[],
+        };
+        let expected = PlatformHeader {
+            name: Located::new(0, 0, 9, 19, pkg_name),
+            requires: Vec::new_in(&arena),
+            exposes: Vec::new_in(&arena),
+            packages,
+            imports,
+            provides,
+            effects,
+            after_platform_keyword: &[],
+            before_requires: newlines,
+            after_requires: &[],
+            before_exposes: newlines,
+            after_exposes: &[],
+            before_packages: newlines,
+            after_packages: &[],
+            before_imports: newlines,
+            after_imports: &[],
+            before_provides: newlines,
+            after_provides: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                platform foo/barbaz
+                    requires {}
+                    exposes []
+                    packages { foo: "./foo" }
+                    imports []
+                    provides [ mainForHost ]
+                    effects Effect {}
+            "#
+        );
+        let actual = platform_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
             .map(|tuple| tuple.0);
 
