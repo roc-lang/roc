@@ -405,7 +405,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     when r is
@@ -455,7 +455,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -492,7 +492,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -512,7 +512,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -565,7 +565,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \{ x ? 10, y } -> x + y
 
