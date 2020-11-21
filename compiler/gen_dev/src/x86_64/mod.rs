@@ -25,6 +25,7 @@ pub struct X86_64Backend<'a> {
     leaf_proc: bool,
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
+    free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
     symbols_map: MutMap<Symbol, SymbolStorage<'a>>,
 
     gp_param_regs: &'static [GPReg],
@@ -58,6 +59,7 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 leaf_proc: true,
                 buf: bumpalo::vec!(in env.arena),
                 last_seen_map: MutMap::default(),
+                free_map: MutMap::default(),
                 symbols_map: MutMap::default(),
                 gp_param_regs: &[
                     GPReg::RDI,
@@ -121,6 +123,7 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 leaf_proc: true,
                 buf: bumpalo::vec!(in env.arena),
                 last_seen_map: MutMap::default(),
+                free_map: MutMap::default(),
                 symbols_map: MutMap::default(),
                 gp_param_regs: &[GPReg::RCX, GPReg::RDX, GPReg::R8, GPReg::R9],
                 gp_return_regs: &[GPReg::RAX],
@@ -186,6 +189,14 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
 
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>> {
         &mut self.last_seen_map
+    }
+
+    fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>) {
+        self.free_map = map;
+    }
+
+    fn free_map(&mut self) -> &mut MutMap<*const Stmt<'a>, Vec<'a, Symbol>> {
+        &mut self.free_map
     }
 
     fn load_literal(

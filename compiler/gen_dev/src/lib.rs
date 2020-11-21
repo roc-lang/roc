@@ -11,7 +11,7 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-use bumpalo::Bump;
+use bumpalo::{collections::Vec, Bump};
 use object::write::Object;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -69,6 +69,12 @@ where
     /// last_seen_map gets the map from symbol to when it is last seen in the function.
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>>;
 
+    /// free_map gets the map statement to the symbols that are free after they run.
+    fn free_map(&mut self) -> &mut MutMap<*const Stmt<'a>, Vec<'a, Symbol>>;
+
+    /// set_free_map sets the free map to the given map.
+    fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>);
+
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(
         &mut self,
@@ -95,6 +101,7 @@ where
         // TODO: let the backend know of all the arguments.
         // let start = std::time::Instant::now();
         self.calculate_last_seen(&proc.body);
+        self.create_free_map();
         // let duration = start.elapsed();
         // println!("Time to calculate lifetimes: {:?}", duration);
         // println!("{:?}", self.last_seen_map());
@@ -107,13 +114,13 @@ where
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout)?;
-                self.maybe_free_symbol(sym, stmt);
+                self.free_symbols(stmt);
                 self.build_stmt(following)?;
                 Ok(())
             }
             Stmt::Ret(sym) => {
                 self.return_symbol(sym)?;
-                self.maybe_free_symbol(sym, stmt);
+                self.free_symbols(stmt);
                 Ok(())
             }
             x => Err(format!("the statement, {:?}, is not yet implemented", x)),
@@ -186,12 +193,14 @@ where
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
 
-    /// maybe_free will check if the symbol is last seen in the current state. If so, it will free the symbol resources, like registers.
-    fn maybe_free_symbol(&mut self, sym: &Symbol, stmt: &Stmt<'a>) {
-        match self.last_seen_map().get(sym) {
-            Some(laststmt) if *laststmt == stmt as *const Stmt<'a> => {
-                //println!("Freeing symbol: {:?}", sym);
-                self.free_symbol(sym);
+    /// free_symbols will free all symbols for the given statement.
+    fn free_symbols(&mut self, stmt: &Stmt<'a>) {
+        match self.free_map().remove(&(stmt as *const Stmt<'a>)) {
+            Some(syms) => {
+                for sym in syms {
+                    //println!("Freeing symbol: {:?}", sym);
+                    self.free_symbol(&sym);
+                }
             }
             _ => {}
         }
@@ -200,6 +209,16 @@ where
     /// set_last_seen sets the statement a symbol was last seen in.
     fn set_last_seen(&mut self, sym: Symbol, stmt: &Stmt<'a>) {
         self.last_seen_map().insert(sym, stmt);
+    }
+
+    fn create_free_map(&mut self) {
+        let mut free_map = MutMap::default();
+        let arena = self.env().arena;
+        for (sym, stmt) in self.last_seen_map() {
+            let vals = free_map.entry(*stmt).or_insert(bumpalo::vec!(in arena));
+            vals.push(*sym);
+        }
+        self.set_free_map(free_map);
     }
 
     /// calculate_last_seen runs through the ast and fill the last seen map.
