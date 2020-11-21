@@ -1486,7 +1486,7 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 2, 3, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 3, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
@@ -1516,7 +1516,7 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 5, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
@@ -1547,7 +1547,7 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Num("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 1, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 5, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
@@ -1591,7 +1591,7 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 1, 8, RecordDestructure(&fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Num("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 8, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 12, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
@@ -1679,7 +1679,7 @@ mod test_parse {
             Located::new(0, 0, 6, 33, as_ann),
         );
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 33, signature));
         let defs = &[loc_ann];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(2, 2, 0, 2, ret);
@@ -1715,7 +1715,7 @@ mod test_parse {
             ann: Located::new(0, 0, 11, 26, applied_alias),
         };
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 4, signature));
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 26, signature));
         let defs = &[loc_ann];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(2, 2, 0, 2, ret);
@@ -2320,7 +2320,7 @@ mod test_parse {
             arena.alloc(Located::new(0, 0, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Expr::SpaceBefore(num, &[Newline]))),
         );
-        let loc_def = &*arena.alloc(Located::new(0, 0, 0, 1, def));
+        let loc_def = &*arena.alloc(Located::new(0, 1, 0, 5, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
         let loc_ret = Located::new(3, 3, 0, 2, ret);
@@ -2349,7 +2349,7 @@ mod test_parse {
             arena.alloc(Located::new(6, 6, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(6, 6, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(6, 6, 0, 1, def));
+        let loc_def = &*arena.alloc(Located::new(6, 6, 0, 5, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
         let loc_ret = Located::new(8, 8, 0, 2, ret);
@@ -2392,7 +2392,7 @@ mod test_parse {
             arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
+        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 5, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
         let loc_ret = Located::new(6, 6, 0, 2, ret);
@@ -2431,7 +2431,7 @@ mod test_parse {
             arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
+        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 5, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
         let loc_ret = Located::new(6, 6, 0, 2, ret);

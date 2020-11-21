@@ -614,7 +614,7 @@ fn annotated_body<'a>(min_indent: u16) -> impl Parser<'a, AnnotationOrAnnotatedB
 fn annotation_or_alias<'a>(
     arena: &'a Bump,
     pattern: &Pattern<'a>,
-    region: Region,
+    pattern_region: Region,
     loc_ann: Located<TypeAnnotation<'a>>,
 ) -> Def<'a> {
     use crate::ast::Pattern::*;
@@ -625,21 +625,21 @@ fn annotation_or_alias<'a>(
         GlobalTag(name) => Def::Alias {
             name: Located {
                 value: name,
-                region,
+                region: pattern_region,
             },
             vars: &[],
             ann: loc_ann,
         },
         Apply(
             Located {
-                region,
+                region: pattern_region,
                 value: Pattern::GlobalTag(name),
             },
             loc_vars,
         ) => Def::Alias {
             name: Located {
                 value: name,
-                region: *region,
+                region: *pattern_region,
             },
             vars: loc_vars,
             ann: loc_ann,
@@ -648,14 +648,14 @@ fn annotation_or_alias<'a>(
             Def::NotYetImplemented("TODO gracefully handle invalid Apply in type annotation")
         }
         SpaceAfter(value, spaces_before) => Def::SpaceAfter(
-            arena.alloc(annotation_or_alias(arena, value, region, loc_ann)),
+            arena.alloc(annotation_or_alias(arena, value, pattern_region, loc_ann)),
             spaces_before,
         ),
         SpaceBefore(value, spaces_before) => Def::SpaceBefore(
-            arena.alloc(annotation_or_alias(arena, value, region, loc_ann)),
+            arena.alloc(annotation_or_alias(arena, value, pattern_region, loc_ann)),
             spaces_before,
         ),
-        Nested(value) => annotation_or_alias(arena, value, region, loc_ann),
+        Nested(value) => annotation_or_alias(arena, value, pattern_region, loc_ann),
 
         PrivateTag(_) => {
             Def::NotYetImplemented("TODO gracefully handle trying to use a private tag as an annotation.")
@@ -676,7 +676,7 @@ fn annotation_or_alias<'a>(
             // This is a regular Annotation
             Def::Annotation(
                 Located {
-                    region,
+                    region: pattern_region,
                     value: Pattern::Identifier(ident),
                 },
                 loc_ann,
@@ -686,7 +686,7 @@ fn annotation_or_alias<'a>(
             // This is a record destructure Annotation
             Def::Annotation(
                 Located {
-                    region,
+                    region: pattern_region,
                     value: Pattern::RecordDestructure(loc_patterns),
                 },
                 loc_ann,
@@ -768,6 +768,8 @@ fn parse_def_expr<'a>(
                         region: loc_first_body.region,
                     }
                 };
+                let def_region =
+                    Region::span_across(&loc_first_pattern.region, &loc_first_body.region);
 
                 let first_def: Def<'a> =
                     // TODO is there some way to eliminate this .clone() here?
@@ -775,7 +777,7 @@ fn parse_def_expr<'a>(
 
                 let loc_first_def = Located {
                     value: first_def,
-                    region: loc_first_pattern.region,
+                    region: def_region,
                 };
 
                 // for formatting reasons, we must insert the first def first!
@@ -866,15 +868,21 @@ fn parse_def_signature<'a>(
         .map(
             move |(((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
                 let loc_first_def: Located<Def<'a>> = match opt_body {
-                    None => Located {
-                        value: annotation_or_alias(
-                            arena,
-                            &loc_first_pattern.value,
-                            loc_first_pattern.region,
-                            loc_first_annotation,
-                        ),
-                        region: loc_first_pattern.region,
-                    },
+                    None => {
+                        let region = Region::span_across(
+                            &loc_first_pattern.region,
+                            &loc_first_annotation.region,
+                        );
+                        Located {
+                            value: annotation_or_alias(
+                                arena,
+                                &loc_first_pattern.value,
+                                loc_first_pattern.region,
+                                loc_first_annotation,
+                            ),
+                            region,
+                        }
+                    }
                     Some((opt_comment, (body_pattern, body_expr))) => {
                         let region =
                             Region::span_across(&loc_first_pattern.region, &body_expr.region);
