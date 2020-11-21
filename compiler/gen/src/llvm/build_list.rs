@@ -1760,12 +1760,7 @@ pub fn load_list<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
 ) -> (IntValue<'ctx>, PointerValue<'ctx>) {
-    let ptr_as_int = builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
-        .unwrap()
-        .into_int_value();
-
-    let ptr = builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr");
+    let ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
     let length = builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
@@ -1780,12 +1775,14 @@ pub fn load_list_ptr<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
 ) -> PointerValue<'ctx> {
-    let ptr_as_int = builder
+    // a `*mut u8` pointer
+    let generic_ptr = builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
         .unwrap()
-        .into_int_value();
+        .into_pointer_value();
 
-    builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr")
+    // cast to the expected pointer type
+    cast_basic_basic(builder, generic_ptr.into(), ptr_type.into()).into_pointer_value()
 }
 
 pub fn clone_nonempty_list<'a, 'ctx, 'env>(
@@ -1810,9 +1807,6 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, inplace, elem_layout, list_len);
 
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
-
     // TODO check if malloc returned null; if so, runtime error for OOM!
 
     // Either memcpy or deep clone the array elements
@@ -1829,6 +1823,9 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     }
 
     // Create a fresh wrapper struct for the newly populated array
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr = cast_basic_basic(builder, clone_ptr.into(), u8_ptr_type.into());
+
     let struct_type = collection(ctx, env.ptr_bytes);
     let mut struct_val;
 
@@ -1836,9 +1833,9 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_clone_nonempty_list",
         )
         .unwrap();
 
@@ -1915,16 +1912,18 @@ pub fn allocate_list<'a, 'ctx, 'env>(
 
 pub fn store_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    list_ptr: PointerValue<'ctx>,
+    pointer_to_first_element: PointerValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
     let builder = env.builder;
 
     let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
     let struct_type = collection(ctx, ptr_bytes);
+
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr =
+        cast_basic_basic(builder, pointer_to_first_element.into(), u8_ptr_type.into());
 
     let mut struct_val;
 
@@ -1932,9 +1931,9 @@ pub fn store_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_store_list",
         )
         .unwrap();
 

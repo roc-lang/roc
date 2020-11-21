@@ -550,11 +550,9 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     let len_type = env.ptr_int();
                     let len = len_type.const_int(bytes_len, false);
 
+                    // NOTE we rely on CHAR_LAYOUT turning into a `i8`
                     let ptr = allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, len);
-                    let int_type = ptr_int(ctx, ptr_bytes);
-                    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
                     let struct_type = collection(ctx, ptr_bytes);
-                    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
 
                     let mut struct_val;
 
@@ -562,9 +560,9 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     struct_val = builder
                         .build_insert_value(
                             struct_type.get_undef(),
-                            ptr_as_int,
+                            ptr,
                             Builtin::WRAPPER_PTR,
-                            "insert_ptr",
+                            "insert_ptr_str_literal",
                         )
                         .unwrap();
 
@@ -1168,8 +1166,10 @@ fn list_literal<'a, 'ctx, 'env>(
     }
 
     let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr = cast_basic_basic(builder, ptr.into(), u8_ptr_type.into());
+
     let struct_type = collection(ctx, ptr_bytes);
     let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
     let mut struct_val;
@@ -1178,9 +1178,9 @@ fn list_literal<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_list_literal",
         )
         .unwrap();
 
