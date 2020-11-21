@@ -232,7 +232,7 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
 }
 
 #[inline(always)]
-fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
+pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
     parser::map(
         and!(
             skip_first!(
