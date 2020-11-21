@@ -2,7 +2,11 @@ use const_format::concatcp;
 use gen::{gen_and_eval, ReplOutput};
 use roc_gen::llvm::build::OptLevel;
 use roc_parse::parser::{Fail, FailReason};
-use std::io::{self, Write};
+use rustyline::error::ReadlineError;
+use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
+use rustyline::Editor;
+use rustyline_derive::{Completer, Helper, Highlighter, Hinter};
+use std::io::{self};
 use target_lexicon::Triple;
 
 const BLUE: &str = "\u{001b}[36m";
@@ -22,106 +26,157 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
 );
 pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
-const ELLIPSIS: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 mod eval;
 mod gen;
 
-pub fn main() -> io::Result<()> {
-    use std::io::BufRead;
+#[derive(Completer, Helper, Hinter, Highlighter)]
+struct ReplHelper {
+    validator: InputValidator,
+    pending_src: String,
+}
 
+impl ReplHelper {
+    pub(crate) fn new() -> ReplHelper {
+        ReplHelper {
+            validator: InputValidator::new(),
+            pending_src: String::new(),
+        }
+    }
+}
+
+impl Validator for ReplHelper {
+    fn validate(
+        &self,
+        ctx: &mut validate::ValidationContext,
+    ) -> rustyline::Result<validate::ValidationResult> {
+        self.validator.validate(ctx)
+    }
+
+    fn validate_while_typing(&self) -> bool {
+        self.validator.validate_while_typing()
+    }
+}
+
+struct InputValidator {}
+
+impl InputValidator {
+    pub(crate) fn new() -> InputValidator {
+        InputValidator {}
+    }
+}
+
+impl Validator for InputValidator {
+    fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        if ctx.input().is_empty() {
+            Ok(ValidationResult::Incomplete)
+        } else {
+            Ok(ValidationResult::Valid(None))
+        }
+    }
+}
+
+pub fn main() -> io::Result<()> {
+    // To debug rustyline:
+    // <UNCOMMENT> env_logger::init();
+    // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
     print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
 
-    // Loop
-
-    let mut pending_src = String::new();
     let mut prev_line_blank = false;
+    let mut editor = Editor::<ReplHelper>::new();
+    let repl_helper = ReplHelper::new();
+    editor.set_helper(Some(repl_helper));
 
     loop {
-        if pending_src.is_empty() {
-            print!("{}", PROMPT);
-        } else {
-            print!("{}", ELLIPSIS);
-        }
+        let readline = editor.readline(PROMPT);
+        let pending_src = &mut editor
+            .helper_mut()
+            .expect("Editor helper was not set")
+            .pending_src;
 
-        io::stdout().flush().unwrap();
+        match readline {
+            Ok(line) => {
+                //TODO rl.add_history_entry(line.as_str());
+                let trim_line = line.trim();
 
-        let stdin = io::stdin();
-        let line = stdin
-            .lock()
-            .lines()
-            .next()
-            .expect("there was no next line")
-            .expect("the line could not be read");
-
-        let line = line.trim();
-
-        match line.to_lowercase().as_str() {
-            ":help" => {
-                println!("Use :exit or :q to exit.");
-            }
-            "" => {
-                if pending_src.is_empty() {
-                    print!("\n{}", INSTRUCTIONS);
-                } else if prev_line_blank {
-                    // After two blank lines in a row, give up and try parsing it
-                    // even though it's going to fail. This way you don't get stuck.
-                    match eval_and_format(pending_src.as_str()) {
-                        Ok(output) => {
-                            println!("{}", output);
-                        }
-                        Err(fail) => {
-                            report_parse_error(fail);
-                        }
-                    }
-
-                    pending_src.clear();
-                } else {
-                    pending_src.push('\n');
-
-                    prev_line_blank = true;
-                    continue; // Skip the part where we reset prev_line_blank to false
-                }
-            }
-            ":exit" => {
-                break;
-            }
-            ":q" => {
-                break;
-            }
-            _ => {
-                let result = if pending_src.is_empty() {
-                    eval_and_format(line)
-                } else {
-                    pending_src.push('\n');
-                    pending_src.push_str(line);
-
-                    eval_and_format(pending_src.as_str())
-                };
-
-                match result {
-                    Ok(output) => {
-                        println!("{}", output);
-                        pending_src.clear();
-                    }
-                    Err(Fail {
-                        reason: FailReason::Eof(_),
-                        ..
-                    }) => {
-                        // If we hit an eof, and we're allowed to keep going,
-                        // append the str to the src we're building up and continue.
-                        // (We only need to append it here if it was empty before;
-                        // otherwise, we already appended it before calling eval_and_format.)
-
+                match trim_line.to_lowercase().as_str() {
+                    "" => {
                         if pending_src.is_empty() {
-                            pending_src.push_str(line);
+                            print!("\n{}", INSTRUCTIONS);
+                        } else if prev_line_blank {
+                            // After two blank lines in a row, give up and try parsing it
+                            // even though it's going to fail. This way you don't get stuck.
+                            match eval_and_format(pending_src.as_str()) {
+                                Ok(output) => {
+                                    println!("{}", output);
+                                }
+                                Err(fail) => {
+                                    report_parse_error(fail);
+                                }
+                            }
+
+                            pending_src.clear();
+                        } else {
+                            pending_src.push('\n');
+
+                            prev_line_blank = true;
+                            continue; // Skip the part where we reset prev_line_blank to false
                         }
                     }
-                    Err(fail) => {
-                        report_parse_error(fail);
-                        pending_src.clear();
+                    ":help" => {
+                        println!("Use :exit or :q to exit.");
+                    }
+                    ":exit" => {
+                        break;
+                    }
+                    ":q" => {
+                        break;
+                    }
+                    _ => {
+                        let result = if pending_src.is_empty() {
+                            eval_and_format(trim_line)
+                        } else {
+                            pending_src.push('\n');
+                            pending_src.push_str(trim_line);
+
+                            eval_and_format(pending_src.as_str())
+                        };
+
+                        match result {
+                            Ok(output) => {
+                                println!("{}", output);
+                                pending_src.clear();
+                            }
+                            Err(Fail {
+                                reason: FailReason::Eof(_),
+                                ..
+                            }) => {}
+                            Err(fail) => {
+                                report_parse_error(fail);
+                                pending_src.clear();
+                            }
+                        }
                     }
                 }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                // If we hit an eof, and we're allowed to keep going,
+                // append the str to the src we're building up and continue.
+                // (We only need to append it here if it was empty before;
+                // otherwise, we already appended it before calling eval_and_format.)
+
+                if pending_src.is_empty() {
+                    pending_src.push_str("");
+                }
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
             }
         }
 
