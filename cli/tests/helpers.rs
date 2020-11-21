@@ -5,7 +5,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_cli::repl::{INSTRUCTIONS, PROMPT, WELCOME_MESSAGE};
+use roc_cli::repl::{INSTRUCTIONS, WELCOME_MESSAGE};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -278,7 +278,7 @@ pub fn repl_eval(input: &str) -> Out {
 
     // Remove the initial instructions from the output.
 
-    let expected_instructions = format!("{}{}{}", WELCOME_MESSAGE, INSTRUCTIONS, PROMPT);
+    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
@@ -300,7 +300,7 @@ pub fn repl_eval(input: &str) -> Out {
             panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
         }
     } else {
-        let expected_after_answer = format!("\n{}", PROMPT);
+        let expected_after_answer = format!("\n");
 
         assert!(
             answer.ends_with(&expected_after_answer),
