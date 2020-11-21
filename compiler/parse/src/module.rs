@@ -202,6 +202,7 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
             };
 
             // rustc must be told the type here
+            #[allow(clippy::type_complexity)]
             let opt_imports: Option<(
                 (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
                 Vec<'a, Located<ImportsEntry<'a>>>,
