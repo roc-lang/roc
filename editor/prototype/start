@@ -1,0 +1,9 @@
+#!/bin/bash 
+
+set -e 
+
+# Build CSS 
+npx tailwindcss-cli@latest build -o ./dist/sty.css
+
+# Build Elm serve Index.html
+elm-live src/Prototype.elm -h -- --output=./dist/app.js
