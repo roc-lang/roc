@@ -4,7 +4,7 @@ use crate::llvm::build::{
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
-use crate::llvm::convert::{collection, ptr_int};
+use crate::llvm::convert::collection;
 use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -535,7 +535,6 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
         }
         Smallness::Big => {
             let clone_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, len);
-            let int_type = ptr_int(ctx, ptr_bytes);
 
             // TODO check if malloc returned null; if so, runtime error for OOM!
 
