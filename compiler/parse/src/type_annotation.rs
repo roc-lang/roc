@@ -167,10 +167,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
             )
         ),
         |((fields, final_comments), ext): (
-            (
-                Fields<'a>,
-                &'a [CommentOrNewline<'a>]
-            ),
+            (Fields<'a>, &'a [CommentOrNewline<'a>]),
             Option<&'a Located<TypeAnnotation<'a>>>,
         )| {
             Record {
