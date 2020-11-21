@@ -71,26 +71,29 @@ mod gen_str {
             3,
             i64
         );
+    }
 
-        // assert_evals_to!(
-        //     indoc!(
-        //         r#"
-        //             when List.first (Str.split "JJJJJ" "JJJJ there") is
-        //                 Ok str ->
-        //                     str
-        //                         |> Str.concat str
-        //                         |> Str.concat str
-        //                         |> Str.concat str
-        //                         |> Str.concat str
-        //
-        //                 _ ->
-        //                     "Not Str!"
-        //
-        //         "#
-        //     ),
-        //     "JJJJJJJJJJJJJJJJJJJJJJJJJ",
-        //     &'static str
-        // );
+    #[test]
+    fn str_split_str_concat_repeated() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.first (Str.split "JJJJJ" "JJJJ there") is
+                        Ok str ->
+                            str
+                                |> Str.concat str
+                                |> Str.concat str
+                                |> Str.concat str
+                                |> Str.concat str
+        
+                        _ ->
+                            "Not Str!"
+        
+                "#
+            ),
+            "JJJJJJJJJJJJJJJJJJJJJJJJJ",
+            &'static str
+        );
     }
 
     #[test]
