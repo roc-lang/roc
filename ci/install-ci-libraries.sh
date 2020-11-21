@@ -72,6 +72,9 @@ make -j`nproc`
 sudo make install
 popd
 
+# Report current valgrind version, to confirm it installed properly
+valgrind --version
+
 # install zig - can't use apt-get since we require at least a specific commit later then the most recent tag (0.6.0)
 wget -c https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz --no-check-certificate
 tar -xf zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
