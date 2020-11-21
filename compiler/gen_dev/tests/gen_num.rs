@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate pretty_assertions;
-//#[macro_use]
+#[macro_use]
 extern crate indoc;
 
 extern crate bumpalo;
@@ -9,7 +9,7 @@ extern crate libc;
 #[macro_use]
 mod helpers;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod gen_num {
     //use roc_std::RocOrder;
 
@@ -25,6 +25,32 @@ mod gen_num {
         assert_evals_to!("0o17", 0o17, i64);
         assert_evals_to!("0x1000_0000_0000_0000", 0x1000_0000_0000_0000, i64);
     }
+
+    // #[test]
+    // fn gen_add_i64() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 1 + 2 + 3
+    //             "#
+    //         ),
+    //         6,
+    //         i64
+    //     );
+    // }
+
+    #[test]
+    fn i64_abs() {
+        assert_evals_to!("Num.abs -6", 6, i64);
+        assert_evals_to!("Num.abs 7", 7, i64);
+        assert_evals_to!("Num.abs 0", 0, i64);
+        assert_evals_to!("Num.abs -0", 0, i64);
+        assert_evals_to!("Num.abs -1", 1, i64);
+        assert_evals_to!("Num.abs 1", 1, i64);
+        assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
+    }
+
     /*
     #[test]
     fn f64_sqrt() {
@@ -51,18 +77,6 @@ mod gen_num {
     fn f64_abs() {
         assert_evals_to!("Num.abs -4.7", 4.7, f64);
         assert_evals_to!("Num.abs 5.8", 5.8, f64);
-    }
-
-    #[test]
-    fn i64_abs() {
-        //assert_evals_to!("Num.abs -6", 6, i64);
-        assert_evals_to!("Num.abs 7", 7, i64);
-        assert_evals_to!("Num.abs 0", 0, i64);
-        assert_evals_to!("Num.abs -0", 0, i64);
-        assert_evals_to!("Num.abs -1", 1, i64);
-        assert_evals_to!("Num.abs 1", 1, i64);
-        assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
-        assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
     }
 
     #[test]
@@ -203,19 +217,6 @@ mod gen_num {
             ),
             true,
             bool
-        );
-    }
-
-    #[test]
-    fn gen_add_i64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    1 + 2 + 3
-                "#
-            ),
-            6,
-            i64
         );
     }
 

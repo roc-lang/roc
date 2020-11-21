@@ -36,10 +36,15 @@ pub fn build_module<'a>(
             // Setup layout_ids for procedure calls.
             let mut layout_ids = roc_mono::layout::LayoutIds::default();
             let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
-            for ((symbol, layout), proc) in procedures {
+            for ((sym, layout), proc) in procedures {
+                // This is temporary until we support passing args to functions.
+                if sym == symbol::Symbol::NUM_ABS {
+                    continue;
+                }
+
                 let fn_name = layout_ids
-                    .get(symbol, &layout)
-                    .to_symbol_string(symbol, &env.interns);
+                    .get(sym, &layout)
+                    .to_symbol_string(sym, &env.interns);
 
                 let proc_symbol = Symbol {
                     name: fn_name.as_bytes().to_vec(),
@@ -48,7 +53,7 @@ pub fn build_module<'a>(
                     kind: SymbolKind::Text,
                     // TODO: Depending on whether we are building a static or dynamic lib, this should change.
                     // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
-                    scope: if env.exposed_to_host.contains(&symbol) {
+                    scope: if env.exposed_to_host.contains(&sym) {
                         SymbolScope::Dynamic
                     } else {
                         SymbolScope::Linkage

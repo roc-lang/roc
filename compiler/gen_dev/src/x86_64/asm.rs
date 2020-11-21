@@ -51,6 +51,15 @@ fn add_reg_extension(reg: GPReg, byte: u8) -> u8 {
 // Unit tests are added at the bottom of the file to ensure correct asm generation.
 // Please keep these in alphanumeric order.
 
+/// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
+pub fn cmovl_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg) {
+    let rex = add_reg_extension(dst, REX_W);
+    let rex = add_rm_extension(src, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let src_mod = src as u8 % 8;
+    buf.extend(&[rex, 0x0F, 0x4C, 0xC0 + dst_mod + src_mod]);
+}
+
 /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
 pub fn mov_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32) {
     let rex = add_rm_extension(dst, REX_W);
@@ -76,6 +85,13 @@ pub fn mov_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, sr
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, 0x89, 0xC0 + dst_mod + src_mod]);
+}
+
+/// `NEG r/m64` -> Two's complement negate r/m64.
+pub fn neg_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg) {
+    let rex = add_rm_extension(reg, REX_W);
+    let reg_mod = reg as u8 % 8;
+    buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
 }
 
 /// `RET` -> Near return to calling procedure.
@@ -113,6 +129,22 @@ mod tests {
 
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x12345678_9ABCDEF0;
+
+    #[test]
+    fn test_cmovl_register64bit_register64bit() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((in1, in2), expected) in &[
+            ((GPReg::RAX, GPReg::RAX), [0x48, 0x0F, 0x4C, 0xC0]),
+            ((GPReg::RAX, GPReg::R15), [0x49, 0x0F, 0x4C, 0xC7]),
+            ((GPReg::R15, GPReg::RAX), [0x4C, 0x0F, 0x4C, 0xF8]),
+            ((GPReg::R15, GPReg::R15), [0x4D, 0x0F, 0x4C, 0xFF]),
+        ] {
+            buf.clear();
+            cmovl_register64bit_register64bit(&mut buf, *in1, *in2);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
 
     #[test]
     fn test_mov_register64bit_immediate32bit() {
@@ -153,6 +185,20 @@ mod tests {
         ] {
             buf.clear();
             mov_register64bit_register64bit(&mut buf, *in1, *in2);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_neg_register64bit() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for (in1, expected) in &[
+            (GPReg::RAX, [0x48, 0xF7, 0xD8]),
+            (GPReg::R15, [0x49, 0xF7, 0xDF]),
+        ] {
+            buf.clear();
+            neg_register64bit(&mut buf, *in1);
             assert_eq!(expected, &buf[..]);
         }
     }

@@ -3,7 +3,7 @@ use bumpalo::collections::Vec;
 use roc_collections::all::{ImSet, MutMap};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{Literal, Stmt};
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Builtin, Layout};
 use target_lexicon::{CallingConvention, Triple};
 
 mod asm;
@@ -11,9 +11,9 @@ use asm::GPReg;
 
 #[derive(Clone, Debug, PartialEq)]
 enum SymbolStorage<'a> {
-    Literal(Literal<'a>),
     GPReg(GPReg, Layout<'a>),
-    Stack(u32, Layout<'a>),
+    Stack(u16, Layout<'a>),
+    StackAndGPReg(GPReg, u16, Layout<'a>),
 }
 
 pub struct X86_64Backend<'a> {
@@ -188,35 +188,45 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
         &mut self.last_seen_map
     }
 
-    fn set_symbol_to_lit(&mut self, sym: &Symbol, lit: &Literal<'a>) {
-        self.symbols_map
-            .insert(*sym, SymbolStorage::Literal(lit.clone()));
+    fn load_literal(
+        &mut self,
+        sym: &Symbol,
+        lit: &Literal<'a>,
+        layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        match lit {
+            Literal::Int(x) => {
+                let reg = self.claim_gp_reg()?;
+                let val = *x;
+                if val <= i32::MAX as i64 && val >= i32::MIN as i64 {
+                    asm::mov_register64bit_immediate32bit(&mut self.buf, reg, val as i32);
+                } else {
+                    asm::mov_register64bit_immediate64bit(&mut self.buf, reg, val);
+                }
+                self.gp_used_regs.push((reg, *sym));
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::GPReg(reg, layout.clone()));
+                Ok(())
+            }
+            x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
+        }
     }
 
     fn free_symbol(&mut self, sym: &Symbol) {
         self.symbols_map.remove(sym);
+        for i in 0..self.gp_used_regs.len() {
+            let (reg, saved_sym) = self.gp_used_regs[i];
+            if saved_sym == *sym {
+                self.gp_free_regs.push(reg);
+                self.gp_used_regs.remove(i);
+                break;
+            }
+        }
     }
 
     fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.get(sym);
         match val {
-            Some(SymbolStorage::Literal(Literal::Int(x))) => {
-                let val = *x;
-                if val <= i32::MAX as i64 && val >= i32::MIN as i64 {
-                    asm::mov_register64bit_immediate32bit(
-                        &mut self.buf,
-                        self.gp_return_regs[0],
-                        val as i32,
-                    );
-                } else {
-                    asm::mov_register64bit_immediate64bit(
-                        &mut self.buf,
-                        self.gp_return_regs[0],
-                        val,
-                    );
-                }
-                Ok(())
-            }
             Some(SymbolStorage::GPReg(reg, _)) if *reg == self.gp_return_regs[0] => Ok(()),
             Some(SymbolStorage::GPReg(reg, _)) => {
                 // If it fits in a general purpose register, just copy it over to.
@@ -224,9 +234,26 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 asm::mov_register64bit_register64bit(&mut self.buf, self.gp_return_regs[0], *reg);
                 Ok(())
             }
-            Some(x) => Err(format!("symbol, {:?}, is not yet implemented", x)),
+            Some(x) => Err(format!(
+                "returning symbol storage, {:?}, is not yet implemented",
+                x
+            )),
             None => Err(format!("Unknown return symbol: {}", sym)),
         }
+    }
+
+    fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
+        let dst_reg = self.claim_gp_reg()?;
+        self.gp_used_regs.push((dst_reg, *dst));
+        self.symbols_map.insert(
+            *dst,
+            SymbolStorage::GPReg(dst_reg, Layout::Builtin(Builtin::Int64)),
+        );
+        let src_reg = self.load_to_reg(src)?;
+        asm::mov_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
+        asm::neg_register64bit(&mut self.buf, dst_reg);
+        asm::cmovl_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
+        Ok(())
     }
 
     fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
@@ -252,6 +279,59 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
 impl<'a> X86_64Backend<'a> {
     fn requires_stack_modification(&self) -> bool {
         !self.leaf_proc
-            || self.stack_size < self.shadow_space_size as u16 + self.red_zone_size as u16
+            || self.stack_size > self.shadow_space_size as u16 + self.red_zone_size as u16
+    }
+
+    fn claim_gp_reg(&mut self) -> Result<GPReg, String> {
+        if self.gp_free_regs.len() > 0 {
+            // TODO: deal with callee saved registers.
+            Ok(self.gp_free_regs.pop().unwrap())
+        } else if self.gp_used_regs.len() > 0 {
+            let (reg, sym) = self.gp_used_regs.remove(0);
+            self.free_to_stack(&sym);
+            Ok(reg)
+        } else {
+            Err(format!("completely out of registers"))
+        }
+    }
+
+    fn load_to_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
+        let val = self.symbols_map.remove(sym);
+        match val {
+            Some(SymbolStorage::GPReg(reg, layout)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::GPReg(reg, layout));
+                Ok(reg)
+            }
+            Some(SymbolStorage::StackAndGPReg(reg, offset, layout)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::StackAndGPReg(reg, offset, layout));
+                Ok(reg)
+            }
+            Some(SymbolStorage::Stack(_offset, _layout)) => {
+                Err(format!("loading to the stack is not yet implemented"))
+            }
+            None => Err(format!("Unknown symbol: {}", sym)),
+        }
+    }
+
+    fn free_to_stack(&mut self, sym: &Symbol) -> Result<(), String> {
+        let val = self.symbols_map.remove(sym);
+        match val {
+            Some(SymbolStorage::GPReg(_reg, _layout)) => {
+                Err(format!("pushing to the stack is not yet implemented"))
+            }
+            Some(SymbolStorage::StackAndGPReg(_, offset, layout)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::Stack(offset, layout));
+                Ok(())
+            }
+            Some(SymbolStorage::Stack(offset, layout)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::Stack(offset, layout));
+                Ok(())
+            }
+            None => Err(format!("Unknown symbol: {}", sym)),
+        }
     }
 }
