@@ -777,6 +777,16 @@ fn to_expr_report<'b>(
                     op
                 );
             }
+            Reason::ForeignCallArg {
+                foreign_symbol,
+                arg_index,
+            } => {
+                panic!(
+                    "Compiler bug: argument #{} to foreign symbol {:?} was the wrong type!",
+                    arg_index.ordinal(),
+                    foreign_symbol
+                );
+            }
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
                 unreachable!("I don't think these can be reached")
             }
@@ -954,12 +964,15 @@ fn add_category<'b>(
                 op
             );
         }
+        ForeignCall => {
+            panic!("Compiler bug: invalid return type from foreign call",);
+        }
 
         Uniqueness => alloc.concat(vec![
             this_is,
             alloc.text(" an uniqueness attribute of type:"),
         ]),
-        Storage => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
+        Storage(_file, _line) => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
 
         DefaultValue(_) => alloc.concat(vec![this_is, alloc.text(" a default field of type:")]),
     }

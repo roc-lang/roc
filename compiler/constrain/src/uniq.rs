@@ -317,7 +317,7 @@ fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(record_type),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
@@ -381,7 +381,7 @@ fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(union_type),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
@@ -686,7 +686,12 @@ pub fn constrain_expr(
                 constraints.push(Eq(inferred, expected.clone(), Category::List, region));
 
                 let stored = Type::Variable(*list_var);
-                constraints.push(Eq(stored, expected, Category::Storage, region));
+                constraints.push(Eq(
+                    stored,
+                    expected,
+                    Category::Storage(std::file!(), std::line!()),
+                    region,
+                ));
 
                 exists(vec![*elem_var, *list_var, uniq_var], And(constraints))
             }
@@ -961,6 +966,60 @@ pub fn constrain_expr(
                 ]),
             )
         }
+        ForeignCall {
+            foreign_symbol,
+            args,
+            ret_var,
+        } => {
+            // This is a modified version of what we do for function calls.
+
+            let ret_type = Variable(*ret_var);
+            let mut vars = Vec::with_capacity(1 + args.len());
+
+            vars.push(*ret_var);
+
+            // Canonicalize the function expression and its arguments
+
+            let mut arg_types = Vec::with_capacity(args.len());
+            let mut arg_cons = Vec::with_capacity(args.len());
+
+            for (index, (arg_var, arg_expr)) in args.iter().enumerate() {
+                let arg_type = Variable(*arg_var);
+
+                let reason = Reason::ForeignCallArg {
+                    foreign_symbol: foreign_symbol.clone(),
+                    arg_index: Index::zero_based(index),
+                };
+
+                let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
+                let arg_con = constrain_expr(
+                    env,
+                    var_store,
+                    var_usage,
+                    applied_usage_constraint,
+                    Region::zero(),
+                    arg_expr,
+                    expected_arg,
+                );
+
+                vars.push(*arg_var);
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+            }
+
+            let expected_uniq_type = var_store.fresh();
+            vars.push(expected_uniq_type);
+
+            let category = Category::ForeignCall;
+
+            exists(
+                vars,
+                And(vec![
+                    And(arg_cons),
+                    Eq(ret_type, expected, category, region),
+                ]),
+            )
+        }
         LetRec(defs, loc_ret, var) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
@@ -990,7 +1049,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -1025,7 +1084,7 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         expected,
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         loc_ret.region,
                     ),
                 ]),
@@ -1121,7 +1180,7 @@ pub fn constrain_expr(
                     let ast_con = Eq(
                         Type::Variable(*branch_var),
                         Expected::NoExpectation(tipe),
-                        Category::Storage,
+                        Category::Storage(std::file!(), std::line!()),
                         region,
                     );
 
@@ -2113,6 +2172,46 @@ fn annotation_to_attr_type(
                 panic!("lifted type is not Attr")
             }
         }
+        HostExposedAlias {
+            name: symbol,
+            arguments: fields,
+            actual_var,
+            actual,
+        } => {
+            let (mut actual_vars, lifted_actual) =
+                annotation_to_attr_type(var_store, actual, rigids, change_var_kind);
+
+            if let Type::Apply(attr_symbol, args) = lifted_actual {
+                debug_assert!(attr_symbol == Symbol::ATTR_ATTR);
+
+                let uniq_type = args[0].clone();
+                let actual_type = args[1].clone();
+
+                let mut new_fields = Vec::with_capacity(fields.len());
+                for (name, tipe) in fields {
+                    let (lifted_vars, lifted) =
+                        annotation_to_attr_type(var_store, tipe, rigids, change_var_kind);
+
+                    actual_vars.extend(lifted_vars);
+
+                    new_fields.push((name.clone(), lifted));
+                }
+
+                let alias = Type::HostExposedAlias {
+                    name: *symbol,
+                    arguments: new_fields,
+                    actual_var: *actual_var,
+                    actual: Box::new(actual_type),
+                };
+
+                (
+                    actual_vars,
+                    crate::builtins::builtin_type(Symbol::ATTR_ATTR, vec![uniq_type, alias]),
+                )
+            } else {
+                panic!("lifted type is not Attr")
+            }
+        }
     }
 }
 
@@ -2184,7 +2283,7 @@ fn constrain_def(
             pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
-                Category::Storage,
+                Category::Storage(std::file!(), std::line!()),
                 Region::zero(),
             ));
 
@@ -2451,32 +2550,30 @@ pub fn rec_defs_help(
                     applied_usage_constraint,
                     def.loc_expr.region,
                     &def.loc_expr.value,
-                    Expected::NoExpectation(expr_type.clone()),
+                    annotation_expected.clone(),
                 );
 
                 // ensure expected type unifies with annotated type
-                rigid_info.constraints.push(Eq(
+                let storage_con = Eq(
                     expr_type,
-                    annotation_expected.clone(),
-                    Category::Storage,
+                    annotation_expected,
+                    Category::Storage(std::file!(), std::line!()),
                     def.loc_expr.region,
-                ));
+                );
 
                 // TODO investigate if this let can be safely removed
                 let def_con = Let(Box::new(LetConstraint {
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
-                    defs_constraint: True, // I think this is correct, once again because there are no args
+                    defs_constraint: storage_con,
                     ret_constraint: expr_con,
                 }));
 
                 rigid_info.vars.extend(&new_rigids);
-                // because of how in Roc headers point to variables, we must include the pattern var here
-                rigid_info.vars.extend(pattern_state.vars);
                 rigid_info.constraints.push(Let(Box::new(LetConstraint {
                     rigid_vars: new_rigids,
-                    flex_vars: Vec::new(),         // no flex vars introduced
+                    flex_vars: pattern_state.vars,
                     def_types: SendMap::default(), // no headers introduced (at this level)
                     defs_constraint: def_con,
                     ret_constraint: True,

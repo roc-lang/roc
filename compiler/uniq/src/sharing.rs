@@ -790,7 +790,8 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         | Str { .. }
         | EmptyRecord
         | Accessor { .. }
-        | RunLowLevel { .. } => {}
+        | RunLowLevel { .. }
+        | ForeignCall { .. } => {}
 
         Var(symbol) => usage.register_unique(*symbol),
 

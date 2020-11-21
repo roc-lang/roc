@@ -674,6 +674,32 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // contains : Attr * (List a)
+    //          , a
+    //          -> Attr * Bool
+    add_type(Symbol::LIST_CONTAINS, {
+        let_tvars! { a, star1, star2 };
+
+        unique_function(vec![list_type(star1, a), flex(a)], bool_type(star2))
+    });
+
+    // sum : Attr * (List (Attr u (Num (Attr u num))))
+    //     -> Attr v (Num (Attr v num))
+    add_type(Symbol::LIST_SUM, {
+        let_tvars! { star1, u, v, num };
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star1),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![num_type(u, num)]),
+                ],
+            )],
+            num_type(v, num),
+        )
+    });
+
     // join : Attr * (List (Attr * (List a)))
     //     -> Attr * (List a)
     add_type(Symbol::LIST_JOIN, {
@@ -1007,6 +1033,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Str module
 
+    // Str.split :
+    //     Attr * Str,
+    //     Attr * Str
+    //     -> Attr * (List (Attr * Str))
+    add_type(Symbol::STR_SPLIT, {
+        let_tvars! { star1, star2, star3, star4 };
+        unique_function(
+            vec![str_type(star1), str_type(star2)],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![str_type(star4)]),
+                ],
+            ),
+        )
+    });
+
     // isEmpty : Attr * Str -> Attr * Bool
     add_type(Symbol::STR_IS_EMPTY, {
         let_tvars! { star1, star2 };
@@ -1017,6 +1061,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(Symbol::STR_CONCAT, {
         let_tvars! { star1, star2, star3 };
         unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
+    });
+
+    // Str.countGraphemes : Attr * Str, -> Attr * Int
+    add_type(Symbol::STR_COUNT_GRAPHEMES, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![str_type(star1)], int_type(star2))
     });
 
     // Result module

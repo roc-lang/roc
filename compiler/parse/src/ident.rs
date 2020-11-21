@@ -393,6 +393,15 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
     }
 }
 
+/// This could be:
+///
+/// * A module name
+/// * A type name
+/// * A global tag
+pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str> {
+    global_tag_or_ident(|first_char| first_char.is_uppercase())
+}
+
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
     global_tag_or_ident(|first_char| first_char.is_alphabetic())
 }

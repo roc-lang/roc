@@ -390,6 +390,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Str module
 
+    // Str.split : Str, Str -> List Str
+    add_type(
+        Symbol::STR_SPLIT,
+        top_level_function(
+            vec![str_type(), str_type()],
+            Box::new(list_type(str_type())),
+        ),
+    );
+
     // Str.concat : Str, Str -> Str
     add_type(
         Symbol::STR_CONCAT,
@@ -400,6 +409,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::STR_IS_EMPTY,
         top_level_function(vec![str_type()], Box::new(bool_type())),
+    );
+
+    // countGraphemes : Str -> Int
+    add_type(
+        Symbol::STR_COUNT_GRAPHEMES,
+        top_level_function(vec![str_type()], Box::new(int_type())),
     );
 
     // List module
@@ -447,6 +462,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(
             vec![list_type(flex(TVAR1)), list_type(flex(TVAR1))],
             Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // contains : List elem, elem -> Bool
+    add_type(
+        Symbol::LIST_CONTAINS,
+        top_level_function(
+            vec![list_type(flex(TVAR1)), flex(TVAR1)],
+            Box::new(bool_type()),
+        ),
+    );
+
+    // sum :  List (Num a) -> Num a
+    add_type(
+        Symbol::LIST_SUM,
+        top_level_function(
+            vec![list_type(num_type(flex(TVAR1)))],
+            Box::new(num_type(flex(TVAR1))),
         ),
     );
 

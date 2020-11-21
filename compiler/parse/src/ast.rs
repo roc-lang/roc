@@ -52,9 +52,9 @@ pub struct AppHeader<'a> {
 pub struct PlatformHeader<'a> {
     pub name: Loc<PackageName<'a>>,
     pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub requires: Vec<'a, Loc<ExposesEntry<'a>>>,
+    pub requires: Vec<'a, Loc<TypedIdent<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-    pub effects: Vec<'a, Loc<EffectsEntry<'a>>>,
+    pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub after_platform_keyword: &'a [CommentOrNewline<'a>],
@@ -64,23 +64,31 @@ pub struct PlatformHeader<'a> {
     pub after_requires: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
     pub after_imports: &'a [CommentOrNewline<'a>],
-    pub before_effects: &'a [CommentOrNewline<'a>],
-    pub after_effects: &'a [CommentOrNewline<'a>],
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum EffectsEntry<'a> {
+pub struct Effects<'a> {
+    pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
+    pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
+    pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
+    pub type_name: &'a str,
+    pub entries: Vec<'a, Loc<TypedIdent<'a>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedIdent<'a> {
     /// e.g.
     ///
     /// printLine : Str -> Effect {}
-    Effect {
+    Entry {
         ident: Loc<&'a str>,
+        spaces_before_colon: &'a [CommentOrNewline<'a>],
         ann: Loc<TypeAnnotation<'a>>,
     },
 
     // Spaces
-    SpaceBefore(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -189,9 +197,11 @@ pub enum Expr<'a> {
 
     // Collection Literals
     List(&'a [&'a Loc<Expr<'a>>]),
+
     Record {
         update: Option<&'a Loc<Expr<'a>>>,
         fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     // Lookups
@@ -268,6 +278,14 @@ pub enum Def<'a> {
     // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)
     // No need to track that relationship in any data structure.
     Body(&'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+
+    AnnotatedBody {
+        ann_pattern: &'a Loc<Pattern<'a>>,
+        ann_type: &'a Loc<TypeAnnotation<'a>>,
+        comment: Option<&'a str>,
+        body_pattern: &'a Loc<Pattern<'a>>,
+        body_expr: &'a Loc<Expr<'a>>,
+    },
 
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.
@@ -367,11 +385,22 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
     DocComment(&'a str),
+}
+
+impl<'a> CommentOrNewline<'a> {
+    pub fn is_comment(&self) -> bool {
+        use CommentOrNewline::*;
+        match self {
+            Newline => false,
+            LineComment(_) => true,
+            DocComment(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -408,7 +437,7 @@ pub enum Pattern<'a> {
     },
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
-    Underscore,
+    Underscore(&'a str),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -525,7 +554,7 @@ impl<'a> Pattern<'a> {
             ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
             (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
-            (Underscore, Underscore) => true,
+            (Underscore(x), Underscore(y)) => x == y,
 
             // Space
             (SpaceBefore(x, _), SpaceBefore(y, _)) => x.equivalent(y),
@@ -620,12 +649,12 @@ impl<'a> Spaceable<'a> for ImportsEntry<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for EffectsEntry<'a> {
+impl<'a> Spaceable<'a> for TypedIdent<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        EffectsEntry::SpaceBefore(self, spaces)
+        TypedIdent::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        EffectsEntry::SpaceAfter(self, spaces)
+        TypedIdent::SpaceAfter(self, spaces)
     }
 }
 
@@ -660,6 +689,7 @@ impl<'a> Spaceable<'a> for Def<'a> {
 /// "currently attempting to parse a list." This helps error messages!
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attempting {
+    LineComment,
     List,
     Keyword,
     StrLiteral,

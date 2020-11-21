@@ -52,6 +52,7 @@ roc_reporting = { path = "../compiler/reporting" }
 roc_editor = { path = "../editor" }
 # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
+const_format = "0.2.8"
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
@@ -77,7 +78,7 @@ libloading = "0.6"
 # commit of TheDan64/inkwell, push a new tag which points to the latest commit,
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
-inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release2" }
+inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release3" }
 target-lexicon = "0.10"
 
 [dev-dependencies]

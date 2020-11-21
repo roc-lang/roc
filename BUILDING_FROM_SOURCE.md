@@ -1,13 +1,13 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, Python 2.7, Zig, valgrind, libunwind, and libc++-dev
+## Installing LLVM, Python, Zig, valgrind, libunwind, and libc++-dev
 
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
-* Python 2.7
+* Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * a particular version of Zig (see below)
 * a particular version of LLVM (see below)
 
@@ -34,7 +34,7 @@ We use a specific version of Zig, a build off the the commit `0088efc4b`. The la
   tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar
   # move the files into /opt:
   sudo mkdir -p /opt/zig
-  sudo mv tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar/* /opt/zig/
+  sudo mv zig-linux-x86_64-0.6.0+0088efc4b/* /opt/zig/
   ```
   Then add `/opt/zig/` to your `PATH` (e.g. in `~/.bashrc`).
   
@@ -80,7 +80,7 @@ If MacOS and using a version >= 10.15:
 
 You may prefer to setup up the volume manually by following nix documentation.
 
-> You my need to restart your terminal
+> You may need to restart your terminal
 
 ### Usage
 
@@ -95,6 +95,32 @@ You should be in a shell with everything needed to build already installed. Next
 `cargo run repl`
 
 You should be in a repl now. Have fun!
+
+### Editor
+
+When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
+
+```bash
+nix-shell
+git clone https://github.com/guibou/nixGL
+cd nixGL
+```
+
+If you have an Nvidia graphics card, run:
+```
+nix-env -f ./ -iA nixVulkanNvidia
+```
+If you have integrated Intel graphics, run:
+```
+nix-env -f ./ -iA nixVulkanIntel
+```
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other configurations.
+
+Now you should be able to run the editor:
+```bash
+cd roc
+nixVulkanNvidia cargo run edit `# replace Nvidia with the config you chose in the previous step`
+```
 
 ## Troubleshooting
 

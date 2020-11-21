@@ -1,5 +1,5 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::spaces::{fmt_comments_only, fmt_spaces, is_comment};
+use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
 use bumpalo::collections::String;
 use roc_parse::ast::{Base, Pattern};
 
@@ -19,7 +19,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
                 debug_assert!(!spaces.is_empty());
 
-                spaces.iter().any(|s| is_comment(s))
+                spaces.iter().any(|s| s.is_comment())
             }
 
             Pattern::Nested(nested_pat) => nested_pat.is_multiline(),
@@ -37,7 +37,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             | Pattern::NonBase10Literal { .. }
             | Pattern::FloatLiteral(_)
             | Pattern::StrLiteral(_)
-            | Pattern::Underscore
+            | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::QualifiedIdentifier { .. } => false,
         }
@@ -128,12 +128,15 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
             }
-            Underscore => buf.push('_'),
+            Underscore(name) => {
+                buf.push('_');
+                buf.push_str(name);
+            }
 
             // Space
             SpaceBefore(sub_pattern, spaces) => {
                 if !sub_pattern.is_multiline() {
-                    fmt_comments_only(buf, spaces.iter(), indent)
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent)
                 } else {
                     fmt_spaces(buf, spaces.iter(), indent);
                 }
@@ -143,7 +146,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 sub_pattern.format_with_options(buf, parens, newlines, indent);
                 // if only_comments {
                 if !sub_pattern.is_multiline() {
-                    fmt_comments_only(buf, spaces.iter(), indent)
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent)
                 } else {
                     fmt_spaces(buf, spaces.iter(), indent);
                 }

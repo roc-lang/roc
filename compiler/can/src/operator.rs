@@ -47,6 +47,26 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Nested(alias @ Alias { .. }) => Nested(alias),
         ann @ Annotation(_, _) => Nested(ann),
         Nested(ann @ Annotation(_, _)) => Nested(ann),
+        AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment,
+            body_pattern,
+            body_expr,
+        }
+        | Nested(AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment,
+            body_pattern,
+            body_expr,
+        }) => AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment: *comment,
+            body_pattern: *body_pattern,
+            body_expr: desugar_expr(arena, body_expr),
+        },
         Nested(NotYetImplemented(s)) => todo!("{}", s),
         NotYetImplemented(s) => todo!("{}", s),
     }
@@ -103,7 +123,16 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 value,
             })
         }
-        Record { fields, update } | Nested(Record { fields, update }) => {
+        Record {
+            fields,
+            update,
+            final_comments,
+        }
+        | Nested(Record {
+            fields,
+            update,
+            final_comments,
+        }) => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
             for field in fields.iter() {
@@ -122,6 +151,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 value: Record {
                     update: *update,
                     fields: new_fields,
+                    final_comments,
                 },
             })
         }
@@ -308,8 +338,8 @@ fn desugar_field<'a>(
                 desugar_expr(arena, arena.alloc(loc_expr)),
             )
         }
-        SpaceBefore(field, spaces) => SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces),
-        SpaceAfter(field, spaces) => SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces),
+        SpaceBefore(field, _spaces) => desugar_field(arena, field),
+        SpaceAfter(field, _spaces) => desugar_field(arena, field),
 
         Malformed(string) => Malformed(string),
     }

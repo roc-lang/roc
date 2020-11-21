@@ -304,6 +304,13 @@ fn fix_values_captured_in_closure_defs(
     defs: &mut Vec<crate::def::Def>,
     no_capture_symbols: &mut MutSet<Symbol>,
 ) {
+    // recursive defs cannot capture each other
+    for def in defs.iter() {
+        no_capture_symbols.extend(crate::pattern::symbols_from_pattern(&def.loc_pattern.value));
+    }
+
+    // TODO mutually recursive functions should both capture the union of both their capture sets
+
     for def in defs.iter_mut() {
         fix_values_captured_in_closure_def(def, no_capture_symbols);
     }
@@ -445,7 +452,7 @@ fn fix_values_captured_in_closure_expr(
                 fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
             }
         }
-        RunLowLevel { args, .. } => {
+        RunLowLevel { args, .. } | ForeignCall { args, .. } => {
             for (_, arg) in args.iter_mut() {
                 fix_values_captured_in_closure_expr(arg, no_capture_symbols);
             }

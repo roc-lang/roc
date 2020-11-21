@@ -162,7 +162,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
                             let (loc_expr, new_state) =
-                                skip_second!(loc(allocated(expr::expr(0))), ascii_char(')'))
+                                skip_second!(loc(allocated(expr::expr(0))), ascii_char(b')'))
                                     .parse(arena, state)?;
 
                             // Advance the iterator past the expr we just parsed.
@@ -185,9 +185,12 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             // Parse the hex digits, surrounded by parens, then
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
-                            let (loc_digits, new_state) =
-                                between!(ascii_char('('), loc(ascii_hex_digits()), ascii_char(')'))
-                                    .parse(arena, state)?;
+                            let (loc_digits, new_state) = between!(
+                                ascii_char(b'('),
+                                loc(ascii_hex_digits()),
+                                ascii_char(b')')
+                            )
+                            .parse(arena, state)?;
 
                             // Advance the iterator past the expr we just parsed.
                             for _ in 0..(original_byte_count - new_state.bytes.len()) {

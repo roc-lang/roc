@@ -549,28 +549,25 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_0() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app LinkedListLen0 provides [ main ] imports []
+                app Test provides [ main ] imports []
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                # nil : LinkedList Int
-                nil = Cons 0x1 Nil
-
-                # length : [ Nil, Cons a (LinkedList a) ] as LinkedList a -> Int
-                length : LinkedList a -> Int
-                length = \list ->
+                len : LinkedList a -> Int
+                len = \list ->
                     when list is
                         Nil -> 0
-                        Cons _ rest -> 1 + length rest
-
+                        Cons _ rest -> 1 + len rest
 
                 main =
-                    length nil
+                    nil : LinkedList Int
+                    nil = Nil
+
+                    len nil
                 "#
             ),
             0,
@@ -579,9 +576,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_twice_0() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app LinkedListLenTwice0 provides [ main ] imports []
@@ -607,9 +603,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_1() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -635,9 +630,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_twice_1() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -663,9 +657,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_len_3() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -1062,6 +1055,520 @@ mod gen_primitives {
             ),
             3.14,
             f64
+        );
+    }
+
+    #[test]
+    fn return_wrapped_function_pointer() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                foo : Effect {}
+                foo = @Effect \{} -> {}
+
+                main : Effect {}
+                main = foo
+                "#
+            ),
+            1,
+            i64,
+            |_| 1
+        );
+    }
+
+    #[test]
+    fn return_wrapped_closure() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                foo : Effect {}
+                foo =
+                    x = 5
+
+                    @Effect (\{} -> if x > 3 then {} else {})
+
+                main : Effect {}
+                main = foo
+                "#
+            ),
+            1,
+            i64,
+            |_| 1
+        );
+    }
+
+    #[test]
+    fn linked_list_is_empty_1() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                empty : ConsList a
+                empty = Nil
+
+                isEmpty : ConsList a -> Bool
+                isEmpty = \list ->
+                    when list is
+                        Cons _ _ ->
+                            False
+
+                        Nil ->
+                            True
+
+                main : Bool
+                main =
+                    myList : ConsList Int
+                    myList = empty
+
+                    isEmpty myList
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn linked_list_is_empty_2() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                isEmpty : ConsList a -> Bool
+                isEmpty = \list ->
+                    when list is
+                        Cons _ _ ->
+                            False
+
+                        Nil ->
+                            True
+
+                main : Bool
+                main =
+                    myList : ConsList Int
+                    myList = Cons 0x1 Nil
+
+                    isEmpty myList
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    fn recursive_functon_with_rigid() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                State a : { count : Int, x : a }
+
+                foo : State a -> Int
+                foo = \state ->
+                    if state.count == 0 then
+                        0
+                    else
+                        1 + foo { count: state.count - 1, x: state.x }
+
+                main : Int
+                main =
+                    foo { count: 3, x: {} }
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn rbtree_insert() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                Key k : Num k
+
+                insert : Key k, v, Dict (Key k) v -> Dict (Key k) v
+                insert = \key, value, dict ->
+                    when insertHelp key value dict is
+                        Node Red k v l r ->
+                            Node Black k v l r
+
+                        x ->
+                            x
+
+                insertHelp : (Key k), v, Dict (Key k) v -> Dict (Key k) v
+                insertHelp = \key, value, dict ->
+                  when dict is
+                    Empty ->
+                      # New nodes are always red. If it violates the rules, it will be fixed
+                      # when balancing.
+                      Node Red key value Empty Empty
+
+                    Node nColor nKey nValue nLeft nRight ->
+                      when Num.compare key nKey is
+                        LT ->
+                          balance nColor nKey nValue (insertHelp key value nLeft) nRight
+
+                        EQ ->
+                          Node nColor nKey value nLeft nRight
+
+                        GT ->
+                          balance nColor nKey nValue nLeft (insertHelp key value nRight)
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+                main : Dict Int {}
+                main =
+                    insert 0 {} Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn rbtree_balance_inc_dec() {
+        // TODO does not define a variable correctly, but all is well with the type signature
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k : [ Node NodeColor k (Dict k)  (Dict k), Empty ]
+
+                # balance : NodeColor, k, Dict k,  Dict k -> Dict k
+                balance = \color, key, left, right ->
+                  when right is
+                    Node Red rK rLeft rRight ->
+                      when left is
+                        Node Red _ _ _ ->
+                          Node
+                            Red
+                            key
+                            Empty
+                            Empty
+
+                        _ ->
+                          Node color rK (Node Red key left rLeft) rRight
+
+                    _ ->
+                        Empty
+
+                main : Dict Int
+                main =
+                    balance Red 0 Empty Empty
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_3() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                    Node key left Empty
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn rbtree_balance_mono_problem() {
+        // because of how the function is written, only `Red` is used and so in the function's
+        // type, the first argument is a unit and dropped. Apparently something is weird with
+        // constraint generation where the specialization required by `main` does not fix the
+        // problem. As a result, the first argument is dropped and we run into issues down the line
+        //
+        // concretely, the `rRight` symbol will not be defined
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                        Empty
+
+                main : Dict Int Int
+                main =
+                    balance Red 0 0 Empty Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_full() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+                main : Dict Int Int
+                main =
+                    balance Red 0 0 Empty Empty
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn nested_pattern_match_two_ways() {
+        // exposed an issue in the ordering of pattern match checks when ran with `--release` mode
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                balance : ConsList Int -> Int
+                balance = \right ->
+                  when right is
+                    Cons 1 foo ->
+                        when foo is
+                            Cons 1 _ -> 3
+                            _ -> 3
+                    _ -> 3
+
+                main : Int
+                main =
+                    when balance Nil is
+                        _ -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                balance : ConsList Int -> Int
+                balance = \right ->
+                  when right is
+                    Cons 1 (Cons 1 _) -> 3
+                    _ -> 3
+
+                main : Int
+                main =
+                    when balance Nil is
+                        _ -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn linked_list_guarded_double_pattern_match() {
+        // the important part here is that the first case (with the nested Cons) does not match
+        // TODO this also has undefined behavior
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                balance : ConsList Int -> Int
+                balance = \right ->
+                  when right is
+                    Cons 1 foo ->
+                        when foo is
+                            Cons 1 _ -> 3
+                            _ -> 3
+                    _ -> 3
+
+                main : Int
+                main =
+                    when balance Nil is
+                        _ -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn linked_list_double_pattern_match() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                foo : ConsList Int -> Int
+                foo = \list ->
+                    when list is
+                        Cons _ (Cons x _) -> x
+                        _ -> 0
+
+                main : Int
+                main =
+                    foo (Cons 1 (Cons 32 Nil))
+                "#
+            ),
+            32,
+            i64
+        );
+    }
+
+    #[test]
+    fn binary_tree_double_pattern_match() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                BTree : [ Node BTree BTree, Leaf Int ]
+
+                foo : BTree -> Int
+                foo = \btree ->
+                    when btree is
+                        Node (Node (Leaf x) _) _ -> x
+                        _ -> 0
+
+                main : Int
+                main =
+                    foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
+                "#
+            ),
+            32,
+            i64
         );
     }
 }

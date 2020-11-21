@@ -6,7 +6,7 @@ use libc::{c_void, size_t};
 
 #[link(name = "alloca")]
 extern "C" {
-    #[no_mangle]
+    #[allow(dead_code)]
     fn c_alloca(_: size_t) -> *mut c_void;
 }
 
@@ -63,7 +63,8 @@ unsafe fn malloc_or_alloca(bytes: usize) -> *mut c_void {
 #[cfg(not(debug_assertions))]
 #[inline(always)]
 unsafe fn malloc_or_alloca(bytes: usize) -> *mut c_void {
-    c_alloca(bytes)
+    // c_alloca(bytes)
+    libc::malloc(bytes)
 }
 
 #[cfg(debug_assertions)]
@@ -74,9 +75,12 @@ unsafe fn free_or_noop(ptr: *mut c_void) {
 
 #[cfg(not(debug_assertions))]
 #[inline(always)]
-fn free_or_noop(_ptr: *mut c_void) {
+unsafe fn free_or_noop(ptr: *mut c_void) {
     // In release builds, we'll have used alloca,
     // so there's nothing to free.
+
+    // except that for now we always use malloc
+    libc::free(ptr)
 }
 
 #[cfg(test)]

@@ -341,6 +341,22 @@ where
     }
 }
 
+pub fn and_then_with_indent_level<'a, P1, P2, F, Before, After>(
+    parser: P1,
+    transform: F,
+) -> impl Parser<'a, After>
+where
+    P1: Parser<'a, Before>,
+    P2: Parser<'a, After>,
+    F: Fn(Before, u16) -> P2,
+{
+    move |arena, state| {
+        parser.parse(arena, state).and_then(|(output, next_state)| {
+            transform(output, next_state.indent_col).parse(arena, next_state)
+        })
+    }
+}
+
 pub fn then<'a, P1, F, Before, After>(parser: P1, transform: F) -> impl Parser<'a, After>
 where
     P1: Parser<'a, Before>,
@@ -432,15 +448,25 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
     (fail, state)
 }
 
-/// A single ASCII char.
-pub fn ascii_char<'a>(expected: char) -> impl Parser<'a, ()> {
-    // Make sure this really is an ASCII char!
-    debug_assert!(expected.len_utf8() == 1);
+/// A single ASCII char that isn't a newline.
+/// (For newlines, use newline_char(), which handles line numbers)
+pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
+    // Make sure this really is not a newline!
+    debug_assert_ne!(expected, b'\n');
 
     move |_arena, state: State<'a>| match state.bytes.first() {
-        Some(&actual) if expected == actual as char => {
-            Ok(((), state.advance_without_indenting(1)?))
-        }
+        Some(&actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
+        Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
+        _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
+    }
+}
+
+/// A single '\n' character.
+/// Use this instead of ascii_char('\n') because it properly handles
+/// incrementing the line number.
+pub fn newline_char<'a>() -> impl Parser<'a, ()> {
+    move |_arena, state: State<'a>| match state.bytes.first() {
+        Some(b'\n') => Ok(((), state.newline()?)),
         Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
@@ -566,6 +592,46 @@ where
                                         },
                                         state,
                                     ));
+                                }
+                            }
+                        }
+                        Err((_, old_state)) => return Ok((buf, old_state)),
+                    }
+                }
+            }
+            Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
+        }
+    }
+}
+
+/// Parse zero or more values separated by a delimiter (e.g. a comma)
+/// with an optional trailing delimiter whose values are discarded
+pub fn trailing_sep_by0<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
+where
+    D: Parser<'a, ()>,
+    P: Parser<'a, Val>,
+{
+    move |arena, state: State<'a>| {
+        match parser.parse(arena, state) {
+            Ok((first_output, next_state)) => {
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
+
+                buf.push(first_output);
+
+                loop {
+                    match delimiter.parse(arena, state) {
+                        Ok(((), next_state)) => {
+                            // If the delimiter passed, check the element parser.
+                            match parser.parse(arena, next_state) {
+                                Ok((next_output, next_state)) => {
+                                    state = next_state;
+                                    buf.push(next_output);
+                                }
+                                Err((_, old_state)) => {
+                                    // If the delimiter parsed, but the following
+                                    // element did not, that means we saw a trailing comma
+                                    return Ok((buf, old_state));
                                 }
                             }
                         }
@@ -788,11 +854,48 @@ macro_rules! collection {
                 // We could change the AST to add extra storage specifically to
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::ascii_char(' ')),
+                zero_or_more!($crate::parser::ascii_char(b' ')),
                 skip_second!(
                     $crate::parser::sep_by0(
                         $delimiter,
                         $crate::blankspace::space0_around($elem, $min_indent)
+                    ),
+                    $closing_brace
+                )
+            )
+        )
+    };
+}
+
+/// Parse zero or more elements between two braces (e.g. square braces).
+/// Elements can be optionally surrounded by spaces, and are separated by a
+/// delimiter (e.g comma-separated) with optionally a trailing delimiter.
+/// Braces and delimiters get discarded.
+#[macro_export]
+macro_rules! collection_trailing_sep {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
+        skip_first!(
+            $opening_brace,
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // roc_collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!($crate::parser::ascii_char(b' ')),
+                skip_second!(
+                    and!(
+                        $crate::parser::trailing_sep_by0(
+                            $delimiter,
+                            $crate::blankspace::space0_around($elem, $min_indent)
+                        ),
+                        $crate::blankspace::spaces0($min_indent)
                     ),
                     $closing_brace
                 )
@@ -1025,8 +1128,8 @@ macro_rules! record_field {
             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
             // (This is true in both literals and types.)
             let (opt_loc_val, state) = $crate::parser::optional(either!(
-                skip_first!(ascii_char(':'), space0_before($val_parser, $min_indent)),
-                skip_first!(ascii_char('?'), space0_before($val_parser, $min_indent))
+                skip_first!(ascii_char(b':'), space0_before($val_parser, $min_indent)),
+                skip_first!(ascii_char(b'?'), space0_before($val_parser, $min_indent))
             ))
             .parse(arena, state)?;
 
@@ -1055,10 +1158,10 @@ macro_rules! record_field {
 macro_rules! record_without_update {
     ($val_parser:expr, $min_indent:expr) => {
         collection!(
-            ascii_char('{'),
+            ascii_char(b'{'),
             loc!(record_field!($val_parser, $min_indent)),
-            ascii_char(','),
-            ascii_char('}'),
+            ascii_char(b','),
+            ascii_char(b'}'),
             $min_indent
         )
     };
@@ -1068,7 +1171,7 @@ macro_rules! record_without_update {
 macro_rules! record {
     ($val_parser:expr, $min_indent:expr) => {
         skip_first!(
-            $crate::parser::ascii_char('{'),
+            $crate::parser::ascii_char(b'{'),
             and!(
                 // You can optionally have an identifier followed by an '&' to
                 // make this a record update, e.g. { Foo.user & username: "blah" }.
@@ -1084,7 +1187,7 @@ macro_rules! record {
                         )),
                         $min_indent
                     ),
-                    $crate::parser::ascii_char('&')
+                    $crate::parser::ascii_char(b'&')
                 )),
                 loc!(skip_first!(
                     // We specifically allow space characters inside here, so that
@@ -1098,16 +1201,19 @@ macro_rules! record {
                     // We could change the AST to add extra storage specifically to
                     // support empty literals containing newlines or comments, but this
                     // does not seem worth even the tiniest regression in compiler performance.
-                    zero_or_more!($crate::parser::ascii_char(' ')),
+                    zero_or_more!($crate::parser::ascii_char(b' ')),
                     skip_second!(
-                        $crate::parser::sep_by0(
-                            $crate::parser::ascii_char(','),
-                            $crate::blankspace::space0_around(
-                                loc!(record_field!($val_parser, $min_indent)),
-                                $min_indent
-                            )
+                        and!(
+                            $crate::parser::trailing_sep_by0(
+                                $crate::parser::ascii_char(b','),
+                                $crate::blankspace::space0_around(
+                                    loc!(record_field!($val_parser, $min_indent)),
+                                    $min_indent
+                                ),
+                            ),
+                            $crate::blankspace::space0($min_indent)
                         ),
-                        $crate::parser::ascii_char('}')
+                        $crate::parser::ascii_char(b'}')
                     )
                 ))
             )

@@ -162,15 +162,20 @@ mod cli_run {
         );
     }
 
+    //    #[test]
+    //    #[serial(effect)]
+    //    fn run_effect_unoptimized() {
+    //        check_output(
+    //            &example_file("effect", "Main.roc"),
+    //            &[],
+    //            "I am Dep2.str2\n",
+    //            true,
+    //        );
+    //    }
+
     #[test]
     #[serial(multi_dep_str)]
     fn run_multi_dep_str_unoptimized() {
-        //        if true {
-        //            todo!(
-        //                "fix this test so it no longer deadlocks and hangs during monomorphization! The test never shows the error; to see the panic error, run this: cargo run run cli/tests/fixtures/multi-dep-str/Main.roc"
-        //            );
-        //        }
-
         check_output(
             &fixture_file("multi-dep-str", "Main.roc"),
             &[],
@@ -184,7 +189,7 @@ mod cli_run {
     fn run_multi_dep_str_optimized() {
         check_output(
             &fixture_file("multi-dep-str", "Main.roc"),
-            &[],
+            &["--optimize"],
             "I am Dep2.str2\n",
             true,
         );
@@ -202,11 +207,11 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(multi_dep_str)]
+    #[serial(multi_dep_thunk)]
     fn run_multi_dep_thunk_optimized() {
         check_output(
             &fixture_file("multi-dep-thunk", "Main.roc"),
-            &[],
+            &["--optimize"],
             "I am Dep2.value2\n",
             true,
         );

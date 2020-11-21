@@ -11,6 +11,14 @@ extern "C" {
 
 const REFCOUNT_1: usize = isize::MIN as usize;
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RocOrder {
+    Eq = 0,
+    Gt = 1,
+    Lt = 2,
+}
+
 //#[macro_export]
 //macro_rules! roclist {
 //    () => (
@@ -455,6 +463,33 @@ impl<T: Sized> Into<Result<T, &'static str>> for RocCallResult<T> {
                     }
 
                     let bytes = core::slice::from_raw_parts(failure, null_byte_index as usize);
+
+                    core::str::from_utf8_unchecked(bytes)
+                };
+
+                msg
+            }),
+        }
+    }
+}
+
+impl<'a, T: Sized + Copy> Into<Result<T, &'a str>> for &'a RocCallResult<T> {
+    fn into(self) -> Result<T, &'a str> {
+        use RocCallResult::*;
+
+        match self {
+            Success(value) => Ok(*value),
+            Failure(failure) => Err({
+                let msg = unsafe {
+                    let mut null_byte_index = 0;
+                    loop {
+                        if *failure.offset(null_byte_index) == 0 {
+                            break;
+                        }
+                        null_byte_index += 1;
+                    }
+
+                    let bytes = core::slice::from_raw_parts(*failure, null_byte_index as usize);
 
                     core::str::from_utf8_unchecked(bytes)
                 };

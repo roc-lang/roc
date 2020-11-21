@@ -1,31 +1,33 @@
-use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
-    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe,
-    list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, list_walk_right,
+    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
+    list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
+    list_reverse, list_set, list_single, list_sum, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, str_len, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, str_split, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, list_get_refcount_ptr,
-    refcount_is_one_comparison,
+    decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
+    PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::debug_info::{
+    AsDIScope, DICompileUnit, DIFlagsConstants, DISubprogram, DebugInfoBuilder,
+};
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
-    PointerValue, StructValue,
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
+    IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -34,7 +36,7 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
-use roc_mono::layout::{Builtin, Layout, MemoryMode};
+use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -97,6 +99,8 @@ pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
+    pub dibuilder: &'env DebugInfoBuilder<'ctx>,
+    pub compile_unit: &'env DICompileUnit<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub ptr_bytes: u32,
@@ -177,6 +181,59 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
                 length.into(),
                 false_val.into(),
             ],
+        )
+    }
+
+    pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
+        module.create_debug_info_builder(
+            true,
+            /* language */ inkwell::debug_info::DWARFSourceLanguage::C,
+            /* filename */ "roc_app",
+            /* directory */ ".",
+            /* producer */ "my llvm compiler frontend",
+            /* is_optimized */ false,
+            /* compiler command line flags */ "",
+            /* runtime_ver */ 0,
+            /* split_name */ "",
+            /* kind */ inkwell::debug_info::DWARFEmissionKind::Full,
+            /* dwo_id */ 0,
+            /* split_debug_inling */ false,
+            /* debug_info_for_profiling */ false,
+        )
+    }
+
+    pub fn new_subprogram(&self, function_name: &str) -> DISubprogram<'ctx> {
+        let dibuilder = self.dibuilder;
+        let compile_unit = self.compile_unit;
+
+        let ditype = dibuilder
+            .create_basic_type(
+                "type_name",
+                0_u64,
+                0x00,
+                inkwell::debug_info::DIFlags::PUBLIC,
+            )
+            .unwrap();
+
+        let subroutine_type = dibuilder.create_subroutine_type(
+            compile_unit.get_file(),
+            /* return type */ Some(ditype.as_type()),
+            /* parameter types */ &[],
+            inkwell::debug_info::DIFlags::PUBLIC,
+        );
+
+        dibuilder.create_function(
+            /* scope */ compile_unit.get_file().as_debug_info_scope(),
+            /* func name */ function_name,
+            /* linkage_name */ None,
+            /* file */ compile_unit.get_file(),
+            /* line_no */ 0,
+            /* DIType */ subroutine_type,
+            /* is_local_to_unit */ true,
+            /* is_definition */ true,
+            /* scope_line */ 0,
+            /* flags */ inkwell::debug_info::DIFlags::PUBLIC,
+            /* is_optimized */ false,
         )
     }
 }
@@ -362,289 +419,24 @@ pub fn construct_optimization_passes<'a>(
     (mpm, fpm)
 }
 
-/// For communication with C (tests and platforms) we need to abide by the C calling convention
-///
-/// While small values are just returned like with the fast CC, larger structures need to
-/// be written into a pointer (into the callers stack)
-enum PassVia {
-    Register,
-    Memory,
-}
-
-impl PassVia {
-    fn from_layout(ptr_bytes: u32, layout: &Layout<'_>) -> Self {
-        let stack_size = layout.stack_size(ptr_bytes);
-        let eightbyte = 8;
-
-        if stack_size > 2 * eightbyte {
-            PassVia::Memory
-        } else {
-            PassVia::Register
-        }
-    }
-}
-
-/// entry point to roc code; uses the fastcc calling convention
-pub fn build_roc_main<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
-    main_body: &roc_mono::ir::Stmt<'a>,
-) -> &'a FunctionValue<'ctx> {
-    use inkwell::types::BasicType;
-
-    let context = env.context;
-    let builder = env.builder;
-    let arena = env.arena;
-    let ptr_bytes = env.ptr_bytes;
-
-    let return_type = basic_type_from_layout(&arena, context, &layout, ptr_bytes);
-    let roc_main_fn_name = "$Test.roc_main";
-
-    // make the roc main function
-    let roc_main_fn_type = return_type.fn_type(&[], false);
-
-    // Add main to the module.
-    let roc_main_fn = env
-        .module
-        .add_function(roc_main_fn_name, roc_main_fn_type, None);
-
-    // internal function, use fast calling convention
-    roc_main_fn.set_call_conventions(FAST_CALL_CONV);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(roc_main_fn, "entry");
-
-    builder.position_at_end(basic_block);
-
-    // builds the function body (return statement included)
-    build_exp_stmt(
-        env,
-        layout_ids,
-        &mut Scope::default(),
-        roc_main_fn,
-        main_body,
-    );
-
-    env.arena.alloc(roc_main_fn)
-}
-
 pub fn promote_to_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
     layout: &Layout<'a>,
-) -> (&'static str, &'a FunctionValue<'ctx>) {
+) -> (&'static str, FunctionValue<'ctx>) {
     let fn_name = layout_ids
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
-    let wrapped = env.module.get_function(&fn_name).unwrap();
-
-    make_main_function_help(env, layout, wrapped)
-}
-
-pub fn make_main_function<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
-    main_body: &roc_mono::ir::Stmt<'a>,
-) -> (&'static str, &'a FunctionValue<'ctx>) {
-    // internal main function
-    let roc_main_fn = *build_roc_main(env, layout_ids, layout, main_body);
-
-    make_main_function_help(env, layout, roc_main_fn)
-}
-
-fn make_main_function_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
-    roc_main_fn: FunctionValue<'ctx>,
-) -> (&'static str, &'a FunctionValue<'ctx>) {
-    // build the C calling convention wrapper
-    use inkwell::types::BasicType;
-    use PassVia::*;
-
-    let context = env.context;
-    let builder = env.builder;
+    let roc_main_fn = env.module.get_function(&fn_name).unwrap();
 
     let main_fn_name = "$Test.main";
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let fields = [Layout::Builtin(Builtin::Int64), layout.clone()];
-    let main_return_layout = Layout::Struct(&fields);
-    let main_return_type = block_of_memory(context, &main_return_layout, env.ptr_bytes);
-
-    let register_or_memory = PassVia::from_layout(env.ptr_bytes, &main_return_layout);
-
-    let main_fn_type = match register_or_memory {
-        Memory => {
-            let return_value_ptr = context.i64_type().ptr_type(AddressSpace::Generic).into();
-            context.void_type().fn_type(&[return_value_ptr], false)
-        }
-        Register => main_return_type.fn_type(&[], false),
-    };
 
     // Add main to the module.
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+    let main_fn = expose_function_to_host_help(env, roc_main_fn, main_fn_name);
 
-    // our exposed main function adheres to the C calling convention
-    main_fn.set_call_conventions(C_CALL_CONV);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
-    let then_block = context.append_basic_block(main_fn, "then_block");
-    let catch_block = context.append_basic_block(main_fn, "catch_block");
-    let cont_block = context.append_basic_block(main_fn, "cont_block");
-
-    builder.position_at_end(basic_block);
-
-    let result_alloca = builder.build_alloca(main_return_type, "result");
-
-    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
-    let call_result = {
-        let call = builder.build_invoke(roc_main_fn, &[], then_block, catch_block, "call_roc_main");
-        call.set_call_convention(FAST_CALL_CONV);
-        call.try_as_basic_value().left().unwrap()
-    };
-
-    // exception handling
-    {
-        builder.position_at_end(catch_block);
-
-        let landing_pad_type = {
-            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
-            let selector_value = context.i32_type().into();
-
-            context.struct_type(&[exception_ptr, selector_value], false)
-        };
-
-        let info = builder
-            .build_catch_all_landing_pad(
-                &landing_pad_type,
-                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-                context.i8_type().ptr_type(AddressSpace::Generic),
-                "main_landing_pad",
-            )
-            .into_struct_value();
-
-        let exception_ptr = builder
-            .build_extract_value(info, 0, "exception_ptr")
-            .unwrap();
-
-        let thrown = cxa_begin_catch(env, exception_ptr);
-
-        let error_msg = {
-            let exception_type = u8_ptr;
-            let ptr = builder.build_bitcast(
-                thrown,
-                exception_type.ptr_type(AddressSpace::Generic),
-                "cast",
-            );
-
-            builder.build_load(ptr.into_pointer_value(), "error_msg")
-        };
-
-        let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
-
-        let return_value = {
-            let v1 = return_type.const_zero();
-
-            // flag is non-zero, indicating failure
-            let flag = context.i64_type().const_int(1, false);
-
-            let v2 = builder
-                .build_insert_value(v1, flag, 0, "set_error")
-                .unwrap();
-
-            let v3 = builder
-                .build_insert_value(v2, error_msg, 1, "set_exception")
-                .unwrap();
-
-            v3
-        };
-
-        // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
-        let result_alloca_bitcast = builder
-            .build_bitcast(
-                result_alloca,
-                return_type.ptr_type(AddressSpace::Generic),
-                "result_alloca_bitcast",
-            )
-            .into_pointer_value();
-
-        // store our return value
-        builder.build_store(result_alloca_bitcast, return_value);
-
-        cxa_end_catch(env);
-
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    {
-        builder.position_at_end(then_block);
-
-        let actual_return_type =
-            basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
-        let return_type =
-            context.struct_type(&[context.i64_type().into(), actual_return_type], false);
-
-        let return_value = {
-            let v1 = return_type.const_zero();
-
-            let v2 = builder
-                .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
-                .unwrap();
-            let v3 = builder
-                .build_insert_value(v2, call_result, 1, "set_call_result")
-                .unwrap();
-
-            v3
-        };
-
-        let ptr = builder.build_bitcast(
-            result_alloca,
-            return_type.ptr_type(AddressSpace::Generic),
-            "name",
-        );
-        builder.build_store(ptr.into_pointer_value(), return_value);
-
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    {
-        builder.position_at_end(cont_block);
-
-        let result = builder.build_load(result_alloca, "result");
-
-        match register_or_memory {
-            Memory => {
-                // write the result into the supplied pointer
-                let ptr_return_type = main_return_type.ptr_type(AddressSpace::Generic);
-
-                let ptr_as_int = main_fn.get_first_param().unwrap();
-
-                let ptr = builder.build_bitcast(ptr_as_int, ptr_return_type, "caller_ptr");
-
-                builder.build_store(ptr.into_pointer_value(), result);
-
-                // this is a void function, therefore return None
-                builder.build_return(None);
-            }
-            Register => {
-                // construct a normal return
-                // values are passed to the caller via registers
-                builder.build_return(Some(&result));
-            }
-        }
-    }
-
-    // MUST set the personality at the very end;
-    // doing it earlier can cause the personality to be ignored
-    let personality_func = get_gxx_personality_v0(env);
-    main_fn.set_personality_function(personality_func);
-
-    (main_fn_name, env.arena.alloc(main_fn))
+    (main_fn_name, main_fn)
 }
 
 fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
@@ -810,6 +602,38 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Literal(literal) => build_exp_literal(env, literal),
         RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
+        ForeignCall {
+            foreign_symbol,
+            arguments,
+            ret_layout,
+        } => {
+            let mut arg_vals: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(arguments.len(), env.arena);
+
+            let mut arg_types = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for arg in arguments.iter() {
+                let (value, layout) = load_symbol_and_layout(env, scope, arg);
+                arg_vals.push(value);
+                let arg_type =
+                    basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+                arg_types.push(arg_type);
+            }
+
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+            let function_type = get_fn_type(&ret_type, &arg_types);
+            let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
+
+            let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+            // this is a foreign function, use c calling convention
+            call.set_call_convention(C_CALL_CONV);
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+        }
         FunctionCall {
             call_type: ByName(name),
             full_layout,
@@ -873,7 +697,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Struct(sorted_fields) => {
             let ctx = env.context;
             let builder = env.builder;
-            let ptr_bytes = env.ptr_bytes;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -884,7 +707,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 let (field_expr, field_layout) = load_symbol_and_layout(env, scope, symbol);
-                if field_layout.stack_size(ptr_bytes) != 0 {
+                if !field_layout.is_dropped_because_empty() {
                     field_types.push(basic_type_from_layout(
                         env.arena,
                         env.context,
@@ -924,7 +747,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let it = arguments.iter();
 
             let ctx = env.context;
-            let ptr_bytes = env.ptr_bytes;
             let builder = env.builder;
 
             // Determine types
@@ -934,9 +756,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             for field_symbol in it {
                 let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if field_layout.stack_size(ptr_bytes) != 0 {
+                if !field_layout.is_dropped_because_empty() {
                     let field_type = basic_type_from_layout(
                         env.arena,
                         env.context,
@@ -989,30 +809,27 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_symbol, tag_field_layout) in
-                arguments.iter().zip(fields[*tag_id as usize].iter())
-            {
-                // note field_layout is the layout of the argument.
-                // tag_field_layout is the layout that the tag will store
-                // these are different for recursive tag unions
-                let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                let field_size = tag_field_layout.stack_size(ptr_size);
+            let tag_field_layouts = fields[*tag_id as usize];
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(env, scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
-                if field_size != 0 {
+                if !tag_field_layout.is_dropped_because_empty() {
                     let field_type =
                         basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
 
                     field_types.push(field_type);
 
                     if let Layout::RecursivePointer = tag_field_layout {
-                        let ptr = allocate_with_refcount(env, field_layout, val).into();
+                        let ptr = allocate_with_refcount(env, &tag_layout, val);
+
                         let ptr = cast_basic_basic(
                             builder,
-                            ptr,
+                            ptr.into(),
                             ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
                         );
+
                         field_vals.push(ptr);
                     } else {
                         field_vals.push(val);
@@ -1116,9 +933,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env.arena.alloc(format!("closure_field_access_{}_", index)),
                     )
                     .unwrap(),
-                (other, layout) => {
-                    unreachable!("can only index into struct layout {:?} {:?}", other, layout)
-                }
+                (other, layout) => unreachable!(
+                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+                    other, layout, index
+                ),
             }
         }
 
@@ -1222,65 +1040,99 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
-    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
-
     let len_type = env.ptr_int();
-    // bytes per element
-    let bytes_len = len_type.const_int(value_bytes, false);
 
-    // TODO fix offset
-    let offset = (env.ptr_bytes as u64).max(value_bytes);
+    let value_bytes = layout.stack_size(env.ptr_bytes);
+    let value_bytes_intvalue = len_type.const_int(value_bytes as u64, false);
+
+    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+
+    let data_ptr = allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1);
+
+    // store the value in the pointer
+    builder.build_store(data_ptr, value);
+
+    data_ptr
+}
+
+pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    number_of_data_bytes: IntValue<'ctx>,
+    initial_refcount: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
+    let len_type = env.ptr_int();
+
+    let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
 
     let ptr = {
-        let len = bytes_len;
-        let len =
-            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+        // number of bytes we will allocated
+        let number_of_bytes = builder.build_int_add(
+            len_type.const_int(extra_bytes as u64, false),
+            number_of_data_bytes,
+            "add_extra_bytes",
+        );
 
         env.builder
-            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
+            .build_array_malloc(ctx.i8_type(), number_of_bytes, "create_ptr")
             .unwrap()
 
         // TODO check if malloc returned null; if so, runtime error for OOM!
     };
 
     // We must return a pointer to the first element:
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-    let incremented = builder.build_int_add(
-        ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
-        "increment_list_ptr",
-    );
+    let data_ptr = {
+        let int_type = ptr_int(ctx, env.ptr_bytes);
+        let as_usize_ptr = cast_basic_basic(
+            env.builder,
+            ptr.into(),
+            int_type.ptr_type(AddressSpace::Generic).into(),
+        )
+        .into_pointer_value();
 
-    let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+        let index = match extra_bytes {
+            n if n == env.ptr_bytes => 1,
+            n if n == 2 * env.ptr_bytes => 2,
+            _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
+        };
 
-    // subtract ptr_size, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        incremented,
-        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
-        "refcount_ptr",
-    );
+        let index_intvalue = int_type.const_int(index, false);
 
-    let refcount_ptr = builder.build_int_to_ptr(
-        refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
-        "make ptr",
-    );
+        let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
 
-    // the refcount of a new allocation is initially 1
-    // we assume that the allocation is indeed used (dead variables are eliminated)
-    builder.build_store(
-        refcount_ptr,
-        crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes),
-    );
+        unsafe {
+            cast_basic_basic(
+                env.builder,
+                env.builder
+                    .build_in_bounds_gep(as_usize_ptr, &[index_intvalue], "get_data_ptr")
+                    .into(),
+                ptr_type.into(),
+            )
+            .into_pointer_value()
+        }
+    };
 
-    // store the value in the pointer
-    builder.build_store(list_element_ptr, value);
+    let refcount_ptr = match extra_bytes {
+        n if n == env.ptr_bytes => {
+            // the malloced pointer is the same as the refcounted pointer
+            unsafe { PointerToRefcount::from_ptr(env, ptr) }
+        }
+        n if n == 2 * env.ptr_bytes => {
+            // the refcount is stored just before the start of the actual data
+            // but in this case (because of alignment) not at the start of the malloced buffer
+            PointerToRefcount::from_ptr_to_data(env, data_ptr)
+        }
+        n => unreachable!("invalid extra_bytes {}", n),
+    };
 
-    list_element_ptr
+    // let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    refcount_ptr.set_refcount(env, initial_refcount);
+
+    data_ptr
 }
 
 fn list_literal<'a, 'ctx, 'env>(
@@ -1605,7 +1457,10 @@ pub fn load_symbol<'a, 'ctx, 'env>(
         Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+        None => panic!(
+            "There was no entry for {:?} {} in scope {:?}",
+            symbol, symbol, scope
+        ),
     }
 }
 
@@ -1846,9 +1701,22 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
 ) {
+    let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
+
+    let result = expose_function_to_host_help(env, roc_function, &c_function_name);
+
+    let subprogram = env.new_subprogram(&c_function_name);
+    result.set_subprogram(subprogram);
+}
+
+fn expose_function_to_host_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
     use inkwell::types::BasicType;
 
-    let roc_wrapper_function = make_exception_catching_wrapper(env, roc_function);
+    let roc_wrapper_function = make_exception_catcher(env, roc_function);
 
     let roc_function_type = roc_wrapper_function.get_type();
 
@@ -1859,13 +1727,13 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     argument_types.push(output_type.into());
 
     let c_function_type = env.context.void_type().fn_type(&argument_types, false);
-    let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
 
-    let c_function = env.module.add_function(
-        c_function_name.as_str(),
-        c_function_type,
-        Some(Linkage::External),
-    );
+    let c_function =
+        env.module
+            .add_function(c_function_name, c_function_type, Some(Linkage::External));
+
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
 
     // STEP 2: build the exposed function's body
     let builder = env.builder;
@@ -1874,6 +1742,23 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     let entry = context.append_basic_block(c_function, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = c_function.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        env.context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(env.context, loc);
 
     // drop the final argument, which is the pointer we write the result into
     let args = c_function.get_params();
@@ -1913,57 +1798,41 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
+
+    c_function
 }
 
-fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
+fn invoke_and_catch<'a, 'ctx, 'env, F, T>(
     env: &Env<'a, 'ctx, 'env>,
-    roc_function: FunctionValue<'ctx>,
-) -> FunctionValue<'ctx> {
-    // build the C calling convention wrapper
-
+    parent: FunctionValue<'ctx>,
+    function: F,
+    arguments: &[BasicValueEnum<'ctx>],
+    return_type: T,
+) -> BasicValueEnum<'ctx>
+where
+    F: Into<either::Either<FunctionValue<'ctx>, PointerValue<'ctx>>>,
+    T: inkwell::types::BasicType<'ctx>,
+{
     let context = env.context;
     let builder = env.builder;
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let roc_function_type = roc_function.get_type();
-    let argument_types = roc_function_type.get_param_types();
-
-    let wrapper_function_name = format!("{}_catcher", roc_function.get_name().to_str().unwrap());
-
-    let wrapper_return_type = context.struct_type(
-        &[
-            context.i64_type().into(),
-            roc_function_type.get_return_type().unwrap(),
-        ],
+    let call_result_type = context.struct_type(
+        &[context.i64_type().into(), return_type.as_basic_type_enum()],
         false,
     );
 
-    let wrapper_function_type = wrapper_return_type.fn_type(&argument_types, false);
+    let then_block = context.append_basic_block(parent, "then_block");
+    let catch_block = context.append_basic_block(parent, "catch_block");
+    let cont_block = context.append_basic_block(parent, "cont_block");
 
-    // Add main to the module.
-    let wrapper_function =
-        env.module
-            .add_function(&wrapper_function_name, wrapper_function_type, None);
-
-    // our exposed main function adheres to the C calling convention
-    wrapper_function.set_call_conventions(FAST_CALL_CONV);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(wrapper_function, "entry");
-    let then_block = context.append_basic_block(wrapper_function, "then_block");
-    let catch_block = context.append_basic_block(wrapper_function, "catch_block");
-    let cont_block = context.append_basic_block(wrapper_function, "cont_block");
-
-    builder.position_at_end(basic_block);
-
-    let result_alloca = builder.build_alloca(wrapper_return_type, "result");
+    let result_alloca = builder.build_alloca(call_result_type, "result");
 
     // invoke instead of call, so that we can catch any exeptions thrown in Roc code
-    let arguments = wrapper_function.get_params();
     let call_result = {
         let call = builder.build_invoke(
-            roc_function,
+            function,
             &arguments,
             then_block,
             catch_block,
@@ -2050,7 +1919,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         builder.position_at_end(then_block);
 
         let return_value = {
-            let v1 = wrapper_return_type.const_zero();
+            let v1 = call_result_type.const_zero();
 
             let v2 = builder
                 .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
@@ -2064,7 +1933,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 
         let ptr = builder.build_bitcast(
             result_alloca,
-            wrapper_return_type.ptr_type(AddressSpace::Generic),
+            call_result_type.ptr_type(AddressSpace::Generic),
             "name",
         );
         builder.build_store(ptr.into_pointer_value(), return_value);
@@ -2072,13 +1941,73 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         builder.build_unconditional_branch(cont_block);
     }
 
-    {
-        builder.position_at_end(cont_block);
+    builder.position_at_end(cont_block);
 
-        let result = builder.build_load(result_alloca, "result");
+    let result = builder.build_load(result_alloca, "result");
 
-        builder.build_return(Some(&result));
-    }
+    // MUST set the personality at the very end;
+    // doing it earlier can cause the personality to be ignored
+    let personality_func = get_gxx_personality_v0(env);
+    parent.set_personality_function(personality_func);
+
+    result
+}
+
+fn make_exception_catcher<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+) -> FunctionValue<'ctx> {
+    let wrapper_function_name = format!("{}_catcher", roc_function.get_name().to_str().unwrap());
+
+    make_exception_catching_wrapper(env, roc_function, &wrapper_function_name)
+}
+
+fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+    wrapper_function_name: &str,
+) -> FunctionValue<'ctx> {
+    // build the C calling convention wrapper
+
+    let context = env.context;
+    let builder = env.builder;
+
+    let roc_function_type = roc_function.get_type();
+    let argument_types = roc_function_type.get_param_types();
+
+    let wrapper_return_type = context.struct_type(
+        &[
+            context.i64_type().into(),
+            roc_function_type.get_return_type().unwrap(),
+        ],
+        false,
+    );
+
+    let wrapper_function_type = wrapper_return_type.fn_type(&argument_types, false);
+
+    // Add main to the module.
+    let wrapper_function =
+        env.module
+            .add_function(&wrapper_function_name, wrapper_function_type, None);
+
+    // our exposed main function adheres to the C calling convention
+    wrapper_function.set_call_conventions(FAST_CALL_CONV);
+
+    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
+    let arguments = wrapper_function.get_params();
+
+    let basic_block = context.append_basic_block(wrapper_function, "entry");
+    builder.position_at_end(basic_block);
+
+    let result = invoke_and_catch(
+        env,
+        wrapper_function,
+        roc_function,
+        &arguments,
+        roc_function_type.get_return_type().unwrap(),
+    );
+
+    builder.build_return(Some(&result));
 
     // MUST set the personality at the very end;
     // doing it earlier can cause the personality to be ignored
@@ -2099,6 +2028,32 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let arena = env.arena;
     let context = &env.context;
 
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    use roc_mono::ir::HostExposedLayouts;
+    match &proc.host_exposed_layouts {
+        HostExposedLayouts::NotHostExposed => {}
+        HostExposedLayouts::HostExposed { rigids: _, aliases } => {
+            for (name, layout) in aliases {
+                match layout {
+                    Layout::Closure(arguments, closure, result) => {
+                        build_closure_caller(env, &fn_name, *name, arguments, closure, result)
+                    }
+                    Layout::FunctionPointer(_arguments, _result) => {
+                        // TODO should this be considered a closure of size 0?
+                        // or do we let the host call it directly?
+                        // then we have no RocCallResult wrapping though
+                    }
+                    _ => {
+                        // TODO
+                    }
+                }
+            }
+        }
+    }
+
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
@@ -2110,14 +2065,14 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
 
-    let fn_name = layout_ids
-        .get(symbol, layout)
-        .to_symbol_string(symbol, &env.interns);
     let fn_val = env
         .module
         .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
 
     fn_val.set_call_conventions(FAST_CALL_CONV);
+
+    let subprogram = env.new_subprogram(&fn_name);
+    fn_val.set_subprogram(subprogram);
 
     if env.exposed_to_host.contains(&symbol) {
         expose_function_to_host(env, fn_val);
@@ -2126,68 +2081,120 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     fn_val
 }
 
-#[allow(dead_code)]
 pub fn build_closure_caller<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
-    closure_function: FunctionValue<'ctx>,
+    def_name: &str,
+    alias_symbol: Symbol,
+    arguments: &[Layout<'a>],
+    closure: &ClosureLayout<'a>,
+    result: &Layout<'a>,
 ) {
-    let context = env.context;
+    use inkwell::types::BasicType;
+
+    let arena = env.arena;
+    let context = &env.context;
     let builder = env.builder;
-    // asuming the closure has type `a, b, closure_data -> c`
-    // change that into `a, b, *const closure_data, *mut output -> ()`
 
-    // a function `a, b, closure_data -> RocCallResult<c>`
-    let wrapped_function = make_exception_catching_wrapper(env, closure_function);
+    // STEP 1: build function header
 
-    let closure_function_type = closure_function.get_type();
-    let wrapped_function_type = wrapped_function.get_type();
-
-    let mut arguments = closure_function_type.get_param_types();
-
-    // require that the closure data is passed by reference
-    let closure_data_type = arguments.pop().unwrap();
-    let closure_data_ptr_type = get_ptr_type(&closure_data_type, AddressSpace::Generic);
-    arguments.push(closure_data_ptr_type.into());
-
-    // require that a pointer is passed in to write the result into
-    let output_type = get_ptr_type(
-        &wrapped_function_type.get_return_type().unwrap(),
-        AddressSpace::Generic,
+    let function_name = format!(
+        "{}_{}_caller",
+        def_name,
+        alias_symbol.ident_string(&env.interns)
     );
-    arguments.push(output_type.into());
 
-    let caller_function_type = env.context.void_type().fn_type(&arguments, false);
-    let caller_function_name: String =
-        format!("{}_caller", closure_function.get_name().to_str().unwrap());
+    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
-    let caller_function = env.module.add_function(
-        caller_function_name.as_str(),
-        caller_function_type,
+    for layout in arguments {
+        argument_types.push(basic_type_from_layout(
+            arena,
+            context,
+            layout,
+            env.ptr_bytes,
+        ));
+    }
+
+    let function_pointer_type = {
+        let function_layout =
+            ClosureLayout::extend_function_layout(arena, arguments, closure.clone(), result);
+
+        // this is already a (function) pointer type
+        basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
+    };
+    argument_types.push(function_pointer_type);
+
+    let closure_argument_type = {
+        let basic_type = basic_type_from_layout(
+            arena,
+            context,
+            &closure.as_block_of_memory_layout(),
+            env.ptr_bytes,
+        );
+
+        basic_type.ptr_type(AddressSpace::Generic)
+    };
+    argument_types.push(closure_argument_type.into());
+
+    let result_type = basic_type_from_layout(arena, context, result, env.ptr_bytes);
+
+    let roc_call_result_type =
+        context.struct_type(&[context.i64_type().into(), result_type], false);
+
+    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
+    argument_types.push(output_type.into());
+
+    let function_type = context.void_type().fn_type(&argument_types, false);
+
+    let function_value = env.module.add_function(
+        function_name.as_str(),
+        function_type,
         Some(Linkage::External),
     );
 
-    caller_function.set_call_conventions(C_CALL_CONV);
+    function_value.set_call_conventions(C_CALL_CONV);
 
-    let entry = context.append_basic_block(caller_function, "entry");
+    // STEP 2: build function body
+
+    let entry = context.append_basic_block(function_value, "entry");
 
     builder.position_at_end(entry);
 
-    let mut parameters = caller_function.get_params();
-    let output = parameters.pop().unwrap();
-    let closure_data_ptr = parameters.pop().unwrap();
+    let mut parameters = function_value.get_params();
+    let output = parameters.pop().unwrap().into_pointer_value();
+    let closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
+    let function_ptr = parameters.pop().unwrap().into_pointer_value();
 
-    let closure_data =
-        builder.build_load(closure_data_ptr.into_pointer_value(), "load_closure_data");
-    parameters.push(closure_data);
+    let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
 
-    let call = builder.build_call(wrapped_function, &parameters, "call_wrapped_function");
-    call.set_call_convention(FAST_CALL_CONV);
+    let mut arguments = parameters;
+    arguments.push(closure_data);
 
-    let result = call.try_as_basic_value().left().unwrap();
+    let result = invoke_and_catch(env, function_value, function_ptr, &arguments, result_type);
 
-    builder.build_store(output.into_pointer_value(), result);
+    builder.build_store(output, result);
 
     builder.build_return(None);
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_name: String = format!(
+        "{}_{}_size",
+        def_name,
+        alias_symbol.ident_string(&env.interns)
+    );
+
+    let size_function = env.module.add_function(
+        size_function_name.as_str(),
+        size_function_type,
+        Some(Linkage::External),
+    );
+
+    let entry = context.append_basic_block(size_function, "entry");
+
+    builder.position_at_end(entry);
+
+    let size: BasicValueEnum = roc_call_result_type.size_of().unwrap().into();
+    builder.build_return(Some(&size));
 }
 
 pub fn build_proc<'a, 'ctx, 'env>(
@@ -2205,6 +2212,24 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+
+    builder.set_current_debug_location(&context, loc);
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
@@ -2340,6 +2365,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_concat(env, inplace, scope, parent, args[0], args[1])
         }
+        StrSplit => {
+            // Str.split : Str, Str -> List Str
+            debug_assert_eq!(args.len(), 2);
+
+            let inplace = get_inplace_from_layout(layout);
+
+            str_split(env, scope, parent, inplace, args[0], args[1])
+        }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
             debug_assert_eq!(args.len(), 1);
@@ -2353,6 +2386,12 @@ fn run_low_level<'a, 'ctx, 'env>(
                 "str_len_is_zero",
             );
             BasicValueEnum::IntValue(is_zero)
+        }
+        StrCountGraphemes => {
+            // Str.countGraphemes : Str -> Int
+            debug_assert_eq!(args.len(), 1);
+
+            str_count_graphemes(env, scope, parent, args[0])
         }
         ListLen => {
             // List.len : List * -> Int
@@ -2428,6 +2467,16 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_keep_if(env, inplace, parent, func, func_layout, list, list_layout)
         }
+        ListContains => {
+            // List.contains : List elem, elem -> Bool
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_contains(env, parent, elem, elem_layout, list, list_layout)
+        }
         ListWalkRight => {
             // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
             debug_assert_eq!(args.len(), 3);
@@ -2448,6 +2497,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                 default,
                 default_layout,
             )
+        }
+        ListSum => {
+            debug_assert_eq!(args.len(), 1);
+
+            let list = load_symbol(env, scope, &args[0]);
+
+            list_sum(env, parent, list, layout)
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem
@@ -2599,40 +2655,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            match (lhs_layout, rhs_layout) {
-                (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
-                    if lhs_builtin == rhs_builtin =>
-                {
-                    use roc_mono::layout::Builtin::*;
-
-                    match lhs_builtin {
-                        Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
-                            env,
-                            parent,
-                            lhs_arg.into_int_value(),
-                            lhs_layout,
-                            rhs_arg.into_int_value(),
-                            rhs_layout,
-                            op,
-                        ),
-                        Float128 | Float64 | Float32 | Float16 => build_float_binop(
-                            env,
-                            parent,
-                            lhs_arg.into_float_value(),
-                            lhs_layout,
-                            rhs_arg.into_float_value(),
-                            rhs_layout,
-                            op,
-                        ),
-                        _ => {
-                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
-                        }
-                    }
-                }
-                _ => {
-                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
-                }
-            }
+            build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
         }
         Eq => {
             debug_assert_eq!(args.len(), 2);
@@ -2768,12 +2791,8 @@ where
 
             let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
 
-            let refcount_ptr = list_get_refcount_ptr(env, list_layout, original_wrapper);
-
-            let refcount = env
-                .builder
-                .build_load(refcount_ptr, "get_refcount")
-                .into_int_value();
+            let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
+            let refcount = refcount_ptr.get_refcount(env);
 
             let comparison = refcount_is_one_comparison(env, refcount);
 
@@ -2840,35 +2859,99 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(
-            NumPowInt,
-            env,
-            &[lhs.into(), rhs.into()],
-            &bitcode::MATH_POW_INT,
-        ),
+        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::NUM_POW_INT),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
 }
 
-fn call_bitcode_fn<'a, 'ctx, 'env>(
-    op: LowLevel,
+pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Did not get return value from bitcode function {:?}",
+                fn_name
+            )
+        })
+}
+
+pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> InstructionValue<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .right()
+        .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
+}
+
+fn call_bitcode_fn_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> CallSiteValue<'ctx> {
     let fn_val = env
-                .module
-                .get_function(fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+        .module
+        .get_function(fn_name)
+        .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+
     let call = env.builder.build_call(fn_val, args, "call_builtin");
 
     call.set_call_convention(fn_val.get_call_conventions());
+    call
+}
 
-    call.try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
+pub fn build_num_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    lhs_arg: BasicValueEnum<'ctx>,
+    lhs_layout: &Layout<'a>,
+    rhs_arg: BasicValueEnum<'ctx>,
+    rhs_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    match (lhs_layout, rhs_layout) {
+        (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+            if lhs_builtin == rhs_builtin =>
+        {
+            use roc_mono::layout::Builtin::*;
+
+            match lhs_builtin {
+                Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_int_value(),
+                    lhs_layout,
+                    rhs_arg.into_int_value(),
+                    rhs_layout,
+                    op,
+                ),
+                Float128 | Float64 | Float32 | Float16 => build_float_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_float_value(),
+                    lhs_layout,
+                    rhs_arg.into_float_value(),
+                    rhs_layout,
+                    op,
+                ),
+                _ => {
+                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
+                }
+            }
+        }
+        _ => {
+            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
+        }
+    }
 }
 
 fn build_float_binop<'a, 'ctx, 'env>(
@@ -2893,8 +2976,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
-                    .into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -2915,8 +2997,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
-                    .into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -3045,10 +3126,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::MATH_IS_FINITE),
-        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::MATH_ATAN),
-        NumAcos => call_bitcode_fn(NumAcos, env, &[arg.into()], &bitcode::MATH_ACOS),
-        NumAsin => call_bitcode_fn(NumAsin, env, &[arg.into()], &bitcode::MATH_ASIN),
+        NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE),
+        NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN),
+        NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS),
+        NumAsin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ASIN),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
@@ -3227,6 +3308,28 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
 
     call.set_call_convention(C_CALL_CONV);
     call.try_as_basic_value().left().unwrap()
+}
+
+fn get_foreign_symbol<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    foreign_symbol: roc_module::ident::ForeignSymbol,
+    function_type: FunctionType<'ctx>,
+) -> FunctionValue<'ctx> {
+    let module = env.module;
+
+    match module.get_function(foreign_symbol.as_str()) {
+        Some(gvalue) => gvalue,
+        None => {
+            let foreign_function = module.add_function(
+                foreign_symbol.as_str(),
+                function_type,
+                Some(Linkage::External),
+            );
+            foreign_function.set_call_conventions(C_CALL_CONV);
+
+            foreign_function
+        }
+    }
 }
 
 fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {

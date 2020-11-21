@@ -13,13 +13,15 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, ModuleName};
+use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
-use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
+use roc_parse::ast::{
+    self, Attempting, ExposesEntry, ImportsEntry, PlatformHeader, TypeAnnotation, TypedIdent,
+};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
@@ -27,7 +29,7 @@ use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, Type};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -40,6 +42,9 @@ use std::time::{Duration, SystemTime};
 
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
+
+/// Roc-Config file name
+const PKG_CONFIG_FILE_NAME: &str = "Pkg-Config";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
@@ -75,10 +80,18 @@ const PHASES: [Phase; 6] = [
     Phase::MakeSpecializations,
 ];
 
+#[derive(Debug)]
+enum Status {
+    NotStarted,
+    Pending,
+    Done,
+}
+
 #[derive(Default, Debug)]
 struct Dependencies {
     waiting_for: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
     notifies: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
+    status: MutMap<(ModuleId, Phase), Status>,
 }
 
 impl Dependencies {
@@ -121,18 +134,68 @@ impl Dependencies {
             }
         }
 
+        self.add_to_status(module_id, goal_phase);
+
         let mut output = MutSet::default();
 
         // all the dependencies can be loaded
         for dep in dependencies {
-            output.insert((*dep, LoadHeader));
+            // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
+            if !format!("{:?}", dep).contains("Effect") {
+                output.insert((*dep, LoadHeader));
+            }
         }
 
         output
     }
 
+    pub fn add_platform_module(
+        &mut self,
+        module_id: ModuleId,
+        dependencies: &MutSet<ModuleId>,
+        goal_phase: Phase,
+    ) -> MutSet<(ModuleId, Phase)> {
+        // add dependencies for self
+        // phase i + 1 of a file always depends on phase i being completed
+        {
+            let mut i = 2;
+
+            // platform modules should only start at CanonicalizeAndConstrain
+            debug_assert!(PHASES[i] == Phase::CanonicalizeAndConstrain);
+            while PHASES[i] < goal_phase {
+                self.add_dependency_help(module_id, module_id, PHASES[i + 1], PHASES[i]);
+                i += 1;
+            }
+        }
+
+        self.add_to_status(module_id, goal_phase);
+
+        let mut output = MutSet::default();
+
+        // all the dependencies can be loaded
+        for dep in dependencies {
+            output.insert((*dep, Phase::LoadHeader));
+        }
+
+        output
+    }
+
+    fn add_to_status(&mut self, module_id: ModuleId, goal_phase: Phase) {
+        for phase in PHASES.iter() {
+            if *phase > goal_phase {
+                break;
+            }
+
+            if let Vacant(entry) = self.status.entry((module_id, *phase)) {
+                entry.insert(Status::NotStarted);
+            }
+        }
+    }
+
     /// Propagate a notification, return (module, phase) pairs that can make progress
     pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
+        self.status.insert((module_id, phase), Status::Done);
+
         let mut output = MutSet::default();
 
         let key = (module_id, phase);
@@ -192,7 +255,18 @@ impl Dependencies {
     fn solved_all(&self) -> bool {
         debug_assert_eq!(self.notifies.is_empty(), self.waiting_for.is_empty());
 
-        self.notifies.is_empty()
+        for status in self.status.values() {
+            match status {
+                Status::Done => {
+                    continue;
+                }
+                _ => {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -204,7 +278,6 @@ struct ModuleCache<'a> {
     /// Phases
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
-    canonicalized: MutMap<ModuleId, CanonicalizedModule<'a>>,
     aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
@@ -220,79 +293,117 @@ struct ModuleCache<'a> {
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
-fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
+fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
-    match phase {
-        Phase::LoadHeader => {
-            let dep_name = state
-                .module_cache
-                .module_names
-                .remove(&module_id)
-                .expect("module id is present");
 
-            BuildTask::LoadModule {
-                module_name: dep_name,
-                // Provide mutexes of ModuleIds and IdentIds by module,
-                // so other modules can populate them as they load.
-                module_ids: Arc::clone(&state.arc_modules),
-                ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+    match state.dependencies.status.get_mut(&(module_id, phase)) {
+        Some(current @ Status::NotStarted) => {
+            // start this phase!
+            *current = Status::Pending;
+        }
+        Some(Status::Pending) => {
+            // don't start this task again!
+            return vec![];
+        }
+        Some(Status::Done) => {
+            // don't start this task again, but tell those waiting for it they can continue
+            return state
+                .dependencies
+                .notify(module_id, phase)
+                .into_iter()
+                .map(|(module_id, phase)| start_phase(module_id, phase, state))
+                .flatten()
+                .collect();
+        }
+        None => match phase {
+            Phase::LoadHeader => {
+                // this is fine, mark header loading as pending
+                state
+                    .dependencies
+                    .status
+                    .insert((module_id, Phase::LoadHeader), Status::Pending);
             }
-        }
-        Phase::Parse => {
-            // parse the file
-            let header = state.module_cache.headers.remove(&module_id).unwrap();
+            _ => unreachable!(
+                "Pair {:?} is not in dependencies.status, that should never happen!",
+                (module_id, phase)
+            ),
+        },
+    }
 
-            BuildTask::Parse { header }
-        }
-        Phase::CanonicalizeAndConstrain => {
-            // canonicalize the file
-            let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
+    let task = {
+        match phase {
+            Phase::LoadHeader => {
+                let dep_name = state
+                    .module_cache
+                    .module_names
+                    .remove(&module_id)
+                    .expect("module id is present");
 
-            let deps_by_name = &parsed.deps_by_name;
-            let num_deps = deps_by_name.len();
-            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
-
-            let State {
-                ident_ids_by_module,
-                ..
-            } = &state;
-
-            {
-                let ident_ids_by_module = (*ident_ids_by_module).lock();
-
-                // Populate dep_idents with each of their IdentIds,
-                // which we'll need during canonicalization to translate
-                // identifier strings into IdentIds, which we need to build Symbols.
-                // We only include the modules we care about (the ones we import).
-                //
-                // At the end of this loop, dep_idents contains all the information to
-                // resolve a symbol from another module: if it's in here, that means
-                // we have both imported the module and the ident was exported by that mdoule.
-                for dep_id in deps_by_name.values() {
-                    // We already verified that these are all present,
-                    // so unwrapping should always succeed here.
-                    let idents = ident_ids_by_module.get(&dep_id).unwrap();
-
-                    dep_idents.insert(*dep_id, idents.clone());
+                BuildTask::LoadModule {
+                    module_name: dep_name,
+                    // Provide mutexes of ModuleIds and IdentIds by module,
+                    // so other modules can populate them as they load.
+                    module_ids: Arc::clone(&state.arc_modules),
+                    ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                    mode: state.stdlib.mode,
                 }
             }
+            Phase::Parse => {
+                // parse the file
+                let header = state.module_cache.headers.remove(&module_id).unwrap();
 
-            // Clone the module_ids we'll need for canonicalization.
-            // This should be small, and cloning it should be quick.
-            // We release the lock as soon as we're done cloning, so we don't have
-            // to lock the global module_ids while canonicalizing any given module.
-            let module_ids = Arc::clone(&state.arc_modules);
-            let module_ids = { (*module_ids).lock().clone() };
+                BuildTask::Parse { header }
+            }
+            Phase::CanonicalizeAndConstrain => {
+                // canonicalize the file
+                let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
 
-            let exposed_symbols = state
-                .exposed_symbols_by_module
-                .remove(&module_id)
-                .expect("Could not find listener ID in exposed_symbols_by_module");
+                let deps_by_name = &parsed.deps_by_name;
+                let num_deps = deps_by_name.len();
+                let mut dep_idents: MutMap<ModuleId, IdentIds> =
+                    IdentIds::exposed_builtins(num_deps);
 
-            let mut aliases = MutMap::default();
+                let State {
+                    ident_ids_by_module,
+                    ..
+                } = &state;
 
-            for imported in parsed.imported_modules.iter() {
-                match state.module_cache.aliases.get(imported) {
+                {
+                    let ident_ids_by_module = (*ident_ids_by_module).lock();
+
+                    // Populate dep_idents with each of their IdentIds,
+                    // which we'll need during canonicalization to translate
+                    // identifier strings into IdentIds, which we need to build Symbols.
+                    // We only include the modules we care about (the ones we import).
+                    //
+                    // At the end of this loop, dep_idents contains all the information to
+                    // resolve a symbol from another module: if it's in here, that means
+                    // we have both imported the module and the ident was exported by that mdoule.
+                    for dep_id in deps_by_name.values() {
+                        // We already verified that these are all present,
+                        // so unwrapping should always succeed here.
+                        let idents = ident_ids_by_module.get(&dep_id).unwrap();
+
+                        dep_idents.insert(*dep_id, idents.clone());
+                    }
+                }
+
+                // Clone the module_ids we'll need for canonicalization.
+                // This should be small, and cloning it should be quick.
+                // We release the lock as soon as we're done cloning, so we don't have
+                // to lock the global module_ids while canonicalizing any given module.
+                let module_ids = Arc::clone(&state.arc_modules);
+                let module_ids = { (*module_ids).lock().clone() };
+
+                let exposed_symbols = state
+                    .exposed_symbols_by_module
+                    .remove(&module_id)
+                    .expect("Could not find listener ID in exposed_symbols_by_module");
+
+                let mut aliases = MutMap::default();
+
+                for imported in parsed.imported_modules.iter() {
+                    match state.module_cache.aliases.get(imported) {
                     None => unreachable!(
                         "imported module {:?} did not register its aliases, so {:?} cannot use them",
                         imported,
@@ -303,97 +414,102 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                         aliases.extend(new.iter().map(|(s, a)| (*s, a.clone())));
                     }
                 }
+                }
+
+                BuildTask::CanonicalizeAndConstrain {
+                    parsed,
+                    dep_idents,
+                    exposed_symbols,
+                    module_ids,
+                    mode: state.stdlib.mode,
+                    aliases,
+                }
             }
 
-            BuildTask::CanonicalizeAndConstrain {
-                parsed,
-                dep_idents,
-                exposed_symbols,
-                module_ids,
-                mode: state.stdlib.mode,
-                aliases,
+            Phase::SolveTypes => {
+                let constrained = state.module_cache.constrained.remove(&module_id).unwrap();
+
+                let ConstrainedModule {
+                    module,
+                    ident_ids,
+                    module_timing,
+                    constraint,
+                    var_store,
+                    imported_modules,
+                    declarations,
+                    ..
+                } = constrained;
+
+                BuildTask::solve_module(
+                    module,
+                    ident_ids,
+                    module_timing,
+                    constraint,
+                    var_store,
+                    imported_modules,
+                    &mut state.exposed_types,
+                    &state.stdlib,
+                    declarations,
+                )
+            }
+            Phase::FindSpecializations => {
+                let typechecked = state.module_cache.typechecked.remove(&module_id).unwrap();
+
+                let TypeCheckedModule {
+                    layout_cache,
+                    module_id,
+                    module_timing,
+                    solved_subs,
+                    decls,
+                    ident_ids,
+                } = typechecked;
+
+                BuildTask::BuildPendingSpecializations {
+                    layout_cache,
+                    module_id,
+                    module_timing,
+                    solved_subs,
+                    decls,
+                    ident_ids,
+                    exposed_to_host: state.exposed_to_host.clone(),
+                }
+            }
+            Phase::MakeSpecializations => {
+                let found_specializations = state
+                    .module_cache
+                    .found_specializations
+                    .remove(&module_id)
+                    .unwrap();
+
+                let specializations_we_must_make = state
+                    .module_cache
+                    .external_specializations_requested
+                    .remove(&module_id)
+                    .unwrap_or_default();
+
+                let FoundSpecializationsModule {
+                    module_id,
+                    ident_ids,
+                    subs,
+                    procs,
+                    layout_cache,
+                    module_timing,
+                } = found_specializations;
+
+                BuildTask::MakeSpecializations {
+                    module_id,
+                    ident_ids,
+                    subs,
+                    procs,
+                    layout_cache,
+                    specializations_we_must_make,
+                    module_timing,
+                }
             }
         }
+    };
 
-        Phase::SolveTypes => {
-            let constrained = state.module_cache.constrained.remove(&module_id).unwrap();
-
-            let ConstrainedModule {
-                module,
-                ident_ids,
-                module_timing,
-                constraint,
-                var_store,
-                imported_modules,
-                declarations,
-                ..
-            } = constrained;
-
-            BuildTask::solve_module(
-                module,
-                ident_ids,
-                module_timing,
-                constraint,
-                var_store,
-                imported_modules,
-                &mut state.exposed_types,
-                &state.stdlib,
-                declarations,
-            )
-        }
-        Phase::FindSpecializations => {
-            let typechecked = state.module_cache.typechecked.remove(&module_id).unwrap();
-
-            let TypeCheckedModule {
-                layout_cache,
-                module_id,
-                module_timing,
-                solved_subs,
-                decls,
-                ident_ids,
-            } = typechecked;
-
-            BuildTask::BuildPendingSpecializations {
-                layout_cache,
-                module_id,
-                module_timing,
-                solved_subs,
-                decls,
-                ident_ids,
-                exposed_to_host: state.exposed_to_host.clone(),
-            }
-        }
-        Phase::MakeSpecializations => {
-            let found_specializations = state
-                .module_cache
-                .found_specializations
-                .remove(&module_id)
-                .unwrap();
-
-            let specializations_we_must_make = state
-                .module_cache
-                .external_specializations_requested
-                .remove(&module_id)
-                .unwrap_or_default();
-
-            let FoundSpecializationsModule {
-                module_id,
-                ident_ids,
-                subs,
-                procs,
-                layout_cache,
-            } = found_specializations;
-
-            BuildTask::MakeSpecializations {
-                module_id,
-                ident_ids,
-                subs,
-                procs,
-                layout_cache,
-                specializations_we_must_make,
-            }
-        }
-    }
+    vec![task]
 }
 
 #[derive(Debug)]
@@ -457,6 +573,7 @@ pub struct FoundSpecializationsModule<'a> {
     pub layout_cache: LayoutCache<'a>,
     pub procs: Procs<'a>,
     pub subs: Subs,
+    pub module_timing: ModuleTiming,
 }
 
 #[derive(Debug)]
@@ -471,6 +588,12 @@ pub struct MonomorphizedModule<'a> {
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+}
+
+#[derive(Debug, Default)]
+pub struct VariablySizedLayouts<'a> {
+    rigids: MutMap<Lowercase, Layout<'a>>,
+    aliases: MutMap<Symbol, Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -488,17 +611,16 @@ struct ParsedModule<'a> {
 }
 
 #[derive(Debug)]
-struct CanonicalizedModule<'a> {
-    module: Module,
-    src: &'a str,
-    module_timing: ModuleTiming,
-}
-
-#[derive(Debug)]
 enum Msg<'a> {
+    Many(Vec<Msg<'a>>),
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
+        constrained_module: ConstrainedModule,
+        canonicalization_problems: Vec<roc_problem::can::Problem>,
+        module_docs: ModuleDocumentation,
+    },
+    MadeEffectModule {
         constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
@@ -523,6 +645,7 @@ enum Msg<'a> {
         procs: Procs<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
+        module_timing: ModuleTiming,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -531,6 +654,7 @@ enum Msg<'a> {
         external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
+        module_timing: ModuleTiming,
         subs: Subs,
     },
 
@@ -563,7 +687,7 @@ struct State<'a> {
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<ModuleIds>>,
 
-    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 
     /// All the dependent modules we've already begun loading -
     /// meaning we should never kick off another load_module on them!
@@ -618,6 +742,8 @@ pub struct ModuleTiming {
     pub canonicalize: Duration,
     pub constrain: Duration,
     pub solve: Duration,
+    pub find_specializations: Duration,
+    pub make_specializations: Duration,
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
@@ -626,6 +752,21 @@ pub struct ModuleTiming {
 }
 
 impl ModuleTiming {
+    pub fn new(start_time: SystemTime) -> Self {
+        ModuleTiming {
+            read_roc_file: Duration::default(),
+            parse_header: Duration::default(),
+            parse_body: Duration::default(),
+            canonicalize: Duration::default(),
+            constrain: Duration::default(),
+            solve: Duration::default(),
+            find_specializations: Duration::default(),
+            make_specializations: Duration::default(),
+            start_time,
+            end_time: start_time, // just for now; we'll overwrite this at the end
+        }
+    }
+
     pub fn total(&self) -> Duration {
         self.end_time.duration_since(self.start_time).unwrap()
     }
@@ -639,6 +780,8 @@ impl ModuleTiming {
             canonicalize,
             constrain,
             solve,
+            find_specializations,
+            make_specializations,
             start_time,
             end_time,
         } = self;
@@ -647,12 +790,16 @@ impl ModuleTiming {
             .duration_since(*start_time)
             .ok()
             .and_then(|t| {
-                t.checked_sub(*solve).and_then(|t| {
-                    t.checked_sub(*constrain).and_then(|t| {
-                        t.checked_sub(*canonicalize).and_then(|t| {
-                            t.checked_sub(*parse_body).and_then(|t| {
-                                t.checked_sub(*parse_header)
-                                    .and_then(|t| t.checked_sub(*read_roc_file))
+                t.checked_sub(*make_specializations).and_then(|t| {
+                    t.checked_sub(*find_specializations).and_then(|t| {
+                        t.checked_sub(*solve).and_then(|t| {
+                            t.checked_sub(*constrain).and_then(|t| {
+                                t.checked_sub(*canonicalize).and_then(|t| {
+                                    t.checked_sub(*parse_body).and_then(|t| {
+                                        t.checked_sub(*parse_header)
+                                            .and_then(|t| t.checked_sub(*read_roc_file))
+                                    })
+                                })
                             })
                         })
                     })
@@ -668,7 +815,13 @@ enum BuildTask<'a> {
     LoadModule {
         module_name: ModuleName,
         module_ids: Arc<Mutex<ModuleIds>>,
-        ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        mode: Mode,
+    },
+    LoadPkgConfig {
+        module_ids: Arc<Mutex<ModuleIds>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        mode: Mode,
     },
     Parse {
         header: ModuleHeader<'a>,
@@ -676,7 +829,7 @@ enum BuildTask<'a> {
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
-        dep_idents: IdentIdsByModule,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         mode: Mode,
         exposed_symbols: MutSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
@@ -706,6 +859,7 @@ enum BuildTask<'a> {
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: ExternalSpecializations,
+        module_timing: ModuleTiming,
     },
 }
 
@@ -724,6 +878,7 @@ pub enum LoadingProblem {
         filename: PathBuf,
         fail: Fail,
     },
+    UnexpectedHeader(String),
     MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
@@ -736,7 +891,6 @@ pub enum Phases {
     Monomorphize,
 }
 
-type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
 type MsgSender<'a> = Sender<Msg<'a>>;
 
 /// Add a task to the queue, and notify all the listeners.
@@ -765,7 +919,7 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
 
     match load(
         arena,
@@ -789,7 +943,7 @@ pub fn load_and_monomorphize<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
 
     match load(
         arena,
@@ -814,7 +968,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, src)?;
+    let load_start = LoadStart::from_str(arena, filename, src, stdlib.mode)?;
 
     match load(
         arena,
@@ -831,13 +985,17 @@ pub fn load_and_monomorphize_from_str<'a>(
 
 struct LoadStart<'a> {
     pub arc_modules: Arc<Mutex<ModuleIds>>,
-    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     pub root_id: ModuleId,
     pub root_msg: Msg<'a>,
 }
 
 impl<'a> LoadStart<'a> {
-    pub fn from_path(arena: &'a Bump, filename: PathBuf) -> Result<Self, LoadingProblem> {
+    pub fn from_path(
+        arena: &'a Bump,
+        filename: PathBuf,
+        mode: Mode,
+    ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -852,6 +1010,7 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
+                mode,
             )?
         };
 
@@ -867,6 +1026,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         src: &'a str,
+        mode: Mode,
     ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -883,6 +1043,7 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
+                mode,
             )?
         };
 
@@ -1182,6 +1343,21 @@ where
     .unwrap()
 }
 
+fn start_tasks<'a>(
+    work: MutSet<(ModuleId, Phase)>,
+    state: &mut State<'a>,
+    injector: &Injector<BuildTask<'a>>,
+    worker_listeners: &'a [Sender<WorkerMsg>],
+) -> Result<(), LoadingProblem> {
+    for (module_id, phase) in work {
+        for task in start_phase(module_id, phase, state) {
+            enqueue_task(&injector, worker_listeners, task)?
+        }
+    }
+
+    Ok(())
+}
+
 fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
@@ -1193,6 +1369,16 @@ fn update<'a>(
     use self::Msg::*;
 
     match msg {
+        Many(messages) => {
+            // enqueue all these message
+            for msg in messages {
+                msg_tx
+                    .send(msg)
+                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+            }
+
+            Ok(state)
+        }
         Header(header) => {
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
@@ -1227,19 +1413,11 @@ fn update<'a>(
 
             state.module_cache.headers.insert(header.module_id, header);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             let work = state.dependencies.notify(home, Phase::LoadHeader);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1255,14 +1433,11 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             Ok(state)
         }
+
         CanonicalizedAndConstrained {
             constrained_module,
             canonicalization_problems,
@@ -1294,11 +1469,54 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
-                enqueue_task(&injector, worker_listeners, task)?
-            }
+            Ok(state)
+        }
+        MadeEffectModule {
+            constrained_module,
+            canonicalization_problems,
+            module_docs,
+        } => {
+            let module_id = constrained_module.module.module_id;
+            log!("made effect module for {:?}", module_id);
+            state
+                .module_cache
+                .can_problems
+                .insert(module_id, canonicalization_problems);
+
+            state
+                .module_cache
+                .documentation
+                .insert(module_id, module_docs);
+
+            state
+                .module_cache
+                .aliases
+                .insert(module_id, constrained_module.module.aliases.clone());
+
+            state
+                .module_cache
+                .constrained
+                .insert(module_id, constrained_module);
+
+            let mut work = state.dependencies.add_platform_module(
+                module_id,
+                &MutSet::default(),
+                state.goal_phase,
+            );
+
+            work.extend(state.dependencies.notify(module_id, Phase::LoadHeader));
+
+            work.extend(state.dependencies.notify(module_id, Phase::Parse));
+
+            work.extend(
+                state
+                    .dependencies
+                    .notify(module_id, Phase::CanonicalizeAndConstrain),
+            );
+
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1385,11 +1603,7 @@ fn update<'a>(
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                 }
 
-                for (module_id, phase) in work {
-                    let task = start_phase(module_id, phase, &mut state);
-
-                    enqueue_task(&injector, worker_listeners, task)?
-                }
+                start_tasks(work, &mut state, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -1401,6 +1615,7 @@ fn update<'a>(
             ident_ids,
             layout_cache,
             problems: _,
+            module_timing,
         } => {
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
@@ -1424,6 +1639,7 @@ fn update<'a>(
                 procs,
                 ident_ids,
                 subs,
+                module_timing,
             };
 
             state
@@ -1435,11 +1651,8 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
 
-                enqueue_task(&injector, worker_listeners, task)?
-            }
             Ok(state)
         }
         MadeSpecializations {
@@ -1449,11 +1662,16 @@ fn update<'a>(
             procedures,
             external_specializations_requested,
             problems,
+            module_timing,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
 
             state.module_cache.mono_problems.insert(module_id, problems);
+
+            state.procedures.extend(procedures);
+            state.constrained_ident_ids.insert(module_id, ident_ids);
+            state.timings.insert(module_id, module_timing);
 
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
@@ -1468,21 +1686,27 @@ fn update<'a>(
                 existing.extend(requested);
             }
 
-            state.procedures.extend(procedures);
-
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
-            state.constrained_ident_ids.insert(module_id, ident_ids);
-
-            if work.is_empty()
-                && state.dependencies.solved_all()
-                && state.goal_phase == Phase::MakeSpecializations
-            {
-                // state.timings.insert(module_id, module_timing);
+            if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
+                debug_assert!(work.is_empty());
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
+
+                // display the mono IR of the module, for debug purposes
+                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
+                    let procs_string = state
+                        .procedures
+                        .values()
+                        .map(|proc| proc.to_pretty(200))
+                        .collect::<Vec<_>>();
+
+                    let result = procs_string.join("\n");
+
+                    println!("{}", result);
+                }
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
@@ -1496,11 +1720,7 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
-                for (module_id, phase) in work {
-                    let task = start_phase(module_id, phase, &mut state);
-
-                    enqueue_task(&injector, worker_listeners, task)?
-                }
+                start_tasks(work, &mut state, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -1556,7 +1776,6 @@ fn finish_specialization<'a>(
         subs,
         interns,
         procedures,
-        // src: src.into(),
         sources,
         timings: state.timings,
     }
@@ -1598,13 +1817,82 @@ fn finish<'a>(
     }
 }
 
+/// Load a PkgConfig.roc file
+fn load_pkg_config<'a>(
+    arena: &'a Bump,
+    src_dir: &Path,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
+) -> Result<Msg<'a>, LoadingProblem> {
+    let module_start_time = SystemTime::now();
+
+    let mut filename = PathBuf::from(src_dir);
+
+    filename.push("platform");
+    filename.push(PKG_CONFIG_FILE_NAME);
+
+    // End with .roc
+    filename.set_extension(ROC_FILE_EXTENSION);
+
+    let file_io_start = SystemTime::now();
+    let file = fs::read(&filename);
+    let file_io_duration = file_io_start.elapsed().unwrap();
+
+    match file {
+        Ok(bytes) => {
+            let parse_start = SystemTime::now();
+            let parse_state = parser::State::new(arena.alloc(bytes), Attempting::Module);
+            let parsed = roc_parse::module::header().parse(&arena, parse_state);
+            let parse_header_duration = parse_start.elapsed().unwrap();
+
+            // Insert the first entries for this module's timings
+            let mut module_timing = ModuleTiming::new(module_start_time);
+
+            module_timing.read_roc_file = file_io_duration;
+            module_timing.parse_header = parse_header_duration;
+
+            match parsed {
+                Ok((ast::Module::Interface { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got Interface with header\n{:?}",
+                        header
+                    )))
+                }
+                Ok((ast::Module::App { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got App with header\n{:?}",
+                        header
+                    )))
+                }
+                Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+                    arena,
+                    module_ids,
+                    ident_ids_by_module,
+                    mode,
+                    header,
+                    module_timing,
+                )
+                .map(|x| x.1),
+                Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+            }
+        }
+
+        Err(err) => Err(LoadingProblem::FileProblem {
+            filename,
+            error: err.kind(),
+        }),
+    }
+}
+
 /// Load a module by its module name, rather than by its filename
 fn load_module<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     module_name: ModuleName,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let module_start_time = SystemTime::now();
     let mut filename = PathBuf::new();
@@ -1625,6 +1913,7 @@ fn load_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_start_time,
+        mode,
     )
 }
 
@@ -1654,12 +1943,14 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
     src_bytes: &'a [u8],
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
@@ -1669,16 +1960,7 @@ fn parse_header<'a>(
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
-    let mut module_timing = ModuleTiming {
-        read_roc_file: Duration::default(),
-        parse_header: Duration::default(),
-        parse_body: Duration::default(),
-        canonicalize: Duration::default(),
-        constrain: Duration::default(),
-        solve: Duration::default(),
-        start_time,
-        end_time: start_time, // just for now; we'll overwrite this at the end
-    };
+    let mut module_timing = ModuleTiming::new(start_time);
 
     module_timing.read_roc_file = read_file_duration;
     module_timing.parse_header = parse_header_duration;
@@ -1694,23 +1976,52 @@ fn parse_header<'a>(
             ident_ids_by_module,
             module_timing,
         )),
-        Ok((ast::Module::App { header }, parse_state)) => Ok(send_header(
-            header.name,
-            filename,
-            header.provides.into_bump_slice(),
-            header.imports.into_bump_slice(),
-            parse_state,
+        Ok((ast::Module::App { header }, parse_state)) => {
+            let mut pkg_config_dir = filename.clone();
+            pkg_config_dir.pop();
+
+            let (module_id, app_module_header_msg) = send_header(
+                header.name,
+                filename,
+                header.provides.into_bump_slice(),
+                header.imports.into_bump_slice(),
+                parse_state,
+                module_ids.clone(),
+                ident_ids_by_module.clone(),
+                module_timing,
+            );
+
+            // check whether we can find a Pkg-Config.roc file
+            let mut pkg_config_roc = pkg_config_dir.clone();
+            pkg_config_roc.push("platform");
+            pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
+            pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
+
+            if pkg_config_roc.as_path().exists() {
+                let load_pkg_config_msg = load_pkg_config(
+                    arena,
+                    &pkg_config_dir,
+                    module_ids,
+                    ident_ids_by_module,
+                    mode,
+                )?;
+
+                Ok((
+                    module_id,
+                    Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
+                ))
+            } else {
+                Ok((module_id, app_module_header_msg))
+            }
+        }
+        Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+            arena,
             module_ids,
             ident_ids_by_module,
+            mode,
+            header,
             module_timing,
-        )),
-        Ok((ast::Module::Platform { header }, parse_state)) => {
-            todo!(
-                "TODO load a platform with {:?} and {:?}",
-                header,
-                parse_state
-            );
-        }
+        ),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }
@@ -1720,8 +2031,9 @@ fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
@@ -1734,6 +2046,7 @@ fn load_filename<'a>(
             filename,
             module_ids,
             ident_ids_by_module,
+            mode,
             arena.alloc(bytes),
             module_start_time,
         ),
@@ -1751,8 +2064,9 @@ fn load_from_str<'a>(
     filename: PathBuf,
     src: &'a str,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
+    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
     let file_io_duration = file_io_start.elapsed().unwrap();
@@ -1763,6 +2077,7 @@ fn load_from_str<'a>(
         filename,
         module_ids,
         ident_ids_by_module,
+        mode,
         src.as_bytes(),
         module_start_time,
     )
@@ -1776,7 +2091,7 @@ fn send_header<'a>(
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let declared_name: ModuleName = name.value.as_str().into();
@@ -2015,10 +2330,275 @@ fn run_solve<'a>(
     }
 }
 
+fn fabricate_effects_module<'a>(
+    arena: &'a Bump,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
+    header: PlatformHeader<'a>,
+    module_timing: ModuleTiming,
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    let num_exposes = header.provides.len() + 1;
+    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
+
+    let module_id: ModuleId;
+
+    let PlatformHeader { effects, .. } = header;
+    let effect_entries = unpack_exposes_entries(arena, &effects.entries);
+    let name = effects.type_name;
+    let declared_name: ModuleName = name.into();
+
+    let hardcoded_effect_symbols = {
+        let mut functions: Vec<_> = crate::effect_module::BUILTIN_EFFECT_FUNCTIONS
+            .iter()
+            .map(|x| x.0)
+            .collect();
+        functions.push(name);
+
+        functions
+    };
+
+    let exposed_ident_ids = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        module_id = module_ids.get_or_insert(&declared_name.as_inline_str());
+
+        // Ensure this module has an entry in the exposed_ident_ids map.
+        ident_ids_by_module
+            .entry(module_id)
+            .or_insert_with(IdentIds::default);
+
+        let ident_ids = ident_ids_by_module.get_mut(&module_id).unwrap();
+
+        // Generate IdentIds entries for all values this module exposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        for (loc_exposed, _) in effect_entries.iter() {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.into());
+            let symbol = Symbol::new(module_id, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        for hardcoded in hardcoded_effect_symbols {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&hardcoded.into());
+            let symbol = Symbol::new(module_id, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        if cfg!(debug_assertions) {
+            module_id.register_debug_idents(&ident_ids);
+        }
+
+        ident_ids.clone()
+    };
+
+    // a platform module has no dependencies, hence empty
+    let dep_idents: MutMap<ModuleId, IdentIds> = IdentIds::exposed_builtins(0);
+
+    let mut var_store = VarStore::default();
+
+    let module_ids = { (*module_ids).lock().clone() };
+
+    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
+    let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
+
+    let effect_symbol = scope
+        .introduce(
+            name.into(),
+            &can_env.exposed_ident_ids,
+            &mut can_env.ident_ids,
+            Region::zero(),
+        )
+        .unwrap();
+
+    let effect_tag_name = TagName::Private(effect_symbol);
+
+    let mut aliases = MutMap::default();
+    let alias = {
+        let a_var = var_store.fresh();
+
+        let actual = crate::effect_module::build_effect_actual(
+            effect_tag_name,
+            Type::Variable(a_var),
+            &mut var_store,
+        );
+
+        scope.add_alias(
+            effect_symbol,
+            Region::zero(),
+            vec![Located::at_zero(("a".into(), a_var))],
+            actual,
+        );
+
+        scope.lookup_alias(effect_symbol).unwrap().clone()
+    };
+
+    aliases.insert(effect_symbol, alias);
+
+    let mut declarations = Vec::new();
+
+    let exposed_vars_by_symbol = {
+        let mut exposed_vars_by_symbol = Vec::new();
+
+        {
+            for (ident, ann) in effect_entries {
+                let symbol = {
+                    scope
+                        .introduce(
+                            ident.value.into(),
+                            &can_env.exposed_ident_ids,
+                            &mut can_env.ident_ids,
+                            Region::zero(),
+                        )
+                        .unwrap()
+                };
+
+                let annotation = roc_can::annotation::canonicalize_annotation(
+                    &mut can_env,
+                    &mut scope,
+                    &ann.value,
+                    Region::zero(),
+                    &mut var_store,
+                );
+
+                let def = crate::effect_module::build_host_exposed_def(
+                    &mut can_env,
+                    &mut scope,
+                    symbol,
+                    ident.value,
+                    TagName::Private(effect_symbol),
+                    &mut var_store,
+                    annotation,
+                );
+
+                exposed_vars_by_symbol.push((symbol, def.expr_var));
+
+                declarations.push(Declaration::Declare(def));
+            }
+        }
+
+        // define Effect.after, Effect.map etc.
+        crate::effect_module::build_effect_builtins(
+            &mut can_env,
+            &mut scope,
+            effect_symbol,
+            &mut var_store,
+            &mut exposed_vars_by_symbol,
+            &mut declarations,
+        );
+
+        exposed_vars_by_symbol
+    };
+
+    use roc_can::module::ModuleOutput;
+    let module_output = ModuleOutput {
+        aliases,
+        rigid_variables: MutMap::default(),
+        declarations,
+        exposed_imports: MutMap::default(),
+        lookups: Vec::new(),
+        problems: can_env.problems,
+        ident_ids: can_env.ident_ids,
+        exposed_vars_by_symbol,
+        references: MutSet::default(),
+    };
+
+    let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+
+    let module = Module {
+        module_id,
+        exposed_imports: module_output.exposed_imports,
+        exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+        references: module_output.references,
+        aliases: module_output.aliases,
+        rigid_variables: module_output.rigid_variables,
+    };
+
+    let imported_modules = MutSet::default();
+
+    // Should a effect module ever have a ModuleDocumentation?
+    let module_docs = ModuleDocumentation {
+        name: String::from(name),
+        docs: String::from("idk fix this later"),
+        entries: Vec::new(),
+    };
+
+    let constrained_module = ConstrainedModule {
+        module,
+        declarations: module_output.declarations,
+        imported_modules,
+        var_store,
+        constraint,
+        ident_ids: module_output.ident_ids,
+        module_timing,
+    };
+
+    Ok((
+        module_id,
+        Msg::MadeEffectModule {
+            constrained_module,
+            canonicalization_problems: module_output.problems,
+            module_docs,
+        },
+    ))
+}
+
+fn unpack_exposes_entries<'a>(
+    arena: &'a Bump,
+    entries: &'a [Located<TypedIdent<'a>>],
+) -> bumpalo::collections::Vec<'a, (&'a Located<&'a str>, &'a Located<TypeAnnotation<'a>>)> {
+    use bumpalo::collections::Vec;
+
+    let mut stack: Vec<&TypedIdent> = Vec::with_capacity_in(entries.len(), arena);
+    let mut output = Vec::with_capacity_in(entries.len(), arena);
+
+    for entry in entries.iter() {
+        stack.push(&entry.value);
+    }
+
+    while let Some(effects_entry) = stack.pop() {
+        match effects_entry {
+            TypedIdent::Entry {
+                ident,
+                spaces_before_colon: _,
+                ann,
+            } => {
+                output.push((ident, ann));
+            }
+            TypedIdent::SpaceAfter(nested, _) | TypedIdent::SpaceBefore(nested, _) => {
+                stack.push(nested);
+            }
+        }
+    }
+
+    output
+}
+
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
-    dep_idents: IdentIdsByModule,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     mode: Mode,
@@ -2195,7 +2775,9 @@ fn make_specializations<'a>(
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations,
+    mut module_timing: ModuleTiming,
 ) -> Msg<'a> {
+    let make_specializations_start = SystemTime::now();
     let mut mono_problems = Vec::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
@@ -2223,6 +2805,11 @@ fn make_specializations<'a>(
     let external_specializations_requested = procs.externals_we_need.clone();
     let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
 
+    let make_specializations_end = SystemTime::now();
+    module_timing.make_specializations = make_specializations_end
+        .duration_since(make_specializations_start)
+        .unwrap();
+
     Msg::MadeSpecializations {
         module_id: home,
         ident_ids,
@@ -2231,6 +2818,7 @@ fn make_specializations<'a>(
         problems: mono_problems,
         subs,
         external_specializations_requested,
+        module_timing,
     }
 }
 
@@ -2241,12 +2829,12 @@ fn build_pending_specializations<'a>(
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
-    // TODO use this?
-    _module_timing: ModuleTiming,
+    mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
+    let find_specializations_start = SystemTime::now();
     let mut procs = Procs::default();
 
     let mut mono_problems = std::vec::Vec::new();
@@ -2292,6 +2880,11 @@ fn build_pending_specializations<'a>(
 
     let problems = mono_env.problems.to_vec();
 
+    let find_specializations_end = SystemTime::now();
+    module_timing.find_specializations = find_specializations_end
+        .duration_since(find_specializations_start)
+        .unwrap();
+
     Msg::FoundSpecializations {
         module_id: home,
         solved_subs: roc_types::solved_types::Solved(subs),
@@ -2299,6 +2892,7 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs,
         problems,
+        module_timing,
     }
 }
 
@@ -2355,7 +2949,13 @@ fn add_def_to_module<'a>(
                             }
                         };
 
-                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                        procs.insert_exposed(
+                            symbol,
+                            layout,
+                            mono_env.subs,
+                            def.annotation,
+                            annotation,
+                        );
                     }
 
                     procs.insert_named(
@@ -2381,7 +2981,13 @@ fn add_def_to_module<'a>(
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
 
-                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                        procs.insert_exposed(
+                            symbol,
+                            layout,
+                            mono_env.subs,
+                            def.annotation,
+                            annotation,
+                        );
                     }
 
                     let proc = PartialProc {
@@ -2419,8 +3025,21 @@ fn run_task<'a>(
             module_name,
             module_ids,
             ident_ids_by_module,
-        } => load_module(arena, src_dir, module_name, module_ids, ident_ids_by_module)
-            .map(|(_, msg)| msg),
+            mode,
+        } => load_module(
+            arena,
+            src_dir,
+            module_name,
+            module_ids,
+            ident_ids_by_module,
+            mode,
+        )
+        .map(|(_, msg)| msg),
+        LoadPkgConfig {
+            module_ids,
+            ident_ids_by_module,
+            mode,
+        } => load_pkg_config(arena, src_dir, module_ids, ident_ids_by_module, mode),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
@@ -2480,6 +3099,7 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
+            module_timing,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -2488,6 +3108,7 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
+            module_timing,
         )),
     }?;
 

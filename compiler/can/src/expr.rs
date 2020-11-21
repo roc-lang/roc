@@ -11,7 +11,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use inlinable_string::InlinableString;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -95,6 +95,11 @@ pub enum Expr {
     ),
     RunLowLevel {
         op: LowLevel,
+        args: Vec<(Variable, Expr)>,
+        ret_var: Variable,
+    },
+    ForeignCall {
+        foreign_symbol: ForeignSymbol,
         args: Vec<(Variable, Expr)>,
         ret_var: Variable,
     },
@@ -203,23 +208,37 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Record {
             fields,
             update: Some(loc_update),
+            final_comments: _,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
-                let (can_fields, mut output) =
-                    canonicalize_fields(env, var_store, scope, region, fields);
+                match canonicalize_fields(env, var_store, scope, region, fields) {
+                    Ok((can_fields, mut output)) => {
+                        output.references = output.references.union(update_out.references);
 
-                output.references = output.references.union(update_out.references);
+                        let answer = Update {
+                            record_var: var_store.fresh(),
+                            ext_var: var_store.fresh(),
+                            symbol: *symbol,
+                            updates: can_fields,
+                        };
 
-                let answer = Update {
-                    record_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    symbol: *symbol,
-                    updates: can_fields,
-                };
-
-                (answer, output)
+                        (answer, output)
+                    }
+                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
+                }
             } else {
                 // only (optionally qualified) variables can be updated, not arbitrary expressions
 
@@ -237,20 +256,32 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Record {
             fields,
             update: None,
+            final_comments: _,
         } => {
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                let (can_fields, output) =
-                    canonicalize_fields(env, var_store, scope, region, fields);
-
-                (
-                    Record {
-                        record_var: var_store.fresh(),
-                        fields: can_fields,
-                    },
-                    output,
-                )
+                match canonicalize_fields(env, var_store, scope, region, fields) {
+                    Ok((can_fields, output)) => (
+                        Record {
+                            record_var: var_store.fresh(),
+                            fields: can_fields,
+                        },
+                        output,
+                    ),
+                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
+                }
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
@@ -696,10 +727,11 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::MalformedIdent(name) => {
             use roc_problem::can::RuntimeError::*;
-            (
-                RuntimeError(MalformedIdentifier((*name).into(), region)),
-                Output::default(),
-            )
+
+            let problem = MalformedIdentifier((*name).into(), region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
         }
         ast::Expr::Nested(sub_expr) => {
             let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
@@ -719,34 +751,34 @@ pub fn canonicalize_expr<'a>(
         }
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
-        ast::Expr::ParensAround(sub_expr) => {
+        bad_expr @ ast::Expr::ParensAround(_) => {
             panic!(
-                "A ParensAround did not get removed during operator desugaring somehow: {:?}",
-                sub_expr
+                "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::SpaceBefore(sub_expr, _spaces) => {
+        bad_expr @ ast::Expr::SpaceBefore(_, _) => {
             panic!(
-                "A SpaceBefore did not get removed during operator desugaring somehow: {:?}",
-                sub_expr
+                "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::SpaceAfter(sub_expr, _spaces) => {
+        bad_expr @ ast::Expr::SpaceAfter(_, _) => {
             panic!(
-                "A SpaceAfter did not get removed during operator desugaring somehow: {:?}",
-                sub_expr
+                "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::BinOp((_, loc_op, _)) => {
+        bad_expr @ ast::Expr::BinOp(_) => {
             panic!(
-                "A binary operator did not get desugared somehow: {:?}",
-                loc_op
+                "A binary operator did not get desugared somehow: {:#?}",
+                bad_expr
             );
         }
-        ast::Expr::UnaryOp(_, loc_op) => {
+        bad_expr @ ast::Expr::UnaryOp(_, _) => {
             panic!(
-                "A unary operator did not get desugared somehow: {:?}",
-                loc_op
+                "A unary operator did not get desugared somehow: {:#?}",
+                bad_expr
             );
         }
     };
@@ -971,50 +1003,79 @@ where
     }
 }
 
+enum CanonicalizeRecordProblem {
+    InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
+}
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     region: Region,
     fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
-) -> (SendMap<Lowercase, Field>, Output) {
+) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeRecordProblem> {
     let mut can_fields = SendMap::default();
     let mut output = Output::default();
 
     for loc_field in fields.iter() {
-        let (label, field_expr, field_out, field_var) =
-            canonicalize_field(env, var_store, scope, &loc_field.value, loc_field.region);
+        match canonicalize_field(env, var_store, scope, &loc_field.value, loc_field.region) {
+            Ok((label, field_expr, field_out, field_var)) => {
+                let field = Field {
+                    var: field_var,
+                    region: loc_field.region,
+                    loc_expr: Box::new(field_expr),
+                };
 
-        let field = Field {
-            var: field_var,
-            region: loc_field.region,
-            loc_expr: Box::new(field_expr),
-        };
+                let replaced = can_fields.insert(label.clone(), field);
 
-        let replaced = can_fields.insert(label.clone(), field);
+                if let Some(old) = replaced {
+                    env.problems.push(Problem::DuplicateRecordFieldValue {
+                        field_name: label,
+                        field_region: loc_field.region,
+                        record_region: region,
+                        replaced_region: old.region,
+                    });
+                }
 
-        if let Some(old) = replaced {
-            env.problems.push(Problem::DuplicateRecordFieldValue {
-                field_name: label,
-                field_region: loc_field.region,
-                record_region: region,
-                replaced_region: old.region,
-            });
+                output.references = output.references.union(field_out.references);
+            }
+            Err(CanonicalizeFieldProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+            }) => {
+                env.problems.push(Problem::InvalidOptionalValue {
+                    field_name: field_name.clone(),
+                    field_region,
+                    record_region: region,
+                });
+                return Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region: region,
+                });
+            }
         }
-
-        output.references = output.references.union(field_out.references);
     }
 
-    (can_fields, output)
+    Ok((can_fields, output))
 }
 
+enum CanonicalizeFieldProblem {
+    InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+    },
+}
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
     region: Region,
-) -> (Lowercase, Located<Expr>, Output, Variable) {
+) -> Result<(Lowercase, Located<Expr>, Output, Variable), CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
     match field {
@@ -1024,17 +1085,18 @@ fn canonicalize_field<'a>(
             let (loc_can_expr, output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
-            (
+            Ok((
                 Lowercase::from(label.value),
                 loc_can_expr,
                 output,
                 field_var,
-            )
+            ))
         }
 
-        OptionalValue(_, _, _) => {
-            todo!("TODO gracefully handle an optional field being used in an Expr");
-        }
+        OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {
+            field_name: Lowercase::from(label.value),
+            field_region: Region::span_across(&label.region, &loc_expr.region),
+        }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
@@ -1116,7 +1178,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Accessor { .. }
         | other @ Update { .. }
         | other @ Var(_)
-        | other @ RunLowLevel { .. } => other,
+        | other @ RunLowLevel { .. }
+        | other @ ForeignCall { .. } => other,
 
         List {
             list_var,

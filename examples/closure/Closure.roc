@@ -1,8 +1,9 @@
-app Closure provides [ closure ] imports []
+app Closure provides [ makeClosure ] imports []
 
-closure : {} -> Int
-closure = 
+makeClosure : ({} -> Int) as MyClosure
+makeClosure = 
     x = 42
+    y = 42
 
-    \{} -> x
+    \{} -> x + y
 
