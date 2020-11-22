@@ -52,12 +52,16 @@ roc_reporting = { path = "../compiler/reporting" }
 roc_editor = { path = "../editor" }
 # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
+const_format = "0.2.8"
+rustyline = "6.3.0"
+rustyline-derive = "0.3.1"
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", "process", "io-driver"] }
 libc = "0.2"
+libloading = "0.6"
 
 # NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
@@ -76,7 +80,7 @@ libc = "0.2"
 # commit of TheDan64/inkwell, push a new tag which points to the latest commit,
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
-inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release2" }
+inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release3" }
 target-lexicon = "0.10"
 
 [dev-dependencies]
@@ -88,4 +92,5 @@ quickcheck_macros = "0.8"
 strip-ansi-escapes = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.4"
+serial_test = "0.5"
 tempfile = "3.1.0"

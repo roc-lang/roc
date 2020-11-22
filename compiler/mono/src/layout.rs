@@ -1,9 +1,10 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, Symbol};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
+use std::collections::HashMap;
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 
@@ -12,7 +13,7 @@ const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
-    UnresolvedTypeVar,
+    UnresolvedTypeVar(Variable),
     Erroneous,
 }
 
@@ -20,6 +21,10 @@ pub enum LayoutProblem {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
+    /// A layout that is empty (turns into the empty struct in LLVM IR
+    /// but for our purposes, not zero-sized, so it does not get dropped from data structures
+    /// this is important for closures that capture zero-sized values
+    PhantomEmptyStruct,
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     RecursiveUnion(&'a [&'a [Layout<'a>]]),
@@ -41,6 +46,14 @@ pub struct ClosureLayout<'a> {
 }
 
 impl<'a> ClosureLayout<'a> {
+    fn from_unit(arena: &'a Bump) -> Self {
+        let layout = Layout::PhantomEmptyStruct;
+        let layouts = arena.alloc(layout);
+        ClosureLayout {
+            captured: &[],
+            layout: layouts,
+        }
+    }
     fn from_bool(arena: &'a Bump) -> Self {
         let layout = Layout::Builtin(Builtin::Int1);
         let layouts = arena.alloc(layout);
@@ -109,9 +122,13 @@ impl<'a> ClosureLayout<'a> {
 
                 use UnionVariant::*;
                 match variant {
-                    Never | Unit => {
-                        // a max closure size of 0 means this is a standard top-level function
-                        Ok(None)
+                    Never => Ok(None),
+                    Unit => Ok(None),
+                    UnitWithArguments => {
+                        // the closure layout is zero-sized, but there is something in it (e.g.  `{}`)
+
+                        let closure_layout = ClosureLayout::from_unit(arena);
+                        Ok(Some(closure_layout))
                     }
                     BoolUnion { .. } => {
                         let closure_layout = ClosureLayout::from_bool(arena);
@@ -226,6 +243,12 @@ impl<'a> ClosureLayout<'a> {
 
                 Ok(expr)
             }
+            Layout::PhantomEmptyStruct => {
+                debug_assert_eq!(symbols.len(), 1);
+
+                Ok(Expr::Struct(&[]))
+            }
+
             _ => {
                 debug_assert_eq!(symbols.len(), 1);
 
@@ -284,21 +307,19 @@ impl<'a, 'b> Env<'a, 'b> {
 }
 
 impl<'a> Layout<'a> {
-    pub fn new(arena: &'a Bump, content: Content, subs: &Subs) -> Result<Self, LayoutProblem> {
-        let mut env = Env {
-            arena,
-            subs,
-            seen: MutSet::default(),
-        };
-
-        Self::new_help(&mut env, content)
-    }
-
-    fn new_help<'b>(env: &mut Env<'a, 'b>, content: Content) -> Result<Self, LayoutProblem> {
+    fn new_help<'b>(
+        env: &mut Env<'a, 'b>,
+        var: Variable,
+        content: Content,
+    ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
         match content {
-            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar),
+            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            RecursionVar { structure, .. } => {
+                let structure_content = env.subs.get_without_compacting(structure).content;
+                Self::new_help(env, structure, structure_content)
+            }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(Symbol::NUM_INT, args, _) => {
@@ -322,7 +343,7 @@ impl<'a> Layout<'a> {
             Ok(Layout::RecursivePointer)
         } else {
             let content = env.subs.get_without_compacting(var).content;
-            Self::new_help(env, content)
+            Self::new_help(env, var, content)
         }
     }
 
@@ -331,6 +352,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
+            PhantomEmptyStruct => true,
             Struct(fields) => fields
                 .iter()
                 .all(|field_layout| field_layout.safe_to_memcpy()),
@@ -357,11 +379,15 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub fn is_zero_sized(&self) -> bool {
+    pub fn is_dropped_because_empty(&self) -> bool {
         // For this calculation, we don't need an accurate
         // stack size, we just need to know whether it's zero,
         // so it's fine to use a pointer size of 1.
-        self.stack_size(1) == 0
+        if let Layout::PhantomEmptyStruct = self {
+            false
+        } else {
+            self.stack_size(1) == 0
+        }
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
@@ -369,6 +395,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.stack_size(pointer_size),
+            PhantomEmptyStruct => 0,
             Struct(fields) => {
                 let mut sum = 0;
 
@@ -405,10 +432,37 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn alignment_bytes(&self, pointer_size: u32) -> u32 {
+        match self {
+            Layout::Struct(fields) => fields
+                .iter()
+                .map(|x| x.alignment_bytes(pointer_size))
+                .max()
+                .unwrap_or(0),
+            Layout::Union(tags) | Layout::RecursiveUnion(tags) => tags
+                .iter()
+                .map(|x| x.iter())
+                .flatten()
+                .map(|x| x.alignment_bytes(pointer_size))
+                .max()
+                .unwrap_or(0),
+            Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
+            Layout::PhantomEmptyStruct => 0,
+            Layout::RecursivePointer => pointer_size,
+            Layout::FunctionPointer(_, _) => pointer_size,
+            Layout::Pointer(_) => pointer_size,
+            Layout::Closure(_, captured, _) => {
+                pointer_size.max(captured.layout.alignment_bytes(pointer_size))
+            }
+        }
+    }
+
     pub fn is_refcounted(&self) -> bool {
         match self {
             Layout::Builtin(Builtin::List(_, _)) => true,
+            Layout::Builtin(Builtin::Str) => true,
             Layout::RecursiveUnion(_) => true,
+            Layout::RecursivePointer => true,
             _ => false,
         }
     }
@@ -421,6 +475,7 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
+            PhantomEmptyStruct => false,
             Struct(fields) => fields.iter().any(|f| f.is_refcounted()),
             Union(fields) => fields
                 .iter()
@@ -603,6 +658,31 @@ impl<'a> Builtin<'a> {
         }
     }
 
+    pub fn alignment_bytes(&self, pointer_size: u32) -> u32 {
+        use std::mem::align_of;
+        use Builtin::*;
+
+        // for our data structures, what counts is the alignment of the `( ptr, len )` tuple, and
+        // since both of those are one pointer size, the alignment of that structure is a pointer
+        // size
+        match self {
+            Int128 => align_of::<i128>() as u32,
+            Int64 => align_of::<i64>() as u32,
+            Int32 => align_of::<i32>() as u32,
+            Int16 => align_of::<i16>() as u32,
+            Int8 => align_of::<i8>() as u32,
+            Int1 => align_of::<bool>() as u32,
+            Float128 => align_of::<i128>() as u32,
+            Float64 => align_of::<f64>() as u32,
+            Float32 => align_of::<f32>() as u32,
+            Float16 => align_of::<i16>() as u32,
+            Str | EmptyStr => pointer_size,
+            Map(_, _) | EmptyMap => pointer_size,
+            Set(_) | EmptySet => pointer_size,
+            List(_, _) | EmptyList => pointer_size,
+        }
+    }
+
     pub fn safe_to_memcpy(&self) -> bool {
         use Builtin::*;
 
@@ -727,7 +807,7 @@ fn layout_from_flat_type<'a>(
             // Determine the layouts of the fields, maintaining sort order
             let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
 
-            for (_, field) in sorted_fields {
+            for (label, field) in sorted_fields {
                 use LayoutProblem::*;
 
                 let field_var = {
@@ -748,11 +828,18 @@ fn layout_from_flat_type<'a>(
                 match Layout::from_var(env, field_var) {
                     Ok(layout) => {
                         // Drop any zero-sized fields like {}.
-                        if !layout.is_zero_sized() {
+                        if !layout.is_dropped_because_empty() {
                             layouts.push(layout);
                         }
                     }
-                    Err(UnresolvedTypeVar) | Err(Erroneous) => {
+                    Err(UnresolvedTypeVar(v)) => {
+                        // Invalid field!
+                        panic!(
+                            r"I hit an unresolved type var {:?} when determining the layout of {:?} of record field: {:?} : {:?}",
+                            field_var, v, label, field
+                        );
+                    }
+                    Err(Erroneous) => {
                         // Invalid field!
                         panic!("TODO gracefully handle record with invalid field.var");
                     }
@@ -827,7 +914,7 @@ pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
-) -> Vec<'a, (Lowercase, Result<Layout<'a>, Layout<'a>>)> {
+) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
     let mut fields_map = MutMap::default();
 
     let mut env = Env {
@@ -849,7 +936,7 @@ pub fn sort_record_fields<'a>(
                     RecordField::Optional(v) => {
                         let layout =
                             Layout::from_var(&mut env, v).expect("invalid layout from var");
-                        sorted_fields.push((label, Err(layout)));
+                        sorted_fields.push((label, v, Err(layout)));
                         continue;
                     }
                 };
@@ -857,12 +944,12 @@ pub fn sort_record_fields<'a>(
                 let layout = Layout::from_var(&mut env, var).expect("invalid layout from var");
 
                 // Drop any zero-sized fields like {}
-                if !layout.is_zero_sized() {
-                    sorted_fields.push((label, Ok(layout)));
+                if !layout.is_dropped_because_empty() {
+                    sorted_fields.push((label, var, Ok(layout)));
                 }
             }
 
-            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+            sorted_fields.sort_by(|(label1, _, _), (label2, _, _)| label1.cmp(label2));
 
             sorted_fields
         }
@@ -874,6 +961,7 @@ pub fn sort_record_fields<'a>(
 pub enum UnionVariant<'a> {
     Never,
     Unit,
+    UnitWithArguments,
     BoolUnion { ttrue: TagName, ffalse: TagName },
     ByteUnion(Vec<'a, TagName>),
     Unwrapped(Vec<'a, Layout<'a>>),
@@ -881,9 +969,16 @@ pub enum UnionVariant<'a> {
 }
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
+    let var =
+        if let Content::RecursionVar { structure, .. } = subs.get_without_compacting(var).content {
+            structure
+        } else {
+            var
+        };
+
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => {
+        Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs)
         }
@@ -904,7 +999,7 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
-fn union_sorted_tags_help<'a>(
+pub fn union_sorted_tags_help<'a>(
     arena: &'a Bump,
     mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
     opt_rec_var: Option<Variable>,
@@ -933,6 +1028,7 @@ fn union_sorted_tags_help<'a>(
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut contains_zero_sized = false;
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
@@ -944,11 +1040,13 @@ fn union_sorted_tags_help<'a>(
                         match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
                                 // Drop any zero-sized arguments like {}
-                                if !layout.is_zero_sized() {
+                                if !layout.is_dropped_because_empty() {
                                     layouts.push(layout);
+                                } else {
+                                    contains_zero_sized = true;
                                 }
                             }
-                            Err(LayoutProblem::UnresolvedTypeVar) => {
+                            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
                                 // then it's zero-sized; drop the argument.
                             }
@@ -962,7 +1060,11 @@ fn union_sorted_tags_help<'a>(
             }
 
             if layouts.is_empty() {
-                UnionVariant::Unit
+                if contains_zero_sized {
+                    UnionVariant::UnitWithArguments
+                } else {
+                    UnionVariant::Unit
+                }
             } else {
                 UnionVariant::Unwrapped(layouts)
             }
@@ -983,13 +1085,13 @@ fn union_sorted_tags_help<'a>(
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
                             // Drop any zero-sized arguments like {}
-                            if !layout.is_zero_sized() {
+                            if !layout.is_dropped_because_empty() {
                                 has_any_arguments = true;
 
                                 arg_layouts.push(layout);
                             }
                         }
-                        Err(LayoutProblem::UnresolvedTypeVar) => {
+                        Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
                             // then it's zero-sized; drop the argument.
                         }
@@ -1045,7 +1147,7 @@ pub fn layout_from_tag_union<'a>(
 
         match variant {
             Never => panic!("TODO gracefully handle trying to instantiate Never"),
-            Unit => Layout::Struct(&[]),
+            Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
             Unwrapped(mut field_layouts) => {
@@ -1096,6 +1198,7 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
     use roc_types::subs::FlatType::*;
 
     match content {
+        RecursionVar { .. } => panic!("recursion var in num"),
         FlexVar(_) | RigidVar(_) => {
             // If a Num makes it all the way through type checking with an unbound
             // type variable, then assume it's a 64-bit integer.
@@ -1172,7 +1275,7 @@ pub fn list_layout_from_elem<'a>(
             Ok(Layout::Builtin(Builtin::EmptyList))
         }
         content => {
-            let elem_layout = Layout::new_help(env, content)?;
+            let elem_layout = Layout::new_help(env, elem_var, content)?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::List(
@@ -1198,5 +1301,54 @@ pub fn mode_from_var(var: Variable, subs: &Subs) -> MemoryMode {
             }
         }
         _ => MemoryMode::Refcounted,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutId(u32);
+
+impl LayoutId {
+    // Returns something like "foo#1" when given a symbol that interns to "foo"
+    // and a LayoutId of 1.
+    pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
+        let ident_string = symbol.ident_string(interns);
+        let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
+        format!("{}_{}_{}", module_string, ident_string, self.0)
+    }
+}
+
+struct IdsByLayout<'a> {
+    by_id: MutMap<Layout<'a>, u32>,
+    next_id: u32,
+}
+
+#[derive(Default)]
+pub struct LayoutIds<'a> {
+    by_symbol: MutMap<Symbol, IdsByLayout<'a>>,
+}
+
+impl<'a> LayoutIds<'a> {
+    /// Returns a LayoutId which is unique for the given symbol and layout.
+    /// If given the same symbol and same layout, returns the same LayoutId.
+    pub fn get(&mut self, symbol: Symbol, layout: &Layout<'a>) -> LayoutId {
+        // Note: this function does some weird stuff to satisfy the borrow checker.
+        // There's probably a nicer way to write it that still works.
+        let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
+            by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
+            next_id: 1,
+        });
+
+        // Get the id associated with this layout, or default to next_id.
+        let answer = ids.by_id.get(layout).copied().unwrap_or(ids.next_id);
+
+        // If we had to default to next_id, it must not have been found;
+        // store the ID we're going to return and increment next_id.
+        if answer == ids.next_id {
+            ids.by_id.insert(layout.clone(), ids.next_id);
+
+            ids.next_id += 1;
+        }
+
+        LayoutId(answer)
     }
 }

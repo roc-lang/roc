@@ -4,8 +4,8 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
-    ParseResult, Parser, State,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either, Fail,
+    FailReason, ParseResult, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -21,11 +21,11 @@ macro_rules! tag_union {
     ($min_indent:expr) => {
         map!(
             and!(
-                collection!(
-                    ascii_char('['),
+                collection_trailing_sep!(
+                    ascii_char(b'['),
                     loc!(tag_type($min_indent)),
-                    ascii_char(','),
-                    ascii_char(']'),
+                    ascii_char(b','),
+                    ascii_char(b']'),
                     $min_indent
                 ),
                 optional(
@@ -33,12 +33,13 @@ macro_rules! tag_union {
                     move |arena, state| allocated(term($min_indent)).parse(arena, state)
                 )
             ),
-            |(tags, ext): (
-                Vec<'a, Located<Tag<'a>>>,
+            |((tags, final_comments), ext): (
+                (Vec<'a, Located<Tag<'a>>>, &'a [CommentOrNewline<'a>]),
                 Option<&'a Located<TypeAnnotation<'a>>>,
             )| TypeAnnotation::TagUnion {
                 tags: tags.into_bump_slice(),
                 ext,
+                final_comments
             }
         )
     };
@@ -89,7 +90,7 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    map!(loc!(ascii_char('*')), |loc_val: Located<()>| {
+    map!(loc!(ascii_char(b'*')), |loc_val: Located<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
@@ -112,12 +113,12 @@ pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnot
 #[inline(always)]
 fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     between!(
-        ascii_char('('),
+        ascii_char(b'('),
         space0_around(
             move |arena, state| expression(min_indent).parse(arena, state),
             min_indent,
         ),
-        ascii_char(')')
+        ascii_char(b')')
     )
 }
 
@@ -153,7 +154,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
-
+    type Fields<'a> = Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>;
     map!(
         and!(
             record_without_update!(
@@ -165,12 +166,15 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
                 move |arena, state| allocated(term(min_indent)).parse(arena, state)
             )
         ),
-        |(fields, ext): (
-            Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>,
+        |((fields, final_comments), ext): (
+            (Fields<'a>, &'a [CommentOrNewline<'a>]),
             Option<&'a Located<TypeAnnotation<'a>>>,
-        )| Record {
-            fields: fields.into_bump_slice(),
-            ext
+        )| {
+            Record {
+                fields: fields.into_bump_slice(),
+                ext,
+                final_comments,
+            }
         }
     )
 }
@@ -208,7 +212,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
     move |arena, state: State<'a>| {
         let (first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;
         let (rest, state) = zero_or_more!(skip_first!(
-            ascii_char(','),
+            ascii_char(b','),
             space0_around(term(min_indent), min_indent)
         ))
         .parse(arena, state)?;
@@ -239,7 +243,13 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 Ok((first, state))
             } else {
                 // e.g. `Int,Int` without an arrow and return type
-                panic!("Invalid function signature")
+                Err((
+                    Fail {
+                        attempting: state.attempting,
+                        reason: FailReason::NotYetImplemented("TODO: Decide the correct error to return for 'Invalid function signature'".to_string()),
+                    },
+                    state,
+                ))
             }
         }
     }
@@ -336,7 +346,7 @@ fn parse_concrete_type<'a>(
         //
         // If we made it this far and don't have a next_char, then necessarily
         // we have consumed a '.' char previously.
-        return malformed(next_char.or_else(|| Some('.')), arena, state, parts);
+        return malformed(next_char.or(Some('.')), arena, state, parts);
     }
 
     if part_buf.is_empty() {

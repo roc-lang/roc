@@ -244,6 +244,34 @@ fn solve(
                 }
             }
         }
+        Store(source, target, _filename, _linenr) => {
+            // a special version of Eq that is used to store types in the AST.
+            // IT DOES NOT REPORT ERRORS!
+            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+            let target = *target;
+
+            match unify(subs, actual, target) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, _actual_type, _expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
+
+                    state
+                }
+                BadType(vars, _problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
+
+                    state
+                }
+            }
+        }
         Lookup(symbol, expectation, region) => {
             let var = *env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
@@ -526,7 +554,7 @@ fn solve(
                             let result = offenders.len();
 
                             if result > 0 {
-                                dbg!(&subs, &offenders, &let_con.def_types, &let_con.def_aliases);
+                                dbg!(&subs, &offenders, &let_con.def_types);
                             }
 
                             result
@@ -750,7 +778,17 @@ fn type_to_variable(
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, new_ext_var));
 
-            register(subs, rank, pools, content)
+            let tag_union_var = register(subs, rank, pools, content);
+
+            subs.set_content(
+                *rec_var,
+                Content::RecursionVar {
+                    opt_name: None,
+                    structure: tag_union_var,
+                },
+            );
+
+            tag_union_var
         }
         Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
@@ -800,6 +838,45 @@ fn type_to_variable(
 
             result
         }
+        HostExposedAlias {
+            name: symbol,
+            arguments: args,
+            actual: alias_type,
+            actual_var,
+            ..
+        } => {
+            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut new_aliases = ImMap::default();
+
+            for (arg, arg_type) in args {
+                let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
+
+                arg_vars.push((arg.clone(), arg_var));
+                new_aliases.insert(arg.clone(), arg_var);
+            }
+
+            let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
+
+            // unify the actual_var with the result var
+            // this can be used to access the type of the actual_var
+            // to determine its layout later
+            // subs.set_content(*actual_var, descriptor.content);
+
+            //subs.set(*actual_var, descriptor.clone());
+            let content = Content::Alias(*symbol, arg_vars, alias_var);
+
+            let result = register(subs, rank, pools, content);
+
+            // We only want to unify the actual_var with the alias once
+            // if it's already redirected (and therefore, redundant)
+            // don't do it again
+            if !subs.redundant(*actual_var) {
+                let descriptor = subs.get(result);
+                subs.union(result, *actual_var, descriptor);
+            }
+
+            result
+        }
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem.clone()));
 
@@ -831,6 +908,13 @@ fn check_for_infinite_type(
                 if !is_uniq_infer {
                     let rec_var = subs.fresh_unnamed_flex_var();
                     subs.set_rank(rec_var, description.rank);
+                    subs.set_content(
+                        rec_var,
+                        Content::RecursionVar {
+                            opt_name: None,
+                            structure: recursive,
+                        },
+                    );
 
                     let mut new_tags = MutMap::default();
 
@@ -874,6 +958,7 @@ fn check_for_infinite_type(
                                 uniq_var,
                                 tag_union_var,
                                 ext_var,
+                                description.rank,
                                 &tags,
                             );
                         }
@@ -894,6 +979,7 @@ fn check_for_infinite_type(
                             uniq_var,
                             tag_union_var,
                             ext_var,
+                            description.rank,
                             &tags,
                         );
                     }
@@ -938,6 +1024,7 @@ fn correct_recursive_attr(
     uniq_var: Variable,
     tag_union_var: Variable,
     ext_var: Variable,
+    recursion_var_rank: Rank,
     tags: &MutMap<TagName, Vec<Variable>>,
 ) {
     let rec_var = subs.fresh_unnamed_flex_var();
@@ -945,6 +1032,15 @@ fn correct_recursive_attr(
 
     let content = content_attr(uniq_var, rec_var);
     subs.set_content(attr_var, content);
+
+    subs.set_rank(rec_var, recursion_var_rank);
+    subs.set_content(
+        rec_var,
+        Content::RecursionVar {
+            opt_name: None,
+            structure: recursive,
+        },
+    );
 
     let mut new_tags = MutMap::default();
 
@@ -1068,29 +1164,47 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let mut desc = subs.get(var);
-    let mark = desc.mark;
+    let desc = subs.get(var);
 
-    if mark == young_mark {
-        desc.mark = visit_mark;
-
-        let content = desc.content.clone();
-        let mut marked_desc = desc.clone();
+    if desc.mark == young_mark {
+        let Descriptor {
+            content,
+            rank,
+            mark: _,
+            copy,
+        } = desc;
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
-        subs.set(var, desc);
+        subs.set(
+            var,
+            Descriptor {
+                content: content.clone(),
+                rank,
+                mark: visit_mark,
+                copy,
+            },
+        );
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
-        marked_desc.rank = max_rank;
+        let max_rank =
+            adjust_rank_content(subs, young_mark, visit_mark, group_rank, content.clone());
 
-        debug_assert_eq!(marked_desc.mark, visit_mark);
-
-        subs.set(var, marked_desc);
+        subs.set(
+            var,
+            Descriptor {
+                content,
+                rank: max_rank,
+                mark: visit_mark,
+                copy,
+            },
+        );
 
         max_rank
-    } else if mark == visit_mark {
+    } else if desc.mark == visit_mark {
+        // nothing changes
         desc.rank
     } else {
+        let mut desc = desc;
+
         let min_rank = group_rank.min(desc.rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
@@ -1115,6 +1229,8 @@ fn adjust_rank_content(
 
     match content {
         FlexVar(_) | RigidVar(_) | Error => group_rank,
+
+        RecursionVar { .. } => group_rank,
 
         Structure(flat_type) => {
             match flat_type {
@@ -1403,6 +1519,23 @@ fn instantiate_rigids_help(
 
         FlexVar(_) | Error => copy,
 
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = instantiate_rigids_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
+
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
 
@@ -1577,6 +1710,23 @@ fn deep_copy_var_help(
         }
 
         FlexVar(_) | Error => copy,
+
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = deep_copy_var_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));

@@ -109,7 +109,7 @@ fn find_names_needed(
     }
 
     match subs.get_without_compacting(variable).content {
-        FlexVar(None) => {
+        RecursionVar { opt_name: None, .. } | FlexVar(None) => {
             let root = subs.get_root_key_without_compacting(variable);
 
             // If this var is *not* its own root, then the
@@ -128,7 +128,11 @@ fn find_names_needed(
                 }
             }
         }
-        FlexVar(Some(name)) => {
+        RecursionVar {
+            opt_name: Some(name),
+            ..
+        }
+        | FlexVar(Some(name)) => {
             // This root already has a name. Nothing more to do here!
 
             // User-defined names are already taken.
@@ -264,9 +268,24 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
             descriptor.content = FlexVar(Some(name));
             subs.set(root, descriptor);
         }
-        FlexVar(Some(_existing)) => {
+        RecursionVar {
+            opt_name: None,
+            structure,
+        } => {
+            descriptor.content = RecursionVar {
+                structure,
+                opt_name: Some(name),
+            };
+            subs.set(root, descriptor);
+        }
+        RecursionVar {
+            opt_name: Some(_existing),
+            ..
+        }
+        | FlexVar(Some(_existing)) => {
             panic!("TODO FIXME - make sure the generated name does not clash with any bound vars! In other words, if the user decided to name a type variable 'a', make sure we don't generate 'a' to name a different one!");
         }
+
         _ => (),
     }
 }
@@ -292,6 +311,10 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
         FlexVar(Some(name)) => buf.push_str(name.as_str()),
         FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name) => buf.push_str(name.as_str()),
+        RecursionVar { opt_name, .. } => match opt_name {
+            Some(name) => buf.push_str(name.as_str()),
+            None => buf.push_str(WILDCARD),
+        },
         Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
         Alias(symbol, args, _actual) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();

@@ -1,11 +1,11 @@
 use crate::ast::{
-    AppHeader, Attempting, CommentOrNewline, Def, EffectsEntry, ExposesEntry, ImportsEntry,
-    InterfaceHeader, Module, PlatformHeader,
+    AppHeader, Attempting, CommentOrNewline, Def, Effects, ExposesEntry, ImportsEntry,
+    InterfaceHeader, Module, PlatformHeader, TypedIdent,
 };
-use crate::blankspace::{space0_around, space1};
+use crate::blankspace::{space0, space0_around, space0_before, space1};
 use crate::expr::def;
 use crate::header::{ModuleName, PackageName};
-use crate::ident::unqualified_ident;
+use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::{
     self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
     unexpected_eof, ParseResult, Parser, State,
@@ -78,7 +78,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>> {
     map!(
         and!(
             parse_package_part,
-            skip_first!(ascii_char('/'), parse_package_part)
+            skip_first!(ascii_char(b'/'), parse_package_part)
         ),
         |(account, pkg)| { PackageName { account, pkg } }
     )
@@ -216,10 +216,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
                 ((before_provides, after_provides), provides),
                 (
                     ((before_requires, after_requires), requires),
-                    (
-                        ((before_imports, after_imports), imports),
-                        ((before_effects, after_effects), effects),
-                    ),
+                    (((before_imports, after_imports), imports), effects),
                 ),
             ),
         )| {
@@ -236,8 +233,6 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
                 after_requires,
                 before_imports,
                 after_imports,
-                before_effects,
-                after_effects,
             }
         },
     )
@@ -259,10 +254,10 @@ fn provides<'a>() -> impl Parser<
     and!(
         and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
         collection!(
-            ascii_char('['),
+            ascii_char(b'['),
             loc!(exposes_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b','),
+            ascii_char(b']'),
             1
         )
     )
@@ -273,16 +268,16 @@ fn requires<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a>>>,
+        Vec<'a, Located<TypedIdent<'a>>>,
     ),
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("requires")), space1(1)),
         collection!(
-            ascii_char('['),
-            loc!(exposes_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b'{'),
+            loc!(typed_ident()),
+            ascii_char(b','),
+            ascii_char(b'}'),
             1
         )
     )
@@ -299,10 +294,10 @@ fn exposes<'a>() -> impl Parser<
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
         collection!(
-            ascii_char('['),
+            ascii_char(b'['),
             loc!(exposes_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b','),
+            ascii_char(b']'),
             1
         )
     )
@@ -319,44 +314,72 @@ fn imports<'a>() -> impl Parser<
     and!(
         and!(skip_second!(space1(1), ascii_string("imports")), space1(1)),
         collection!(
-            ascii_char('['),
+            ascii_char(b'['),
             loc!(imports_entry()),
-            ascii_char(','),
-            ascii_char(']'),
+            ascii_char(b','),
+            ascii_char(b']'),
             1
         )
     )
 }
 
 #[inline(always)]
-fn effects<'a>() -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<EffectsEntry<'a>>>,
-    ),
-> {
-    and!(
-        and!(skip_second!(space1(1), ascii_string("effects")), space1(1)),
-        collection!(
-            ascii_char('{'),
-            loc!(effects_entry()),
-            ascii_char(','),
-            ascii_char('}'),
+fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
+    move |arena, state| {
+        let (spaces_before_effects_keyword, state) =
+            skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
+        let (spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
+        let ((type_name, spaces_after_type_name), state) =
+            and!(uppercase_ident(), space1(0)).parse(arena, state)?;
+        let (entries, state) = collection!(
+            ascii_char(b'{'),
+            loc!(typed_ident()),
+            ascii_char(b','),
+            ascii_char(b'}'),
             1
         )
-    )
+        .parse(arena, state)?;
+
+        Ok((
+            Effects {
+                spaces_before_effects_keyword,
+                spaces_after_effects_keyword,
+                spaces_after_type_name,
+                type_name,
+                entries,
+            },
+            state,
+        ))
+    }
 }
 
 #[inline(always)]
-fn effects_entry<'a>() -> impl Parser<'a, EffectsEntry<'a>> {
-    // e.g.
-    //
-    // printLine : Str -> Effect {}
-    map!(
-        and!(loc(unqualified_ident()), type_annotation::located(0)),
-        |(ident, ann)| { EffectsEntry::Effect { ident, ann } }
-    )
+fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
+    move |arena, state| {
+        // You must have a field name, e.g. "email"
+        let (ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
+
+        let (spaces_before_colon, state) = space0(0).parse(arena, state)?;
+
+        let (ann, state) = skip_first!(
+            ascii_char(b':'),
+            space0_before(type_annotation::located(0), 0)
+        )
+        .parse(arena, state)?;
+
+        // e.g.
+        //
+        // printLine : Str -> Effect {}
+
+        Ok((
+            TypedIdent::Entry {
+                ident,
+                spaces_before_colon,
+                ann,
+            },
+            state,
+        ))
+    }
 }
 
 #[inline(always)]
@@ -372,12 +395,12 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             module_name(),
             // e.g. `.{ Task, after}`
             optional(skip_first!(
-                ascii_char('.'),
+                ascii_char(b'.'),
                 collection!(
-                    ascii_char('{'),
+                    ascii_char(b'{'),
                     loc!(exposes_entry()),
-                    ascii_char(','),
-                    ascii_char('}'),
+                    ascii_char(b','),
+                    ascii_char(b'}'),
                     1
                 )
             ))

@@ -5,7 +5,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_cli::repl::{INSTRUCTIONS, PROMPT, WELCOME_MESSAGE};
+use roc_cli::repl::{INSTRUCTIONS, WELCOME_MESSAGE};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use tempfile::NamedTempFile;
 
+#[derive(Debug)]
 pub struct Out {
     pub stdout: String,
     pub stderr: String,
@@ -69,7 +70,7 @@ pub fn run_cmd(cmd_name: &str, args: &[&str]) -> Out {
 
     let output = cmd
         .output()
-        .expect(&format!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
 
     Out {
         stdout: String::from_utf8(output.stdout).unwrap(),
@@ -131,6 +132,9 @@ enum ValgrindField {
     Args(ValgrindDummyStruct),
     Error(ValgrindError),
     Status(ValgrindDummyStruct),
+    Stack(ValgrindDummyStruct),
+    #[serde(rename = "fatal_signal")]
+    FatalSignal(ValgrindDummyStruct),
     ErrorCounts(ValgrindDummyStruct),
     SuppCounts(ValgrindDummyStruct),
 }
@@ -204,6 +208,40 @@ pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
 }
 
 #[allow(dead_code)]
+pub fn fixtures_dir(dir_name: &str) -> PathBuf {
+    let mut path = env::current_exe().ok().unwrap();
+
+    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
+    path.pop();
+
+    // If we're in deps/ get rid of deps/ in target/debug/deps/
+    if path.ends_with("deps") {
+        path.pop();
+    }
+
+    // Get rid of target/debug/ so we're back at the project root
+    path.pop();
+    path.pop();
+
+    // Descend into cli/tests/fixtures/{dir_name}
+    path.push("cli");
+    path.push("tests");
+    path.push("fixtures");
+    path.push(dir_name);
+
+    path
+}
+
+#[allow(dead_code)]
+pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
+    let mut path = fixtures_dir(dir_name);
+
+    path.push(file_name);
+
+    path
+}
+
+#[allow(dead_code)]
 pub fn repl_eval(input: &str) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
@@ -225,12 +263,12 @@ pub fn repl_eval(input: &str) -> Out {
 
         // Evaluate the expression
         stdin
-            .write_all("\n".as_bytes())
+            .write_all(b"\n")
             .expect("Failed to write newline to stdin");
 
         // Gracefully exit the repl
         stdin
-            .write_all(":exit\n".as_bytes())
+            .write_all(b":exit\n")
             .expect("Failed to write :exit to stdin");
     }
 
@@ -240,7 +278,7 @@ pub fn repl_eval(input: &str) -> Out {
 
     // Remove the initial instructions from the output.
 
-    let expected_instructions = format!("{}{}{}", WELCOME_MESSAGE, INSTRUCTIONS, PROMPT);
+    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
@@ -262,7 +300,7 @@ pub fn repl_eval(input: &str) -> Out {
             panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
         }
     } else {
-        let expected_after_answer = format!("\n{}", PROMPT);
+        let expected_after_answer = format!("\n");
 
         assert!(
             answer.ends_with(&expected_after_answer),

@@ -1,5 +1,8 @@
-use crate::llvm::build::{Env, InPlace};
-use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
+use crate::llvm::build::{
+    allocate_with_refcount_help, build_num_binop, cast_basic_basic, Env, InPlace,
+};
+use crate::llvm::compare::build_eq;
+use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
@@ -184,7 +187,9 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
+        builder
+            .build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -625,7 +630,9 @@ pub fn list_append<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
+        builder
+            .build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -727,6 +734,81 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
+/// List.sum : List (Num a) -> Num a
+pub fn list_sum<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    default_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let list_wrapper = list.into_struct_value();
+    let len = list_len(env.builder, list_wrapper);
+
+    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
+    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
+
+    let default: BasicValueEnum = match accum_type {
+        BasicTypeEnum::IntType(int_type) => int_type.const_zero().into(),
+        BasicTypeEnum::FloatType(float_type) => float_type.const_zero().into(),
+        _ => unreachable!(""),
+    };
+
+    builder.build_store(accum_alloca, default);
+
+    let then_block = ctx.append_basic_block(parent, "then");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    let condition = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "list_non_empty",
+    );
+
+    builder.build_conditional_branch(condition, then_block, cont_block);
+
+    builder.position_at_end(then_block);
+
+    let elem_ptr_type = get_ptr_type(&accum_type, AddressSpace::Generic);
+    let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+
+    let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
+        // load current accumulator
+        let current = builder.build_load(accum_alloca, "retrieve_accum");
+
+        let new_current = build_num_binop(
+            env,
+            parent,
+            current,
+            default_layout,
+            elem,
+            default_layout,
+            roc_module::low_level::LowLevel::NumAdd,
+        );
+
+        builder.build_store(accum_alloca, new_current);
+    };
+
+    incrementing_elem_loop(
+        builder,
+        ctx,
+        parent,
+        list_ptr,
+        len,
+        "#index",
+        walk_right_loop,
+    );
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    builder.build_load(accum_alloca, "load_final_acum")
+}
+
 /// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
 #[allow(clippy::too_many_arguments)]
 pub fn list_walk_right<'a, 'ctx, 'env>(
@@ -788,8 +870,7 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
                 let new_current = call_site_value
                     .try_as_basic_value()
                     .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-                    .into_int_value();
+                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
 
                 builder.build_store(accum_alloca, new_current);
             };
@@ -818,6 +899,116 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
     builder.position_at_end(cont_block);
 
     builder.build_load(accum_alloca, "load_final_acum")
+}
+
+/// List.contains : List elem, elem -> Bool
+pub fn list_contains<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
+
+    let builder = env.builder;
+
+    let wrapper_struct = list.into_struct_value();
+    let list_elem_layout = match &list_layout {
+        // this pointer will never actually be dereferenced
+        Layout::Builtin(Builtin::EmptyList) => &Layout::Builtin(Builtin::Int64),
+        Layout::Builtin(Builtin::List(_, element_layout)) => element_layout,
+        _ => unreachable!("Invalid layout {:?} in List.contains", list_layout),
+    };
+
+    let list_elem_type =
+        basic_type_from_layout(env.arena, env.context, list_elem_layout, env.ptr_bytes);
+
+    let list_ptr = load_list_ptr(
+        builder,
+        wrapper_struct,
+        list_elem_type.ptr_type(AddressSpace::Generic),
+    );
+
+    let length = list_len(builder, list.into_struct_value());
+
+    list_contains_help(
+        env,
+        parent,
+        length,
+        list_ptr,
+        list_elem_layout,
+        elem,
+        elem_layout,
+    )
+}
+
+pub fn list_contains_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    length: IntValue<'ctx>,
+    source_ptr: PointerValue<'ctx>,
+    list_elem_layout: &Layout<'a>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let bool_alloca = builder.build_alloca(ctx.bool_type(), "bool_alloca");
+    let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
+    let next_free_index_alloca = builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
+
+    builder.build_store(bool_alloca, ctx.bool_type().const_zero());
+    builder.build_store(index_alloca, ctx.i64_type().const_zero());
+    builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
+
+    let condition_bb = ctx.append_basic_block(parent, "condition");
+    builder.build_unconditional_branch(condition_bb);
+    builder.position_at_end(condition_bb);
+
+    let index = builder.build_load(index_alloca, "index").into_int_value();
+
+    let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
+
+    let body_bb = ctx.append_basic_block(parent, "body");
+    let cont_bb = ctx.append_basic_block(parent, "cont");
+    builder.build_conditional_branch(condition, body_bb, cont_bb);
+
+    // loop body
+    builder.position_at_end(body_bb);
+
+    let current_elem_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
+
+    let current_elem = builder.build_load(current_elem_ptr, "load_elem");
+
+    let has_found = build_eq(env, current_elem, elem, list_elem_layout, elem_layout);
+
+    builder.build_store(bool_alloca, has_found.into_int_value());
+
+    let one = ctx.i64_type().const_int(1, false);
+
+    let next_free_index = builder
+        .build_load(next_free_index_alloca, "load_next_free")
+        .into_int_value();
+
+    builder.build_store(
+        next_free_index_alloca,
+        builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
+    );
+
+    builder.build_store(
+        index_alloca,
+        builder.build_int_add(index, one, "incremented_index"),
+    );
+
+    builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
+
+    // continuation
+    builder.position_at_end(cont_bb);
+
+    builder.build_load(bool_alloca, "answer")
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -850,7 +1041,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             elem_layout.clone(),
         ),
 
-        _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
+        _ => unreachable!("Invalid layout {:?} in List.keepIf", list_layout),
     };
 
     let list_type = basic_type_from_layout(env.arena, env.context, &list_layout, env.ptr_bytes);
@@ -1399,11 +1590,6 @@ pub fn incrementing_index_loop<'ctx, LoopFn>(
     parent: FunctionValue<'ctx>,
     end: IntValue<'ctx>,
     index_name: &str,
-    // allocating memory for an index is costly, so sometimes
-    // we want to reuse an index if multiple loops happen in a
-    // series, such as the case in List.concat. A memory
-    // allocation cab be passed in to be used, and the memory
-    // allocation that _is_ used is the return value.
     mut loop_fn: LoopFn,
 ) -> PointerValue<'ctx>
 where
@@ -1575,12 +1761,7 @@ pub fn load_list<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
 ) -> (IntValue<'ctx>, PointerValue<'ctx>) {
-    let ptr_as_int = builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
-        .unwrap()
-        .into_int_value();
-
-    let ptr = builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr");
+    let ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
     let length = builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
@@ -1595,12 +1776,14 @@ pub fn load_list_ptr<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
 ) -> PointerValue<'ctx> {
-    let ptr_as_int = builder
+    // a `*mut u8` pointer
+    let generic_ptr = builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
         .unwrap()
-        .into_int_value();
+        .into_pointer_value();
 
-    builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr")
+    // cast to the expected pointer type
+    cast_basic_basic(builder, generic_ptr.into(), ptr_type.into()).into_pointer_value()
 }
 
 pub fn clone_nonempty_list<'a, 'ctx, 'env>(
@@ -1625,9 +1808,6 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, inplace, elem_layout, list_len);
 
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
-
     // TODO check if malloc returned null; if so, runtime error for OOM!
 
     // Either memcpy or deep clone the array elements
@@ -1636,12 +1816,17 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size);
+        builder
+            .build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size)
+            .unwrap();
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
 
     // Create a fresh wrapper struct for the newly populated array
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr = cast_basic_basic(builder, clone_ptr.into(), u8_ptr_type.into());
+
     let struct_type = collection(ctx, env.ptr_bytes);
     let mut struct_val;
 
@@ -1649,9 +1834,9 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_clone_nonempty_list",
         )
         .unwrap();
 
@@ -1692,7 +1877,9 @@ pub fn clone_list<'a, 'ctx, 'env>(
     );
 
     // copy old elements in
-    builder.build_memcpy(new_ptr, ptr_bytes, old_ptr, ptr_bytes, bytes);
+    builder
+        .build_memcpy(new_ptr, ptr_bytes, old_ptr, ptr_bytes, bytes)
+        .unwrap();
 
     new_ptr
 }
@@ -1706,53 +1893,13 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
     let len_type = env.ptr_int();
-    // bytes per element
-    let bytes_len = len_type.const_int(elem_bytes, false);
-    let offset = (env.ptr_bytes as u64).max(elem_bytes);
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+    let bytes_per_element = len_type.const_int(elem_bytes, false);
 
-    let ptr = {
-        let len = builder.build_int_mul(bytes_len, length, "data_length");
-        let len =
-            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+    let number_of_data_bytes = builder.build_int_mul(bytes_per_element, length, "data_length");
 
-        env.builder
-            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
-    };
-
-    // We must return a pointer to the first element:
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-    let incremented = builder.build_int_add(
-        ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
-        "increment_list_ptr",
-    );
-
-    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
-
-    // subtract ptr_size, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        incremented,
-        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
-        "refcount_ptr",
-    );
-
-    let refcount_ptr = builder.build_int_to_ptr(
-        refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
-        "make ptr",
-    );
-
-    let ref_count_one = match inplace {
+    let rc1 = match inplace {
         InPlace::InPlace => length,
         InPlace::Clone => {
             // the refcount of a new list is initially 1
@@ -1761,23 +1908,23 @@ pub fn allocate_list<'a, 'ctx, 'env>(
         }
     };
 
-    builder.build_store(refcount_ptr, ref_count_one);
-
-    list_element_ptr
+    allocate_with_refcount_help(env, elem_layout, number_of_data_bytes, rc1)
 }
 
 pub fn store_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    list_ptr: PointerValue<'ctx>,
+    pointer_to_first_element: PointerValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
     let builder = env.builder;
 
     let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
     let struct_type = collection(ctx, ptr_bytes);
+
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr =
+        cast_basic_basic(builder, pointer_to_first_element.into(), u8_ptr_type.into());
 
     let mut struct_val;
 
@@ -1785,9 +1932,9 @@ pub fn store_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_store_list",
         )
         .unwrap();
 

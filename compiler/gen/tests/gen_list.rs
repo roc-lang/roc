@@ -14,8 +14,7 @@ mod helpers;
 #[cfg(test)]
 mod gen_list {
     use crate::helpers::with_larger_debug_stack;
-    //use roc_std::roclist;
-    use roc_std::RocList;
+    use roc_std::{RocList, RocStr};
 
     #[test]
     fn roc_list_construction() {
@@ -265,6 +264,48 @@ mod gen_list {
     }
 
     #[test]
+    fn list_walk_right_with_str() {
+        assert_evals_to!(
+            r#"List.walkRight [ "x", "y", "z" ] Str.concat "<""#,
+            RocStr::from("zyx<"),
+            RocStr
+        );
+
+        assert_evals_to!(
+            r#"List.walkRight [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+            RocStr::from("FirstSecondThirdFourth"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn list_walk_right_with_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Bit : [ Zero, One ]
+
+                byte : List Bit
+                byte = [ Zero, One, Zero, One, Zero, Zero, One, Zero ]
+
+                initialCounts = { zeroes: 0, ones: 0 }
+
+                acc = \b, r ->
+                    when b is
+                        Zero -> { r & zeroes: r.zeroes + 1 }
+                        One -> { r & ones: r.ones + 1 }
+
+                finalCounts = List.walkRight byte acc initialCounts
+
+                finalCounts.ones * 10 + finalCounts.zeroes
+                "#
+            ),
+            35,
+            i64
+        );
+    }
+
+    #[test]
     fn list_keep_if_empty_list_of_int() {
         assert_evals_to!(
             indoc!(
@@ -273,7 +314,7 @@ mod gen_list {
                 empty =
                     []
 
-                List.keepIf empty (\x -> True)
+                List.keepIf empty (\_ -> True)
                 "#
             ),
             RocList::from_slice(&[]),
@@ -305,7 +346,7 @@ mod gen_list {
             indoc!(
                 r#"
                 alwaysTrue : Int -> Bool
-                alwaysTrue = \i ->
+                alwaysTrue = \_ ->
                     True
 
                 oneThroughEight : List Int
@@ -326,7 +367,7 @@ mod gen_list {
             indoc!(
                 r#"
                 alwaysFalse : Int -> Bool
-                alwaysFalse = \i ->
+                alwaysFalse = \_ ->
                     False
 
                 List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
@@ -1561,5 +1602,21 @@ mod gen_list {
             RocList::from_slice(&[1, 2, 3]),
             RocList<i64>
         );
+    }
+
+    #[test]
+    fn list_contains() {
+        assert_evals_to!(indoc!("List.contains [1,2,3] 1"), true, bool);
+
+        assert_evals_to!(indoc!("List.contains [1,2,3] 4"), false, bool);
+
+        assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
+    }
+
+    #[test]
+    fn list_sum() {
+        assert_evals_to!("List.sum []", 0, i64);
+        assert_evals_to!("List.sum [ 1, 2, 3 ]", 6, i64);
+        assert_evals_to!("List.sum [ 1.1, 2.2, 3.3 ]", 6.6, f64);
     }
 }

@@ -1,12 +1,13 @@
+use roc_std::RocCallResult;
 use roc_std::RocList;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "quicksort_1"]
-    fn quicksort(list: RocList<i64>) -> RocList<i64>;
+    #[link_name = "Quicksort_quicksort_1_exposed"]
+    fn quicksort(list: RocList<i64>, output: &mut RocCallResult<RocList<i64>>) -> ();
 }
 
-const NUM_NUMS: usize = 10_000;
+const NUM_NUMS: usize = 100;
 
 #[no_mangle]
 pub fn rust_main() -> isize {
@@ -14,7 +15,7 @@ pub fn rust_main() -> isize {
         let mut nums = Vec::with_capacity(NUM_NUMS);
 
         for index in 0..nums.capacity() {
-            let num = index as i64 % 123;
+            let num = index as i64 % 12;
 
             nums.push(num);
         }
@@ -24,7 +25,18 @@ pub fn rust_main() -> isize {
 
     println!("Running Roc quicksort on {} numbers...", nums.len());
     let start_time = SystemTime::now();
-    let answer = unsafe { quicksort(nums) };
+    let answer = unsafe {
+        use std::mem::MaybeUninit;
+        let mut output = MaybeUninit::uninit();
+
+        quicksort(nums, &mut *output.as_mut_ptr());
+
+        match output.assume_init().into() {
+            Ok(value) => value,
+            Err(msg) => panic!("roc failed with message {}", msg),
+        }
+    };
+
     let end_time = SystemTime::now();
     let duration = end_time.duration_since(start_time).unwrap();
 

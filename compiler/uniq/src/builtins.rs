@@ -48,7 +48,6 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
         rigid_vars: Vec::new(),
         flex_vars,
         def_types: SendMap::default(),
-        def_aliases: SendMap::default(),
         defs_constraint: constraint,
         ret_constraint: Constraint::True,
     }))

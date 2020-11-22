@@ -652,6 +652,8 @@ define_builtins! {
         42 NUM_ADD_WRAP: "addWrap"
         43 NUM_ADD_CHECKED: "addChecked"
         44 NUM_ATAN: "atan"
+        45 NUM_ACOS: "acos"
+        46 NUM_ASIN: "asin"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -668,7 +670,9 @@ define_builtins! {
         2 STR_IS_EMPTY: "isEmpty"
         3 STR_APPEND: "append"
         4 STR_CONCAT: "concat"
-        5 STR_STARTS_WITH: "startsWith"
+        5 STR_SPLIT: "split"
+        6 STR_COUNT_GRAPHEMES: "countGraphemes"
+        7 STR_STARTS_WITH: "startsWith"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -689,6 +693,8 @@ define_builtins! {
         15 LIST_PREPEND: "prepend"
         16 LIST_JOIN: "join"
         17 LIST_KEEP_IF: "keepIf"
+        18 LIST_CONTAINS: "contains"
+        19 LIST_SUM: "sum"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

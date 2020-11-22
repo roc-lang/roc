@@ -254,11 +254,11 @@ mod gen_records {
                 r#"
                 v = {}
 
-                1
+                v
                 "#
             ),
-            1,
-            i64
+            (),
+            ()
         );
     }
     #[test]
@@ -818,6 +818,30 @@ mod gen_records {
             ),
             43,
             i64
+        );
+    }
+
+    #[test]
+    fn booleans_in_record() {
+        assert_evals_to!(
+            indoc!("{ x: 1 == 1, y: 1 == 1 }"),
+            (true, true),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 != 1, y: 1 == 1 }"),
+            (false, true),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 == 1, y: 1 != 1 }"),
+            (true, false),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 != 1, y: 1 != 1 }"),
+            (false, false),
+            (bool, bool)
         );
     }
 }

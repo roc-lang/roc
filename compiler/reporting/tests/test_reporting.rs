@@ -95,8 +95,13 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
             };
-            let _mono_expr =
-                Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
+            let _mono_expr = Stmt::new(
+                &mut mono_env,
+                loc_expr.value,
+                var,
+                &mut procs,
+                &mut layout_cache,
+            );
         }
 
         Ok((unify_problems, can_problems, mono_problems, home, interns))
@@ -407,6 +412,44 @@ mod test_reporting {
 
                 3│      if selectedId != thisId == adminsId then
                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unused_undefined_argument() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = { x: 1 == 1, y: 0x4 }
+
+                baz = 3
+
+                main : Str
+                main =
+                    when foo.y is
+                        4 -> bar baz "yay"
+                        _ -> "nay"
+
+                main
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+               
+                I cannot find a `bar` value
+               
+                8│          4 -> bar baz "yay"
+                                 ^^^
+
+                these names seem close though:
+
+                    baz
+                    Map
+                    Str
+                    main
                 "#
             ),
         )
@@ -1042,7 +1085,7 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                Something is off with the 1st branch of this `if` expression:
+                Something is off with the `then` branch of this `if` expression:
 
                 2│  x = if True then 3.14 else 4
                                      ^^^^
@@ -1079,12 +1122,14 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                Something is off with the 1st branch of this `when` expression:
+                Something is off with the body of the `x` definition:
 
-                4│          _ -> 3.14
-                                 ^^^^
+                1│   x : Int
+                2│   x =
+                3│>      when True is
+                4│>          _ -> 3.14
 
-                The 1st branch is a float of type:
+                This `when`expression produces:
 
                     Float
 
@@ -1118,15 +1163,15 @@ mod test_reporting {
 
                 1│  x : Int -> Int
                 2│  x = \_ -> 3.14
-                        ^^^^^^^^^^
+                              ^^^^
 
-                The body is an anonymous function of type:
+                The body is a float of type:
 
-                    Int -> Float
+                    Float
 
                 But the type annotation on `x` says it should be:
 
-                    Int -> Int
+                    Int
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1659,7 +1704,7 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This `if` has an `else` branch with a different type from its `then` branch:
+                Something is off with the `else` branch of this `if` expression:
 
                 2│  f = \x, y -> if True then x else y
                                                      ^
@@ -1668,11 +1713,9 @@ mod test_reporting {
 
                     b
 
-                but the `then` branch has the type:
+                But the type annotation on `f` says it should be:
 
                     a
-
-                I need all branches in an `if` to have the same type!
 
                 Tip: Your type annotation uses `b` and `a` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
@@ -1702,15 +1745,15 @@ mod test_reporting {
 
                 1│  f : Bool -> msg
                 2│  f = \_ -> Foo
-                        ^^^^^^^^^
+                              ^^^
 
-                The body is an anonymous function of type:
+                This `Foo` global tag has the type:
 
-                    Bool -> [ Foo ]a
+                    [ Foo ]a
 
                 But the type annotation on `f` says it should be:
 
-                    Bool -> msg
+                    msg
 
                 Tip: The type annotation uses the type variable `msg` to say that this
                 definition can produce any type of value. But in the body I see that
@@ -1824,19 +1867,20 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
-                1│   f : Bool -> Int
-                2│>  f = \_ ->
-                3│>      ok = 3
-                4│>
-                5│>      Ok
+                1│  f : Bool -> Int
+                2│  f = \_ ->
+                3│      ok = 3
+                4│
+                5│      Ok
+                        ^^
 
-                The body is an anonymous function of type:
+                This `Ok` global tag has the type:
 
-                    Bool -> [ Ok ]a
+                    [ Ok ]a
 
                 But the type annotation on `f` says it should be:
 
-                    Bool -> Int
+                    Int
                 "#
             ),
         )
@@ -2136,15 +2180,15 @@ mod test_reporting {
 
                 1│  f : [ A ] -> [ A, B ]
                 2│  f = \a -> a
-                        ^^^^^^^
+                              ^
 
-                The body is an anonymous function of type:
+                This `a` value is a:
 
-                    [ A ] -> [ A ]
+                    [ A ]
 
                 But the type annotation on `f` says it should be:
 
-                    [ A ] -> [ A, B ]
+                    [ A, B ]
 
                 Tip: Looks like a closed tag union does not have the `B` tag.
 
@@ -2174,15 +2218,15 @@ mod test_reporting {
 
                 1│  f : [ A ] -> [ A, B, C ]
                 2│  f = \a -> a
-                        ^^^^^^^
+                              ^
 
-                The body is an anonymous function of type:
+                This `a` value is a:
 
-                    [ A ] -> [ A ]
+                    [ A ]
 
                 But the type annotation on `f` says it should be:
 
-                    [ A ] -> [ A, B, C ]
+                    [ A, B, C ]
 
                 Tip: Looks like a closed tag union does not have the `C` and `B` tags.
 
@@ -2574,6 +2618,7 @@ mod test_reporting {
     }
 
     #[test]
+    #[ignore]
     fn cyclic_alias() {
         report_problem_as(
             indoc!(
@@ -2988,7 +3033,7 @@ mod test_reporting {
                 Pair a b : [ Pair a b ]
 
                 x : Pair Int
-                x = 3
+                x = Pair 2 3
 
                 x
                 "#
@@ -3089,9 +3134,6 @@ mod test_reporting {
 
     #[test]
     fn two_different_cons() {
-        // TODO investigate what is happening here;
-        // while it makes some kind of sense to print the recursion var as infinite,
-        // it's not very helpful in practice.
         report_problem_as(
             indoc!(
                 r#"
@@ -3115,17 +3157,18 @@ mod test_reporting {
 
                 This `Cons` global tag application has the type:
 
-                    [ Cons {} [ Cons Str [ Cons {} ∞, Nil ] as ∞, Nil ], Nil ]
+                    [ Cons {} [ Cons Str [ Cons {} a, Nil ] as a, Nil ], Nil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ Cons {} ∞, Nil ] as ∞
+                    [ Cons {} a, Nil ] as a
                 "#
             ),
         )
     }
 
     #[test]
+    #[ignore]
     fn mutually_recursive_types_with_type_error() {
         report_problem_as(
             indoc!(
@@ -3808,6 +3851,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn incorrect_optional_field() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x: 5, y ? 42 }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This record uses an optional value for the `.y` field in an incorrect
+                context!
+
+                1│  { x: 5, y ? 42 }
+                            ^^^^^^
+
+                You can only use optional values in record destructuring, for example
+                in affectation:
+
+                    { answer ? 42, otherField } = myRecord
+                "#
+            ),
+        )
+    }
+    #[test]
     fn first_wildcard_is_required() {
         report_problem_as(
             indoc!(
@@ -3846,6 +3915,77 @@ mod test_reporting {
 
             Any value of this shape will be handled by a previous pattern, so this
             one should be removed.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn alias_using_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                # The color of a node. Leaves are considered Black.
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # Create an empty dictionary.
+                empty : Dict k v
+                empty =
+                    Empty
+
+                empty
+                "#
+            ),
+            "",
+        )
+    }
+
+    #[test]
+    fn unused_argument() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \foo -> 1
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+            ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+            `f` doesn't use `foo`.
+
+            1│  f = \foo -> 1
+                     ^^^
+
+            If you don't need `foo`, then you can just remove it. However, if you
+            really do need `foo` as an argument of `f`, prefix it with an underscore,
+            like this: "_`foo`". Adding an underscore at the start of a variable
+            name is a way of saying that the variable is not used.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_global_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo.Bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                The `Foo.Bar` identifier is malformed:
+
+                1│  Foo.Bar
+                    ^^^^^^^
             "#
             ),
         )

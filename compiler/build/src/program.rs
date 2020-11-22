@@ -2,10 +2,9 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
-use inkwell::OptimizationLevel;
-use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
+use roc_mono::layout::LayoutIds;
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 
@@ -15,45 +14,64 @@ use target_lexicon::Triple;
 #[allow(clippy::cognitive_complexity)]
 pub fn gen_from_mono_module(
     arena: &Bump,
-    loaded: MonomorphizedModule,
-    filename: PathBuf,
+    mut loaded: MonomorphizedModule,
+    _file_path: PathBuf,
     target: Triple,
-    dest_filename: &Path,
+    app_o_file: &Path,
     opt_level: OptLevel,
 ) {
-    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{
+        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+    };
 
-    let src = loaded.src;
-    let home = loaded.module_id;
-    let src_lines: Vec<&str> = src.split('\n').collect();
-    let palette = DEFAULT_PALETTE;
+    for (home, (module_path, src)) in loaded.sources {
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let palette = DEFAULT_PALETTE;
 
-    // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
+        // Report parsing and canonicalization problems
+        let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
 
-    for problem in loaded.can_problems.into_iter() {
-        let report = can_problem(&alloc, filename.clone(), problem);
-        let mut buf = String::new();
+        let problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        for problem in problems.into_iter() {
+            let report = can_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+            report.render_color_terminal(&mut buf, &alloc, &palette);
 
-        println!("\n{}\n", buf);
-    }
+            println!("\n{}\n", buf);
+        }
 
-    for problem in loaded.type_problems.into_iter() {
-        let report = type_problem(&alloc, filename.clone(), problem);
-        let mut buf = String::new();
+        let problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = type_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+            report.render_color_terminal(&mut buf, &alloc, &palette);
 
-        println!("\n{}\n", buf);
+            println!("\n{}\n", buf);
+        }
+
+        let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            println!("\n{}\n", buf);
+        }
     }
 
     // Generate the binary
 
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(&context, "app"));
+
+    // strip Zig debug stuff
+    // module.strip_debug_info();
+
     let builder = context.create_builder();
+    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -62,6 +80,8 @@ pub fn gen_from_mono_module(
     let env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
         context: &context,
         interns: loaded.interns,
         module,
@@ -99,6 +119,9 @@ pub fn gen_from_mono_module(
         // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
         build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
+        // call finalize() before any code generation/verification
+        env.dibuilder.finalize();
+
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
         } else {
@@ -110,6 +133,8 @@ pub fn gen_from_mono_module(
             );
         }
     }
+
+    env.dibuilder.finalize();
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -126,14 +151,11 @@ pub fn gen_from_mono_module(
 
     // Emit the .o file
 
-    let opt = OptimizationLevel::Aggressive;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
-    let target_machine = target::target_machine(&target, opt, reloc, model).unwrap();
+    let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
 
     target_machine
-        .write_to_file(&env.module, FileType::Object, &dest_filename)
+        .write_to_file(&env.module, FileType::Object, &app_o_file)
         .expect("Writing .o file failed");
-
-    println!("\nSuccess! 🎉\n\n\t➡ {}\n", dest_filename.display());
 }

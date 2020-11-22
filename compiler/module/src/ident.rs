@@ -23,6 +23,10 @@ pub struct Lowercase(InlinableString);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(InlinableString);
 
+/// A string representing a foreign (linked-in) symbol
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct ForeignSymbol(InlinableString);
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
     /// Global tags have no module, but tend to be short strings (since they're
@@ -122,6 +126,28 @@ impl<'a> Into<&'a InlinableString> for &'a ModuleName {
 impl<'a> Into<Box<str>> for ModuleName {
     fn into(self) -> Box<str> {
         self.0.to_string().into()
+    }
+}
+
+impl ForeignSymbol {
+    pub fn as_str(&self) -> &str {
+        &*self.0
+    }
+
+    pub fn as_inline_str(&self) -> &InlinableString {
+        &self.0
+    }
+}
+
+impl<'a> From<&'a str> for ForeignSymbol {
+    fn from(string: &'a str) -> Self {
+        Self(string.into())
+    }
+}
+
+impl<'a> From<String> for ForeignSymbol {
+    fn from(string: String) -> Self {
+        Self(string.into())
     }
 }
 

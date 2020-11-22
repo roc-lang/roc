@@ -1,17 +1,95 @@
-use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope};
+use crate::llvm::build::{
+    call_bitcode_fn, call_void_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope,
+};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, incrementing_index_loop,
     load_list_ptr, store_list,
 };
-use crate::llvm::convert::{collection, ptr_int};
+use crate::llvm::convert::collection;
 use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
 pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
+
+/// Str.split : Str, Str -> List Str
+pub fn str_split<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    inplace: InPlace,
+    str_symbol: Symbol,
+    delimiter_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let str_ptr = ptr_from_symbol(scope, str_symbol);
+    let delimiter_ptr = ptr_from_symbol(scope, delimiter_symbol);
+
+    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+
+    load_str(
+        env,
+        parent,
+        *str_ptr,
+        str_wrapper_type,
+        |str_bytes_ptr, str_len, _str_smallness| {
+            load_str(
+                env,
+                parent,
+                *delimiter_ptr,
+                str_wrapper_type,
+                |delimiter_bytes_ptr, delimiter_len, _delimiter_smallness| {
+                    let segment_count = call_bitcode_fn(
+                        env,
+                        &[
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
+                            BasicValueEnum::IntValue(str_len),
+                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
+                            BasicValueEnum::IntValue(delimiter_len),
+                        ],
+                        &bitcode::STR_COUNT_SEGMENTS,
+                    )
+                    .into_int_value();
+
+                    // a pointer to the elements
+                    let ret_list_ptr =
+                        allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
+
+                    // get the RocStr type defined by zig
+                    let roc_str_type = env.module.get_struct_type("str.RocStr").unwrap();
+
+                    // convert `*mut { *mut u8, i64 }` to `*mut RocStr`
+                    let ret_list_ptr_zig_rocstr = builder.build_bitcast(
+                        ret_list_ptr,
+                        roc_str_type.ptr_type(AddressSpace::Generic),
+                        "convert_to_zig_rocstr",
+                    );
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            ret_list_ptr_zig_rocstr,
+                            BasicValueEnum::IntValue(segment_count),
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
+                            BasicValueEnum::IntValue(str_len),
+                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
+                            BasicValueEnum::IntValue(delimiter_len),
+                        ],
+                        &bitcode::STR_STR_SPLIT_IN_PLACE,
+                    );
+
+                    store_list(env, ret_list_ptr, segment_count)
+                },
+            )
+        },
+    )
+}
 
 /// Str.concat : Str, Str -> Str
 pub fn str_concat<'a, 'ctx, 'env>(
@@ -28,19 +106,19 @@ pub fn str_concat<'a, 'ctx, 'env>(
     let second_str_ptr = ptr_from_symbol(scope, second_str_symbol);
     let first_str_ptr = ptr_from_symbol(scope, first_str_symbol);
 
-    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+    let ret_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
 
     load_str(
         env,
         parent,
         *second_str_ptr,
-        str_wrapper_type,
+        ret_type,
         |second_str_ptr, second_str_len, second_str_smallness| {
             load_str(
                 env,
                 parent,
                 *first_str_ptr,
-                str_wrapper_type,
+                ret_type,
                 |first_str_ptr, first_str_len, first_str_smallness| {
                     // first_str_len > 0
                     // We do this check to avoid allocating memory. If the first input
@@ -73,7 +151,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                             second_str_length_comparison,
                             if_second_str_is_nonempty,
                             if_second_str_is_empty,
-                            str_wrapper_type,
+                            ret_type,
                         )
                     };
 
@@ -458,14 +536,14 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
         }
         Smallness::Big => {
             let clone_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, len);
-            let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
             // TODO check if malloc returned null; if so, runtime error for OOM!
 
             // Copy the bytes from the original array into the new
             // one we just malloc'd.
-            builder.build_memcpy(clone_ptr, ptr_bytes, bytes_ptr, ptr_bytes, len);
+            builder
+                .build_memcpy(clone_ptr, ptr_bytes, bytes_ptr, ptr_bytes, len)
+                .unwrap();
 
             // Create a fresh wrapper struct for the newly populated array
             let struct_type = collection(ctx, env.ptr_bytes);
@@ -475,7 +553,7 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
             struct_val = builder
                 .build_insert_value(
                     struct_type.get_undef(),
-                    ptr_as_int,
+                    clone_ptr,
                     Builtin::WRAPPER_PTR,
                     "insert_ptr",
                 )
@@ -699,6 +777,36 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
                         bool_wrapper_type,
                     )
                 },
+            )
+        },
+    )
+}
+
+/// Str.countGraphemes : Str -> Int
+pub fn str_count_graphemes<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let sym_str_ptr = ptr_from_symbol(scope, str_symbol);
+    let ret_type = BasicTypeEnum::IntType(ctx.i64_type());
+
+    load_str(
+        env,
+        parent,
+        *sym_str_ptr,
+        ret_type,
+        |str_ptr, str_len, _str_smallness| {
+            call_bitcode_fn(
+                env,
+                &[
+                    BasicValueEnum::PointerValue(str_ptr),
+                    BasicValueEnum::IntValue(str_len),
+                ],
+                &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
             )
         },
     )

@@ -73,7 +73,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home);
+    let mut scope = Scope::new(home, &mut var_store);
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(

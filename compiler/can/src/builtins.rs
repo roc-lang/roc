@@ -51,8 +51,10 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_OR => bool_or,
         Symbol::BOOL_NOT => bool_not,
         Symbol::STR_CONCAT => str_concat,
+        Symbol::STR_SPLIT => str_split,
         Symbol::STR_IS_EMPTY => str_is_empty,
         Symbol::STR_STARTS_WITH => str_starts_with,
+        Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -63,6 +65,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_REPEAT => list_repeat,
         Symbol::LIST_REVERSE => list_reverse,
         Symbol::LIST_CONCAT => list_concat,
+        Symbol::LIST_CONTAINS => list_contains,
+        Symbol::LIST_SUM => list_sum,
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
@@ -99,6 +103,38 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_POW_INT => num_pow_int,
         Symbol::NUM_FLOOR => num_floor,
         Symbol::NUM_ATAN => num_atan,
+        Symbol::NUM_ACOS => num_acos,
+        Symbol::NUM_ASIN => num_asin,
+        Symbol::NUM_MAX_INT => num_max_int,
+        Symbol::NUM_MIN_INT => num_min_int,
+    }
+}
+
+/// Num.maxInt : Int
+fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let body = Int(int_var, i64::MAX);
+
+    Def {
+        annotation: None,
+        expr_var: int_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.minInt : Int
+fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let body = Int(int_var, i64::MIN);
+
+    Def {
+        annotation: None,
+        expr_var: int_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
     }
 }
 
@@ -218,8 +254,8 @@ fn num_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
     )
 }
 
-/// Num a, Num a -> Bool
-fn num_bool_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
+/// Num a, Num a -> b
+fn num_num_other_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
     let num_var = var_store.fresh();
     let bool_var = var_store.fresh();
     let body = RunLowLevel {
@@ -325,12 +361,7 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
         annotation: None,
     };
 
-    let body = LetNonRec(
-        Box::new(def),
-        Box::new(no_region(cont)),
-        ret_var,
-        SendMap::default(),
-    );
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
 
     defn(
         symbol,
@@ -353,27 +384,27 @@ fn num_mul(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isGt : Num a, Num a -> Bool
 fn num_gt(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumGt)
+    num_num_other_binop(symbol, var_store, LowLevel::NumGt)
 }
 
 /// Num.isGte : Num a, Num a -> Bool
 fn num_gte(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumGte)
+    num_num_other_binop(symbol, var_store, LowLevel::NumGte)
 }
 
 /// Num.isLt : Num a, Num a -> Bool
 fn num_lt(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumLt)
+    num_num_other_binop(symbol, var_store, LowLevel::NumLt)
 }
 
-/// Num.isLte : Num a, Num a -> Num a
+/// Num.isLte : Num a, Num a -> Bool
 fn num_lte(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumLte)
+    num_num_other_binop(symbol, var_store, LowLevel::NumLte)
 }
 
 /// Num.compare : Num a, Num a -> [ LT, EQ, GT ]
 fn num_compare(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    num_bool_binop(symbol, var_store, LowLevel::NumCompare)
+    num_num_other_binop(symbol, var_store, LowLevel::NumCompare)
 }
 
 /// Num.sin : Float -> Float
@@ -787,6 +818,46 @@ fn num_atan(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// Num.acos : Float -> Float
+fn num_acos(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_float_var = var_store.fresh();
+    let ret_float_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumAcos,
+        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
+        ret_var: ret_float_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg_float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_float_var,
+    )
+}
+
+/// Num.asin : Float -> Float
+fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_float_var = var_store.fresh();
+    let ret_float_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumAsin,
+        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
+        ret_var: ret_float_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg_float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_float_var,
+    )
+}
+
 /// List.isEmpty : List * -> Bool
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -838,6 +909,26 @@ fn list_reverse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// Str.split : Str, Str -> List Str
+fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let ret_list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrSplit,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: ret_list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_list_var,
+    )
+}
+
 /// Str.concat : Str, Str -> Str
 fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
@@ -857,7 +948,7 @@ fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.isEmpty : List * -> Bool
+/// Str.isEmpty : Str -> Bool
 fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -894,6 +985,26 @@ fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         bool_var,
+    )
+}
+
+/// Str.countGraphemes : Str -> Int
+fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let int_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrCountGraphemes,
+        args: vec![(str_var, Var(Symbol::ARG_1))],
+        ret_var: int_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        int_var,
     )
 }
 
@@ -1231,6 +1342,26 @@ fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.sum : List (Num a) -> Num a
+fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListSum,
+        args: vec![(list_var, Var(Symbol::ARG_1))],
+        ret_var: result_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        result_var,
+    )
+}
+
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
 fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -1251,6 +1382,30 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+// List.contains : List elem, elem, -> Bool
+fn list_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let elem_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListContains,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (elem_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (elem_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        bool_var,
     )
 }
 
