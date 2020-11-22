@@ -235,7 +235,9 @@ impl RocStr {
     pub fn len(&self) -> usize {
         if self.is_small_str() {
             let bytes = self.length.to_ne_bytes();
-            let last_byte = bytes[bytes.len() - 1];
+            let len = core::mem::size_of::<RocStr>();
+            let last_byte = bytes[len - 1];
+
             (last_byte ^ 0b1000_0000) as usize
         } else {
             self.length
