@@ -4,26 +4,27 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 
+extern fn malloc(size: usize) ?*u8;
 
 const RocStr = struct {
-    str_bytes_ptrs: [*]u8,
+    str_bytes: ?[*]u8,
     str_len: usize,
 
     pub fn empty() RocStr {
         return RocStr {
             .str_len = 0,
-            .str_bytes_ptrs = 0
+            .str_bytes = null
         };
     }
 
-    pub fn init(bytes: [*]u8, len: usize) RocStr {
+    // This takes ownership of the pointed-to bytes if they won't fit in a
+    // small string, and returns a (pointer, len) tuple which points to them.
+    pub fn init(bytes: [*]const u8, length: usize) RocStr {
         const rocStrSize = @sizeOf(RocStr);
 
-        if (len < rocStrSize) {
+        if (length < rocStrSize) {
             var ret_small_str = RocStr.empty();
-
-            const target_ptr = @ptrToInt(ret_small_str);
-
+            const target_ptr = @ptrToInt(&ret_small_str);
             var index : u8 = 0;
             // Zero out the data, just to be safe
             while (index < rocStrSize) {
@@ -33,7 +34,7 @@ const RocStr = struct {
             }
 
             index = 0;
-            while (index < len) {
+            while (index < length) {
                 var offset_ptr = @intToPtr(*u8, target_ptr + index);
                 offset_ptr.* = bytes[index];
                 index += 1;
@@ -41,30 +42,57 @@ const RocStr = struct {
 
             // set the final byte to be the length
             const final_byte_ptr = @intToPtr(*u8, target_ptr + rocStrSize - 1);
-            final_byte_ptr.* = @truncate(u8, len) ^ 0b10000000;
+            final_byte_ptr.* = @truncate(u8, length) ^ 0b10000000;
 
             return ret_small_str;
         } else {
+            var new_bytes: [*]u8 = @ptrCast([*]u8, malloc(length));
+
+            @memcpy(new_bytes, bytes, length);
+
             return RocStr {
-                .str_bytes_ptrs = bytes,
-                .str_len = len
+                .str_bytes = new_bytes,
+                .str_len = length
             };
         }
     }
 
-    pub fn eq(self: *RocStr, other: RocStr) bool {
-        if (self.str_len != other.str_len) {
+    pub fn eq(self: *const RocStr, other: *const RocStr) bool {
+        const self_bytes_ptr: ?[*]const u8 = self.str_bytes;
+        const other_bytes_ptr: ?[*]const u8 = other.str_bytes;
+
+        // If they are byte-for-byte equal, they're definitely equal!
+        if (self_bytes_ptr == other_bytes_ptr and self.str_len == other.str_len) {
+            return true;
+        }
+
+        const self_len = self.len();
+        const other_len = other.len();
+
+        // If their lengths are different, they're definitely unequal.
+        if (self_len != other_len) {
             return false;
         }
 
-        var areEq: bool = true;
+        const self_bytes_nonnull: [*]const u8 = self_bytes_ptr orelse unreachable;
+        const other_bytes_nonnull: [*]const u8 = other_bytes_ptr orelse unreachable;
+        const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, self);
+        const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, other);
+        const self_bytes: [*]const u8 = if (self_len < @sizeOf(RocStr)) self_u8_ptr else self_bytes_nonnull;
+        const other_bytes: [*]const u8 = if (other_len < @sizeOf(RocStr)) other_u8_ptr else other_bytes_nonnull;
+
         var index: usize = 0;
-        while (index < self.str_len and areEq) {
-            areEq = areEq and self.str_bytes_ptrs[index] == other.str_bytes_ptrs[index];
+
+        // TODO rewrite this into a for loop
+        while (index < self.str_len) {
+            if (self_bytes[index] != other_bytes[index]) {
+                return false;
+            }
+
             index = index + 1;
         }
 
-        return areEq;
+        return true;
     }
 
     test "RocStr.eq: equal" {
@@ -78,7 +106,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(roc_str1.eq(roc_str2));
+        expect(roc_str1.eq(&roc_str2));
     }
 
     test "RocStr.eq: not equal different length" {
@@ -92,7 +120,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!roc_str1.eq(roc_str2));
+        expect(!roc_str1.eq(&roc_str2));
     }
 
     test "RocStr.eq: not equal same length" {
@@ -106,7 +134,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!roc_str1.eq(roc_str2));
+        expect(!roc_str1.eq(&roc_str2));
     }
 };
 
@@ -115,16 +143,13 @@ const RocStr = struct {
 pub fn strSplitInPlace(
     array: [*]RocStr,
     array_len: usize,
-    str_bytes_ptrs: [*]u8,
+    str_bytes: [*]const u8,
     str_len: usize,
-    delimiter_bytes_ptrs: [*]u8,
+    delimiter_bytes_ptrs: [*]const u8,
     delimiter_len: usize
 ) callconv(.C) void {
-
     var ret_array_index : usize = 0;
-
     var sliceStart_index : usize = 0;
-
     var str_index : usize = 0;
 
     if (str_len > delimiter_len) {
@@ -135,7 +160,7 @@ pub fn strSplitInPlace(
 
             while (delimiter_index < delimiter_len) {
                 var delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-                var strChar = str_bytes_ptrs[str_index + delimiter_index];
+                var strChar = str_bytes[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {
                     matches_delimiter = false;
@@ -147,7 +172,8 @@ pub fn strSplitInPlace(
 
             if (matches_delimiter) {
                 const segment_len : usize = str_index - sliceStart_index;
-                array[ret_array_index] = RocStr.init(str_bytes_ptrs + sliceStart_index, segment_len);
+
+                array[ret_array_index] = RocStr.init(str_bytes + sliceStart_index, segment_len);
                 sliceStart_index = str_index + delimiter_len;
                 ret_array_index += 1;
                 str_index += delimiter_len;
@@ -157,23 +183,23 @@ pub fn strSplitInPlace(
         }
     }
 
-    array[ret_array_index] = RocStr.init(str_bytes_ptrs + sliceStart_index, str_len - sliceStart_index);
+    array[ret_array_index] = RocStr.init(str_bytes + sliceStart_index, str_len - sliceStart_index);
 }
 
 test "strSplitInPlace: no delimiter" {
     // Str.split "abc" "!" == [ "abc" ]
 
     var str: [3]u8 = "abc".*;
-    const str_ptr: [*]u8 = &str;
+    const str_ptr: [*]const u8 = &str;
 
     var delimiter: [1]u8 = "!".*;
-    const delimiter_ptr: [*]u8 = &delimiter;
+    const delimiter_ptr: [*]const u8 = &delimiter;
 
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
     strSplitInPlace(
-        @ptrCast([*]u128, array_ptr),
+        array_ptr,
         1,
         str_ptr,
         3,
@@ -186,7 +212,7 @@ test "strSplitInPlace: no delimiter" {
     };
 
     expectEqual(array.len, expected.len);
-    expect(array[0].eq(expected[0]));
+    expect(array[0].eq(&expected[0]));
 }
 
 test "strSplitInPlace: empty end" {
@@ -195,8 +221,8 @@ test "strSplitInPlace: empty end" {
     const str_ptr: [*]u8 = &str;
 
     const delimiter_len = 24;
-    const delimiter: [delimiter_len]u8 = "---- ---- ---- ---- ----";
-    const delimiter_ptr: [*]u8 = &delimiter;
+    const delimiter: *const [delimiter_len:0]u8 = "---- ---- ---- ---- ----";
+    const delimiter_ptr: [*]const u8 = delimiter;
 
     const array_len : usize = 3;
     var array: [array_len]RocStr = [_]RocStr {
@@ -227,8 +253,8 @@ test "strSplitInPlace: empty end" {
 
         expectEqual(array.len, 3);
         expectEqual(array[0].str_len, 0);
-        expect(array[0].eq(firstExpectedRocStr));
-        expect(array[1].eq(secondExpectedRocStr));
+        expect(array[0].eq(&firstExpectedRocStr));
+        expect(array[1].eq(&secondExpectedRocStr));
         expectEqual(array[2].str_len, 0);
 }
 
@@ -262,12 +288,12 @@ test "strSplitInPlace: delimiter on sides" {
 
     const expected_str_len: usize = 3;
     var expected_str: [expected_str_len]u8 = "ghi".*;
-    const expected_str_ptr: [*]u8 = &expected_str;
+    const expected_str_ptr: [*]const u8 = &expected_str;
     var expectedRocStr = RocStr.init(expected_str_ptr, expected_str_len);
 
     expectEqual(array.len, 3);
     expectEqual(array[0].str_len, 0);
-    expect(array[1].eq(expectedRocStr));
+    expect(array[1].eq(&expectedRocStr));
     expectEqual(array[2].str_len, 0);
 }
 
@@ -306,23 +332,23 @@ test "strSplitInPlace: three pieces" {
 
     var expected_array = [array_len]RocStr{
         RocStr{
-            .str_bytes_ptrs = a_ptr,
+            .str_bytes = a_ptr,
             .str_len = 1,
         },
         RocStr{
-            .str_bytes_ptrs = b_ptr,
+            .str_bytes = b_ptr,
             .str_len = 1,
         },
         RocStr{
-            .str_bytes_ptrs = c_ptr,
+            .str_bytes = c_ptr,
             .str_len = 1,
         }
     };
 
     expectEqual(expected_array.len, array.len);
-    expect(array[0].eq(expected_array[0]));
-    expect(array[1].eq(expected_array[1]));
-    expect(array[2].eq(expected_array[2]));
+    expect(array[0].eq(&expected_array[0]));
+    expect(array[1].eq(&expected_array[1]));
+    expect(array[2].eq(&expected_array[2]));
 }
 
 // This is used for `Str.split : Str, Str -> Array Str
@@ -330,7 +356,7 @@ test "strSplitInPlace: three pieces" {
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
 pub fn countSegments(
-    str_bytes_ptrs: [*]u8,
+    str_bytes: [*]u8,
     str_len: usize,
     delimiter_bytes_ptrs: [*]u8,
     delimiter_len: usize
@@ -348,7 +374,7 @@ pub fn countSegments(
 
             while (delimiter_index < delimiter_len) {
                 const delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-                const strChar = str_bytes_ptrs[str_index + delimiter_index];
+                const strChar = str_bytes[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {
                     matches_delimiter = false;
