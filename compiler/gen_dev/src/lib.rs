@@ -66,29 +66,6 @@ where
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     fn reset(&mut self);
 
-    /// last_seen_map gets the map from symbol to when it is last seen in the function.
-    fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>>;
-
-    /// free_map gets the map statement to the symbols that are free after they run.
-    fn free_map(&mut self) -> &mut MutMap<*const Stmt<'a>, Vec<'a, Symbol>>;
-
-    /// set_free_map sets the free map to the given map.
-    fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>);
-
-    /// load_literal sets a symbol to be equal to a literal.
-    fn load_literal(
-        &mut self,
-        sym: &Symbol,
-        lit: &Literal<'a>,
-        layout: &Layout<'a>,
-    ) -> Result<(), String>;
-
-    /// free_symbol frees any registers or stack space used to hold a symbol.
-    fn free_symbol(&mut self, sym: &Symbol);
-
-    /// return_symbol moves a symbol to the correct return location for the backend.
-    fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String>;
-
     /// finalize does any setup and cleanup that should happen around the procedure.
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pionter and setup stack space.
@@ -207,33 +184,55 @@ where
         src2: &Symbol,
     ) -> Result<(), String>;
 
+    /// load_literal sets a symbol to be equal to a literal.
+    fn load_literal(
+        &mut self,
+        sym: &Symbol,
+        lit: &Literal<'a>,
+        layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// return_symbol moves a symbol to the correct return location for the backend.
+    fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String>;
+
     /// free_symbols will free all symbols for the given statement.
     fn free_symbols(&mut self, stmt: &Stmt<'a>) {
-        match self.free_map().remove(&(stmt as *const Stmt<'a>)) {
-            Some(syms) => {
-                for sym in syms {
-                    //println!("Freeing symbol: {:?}", sym);
-                    self.free_symbol(&sym);
-                }
+        if let Some(syms) = self.free_map().remove(&(stmt as *const Stmt<'a>)) {
+            for sym in syms {
+                //println!("Freeing symbol: {:?}", sym);
+                self.free_symbol(&sym);
             }
-            _ => {}
         }
     }
+
+    /// free_symbol frees any registers or stack space used to hold a symbol.
+    fn free_symbol(&mut self, sym: &Symbol);
 
     /// set_last_seen sets the statement a symbol was last seen in.
     fn set_last_seen(&mut self, sym: Symbol, stmt: &Stmt<'a>) {
         self.last_seen_map().insert(sym, stmt);
     }
 
+    /// last_seen_map gets the map from symbol to when it is last seen in the function.
+    fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>>;
+
     fn create_free_map(&mut self) {
         let mut free_map = MutMap::default();
         let arena = self.env().arena;
         for (sym, stmt) in self.last_seen_map() {
-            let vals = free_map.entry(*stmt).or_insert(bumpalo::vec!(in arena));
+            let vals = free_map
+                .entry(*stmt)
+                .or_insert_with(|| bumpalo::vec![in arena]);
             vals.push(*sym);
         }
         self.set_free_map(free_map);
     }
+
+    /// free_map gets the map statement to the symbols that are free after they run.
+    fn free_map(&mut self) -> &mut MutMap<*const Stmt<'a>, Vec<'a, Symbol>>;
+
+    /// set_free_map sets the free map to the given map.
+    fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>);
 
     /// calculate_last_seen runs through the ast and fill the last seen map.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
