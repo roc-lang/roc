@@ -11,15 +11,20 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
+use crate::rect::Rect;
+use crate::vertex::Vertex;
 use std::error::Error;
 use std::io;
 use std::path::Path;
+use wgpu::util::DeviceExt;
 use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 use winit::event_loop::ControlFlow;
 
 pub mod ast;
+mod rect;
 pub mod text_state;
+mod vertex;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -117,7 +122,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
         depth_stencil_state: None,
         vertex_state: wgpu::VertexStateDescriptor {
             index_format: wgpu::IndexFormat::Uint16,
-            vertex_buffers: &[],
+            vertex_buffers: &[Vertex::buffer_descriptor()],
         },
         sample_count: 1,
         sample_mask: !0,
@@ -216,6 +221,42 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next swap chain texture")
                     .output;
 
+                // Test Rectangle
+                let test_rect_1 = Rect {
+                    top: 0.9,
+                    left: -0.8,
+                    width: 0.2,
+                    height: 0.3,
+                    color: [0.0, 1.0, 1.0],
+                };
+                let test_rect_2 = Rect {
+                    top: 0.0,
+                    left: 0.0,
+                    width: 0.5,
+                    height: 0.5,
+                    color: [1.0, 1.0, 0.0],
+                };
+                let mut rectangles = Vec::new();
+                rectangles.extend_from_slice(&test_rect_1.as_array());
+                rectangles.extend_from_slice(&test_rect_2.as_array());
+
+                let mut rect_index_buffers = Vec::new();
+                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
+                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
+                // Vertex Buffer for drawing rectangles
+                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&rectangles),
+                    usage: wgpu::BufferUsage::VERTEX,
+                });
+
+                // Index Buffer for drawing rectangles
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Index Buffer"),
+                    contents: bytemuck::cast_slice(&rect_index_buffers),
+                    usage: wgpu::BufferUsage::INDEX,
+                });
+
                 // Clear frame
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -236,7 +277,19 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     });
 
                     render_pass.set_pipeline(&triangle_pipeline);
-                    render_pass.draw(0..3, 0..1);
+
+                    render_pass.set_vertex_buffer(
+                        0,                       // The buffer slot to use for this vertex buffer.
+                        vertex_buffer.slice(..), // Use the entire buffer.
+                    );
+
+                    render_pass.set_index_buffer(index_buffer.slice(..));
+
+                    render_pass.draw_indexed(
+                        0..((&rect_index_buffers).len() as u32), // Draw all of the vertices from our test data.
+                        0,                                       // Base Vertex
+                        0..1,                                    // Instances
+                    );
                 }
 
                 glyph_brush.queue(Section {

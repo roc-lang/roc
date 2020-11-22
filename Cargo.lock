@@ -231,6 +231,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3b5ca7a04898ad4bcd41c90c5285445ff5b791899bb1b0abdd2a2aa791211d7"
 
 [[package]]
+name = "bytemuck"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41aa2ec95ca3b5c54cf73c91acf06d24f4495d5f1b1c12506ae3483d646177ac"
+
+[[package]]
 name = "byteorder"
 version = "1.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -250,7 +256,7 @@ checksum = "7aa2097be53a00de9e8fc349fea6d76221f398f5c4fa550d420669906962d160"
 dependencies = [
  "mio",
  "mio-extras",
- "nix",
+ "nix 0.14.1",
 ]
 
 [[package]]
@@ -378,6 +384,26 @@ dependencies = [
  "foreign-types",
  "libc",
  "objc",
+]
+
+[[package]]
+name = "const_format"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a49b6cb3f7a62b0a488baa8692286b25b69648f1dae69a598b1a9faa166d56d"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8df496e1bbc93814d728a8036ff054cd95830afe9cf2275c9326688c02eff936"
+dependencies = [
+ "proc-macro2 1.0.21",
+ "quote 1.0.7",
+ "unicode-xid 0.2.1",
 ]
 
 [[package]]
@@ -629,6 +655,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3d0c8c8752312f9713efd397ff63acb9f85585afbf179282e720e7704954dd5"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "dirs-next"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf36e65a80337bea855cd4ef9b8401ffce06a7baedf2e85ec467b1ac3f6e82b6"
+dependencies = [
+ "cfg-if 1.0.0",
+ "dirs-sys-next",
+]
+
+[[package]]
+name = "dirs-sys-next"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99de365f605554ae33f115102a02057d4fc18b01f3284d6870be0938743cfe7d"
+dependencies = [
+ "libc",
+ "redox_users",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -1425,9 +1472,9 @@ checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
 
 [[package]]
 name = "memchr"
-version = "2.3.3"
+version = "2.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3728d817d99e5ac407411fa471ff9800a778d88a24685968b36824eaf4bee400"
+checksum = "0ee1c47aaa256ecabcaea351eae4a9b01ef39ed810004e298d2511ed284b1525"
 
 [[package]]
 name = "memmap"
@@ -1615,6 +1662,18 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc",
  "void",
+]
+
+[[package]]
+name = "nix"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83450fe6a6142ddd95fb064b746083fc4ef1705fe81f64a64e1d4b39f54a1055"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if 0.1.10",
+ "libc",
 ]
 
 [[package]]
@@ -2250,6 +2309,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41cc0f7e4d5d4544e8861606a285bb08d3e70712ccc7d2b84d7c0ccfaf4b05ce"
 
 [[package]]
+name = "redox_users"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de0737333e7a9502c789a36d7c7fa6092a49895d4faa31ca5df163857ded2e9d"
+dependencies = [
+ "getrandom",
+ "redox_syscall",
+]
+
+[[package]]
 name = "regex"
 version = "1.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2364,6 +2433,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "clap 3.0.0-beta.1",
+ "const_format",
  "im",
  "im-rc",
  "indoc",
@@ -2394,6 +2464,8 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_uniq",
+ "rustyline",
+ "rustyline-derive",
  "serde",
  "serde-xml-rs",
  "serial_test",
@@ -2438,6 +2510,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bumpalo",
+ "bytemuck",
  "env_logger 0.7.1",
  "fs_extra",
  "futures",
@@ -2839,6 +2912,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyline"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f0d5e7b0219a3eadd5439498525d4765c59b7c993ef0c12244865cd2d988413"
+dependencies = [
+ "cfg-if 0.1.10",
+ "dirs-next",
+ "libc",
+ "log",
+ "memchr",
+ "nix 0.18.0",
+ "scopeguard",
+ "unicode-segmentation",
+ "unicode-width",
+ "utf8parse 0.2.0",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "rustyline-derive"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54a50e29610a5be68d4a586a5cce3bfb572ed2c2a74227e4168444b7bf4e5235"
+dependencies = [
+ "quote 1.0.7",
+ "syn 1.0.40",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3024,7 +3126,7 @@ dependencies = [
  "dlib",
  "lazy_static",
  "memmap",
- "nix",
+ "nix 0.14.1",
  "wayland-client",
  "wayland-protocols",
 ]
@@ -3362,6 +3464,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8772a4ccbb4e89959023bc5b7cb8623a795caa7092d99f3aa9501b9484d4557d"
 
 [[package]]
+name = "utf8parse"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
+
+[[package]]
 name = "vec_map"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3411,7 +3519,7 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f42f536e22f7fcbb407639765c8fd78707a33109301f834a594758bedd6e8cf"
 dependencies = [
- "utf8parse",
+ "utf8parse 0.1.1",
 ]
 
 [[package]]
@@ -3514,7 +3622,7 @@ dependencies = [
  "downcast-rs",
  "libc",
  "mio",
- "nix",
+ "nix 0.14.1",
  "wayland-commons",
  "wayland-scanner",
  "wayland-sys",
@@ -3526,7 +3634,7 @@ version = "0.23.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb66b0d1a27c39bbce712b6372131c6e25149f03ffb0cd017cf8f7de8d66dbdb"
 dependencies = [
- "nix",
+ "nix 0.14.1",
  "wayland-sys",
 ]
 

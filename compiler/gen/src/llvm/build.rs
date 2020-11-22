@@ -17,7 +17,9 @@ use bumpalo::Bump;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::debug_info::{AsDIScope, DICompileUnit, DISubprogram, DebugInfoBuilder};
+use inkwell::debug_info::{
+    AsDIScope, DICompileUnit, DIFlagsConstants, DISubprogram, DebugInfoBuilder,
+};
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
@@ -201,8 +203,6 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn new_subprogram(&self, function_name: &str) -> DISubprogram<'ctx> {
-        use inkwell::debug_info::DIFlagsConstants;
-
         let dibuilder = self.dibuilder;
         let compile_unit = self.compile_unit;
 
@@ -223,7 +223,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         );
 
         dibuilder.create_function(
-            /* scope */ compile_unit.as_debug_info_scope(),
+            /* scope */ compile_unit.get_file().as_debug_info_scope(),
             /* func name */ function_name,
             /* linkage_name */ None,
             /* file */ compile_unit.get_file(),
@@ -1040,21 +1040,45 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
-    let value_bytes = layout.stack_size(env.ptr_bytes);
-
     let len_type = env.ptr_int();
 
-    let extra_bytes = layout.alignment_bytes(env.ptr_bytes);
+    let value_bytes = layout.stack_size(env.ptr_bytes);
+    let value_bytes_intvalue = len_type.const_int(value_bytes as u64, false);
+
+    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+
+    let data_ptr = allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1);
+
+    // store the value in the pointer
+    builder.build_store(data_ptr, value);
+
+    data_ptr
+}
+
+pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    number_of_data_bytes: IntValue<'ctx>,
+    initial_refcount: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
+    let len_type = env.ptr_int();
+
+    let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
 
     let ptr = {
-        let len = value_bytes as u64 + extra_bytes as u64;
-
-        // bytes per element
-        let bytes_len = len_type.const_int(len, false);
+        // number of bytes we will allocated
+        let number_of_bytes = builder.build_int_add(
+            len_type.const_int(extra_bytes as u64, false),
+            number_of_data_bytes,
+            "add_extra_bytes",
+        );
 
         env.builder
-            .build_array_malloc(ctx.i8_type(), bytes_len, "create_ptr")
+            .build_array_malloc(ctx.i8_type(), number_of_bytes, "create_ptr")
             .unwrap()
 
         // TODO check if malloc returned null; if so, runtime error for OOM!
@@ -1073,7 +1097,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
         let index = match extra_bytes {
             n if n == env.ptr_bytes => 1,
             n if n == 2 * env.ptr_bytes => 2,
-            _ => unreachable!("invalid extra_bytes"),
+            _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
         };
 
         let index_intvalue = int_type.const_int(index, false);
@@ -1105,11 +1129,8 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
         n => unreachable!("invalid extra_bytes {}", n),
     };
 
-    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
-    refcount_ptr.set_refcount(env, rc1);
-
-    // store the value in the pointer
-    builder.build_store(data_ptr, value);
+    // let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    refcount_ptr.set_refcount(env, initial_refcount);
 
     data_ptr
 }
