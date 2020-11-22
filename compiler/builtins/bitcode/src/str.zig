@@ -17,7 +17,7 @@ const RocStr = struct {
     pub fn empty() RocStr {
         return RocStr {
             .str_len = 0,
-            .str_bytes_ptrs = undefined
+            .str_bytes_ptrs = 0
         };
     }
 
