@@ -137,9 +137,7 @@ init _ =
                                 , token "\"Register\""
                                 , syntax ","
                                 ]
-                            , group Hori
-                                [ token "content"
-                                ]
+                            , token "content"
                             , syntax "}"
                             ]
                         ]
@@ -155,15 +153,17 @@ init _ =
 view : Model -> Html Action
 view model =
     H.div [ A.class "flex flex-col justify-start items-start" ] <|
-        case model.keyboard of
+        (case model.keyboard of
             Navigating path ->
-                [ viewToken (Just path) model.tree ]
+                [ viewToken (Just path) This model.tree ]
 
             Editing _ path ->
-                [ viewToken (Just path) model.tree ]
+                [ viewToken (Just path) This model.tree ]
+        )
+            ++ [ H.text <| Debug.toString model.keyboard ]
 
 
-viewToken : Maybe TokenPath -> TokenPath ->  Token -> Html Action
+viewToken : Maybe TokenPath -> TokenPath -> Token -> Html Action
 viewToken selPath path (Token t) =
     let
         ( self, sty ) =
@@ -193,9 +193,14 @@ viewToken selPath path (Token t) =
                     _ ->
                         Nothing
                 )
-                (Next idx path)
+                (appendPath idx path)
                 subtoken
-
+        appendPath idx pth = 
+            case pth of
+                This -> 
+                    Next idx This
+                Next n subPath ->
+                    Next n (appendPath idx subPath)
         subtokens =
             List.indexedMap viewSubtoken t.subTokens
     in
@@ -207,6 +212,7 @@ viewToken selPath path (Token t) =
 
             Vert ->
                 A.class " "
+        , Ev.onMouseEnter (UserMouseHover path)
         ]
     <|
         self
@@ -221,10 +227,6 @@ isSel mpath =
 
         _ ->
             False
-
-
-
---
 
 
 tokenStyles : Bool -> H.Attribute msg
@@ -258,6 +260,12 @@ tokenStyles sel =
 update : Action -> Model -> ( Model, Cmd Action )
 update msg model =
     case msg of
+        UserMouseHover path ->
+            { model
+                | keyboard = Navigating path
+            }
+                |> state
+
         MoveDown ->
             { model
                 | keyboard = mapKeyboard (down model.tree) model.keyboard
@@ -285,27 +293,25 @@ update msg model =
         _ ->
             state model
 
+
 down : Token -> TokenPath -> TokenPath
-down t tp = 
+down t tp =
     Debug.todo "DOWN"
-            
 
 
 up : Token -> TokenPath -> TokenPath
 up xs p =
-     Debug.todo "Up"
-
-
+    Debug.todo "Up"
 
 
 left : Token -> TokenPath -> TokenPath
 left xs p =
-     Debug.todo "left"
+    Debug.todo "left"
 
 
 right : Token -> TokenPath -> TokenPath
 right xs p =
-     Debug.todo "RIGHT"
+    Debug.todo "RIGHT"
 
 
 type Action
@@ -317,6 +323,7 @@ type Action
     | Enter
     | Space
     | Type Int
+    | UserMouseHover TokenPath
 
 
 action : Action -> Token -> TokenPath -> TokenPath
