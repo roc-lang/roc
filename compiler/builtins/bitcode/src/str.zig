@@ -9,11 +9,6 @@ const RocStr = struct {
     str_bytes_ptrs: [*]u8,
     str_len: usize,
 
-    pub fn get_small_str_ptr(self: *RocStr) *u8 {
-        const small_str_ptr = @ptrCast(*u8, self);
-        return small_str_ptr;
-    }
-
     pub fn empty() RocStr {
         return RocStr {
             .str_len = 0,
@@ -27,7 +22,7 @@ const RocStr = struct {
         if (len < rocStrSize) {
             var ret_small_str = RocStr.empty();
 
-            const target_ptr = @ptrToInt(ret_small_str.get_small_str_ptr());
+            const target_ptr = @ptrToInt(ret_small_str);
 
             var index : u8 = 0;
             // Zero out the data, just to be safe
