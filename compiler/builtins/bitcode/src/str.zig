@@ -95,6 +95,45 @@ const RocStr = struct {
         return true;
     }
 
+    pub fn is_small_str(self: *const RocStr) bool {
+        return @bitCast(isize, self.str_len) < 0;
+    }
+
+    pub fn len(self: *const RocStr) usize {
+        const bytes: [*]const u8 = @ptrCast([*]const u8, self);
+        const last_byte = bytes[@sizeOf(RocStr) - 1];
+        const small_len = @as(usize, last_byte ^ 0b1000_0000);
+        const big_len = self.str_len;
+
+        // Since this conditional would be prone to branch misprediction,
+        // make sure it will compile to a cmov.
+        return if (self.is_small_str()) small_len else big_len;
+    }
+
+    // Given a pointer to some memory of length (self.len() + 1) bytes,
+    // write this RocStr's contents into it as a nul-terminated C string.
+    //
+    // This is useful so that (for example) we can write into an `alloca`
+    // if the C string only needs to live long enough to be passed as an
+    // argument to a C function - like the file path argument to `fopen`.
+    pub fn write_cstr(self: *const RocStr, dest: [*]u8) void {
+        const len: usize = self.len();
+        const small_src = @ptrCast(*u8, self);
+        const big_src = self.str_bytes_ptr;
+
+        // For a small string, copy the bytes directly from `self`.
+        // For a large string, copy from the pointed-to bytes.
+
+        // Since this conditional would be prone to branch misprediction,
+        // make sure it will compile to a cmov.
+        const src: [*]u8 = if (len < @sizeOf(RocStr)) small_src else big_src;
+
+        @memcpy(dest, src, len);
+
+        // C strings must end in 0.
+        dest[len + 1] = 0;
+    }
+
     test "RocStr.eq: equal" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "abc".*;
