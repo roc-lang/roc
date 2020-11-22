@@ -537,7 +537,7 @@ pub fn startsWith(
     bytes_len: usize,
     prefix_ptr: [*]u8,
     prefix_len: usize
-) callconv(.C) u1 {
+) callconv(.C) bool {
     if(prefix_len > bytes_len) {
         return false;
     }
