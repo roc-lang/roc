@@ -13,7 +13,7 @@
 
 use bumpalo::{collections::Vec, Bump};
 use object::write::Object;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{ImSet, MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
@@ -30,6 +30,9 @@ pub struct Env<'a> {
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
+
+// INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
+const INLINED_SYMBOLS: [Symbol; 2] = [Symbol::NUM_ABS, Symbol::NUM_ADD];
 
 /// build_module is the high level builder/delegator.
 /// It takes the request to build a module and output the object file for the module.
@@ -77,7 +80,7 @@ where
         self.reset();
         // TODO: let the backend know of all the arguments.
         // let start = std::time::Instant::now();
-        self.calculate_last_seen(&proc.body);
+        self.scan_ast(&proc.body);
         self.create_free_map();
         // let duration = start.elapsed();
         // println!("Time to calculate lifetimes: {:?}", duration);
@@ -234,9 +237,13 @@ where
     /// set_free_map sets the free map to the given map.
     fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>);
 
-    /// calculate_last_seen runs through the ast and fill the last seen map.
+    /// set_not_leaf_function lets the backend know that it is not a leaf function.
+    fn set_not_leaf_function(&mut self);
+
+    /// scan_ast runs through the ast and fill the last seen map.
+    /// It also checks if the function is a leaf function or not.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
-    fn calculate_last_seen(&mut self, stmt: &Stmt<'a>) {
+    fn scan_ast(&mut self, stmt: &Stmt<'a>) {
         match stmt {
             Stmt::Let(sym, expr, _, following) => {
                 self.set_last_seen(*sym, stmt);
@@ -250,10 +257,14 @@ where
                             self.set_last_seen(*sym, stmt);
                         }
                         match call_type {
-                            CallType::ByName(_sym) => {
-                                // Do nothing, by name is not a variable with lifetime.
+                            CallType::ByName(sym) => {
+                                // For functions that we won't inline, we should not be a leaf function.
+                                if !INLINED_SYMBOLS.contains(sym) {
+                                    self.set_not_leaf_function();
+                                }
                             }
                             CallType::ByPointer(sym) => {
+                                self.set_not_leaf_function();
                                 self.set_last_seen(*sym, stmt);
                             }
                         }
@@ -267,6 +278,7 @@ where
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
                         }
+                        self.set_not_leaf_function();
                     }
                     Expr::Tag { arguments, .. } => {
                         for sym in *arguments {
@@ -312,7 +324,7 @@ where
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
                 }
-                self.calculate_last_seen(following);
+                self.scan_ast(following);
             }
             Stmt::Switch {
                 cond_symbol,
@@ -322,9 +334,9 @@ where
             } => {
                 self.set_last_seen(*cond_symbol, stmt);
                 for (_, branch) in *branches {
-                    self.calculate_last_seen(branch);
+                    self.scan_ast(branch);
                 }
-                self.calculate_last_seen(default_branch);
+                self.scan_ast(default_branch);
             }
             Stmt::Cond {
                 cond_symbol,
@@ -335,19 +347,19 @@ where
             } => {
                 self.set_last_seen(*cond_symbol, stmt);
                 self.set_last_seen(*branching_symbol, stmt);
-                self.calculate_last_seen(pass);
-                self.calculate_last_seen(fail);
+                self.scan_ast(pass);
+                self.scan_ast(fail);
             }
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
             Stmt::Inc(sym, following) => {
                 self.set_last_seen(*sym, stmt);
-                self.calculate_last_seen(following);
+                self.scan_ast(following);
             }
             Stmt::Dec(sym, following) => {
                 self.set_last_seen(*sym, stmt);
-                self.calculate_last_seen(following);
+                self.scan_ast(following);
             }
             Stmt::Join {
                 parameters,
@@ -358,8 +370,8 @@ where
                 for param in *parameters {
                     self.set_last_seen(param.symbol, stmt);
                 }
-                self.calculate_last_seen(continuation);
-                self.calculate_last_seen(remainder);
+                self.scan_ast(continuation);
+                self.scan_ast(remainder);
             }
             Stmt::Jump(JoinPointId(sym), symbols) => {
                 self.set_last_seen(*sym, stmt);

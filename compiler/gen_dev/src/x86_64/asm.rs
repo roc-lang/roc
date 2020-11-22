@@ -51,6 +51,15 @@ fn add_reg_extension(reg: GPReg, byte: u8) -> u8 {
 // Unit tests are added at the bottom of the file to ensure correct asm generation.
 // Please keep these in alphanumeric order.
 
+/// `ADD r/m64, imm32` -> Add imm32 sign-extended to 64-bits from r/m64.
+pub fn add_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32) {
+    let rex = add_rm_extension(dst, REX_W);
+    let dst_mod = dst as u8 % 8;
+    buf.reserve(7);
+    buf.extend(&[rex, 0x81, 0xC0 + dst_mod]);
+    buf.extend(&imm.to_le_bytes());
+}
+
 /// `ADD r/m64,r64` -> Add r64 to r/m64.
 pub fn add_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg) {
     let rex = add_rm_extension(dst, REX_W);
@@ -80,11 +89,15 @@ pub fn mov_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, i
 
 /// `MOV r64, imm64` -> Move imm64 to r64.
 pub fn mov_register64bit_immediate64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i64) {
-    let rex = add_opcode_extension(dst, REX_W);
-    let dst_mod = dst as u8 % 8;
-    buf.reserve(10);
-    buf.extend(&[rex, 0xB8 + dst_mod]);
-    buf.extend(&imm.to_le_bytes());
+    if imm <= i32::MAX as i64 && imm >= i32::MIN as i64 {
+        mov_register64bit_immediate32bit(buf, dst, imm as i32)
+    } else {
+        let rex = add_opcode_extension(dst, REX_W);
+        let dst_mod = dst as u8 % 8;
+        buf.reserve(10);
+        buf.extend(&[rex, 0xB8 + dst_mod]);
+        buf.extend(&imm.to_le_bytes());
+    }
 }
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
@@ -94,6 +107,28 @@ pub fn mov_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, sr
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, 0x89, 0xC0 + dst_mod + src_mod]);
+}
+
+/// `MOV r64,r/m64` -> Move r/m64 to r64.
+pub fn mov_register64bit_stackoffset32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32) {
+    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
+    // Also, this may technically be faster genration since stack operations should be so common.
+    let rex = add_reg_extension(dst, REX_W);
+    let dst_mod = (dst as u8 % 8) << 3;
+    buf.reserve(8);
+    buf.extend(&[rex, 0x8B, 0x84 + dst_mod, 0x24]);
+    buf.extend(&offset.to_le_bytes());
+}
+
+/// `MOV r/m64,r64` -> Move r64 to r/m64.
+pub fn mov_stackoffset32bit_register64bit<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg) {
+    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
+    // Also, this may technically be faster genration since stack operations should be so common.
+    let rex = add_reg_extension(src, REX_W);
+    let src_mod = (src as u8 % 8) << 3;
+    buf.reserve(8);
+    buf.extend(&[rex, 0x89, 0x84 + src_mod, 0x24]);
+    buf.extend(&offset.to_le_bytes());
 }
 
 /// `NEG r/m64` -> Two's complement negate r/m64.
@@ -106,6 +141,15 @@ pub fn neg_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg) {
 /// `RET` -> Near return to calling procedure.
 pub fn ret_near<'a>(buf: &mut Vec<'a, u8>) {
     buf.push(0xC3);
+}
+
+/// `SUB r/m64, imm32` -> Subtract imm32 sign-extended to 64-bits from r/m64.
+pub fn sub_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32) {
+    let rex = add_rm_extension(dst, REX_W);
+    let dst_mod = dst as u8 % 8;
+    buf.reserve(7);
+    buf.extend(&[rex, 0x81, 0xE8 + dst_mod]);
+    buf.extend(&imm.to_le_bytes());
 }
 
 /// `POP r64` -> Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit operand size.
@@ -140,17 +184,32 @@ mod tests {
     const TEST_I64: i64 = 0x12345678_9ABCDEF0;
 
     #[test]
+    fn test_add_register64bit_immediate32bit() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for (dst, expected) in &[
+            (GPReg::RAX, [0x48, 0x81, 0xC0]),
+            (GPReg::R15, [0x49, 0x81, 0xC7]),
+        ] {
+            buf.clear();
+            add_register64bit_immediate32bit(&mut buf, *dst, TEST_I32);
+            assert_eq!(expected, &buf[..3]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
+        }
+    }
+
+    #[test]
     fn test_add_register64bit_register64bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for ((in1, in2), expected) in &[
+        for ((dst, src), expected) in &[
             ((GPReg::RAX, GPReg::RAX), [0x48, 0x01, 0xC0]),
             ((GPReg::RAX, GPReg::R15), [0x4C, 0x01, 0xF8]),
             ((GPReg::R15, GPReg::RAX), [0x49, 0x01, 0xC7]),
             ((GPReg::R15, GPReg::R15), [0x4D, 0x01, 0xFF]),
         ] {
             buf.clear();
-            add_register64bit_register64bit(&mut buf, *in1, *in2);
+            add_register64bit_register64bit(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
     }
@@ -159,14 +218,14 @@ mod tests {
     fn test_cmovl_register64bit_register64bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for ((in1, in2), expected) in &[
+        for ((dst, src), expected) in &[
             ((GPReg::RAX, GPReg::RAX), [0x48, 0x0F, 0x4C, 0xC0]),
             ((GPReg::RAX, GPReg::R15), [0x49, 0x0F, 0x4C, 0xC7]),
             ((GPReg::R15, GPReg::RAX), [0x4C, 0x0F, 0x4C, 0xF8]),
             ((GPReg::R15, GPReg::R15), [0x4D, 0x0F, 0x4C, 0xFF]),
         ] {
             buf.clear();
-            cmovl_register64bit_register64bit(&mut buf, *in1, *in2);
+            cmovl_register64bit_register64bit(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
     }
@@ -175,12 +234,12 @@ mod tests {
     fn test_mov_register64bit_immediate32bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for (in1, expected) in &[
+        for (dst, expected) in &[
             (GPReg::RAX, [0x48, 0xC7, 0xC0]),
             (GPReg::R15, [0x49, 0xC7, 0xC7]),
         ] {
             buf.clear();
-            mov_register64bit_immediate32bit(&mut buf, *in1, TEST_I32);
+            mov_register64bit_immediate32bit(&mut buf, *dst, TEST_I32);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
@@ -190,11 +249,20 @@ mod tests {
     fn test_mov_register64bit_immediate64bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for (in1, expected) in &[(GPReg::RAX, [0x48, 0xB8]), (GPReg::R15, [0x49, 0xBF])] {
+        for (dst, expected) in &[(GPReg::RAX, [0x48, 0xB8]), (GPReg::R15, [0x49, 0xBF])] {
             buf.clear();
-            mov_register64bit_immediate64bit(&mut buf, *in1, TEST_I64);
+            mov_register64bit_immediate64bit(&mut buf, *dst, TEST_I64);
             assert_eq!(expected, &buf[..2]);
             assert_eq!(TEST_I64.to_le_bytes(), &buf[2..]);
+        }
+        for (dst, expected) in &[
+            (GPReg::RAX, [0x48, 0xC7, 0xC0]),
+            (GPReg::R15, [0x49, 0xC7, 0xC7]),
+        ] {
+            buf.clear();
+            mov_register64bit_immediate64bit(&mut buf, *dst, TEST_I32 as i64);
+            assert_eq!(expected, &buf[..3]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
     }
 
@@ -202,15 +270,45 @@ mod tests {
     fn test_mov_register64bit_register64bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for ((in1, in2), expected) in &[
+        for ((dst, src), expected) in &[
             ((GPReg::RAX, GPReg::RAX), [0x48, 0x89, 0xC0]),
             ((GPReg::RAX, GPReg::R15), [0x4C, 0x89, 0xF8]),
             ((GPReg::R15, GPReg::RAX), [0x49, 0x89, 0xC7]),
             ((GPReg::R15, GPReg::R15), [0x4D, 0x89, 0xFF]),
         ] {
             buf.clear();
-            mov_register64bit_register64bit(&mut buf, *in1, *in2);
+            mov_register64bit_register64bit(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_mov_register64bit_stackoffset32bit() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, offset), expected) in &[
+            ((GPReg::RAX, TEST_I32), [0x48, 0x8B, 0x84, 0x24]),
+            ((GPReg::R15, TEST_I32), [0x4C, 0x8B, 0xBC, 0x24]),
+        ] {
+            buf.clear();
+            mov_register64bit_stackoffset32bit(&mut buf, *dst, *offset);
+            assert_eq!(expected, &buf[..4]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
+        }
+    }
+
+    #[test]
+    fn test_mov_stackoffset32bit_register64bit() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((offset, src), expected) in &[
+            ((TEST_I32, GPReg::RAX), [0x48, 0x89, 0x84, 0x24]),
+            ((TEST_I32, GPReg::R15), [0x4C, 0x89, 0xBC, 0x24]),
+        ] {
+            buf.clear();
+            mov_stackoffset32bit_register64bit(&mut buf, *offset, *src);
+            assert_eq!(expected, &buf[..4]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
         }
     }
 
@@ -218,12 +316,12 @@ mod tests {
     fn test_neg_register64bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for (in1, expected) in &[
+        for (reg, expected) in &[
             (GPReg::RAX, [0x48, 0xF7, 0xD8]),
             (GPReg::R15, [0x49, 0xF7, 0xDF]),
         ] {
             buf.clear();
-            neg_register64bit(&mut buf, *in1);
+            neg_register64bit(&mut buf, *reg);
             assert_eq!(expected, &buf[..]);
         }
     }
@@ -237,12 +335,27 @@ mod tests {
     }
 
     #[test]
+    fn test_sub_register64bit_immediate32bit() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for (dst, expected) in &[
+            (GPReg::RAX, [0x48, 0x81, 0xE8]),
+            (GPReg::R15, [0x49, 0x81, 0xEF]),
+        ] {
+            buf.clear();
+            sub_register64bit_immediate32bit(&mut buf, *dst, TEST_I32);
+            assert_eq!(expected, &buf[..3]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
+        }
+    }
+
+    #[test]
     fn test_pop_register64bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for (in1, expected) in &[(GPReg::RAX, vec![0x58]), (GPReg::R15, vec![0x41, 0x5F])] {
+        for (dst, expected) in &[(GPReg::RAX, vec![0x58]), (GPReg::R15, vec![0x41, 0x5F])] {
             buf.clear();
-            pop_register64bit(&mut buf, *in1);
+            pop_register64bit(&mut buf, *dst);
             assert_eq!(&expected[..], &buf[..]);
         }
     }
@@ -251,9 +364,9 @@ mod tests {
     fn test_push_register64bit() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for (in1, expected) in &[(GPReg::RAX, vec![0x50]), (GPReg::R15, vec![0x41, 0x57])] {
+        for (src, expected) in &[(GPReg::RAX, vec![0x50]), (GPReg::R15, vec![0x41, 0x57])] {
             buf.clear();
-            push_register64bit(&mut buf, *in1);
+            push_register64bit(&mut buf, *src);
             assert_eq!(&expected[..], &buf[..]);
         }
     }

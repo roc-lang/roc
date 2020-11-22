@@ -2619,6 +2619,7 @@ dependencies = [
  "im-rc",
  "indoc",
  "inlinable_string",
+ "itertools",
  "libc",
  "libloading",
  "maplit",

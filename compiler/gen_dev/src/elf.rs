@@ -1,5 +1,5 @@
 use crate::x86_64::X86_64Backend;
-use crate::{Backend, Env, Relocation};
+use crate::{Backend, Env, Relocation, INLINED_SYMBOLS};
 use bumpalo::collections::Vec;
 use object::write;
 use object::write::{Object, StandardSection, Symbol, SymbolSection};
@@ -38,7 +38,7 @@ pub fn build_module<'a>(
             let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
             for ((sym, layout), proc) in procedures {
                 // This is temporary until we support passing args to functions.
-                if [symbol::Symbol::NUM_ABS, symbol::Symbol::NUM_ADD].contains(&sym) {
+                if INLINED_SYMBOLS.contains(&sym) {
                     continue;
                 }
 
@@ -68,8 +68,8 @@ pub fn build_module<'a>(
 
             // Build procedures.
             let mut backend: X86_64Backend = Backend::new(env, target)?;
-            let mut local_data_index = 0;
             for (fn_name, proc_id, proc) in procs {
+                let mut local_data_index = 0;
                 let (proc_data, relocations) = backend.build_proc(proc)?;
                 let proc_offset = output.add_symbol_data(proc_id, text, proc_data, 16);
                 for reloc in relocations {
