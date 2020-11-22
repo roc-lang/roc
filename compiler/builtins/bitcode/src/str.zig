@@ -118,15 +118,13 @@ const RocStr = struct {
 // Str.split
 
 pub fn strSplitInPlace(
-    bytes_array: [*]u128,
+    array: [*]RocStr,
     array_len: usize,
     str_bytes_ptrs: [*]u8,
     str_len: usize,
     delimiter_bytes_ptrs: [*]u8,
     delimiter_len: usize
 ) callconv(.C) void {
-
-    var array = @ptrCast([*]RocStr, bytes_array);
 
     var ret_array_index : usize = 0;
 
