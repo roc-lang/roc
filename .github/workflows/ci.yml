@@ -13,6 +13,9 @@ jobs:
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
 
+      - name: Run Zig tests
+        run: pushd roc/compiler/builtins/bitcode; ./run-tests.sh; popd;
+
       - name: Enable LLD
         run: sudo ./ci/enable-lld.sh
 
