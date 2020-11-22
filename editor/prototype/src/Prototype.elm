@@ -2,7 +2,7 @@ module Prototype exposing (main)
 
 import Browser
 import Browser.Events
-import Html as H exposing (Html)
+import Html as H exposing (Html, sub)
 import Html.Attributes as A
 import Html.Events as Ev
 import Json.Decode as Json
@@ -10,110 +10,225 @@ import Json.Decode as Json
 
 type alias Model =
     { tree : Token
-    , keyCode : Maybe Int
+    , keyboard : Keyboard
+    , actions : List Action
     }
 
 
-type Token
-    = Token String
-    | Syntax String
-    | SubToken String
-    | TokenGroup Layout (List Token)
+type Keyboard
+    = Editing String TokenPath
+    | Navigating TokenPath
 
-type Selected
-    = Nop
-    | Node Int Selected
+
+type TokenPath
+    = This
+    | Next Int TokenPath
+
+
+type Token
+    = Token
+        { variant : Variant
+        , subTokens : List Token
+        , layout : Layout
+        }
+
+
+type Variant
+    = Syntax String
+    | Ident
+    | SubToken String
+    | Group
+
+
+token : String -> Token
+token s =
+    tk (SubToken s) [] Hori
+
+
+tokenWith : String -> List Token -> Token
+tokenWith s xs =
+    tk (SubToken s) xs Hori
+
+
+ident : List Token -> Token
+ident xs =
+    tk Ident xs Vert
+
+
+syntax : String -> Token
+syntax s =
+    tk (Syntax s) [] Hori
+
+
+group : Layout -> List Token -> Token
+group l xs =
+    tk Group xs l
+
+
+tk : Variant -> List Token -> Layout -> Token
+tk v xs l =
+    Token { variant = v, subTokens = xs, layout = l }
+
 
 type Layout
     = Vert
     | Hori
 
 
-init : () -> ( Model, Cmd Msg )
+init : () -> ( Model, Cmd Action )
 init _ =
     ( { tree =
-            TokenGroup Vert
-                [ TokenGroup Hori
-                    [ Token "State", Syntax ":" ]
-                , TokenGroup Vert
-                    [ TokenGroup Hori
-                        [ Token "session"
-                        , Syntax " : "
-                        , Token "Session"
+            group Vert
+                [ group Hori
+                    [ token "State", syntax ":" ]
+                , group Vert
+                    [ syntax "{"
+                    , ident <|
+                        [ group Hori
+                            [ token "session"
+                            , syntax " : "
+                            , token "Session"
+                            ]
+                        , group Hori
+                            [ token "problems"
+                            , syntax " : "
+                            , tokenWith "List" [ token "Problem" ]
+                            ]
+                        , group Hori
+                            [ token "form"
+                            , syntax " : "
+                            , tokenWith "Maybe" [ token "Form" ]
+                            ]
                         ]
-                    , TokenGroup Hori
-                        [ Token "problems"
-                        , Syntax " : "
-                        , TokenGroup Hori
-                            [ SubToken "List", Token "Problem" ]
+                    , syntax "}"
+                    ]
+                , group Vert
+                    [ group Hori
+                        [ token "view"
+                        , syntax ":"
+                        , token "State"
+                        , syntax "->"
+                        , tokenWith "Elem" [ token "Event" ]
                         ]
-                    , TokenGroup Hori
-                        [ Token "form"
-                        , Syntax " : "
-                        , TokenGroup Hori
-                            [ SubToken "Maybe", Token "Form" ]
+                    , group Hori
+                        [ token "view"
+                        , syntax " = \\ "
+                        , token "state"
+                        , syntax "->"
+                        ]
+                    , ident <|
+                        [ group Hori
+                            [ token "content"
+                            , syntax "="
+                            , tokenWith "col"
+                                [ group Hori [ syntax "{", syntax "}" ]
+                                , group Vert
+                                    [ syntax "["
+                                    , ident [ token "a" ]
+                                    , syntax "]"
+                                    ]
+                                ]
+                            ]
+                        , group Hori
+                            [ syntax "{"
+                            , group Hori
+                                [ token "title"
+                                , syntax ":"
+                                , token "\"Register\""
+                                , syntax ","
+                                ]
+                            , group Hori
+                                [ token "content"
+                                ]
+                            , syntax "}"
+                            ]
                         ]
                     ]
                 ]
-      , keyCode = Nothing
+      , keyboard = Navigating This
+      , actions = []
       }
     , Cmd.none
     )
 
 
-view : Model -> Html Msg
+view : Model -> Html Action
 view model =
-    H.div [ A.class "flex flex-col items-start" ]
-        [ token model.tree
-        , H.div [] [ H.text (Debug.toString model.keyCode) ]
-        ]
+    H.div [ A.class "flex flex-col justify-start items-start" ] <|
+        case model.keyboard of
+            Navigating path ->
+                [ viewToken (Just path) model.tree ]
+
+            Editing _ path ->
+                [ viewToken (Just path) model.tree ]
 
 
-tokenGroup : List Token -> Html Msg
-tokenGroup xs =
+viewToken : Maybe TokenPath -> TokenPath ->  Token -> Html Action
+viewToken selPath path (Token t) =
+    let
+        ( self, sty ) =
+            case t.variant of
+                Group ->
+                    ( H.text "", tokenStyles (isSel selPath) )
+
+                Ident ->
+                    ( H.text "", A.class "ml-8" )
+
+                Syntax s ->
+                    ( H.text s, A.class "" )
+
+                SubToken s ->
+                    ( H.text s, tokenStyles (isSel selPath) )
+
+        viewSubtoken idx subtoken =
+            viewToken
+                (case selPath of
+                    Just (Next n subpath) ->
+                        if n == idx then
+                            Just subpath
+
+                        else
+                            Nothing
+
+                    _ ->
+                        Nothing
+                )
+                (Next idx path)
+                subtoken
+
+        subtokens =
+            List.indexedMap viewSubtoken t.subTokens
+    in
     H.div
-        []
-        (List.map token xs)
+        [ sty
+        , case t.layout of
+            Hori ->
+                A.class "flex flex-row items-center"
+
+            Vert ->
+                A.class " "
+        ]
+    <|
+        self
+            :: subtokens
 
 
-token : Token -> Html Msg
-token t =
-    case t of
-        Token s ->
-            H.div
-                [ tokenStyles                
-                ]
-                [ H.text s ]
+isSel : Maybe TokenPath -> Bool
+isSel mpath =
+    case mpath of
+        Just This ->
+            True
 
-        SubToken s ->
-            H.div
-                [ A.class "text-gray-900 dark:text-green-100 mr-2"
-                ]
-                [ H.text s ]
-
-        Syntax s ->
-            H.div
-                [ A.class "mx-1 py-1"
-                , A.class "text-gray-400 dark:text-gray-600"
-                ]
-                [ H.text s ]
-
-        TokenGroup lay xs ->
-            H.div
-                [ A.class <|
-                    case lay of
-                        Vert ->
-                            ""
-
-                        Hori ->
-                            "flex flex-row items-baseline"
-                , tokenStyles
-                ]
-                (List.map token xs)
+        _ ->
+            False
 
 
-tokenStyles : H.Attribute msg
-tokenStyles =
+
+--
+
+
+tokenStyles : Bool -> H.Attribute msg
+tokenStyles sel =
     A.class <|
         String.join " "
             [ "px-2"
@@ -126,37 +241,136 @@ tokenStyles =
             , "rounded-md"
             , "border-solid"
             , "border"
-            , "border-gray-200"
-            , "dark:border-gray-700"
+            , if sel then
+                "border-red-500"
+
+              else
+                "border-gray-200"
+            , if sel then
+                "dark:border-red-500"
+
+              else
+                "dark:border-gray-700"
             , "cursor-pointer"
             ]
 
 
-type Msg
-    = KeyDown Int
-    | KeyUp
-
-
-update : Msg -> Model -> ( Model, Cmd Msg )
+update : Action -> Model -> ( Model, Cmd Action )
 update msg model =
     case msg of
-        KeyDown keyCode ->
+        MoveDown ->
             { model
-                | keyCode = Just keyCode
+                | keyboard = mapKeyboard (down model.tree) model.keyboard
             }
                 |> state
 
-        KeyUp ->
-            { model | keyCode = Nothing }
+        MoveUp ->
+            { model
+                | keyboard = mapKeyboard (up model.tree) model.keyboard
+            }
                 |> state
 
+        MoveLeft ->
+            { model
+                | keyboard = mapKeyboard (left model.tree) model.keyboard
+            }
+                |> state
 
-state : Model -> ( Model, Cmd Msg )
+        MoveRight ->
+            { model
+                | keyboard = mapKeyboard (right model.tree) model.keyboard
+            }
+                |> state
+
+        _ ->
+            state model
+
+down : Token -> TokenPath -> TokenPath
+down t tp = 
+    Debug.todo "DOWN"
+            
+
+
+up : Token -> TokenPath -> TokenPath
+up xs p =
+     Debug.todo "Up"
+
+
+
+
+left : Token -> TokenPath -> TokenPath
+left xs p =
+     Debug.todo "left"
+
+
+right : Token -> TokenPath -> TokenPath
+right xs p =
+     Debug.todo "RIGHT"
+
+
+type Action
+    = MoveUp
+    | MoveDown
+    | MoveLeft
+    | MoveRight
+    | Escape
+    | Enter
+    | Space
+    | Type Int
+
+
+action : Action -> Token -> TokenPath -> TokenPath
+action act_ tok tp =
+    tp
+
+
+{-| Transforms keyboard signals into our own language
+There should be modifiers and whatnots here
+-}
+keyToAction : Int -> Action
+keyToAction k =
+    case k of
+        40 ->
+            MoveDown
+
+        39 ->
+            MoveRight
+
+        37 ->
+            MoveLeft
+
+        38 ->
+            MoveUp
+
+        27 ->
+            Escape
+
+        13 ->
+            Enter
+
+        32 ->
+            Space
+
+        _ ->
+            Type k
+
+
+mapKeyboard : (TokenPath -> TokenPath) -> Keyboard -> Keyboard
+mapKeyboard fn key =
+    case key of
+        Navigating tp ->
+            Navigating (fn tp)
+
+        Editing s tp ->
+            Editing s (fn tp)
+
+
+state : Model -> ( Model, Cmd Action )
 state m =
     ( m, Cmd.none )
 
 
-main : Program () Model Msg
+main : Program () Model Action
 main =
     Browser.element
         { init = init
@@ -167,10 +381,8 @@ main =
                 Sub.batch
                     [ Browser.Events.onKeyDown
                         (Ev.keyCode
-                            |> Json.andThen
-                                (KeyDown >> Json.succeed)
+                            |> Json.map
+                                keyToAction
                         )
-                    , Browser.Events.onKeyUp
-                        (Json.succeed KeyUp)
                     ]
         }
