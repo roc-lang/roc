@@ -201,6 +201,46 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
         &mut self.free_map
     }
 
+    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
+        // TODO: handle allocating and cleaning up data on the stack.
+        let mut out = bumpalo::vec![in self.env.arena];
+        if !self.leaf_proc {
+            asm::push_register64bit(&mut out, GPReg::RBP);
+            asm::mov_register64bit_register64bit(&mut out, GPReg::RBP, GPReg::RSP);
+        }
+        out.extend(&self.buf);
+
+        if !self.leaf_proc {
+            asm::pop_register64bit(&mut out, GPReg::RBP);
+        }
+        asm::ret_near(&mut out);
+
+        Ok((out.into_bump_slice(), &[]))
+    }
+
+    fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
+        let dst_reg = self.claim_gp_reg(dst)?;
+        let src_reg = self.load_to_reg(src)?;
+        asm::mov_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
+        asm::neg_register64bit(&mut self.buf, dst_reg);
+        asm::cmovl_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
+        Ok(())
+    }
+
+    fn build_num_add_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String> {
+        let dst_reg = self.claim_gp_reg(dst)?;
+        let src1_reg = self.load_to_reg(src1)?;
+        asm::mov_register64bit_register64bit(&mut self.buf, dst_reg, src1_reg);
+        let src2_reg = self.load_to_reg(src2)?;
+        asm::add_register64bit_register64bit(&mut self.buf, dst_reg, src2_reg);
+        Ok(())
+    }
+
     fn load_literal(
         &mut self,
         sym: &Symbol,
@@ -251,56 +291,11 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
             None => Err(format!("Unknown return symbol: {}", sym)),
         }
     }
-
-    fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
-        let dst_reg = self.claim_gp_reg(dst)?;
-        let src_reg = self.load_to_reg(src)?;
-        asm::mov_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
-        asm::neg_register64bit(&mut self.buf, dst_reg);
-        asm::cmovl_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
-        Ok(())
-    }
-
-    fn build_num_add_i64(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-    ) -> Result<(), String> {
-        let dst_reg = self.claim_gp_reg(dst)?;
-        let src1_reg = self.load_to_reg(src1)?;
-        asm::mov_register64bit_register64bit(&mut self.buf, dst_reg, src1_reg);
-        let src2_reg = self.load_to_reg(src2)?;
-        asm::add_register64bit_register64bit(&mut self.buf, dst_reg, src2_reg);
-        Ok(())
-    }
-
-    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
-        // TODO: handle allocating and cleaning up data on the stack.
-        let mut out = bumpalo::vec![in self.env.arena];
-        if self.requires_stack_modification() {
-            asm::push_register64bit(&mut out, GPReg::RBP);
-            asm::mov_register64bit_register64bit(&mut out, GPReg::RBP, GPReg::RSP);
-        }
-        out.extend(&self.buf);
-
-        if self.requires_stack_modification() {
-            asm::pop_register64bit(&mut out, GPReg::RBP);
-        }
-        asm::ret_near(&mut out);
-
-        Ok((out.into_bump_slice(), &[]))
-    }
 }
 
 /// This impl block is for ir related instructions that need backend specific information.
 /// For example, loading a symbol for doing a computation.
 impl<'a> X86_64Backend<'a> {
-    fn requires_stack_modification(&self) -> bool {
-        !self.leaf_proc
-            || self.stack_size > self.shadow_space_size as u16 + self.red_zone_size as u16
-    }
-
     fn claim_gp_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
         let reg = if !self.gp_free_regs.is_empty() {
             // TODO: deal with callee saved registers.
