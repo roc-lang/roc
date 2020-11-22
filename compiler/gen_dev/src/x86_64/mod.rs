@@ -3,7 +3,6 @@ use bumpalo::collections::Vec;
 use roc_collections::all::{ImSet, MutMap, MutSet};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{Literal, Stmt};
-use roc_mono::layout::Layout;
 use target_lexicon::{CallingConvention, Triple};
 
 mod asm;
