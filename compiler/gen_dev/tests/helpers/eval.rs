@@ -21,6 +21,7 @@ pub fn helper<'a>(
     src: &str,
     stdlib: roc_builtins::std::StdLib,
     _leak: bool,
+    lazy_literals: bool,
 ) -> (&'static str, Vec<roc_problem::can::Problem>, Library) {
     use std::path::{Path, PathBuf};
 
@@ -149,6 +150,7 @@ pub fn helper<'a>(
         arena,
         interns,
         exposed_to_host: exposed_to_host.keys().copied().collect(),
+        lazy_literals,
     };
 
     let target = target_lexicon::Triple::host();
@@ -173,8 +175,8 @@ pub fn helper<'a>(
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();
 
-    std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
-    std::fs::copy(&path, "/tmp/libapp.so").unwrap();
+    // std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+    // std::fs::copy(&path, "/tmp/libapp.so").unwrap();
 
     let lib = Library::new(path).expect("failed to load shared library");
 
@@ -193,13 +195,22 @@ macro_rules! assert_evals_to {
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
+        // Run both with and without lazy literal optimization.
+        {
+            assert_evals_to!($src, $expected, $ty, $transform, $leak, false);
+        }
+        {
+            assert_evals_to!($src, $expected, $ty, $transform, $leak, true);
+        }
+    };
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
         use bumpalo::Bump;
         use roc_gen_dev::run_jit_function_raw;
         let stdlib = roc_builtins::std::standard_stdlib();
 
         let arena = Bump::new();
         let (main_fn_name, errors, lib) =
-            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak);
+            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, $lazy_literals);
 
         let transform = |success| {
             let expected = $expected;

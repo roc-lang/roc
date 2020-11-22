@@ -29,6 +29,7 @@ pub struct Env<'a> {
     pub arena: &'a Bump,
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
+    pub lazy_literals: bool,
 }
 
 // INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
@@ -99,6 +100,7 @@ where
                 Ok(())
             }
             Stmt::Ret(sym) => {
+                self.load_literal_symbols(&[*sym])?;
                 self.return_symbol(sym)?;
                 self.free_symbols(stmt);
                 Ok(())
@@ -117,7 +119,11 @@ where
     ) -> Result<(), String> {
         match expr {
             Expr::Literal(lit) => {
-                self.load_literal(sym, lit, layout)?;
+                if self.env().lazy_literals {
+                    self.literal_map().insert(*sym, lit.clone());
+                } else {
+                    self.load_literal(sym, lit)?;
+                }
                 Ok(())
             }
             Expr::FunctionCall {
@@ -153,6 +159,8 @@ where
         args: &'a [Symbol],
         layout: &Layout<'a>,
     ) -> Result<(), String> {
+        // Now that the arguments are needed, load them if they are literals.
+        self.load_literal_symbols(args)?;
         match lowlevel {
             LowLevel::NumAbs => {
                 // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
@@ -187,13 +195,22 @@ where
         src2: &Symbol,
     ) -> Result<(), String>;
 
+    /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
+
+    fn load_literal_symbols(&mut self, syms: &[Symbol]) -> Result<(), String> {
+        if self.env().lazy_literals {
+            for sym in syms {
+                if let Some(lit) = self.literal_map().remove(sym) {
+                    self.load_literal(sym, &lit)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// load_literal sets a symbol to be equal to a literal.
-    fn load_literal(
-        &mut self,
-        sym: &Symbol,
-        lit: &Literal<'a>,
-        layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String>;
 
     /// return_symbol moves a symbol to the correct return location for the backend.
     fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String>;

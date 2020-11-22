@@ -29,6 +29,7 @@ pub struct X86_64Backend<'a> {
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
     symbols_map: MutMap<Symbol, SymbolStorage>,
+    literal_map: MutMap<Symbol, Literal<'a>>,
 
     gp_param_regs: &'static [GPReg],
     gp_return_regs: &'static [GPReg],
@@ -66,6 +67,7 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 last_seen_map: MutMap::default(),
                 free_map: MutMap::default(),
                 symbols_map: MutMap::default(),
+                literal_map: MutMap::default(),
                 gp_param_regs: &[
                     GPReg::RDI,
                     GPReg::RSI,
@@ -132,6 +134,7 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
                 last_seen_map: MutMap::default(),
                 free_map: MutMap::default(),
                 symbols_map: MutMap::default(),
+                literal_map: MutMap::default(),
                 gp_param_regs: &[GPReg::RCX, GPReg::RDX, GPReg::R8, GPReg::R9],
                 gp_return_regs: &[GPReg::RAX],
                 gp_default_free_regs: &[
@@ -211,6 +214,10 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
         self.stack_size = self.shadow_space_size as i32 - self.red_zone_size as i32;
     }
 
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
+        &mut self.literal_map
+    }
+
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>> {
         &mut self.last_seen_map
     }
@@ -224,7 +231,6 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
     }
 
     fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
-        // TODO: handle allocating and cleaning up data on the stack.
         let mut out = bumpalo::vec![in self.env.arena];
 
         if !self.leaf_function {
@@ -282,12 +288,7 @@ impl<'a> Backend<'a> for X86_64Backend<'a> {
         Ok(())
     }
 
-    fn load_literal(
-        &mut self,
-        sym: &Symbol,
-        lit: &Literal<'a>,
-        _layout: &Layout<'a>,
-    ) -> Result<(), String> {
+    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String> {
         match lit {
             Literal::Int(x) => {
                 let reg = self.claim_gp_reg(sym)?;
