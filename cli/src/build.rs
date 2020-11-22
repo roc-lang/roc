@@ -111,10 +111,17 @@ pub fn build_file(
 
     // TODO we should no longer need to do this once we have platforms on
     // a package repository, as we can then get precompiled hosts from there.
+    let rebuild_host_start = SystemTime::now();
     rebuild_host(host_input_path.as_path());
+    let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
+    println!(
+        "Finished rebuilding the host in {} ms\n",
+        rebuild_host_end.as_millis()
+    );
 
     // TODO try to move as much of this linking as possible to the precompiled
     // host, to minimize the amount of host-application linking required.
+    let link_start = SystemTime::now();
     let (mut child, binary_path) =  // TODO use lld
         link(
             target,
@@ -130,6 +137,9 @@ pub fn build_file(
         todo!("gracefully handle error after `rustc` spawned");
     });
 
+    let link_end = link_start.elapsed().unwrap();
+    println!("Finished linking in {} ms\n", link_end.as_millis());
+
     // Clean up the leftover .o file from the Roc, if possible.
     // (If cleaning it up fails, that's fine. No need to take action.)
     // TODO compile the app_o_file to a tmpdir, as an extra precaution.
@@ -137,6 +147,9 @@ pub fn build_file(
 
     // If the cmd errored out, return the Err.
     cmd_result?;
+
+    let total_end = compilation_start.elapsed().unwrap();
+    println!("Finished entire process in {} ms\n", total_end.as_millis());
 
     Ok(binary_path)
 }
