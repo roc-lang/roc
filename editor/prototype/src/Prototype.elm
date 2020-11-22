@@ -26,48 +26,39 @@ type TokenPath
 
 
 type Token
-    = Token
-        { variant : Variant
-        , subTokens : List Token
-        , layout : Layout
-        }
+    = Token Variant
+    | Group String Layout (List Token)
 
 
 type Variant
     = Syntax String
-    | Ident
+    | Indent Token
     | SubToken String
-    | Group
 
 
 token : String -> Token
 token s =
-    tk (SubToken s) [] Hori
+    Token (SubToken s)
 
 
 tokenWith : String -> List Token -> Token
 tokenWith s xs =
-    tk (SubToken s) xs Hori
+    Group s Hori xs
 
 
-ident : List Token -> Token
-ident xs =
-    tk Ident xs Vert
+indent : List Token -> Token
+indent xs =
+    Token (Indent (group Vert xs))
 
 
 syntax : String -> Token
 syntax s =
-    tk (Syntax s) [] Hori
+    Token (Syntax s)
 
 
 group : Layout -> List Token -> Token
 group l xs =
-    tk Group xs l
-
-
-tk : Variant -> List Token -> Layout -> Token
-tk v xs l =
-    Token { variant = v, subTokens = xs, layout = l }
+    Group "" l xs
 
 
 type Layout
@@ -83,7 +74,7 @@ init _ =
                     [ token "State", syntax ":" ]
                 , group Vert
                     [ syntax "{"
-                    , ident <|
+                    , indent <|
                         [ group Hori
                             [ token "session"
                             , syntax " : "
@@ -116,7 +107,7 @@ init _ =
                         , token "state"
                         , syntax "->"
                         ]
-                    , ident <|
+                    , indent <|
                         [ group Hori
                             [ token "content"
                             , syntax "="
@@ -124,7 +115,7 @@ init _ =
                                 [ group Hori [ syntax "{", syntax "}" ]
                                 , group Vert
                                     [ syntax "["
-                                    , ident [ token "a" ]
+                                    , indent [ token "a" ]
                                     , syntax "]"
                                     ]
                                 ]
@@ -164,22 +155,19 @@ view model =
 
 
 viewToken : Maybe TokenPath -> TokenPath -> Token -> Html Action
-viewToken selPath path (Token t) =
+viewToken selPath path token_ =
     let
-        ( self, sty ) =
-            case t.variant of
-                Group ->
-                    ( H.text "", tokenStyles (isSel selPath) )
-
-                Ident ->
-                    ( H.text "", A.class "ml-8" )
-
-                Syntax s ->
-                    ( H.text s, A.class "" )
-
-                SubToken s ->
-                    ( H.text s, tokenStyles (isSel selPath) )
-
+        ( self, sty, xs) =
+            case token_ of
+                Group name lay xs_ ->
+                    (H.text name, tokenStyles (isSel selPath) lay, xs_)
+                Token (SubToken var) -> 
+                    (H.text var, tokenStyles (isSel selPath) Hori, [])
+                Token (Syntax var) -> 
+                    (H.text var, noStyle, [])
+                Token (Indent tok) -> 
+                    (viewToken selPath path tok, A.class "ml-4", [])
+               
         viewSubtoken idx subtoken =
             viewToken
                 (case selPath of
@@ -195,29 +183,32 @@ viewToken selPath path (Token t) =
                 )
                 (appendPath idx path)
                 subtoken
-        appendPath idx pth = 
+
+        appendPath idx pth =
             case pth of
-                This -> 
+                This ->
                     Next idx This
+
                 Next n subPath ->
                     Next n (appendPath idx subPath)
+
         subtokens =
-            List.indexedMap viewSubtoken t.subTokens
+            List.indexedMap viewSubtoken xs
     in
     H.div
         [ sty
-        , case t.layout of
-            Hori ->
-                A.class "flex flex-row items-center"
-
-            Vert ->
-                A.class " "
         , Ev.onMouseEnter (UserMouseHover path)
         ]
     <|
         self
             :: subtokens
 
+
+none : H.Html msg 
+none = H.text ""
+
+noStyle : H.Attribute msg
+noStyle = A.classList []
 
 isSel : Maybe TokenPath -> Bool
 isSel mpath =
@@ -229,8 +220,8 @@ isSel mpath =
             False
 
 
-tokenStyles : Bool -> H.Attribute msg
-tokenStyles sel =
+tokenStyles : Bool -> Layout -> H.Attribute msg
+tokenStyles sel layout =
     A.class <|
         String.join " "
             [ "px-2"
@@ -254,6 +245,12 @@ tokenStyles sel =
               else
                 "dark:border-gray-700"
             , "cursor-pointer"
+            , case layout of
+                Hori ->
+                    "flex flex-row items-center"
+
+                Vert ->
+                    ""
             ]
 
 
