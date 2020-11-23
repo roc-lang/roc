@@ -53,6 +53,7 @@ fn add_reg_extension(reg: GPReg, byte: u8) -> u8 {
 
 /// `ADD r/m64, imm32` -> Add imm32 sign-extended to 64-bits from r/m64.
 pub fn add_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32) {
+    // This can be optimized if the immediate is 1 byte.
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
@@ -111,6 +112,7 @@ pub fn mov_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, sr
 
 /// `MOV r64,r/m64` -> Move r/m64 to r64.
 pub fn mov_register64bit_stackoffset32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32) {
+    // This can be optimized based on how many bytes the offset actually is.
     // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
     // Also, this may technically be faster genration since stack operations should be so common.
     let rex = add_reg_extension(dst, REX_W);
@@ -122,6 +124,7 @@ pub fn mov_register64bit_stackoffset32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg,
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
 pub fn mov_stackoffset32bit_register64bit<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg) {
+    // This can be optimized based on how many bytes the offset actually is.
     // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
     // Also, this may technically be faster genration since stack operations should be so common.
     let rex = add_reg_extension(src, REX_W);
@@ -145,6 +148,7 @@ pub fn ret_near<'a>(buf: &mut Vec<'a, u8>) {
 
 /// `SUB r/m64, imm32` -> Subtract imm32 sign-extended to 64-bits from r/m64.
 pub fn sub_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32) {
+    // This can be optimized if the immediate is 1 byte.
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
