@@ -12,7 +12,6 @@
 #![allow(clippy::large_enum_variant)]
 
 use bumpalo::{collections::Vec, Bump};
-use object::write::Object;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;

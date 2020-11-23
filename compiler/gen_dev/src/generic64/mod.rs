@@ -4,7 +4,7 @@ use roc_collections::all::{ImSet, MutMap, MutSet};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{Literal, Stmt};
 use std::marker::PhantomData;
-use target_lexicon::{CallingConvention, Triple};
+use target_lexicon::Triple;
 
 pub mod x86_64;
 
