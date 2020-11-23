@@ -15,6 +15,7 @@ const str = @import("str.zig");
 comptime { exportStrFn(str.strSplitInPlace, "str_split_in_place"); }
 comptime { exportStrFn(str.countSegments, "count_segments"); }
 comptime { exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters"); }
+comptime { exportStrFn(str.startsWith, "starts_with"); }
 
 // Export helpers - Must be run inside a comptime
 fn exportBuiltinFn(comptime fn_target: anytype, comptime fn_name: []const u8) void {

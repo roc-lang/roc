@@ -425,6 +425,15 @@ mod gen_str {
     }
 
     #[test]
+    fn str_starts_with() {
+        assert_evals_to!(r#"Str.startsWith "hello world" "hell""#, true, bool);
+        assert_evals_to!(r#"Str.startsWith "hello world" """#, true, bool);
+        assert_evals_to!(r#"Str.startsWith "nope" "hello world""#, false, bool);
+        assert_evals_to!(r#"Str.startsWith "hell" "hello world""#, false, bool);
+        assert_evals_to!(r#"Str.startsWith "" "hello world""#, false, bool);
+    }
+
+    #[test]
     fn str_count_graphemes_small_str() {
         assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
     }
@@ -441,5 +450,37 @@ mod gen_str {
             45,
             usize
         );
+    }
+
+    #[test]
+    fn str_starts_with_same_big_str() {
+        assert_evals_to!(
+            r#"Str.startsWith "123456789123456789" "123456789123456789""#,
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn str_starts_with_different_big_str() {
+        assert_evals_to!(
+            r#"Str.startsWith "12345678912345678910" "123456789123456789""#,
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn str_starts_with_same_small_str() {
+        assert_evals_to!(r#"Str.startsWith "1234" "1234""#, true, bool);
+    }
+
+    #[test]
+    fn str_starts_with_different_small_str() {
+        assert_evals_to!(r#"Str.startsWith "1234" "12""#, true, bool);
+    }
+    #[test]
+    fn str_starts_with_false_small_str() {
+        assert_evals_to!(r#"Str.startsWith "1234" "23""#, false, bool);
     }
 }

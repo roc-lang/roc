@@ -670,6 +670,50 @@ fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntVa
     )
 }
 
+/// Str.startsWith : Str, Str -> Bool
+pub fn str_starts_with<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _inplace: InPlace,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    str_symbol: Symbol,
+    prefix_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let str_ptr = ptr_from_symbol(scope, str_symbol);
+    let prefix_ptr = ptr_from_symbol(scope, prefix_symbol);
+
+    let ret_type = BasicTypeEnum::IntType(ctx.bool_type());
+
+    load_str(
+        env,
+        parent,
+        *str_ptr,
+        ret_type,
+        |str_bytes_ptr, str_len, _str_smallness| {
+            load_str(
+                env,
+                parent,
+                *prefix_ptr,
+                ret_type,
+                |prefix_bytes_ptr, prefix_len, _prefix_smallness| {
+                    call_bitcode_fn(
+                        env,
+                        &[
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
+                            BasicValueEnum::IntValue(str_len),
+                            BasicValueEnum::PointerValue(prefix_bytes_ptr),
+                            BasicValueEnum::IntValue(prefix_len),
+                        ],
+                        &bitcode::STR_STARTS_WITH,
+                    )
+                },
+            )
+        },
+    )
+}
+
 /// Str.countGraphemes : Str -> Int
 pub fn str_count_graphemes<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

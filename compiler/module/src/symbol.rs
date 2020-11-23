@@ -672,6 +672,7 @@ define_builtins! {
         4 STR_CONCAT: "concat"
         5 STR_SPLIT: "split"
         6 STR_COUNT_GRAPHEMES: "countGraphemes"
+        7 STR_STARTS_WITH: "startsWith"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
