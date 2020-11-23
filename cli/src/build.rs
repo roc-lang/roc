@@ -98,9 +98,12 @@ pub fn build_file(
 
     let compilation_end = compilation_start.elapsed().unwrap();
 
+    let size = std::fs::metadata(&app_o_file).unwrap().len();
+
     println!(
-        "Finished compilation and code gen in {} ms\n",
-        compilation_end.as_millis()
+        "Finished compilation and code gen in {} ms\n\nProduced a app.o file of size {:?}\n",
+        compilation_end.as_millis(),
+        size,
     );
 
     let cwd = app_o_file.parent().unwrap();
