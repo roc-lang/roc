@@ -5,6 +5,7 @@ const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 
 extern fn malloc(size: usize) ?*u8;
+extern fn free([*]u8) void;
 
 const RocStr = struct {
     str_bytes: ?[*]u8,
@@ -54,6 +55,14 @@ const RocStr = struct {
                 .str_bytes = new_bytes,
                 .str_len = length
             };
+        }
+    }
+
+    pub fn drop(self: RocStr) void {
+        if (!self.is_small_str()) {
+            const str_bytes: [*]u8 = self.str_bytes orelse unreachable;
+
+            free(str_bytes);
         }
     }
 
@@ -147,6 +156,9 @@ const RocStr = struct {
 
         // TODO: fix those tests
         // expect(roc_str1.eq(roc_str2));
+
+        roc_str1.drop();
+        roc_str2.drop();
     }
 
     test "RocStr.eq: not equal different length" {
@@ -161,6 +173,9 @@ const RocStr = struct {
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
         expect(!roc_str1.eq(roc_str2));
+
+        roc_str1.drop();
+        roc_str2.drop();
     }
 
     test "RocStr.eq: not equal same length" {
@@ -176,6 +191,9 @@ const RocStr = struct {
 
         // TODO: fix those tests
         // expect(!roc_str1.eq(roc_str2));
+
+        roc_str1.drop();
+        roc_str2.drop();
     }
 };
 
@@ -255,6 +273,14 @@ test "strSplitInPlace: no delimiter" {
     expectEqual(array.len, expected.len);
     // TODO: fix those tests
     //expect(array[0].eq(expected[0]));
+
+    for (array) |roc_str| {
+        roc_str.drop();
+    }
+
+    for (expected) |roc_str| {
+        roc_str.drop();
+    }
 }
 
 test "strSplitInPlace: empty end" {
