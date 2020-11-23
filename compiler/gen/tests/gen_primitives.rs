@@ -1444,7 +1444,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -1470,7 +1470,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
