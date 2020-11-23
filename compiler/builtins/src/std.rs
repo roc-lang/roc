@@ -411,6 +411,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![str_type()], Box::new(bool_type())),
     );
 
+    // startsWith : Str, Str -> Bool
+    add_type(
+        Symbol::STR_STARTS_WITH,
+        top_level_function(vec![str_type(), str_type()], Box::new(bool_type())),
+    );
+
     // countGraphemes : Str -> Int
     add_type(
         Symbol::STR_COUNT_GRAPHEMES,

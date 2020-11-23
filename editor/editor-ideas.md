@@ -32,9 +32,11 @@ These are potentially inspirational resources for the editor's design.
 
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
 * [Algorithm visualization for javascript](https://algorithm-visualizer.org)
+* [godbolt.org Compiler Explorer](https://godbolt.org/)
 
 ### Structured Editing
 
+* [Greenfoot](https://www.youtube.com/watch?v=uUVA7nTh0XY)
 * [Deuce](http://ravichugh.github.io/sketch-n-sketch/) (videos on the right) by [Ravi Chugh](http://people.cs.uchicago.edu/~rchugh/) and others
 * [Fructure: A Structured Editing Engine in Racket](https://youtu.be/CnbVCNIh1NA) by Andrew Blinn
 * [Hazel: A Live FP Environment with Typed Holes](https://youtu.be/UkDSL0U9ndQ) by [Cyrus Omar](https://web.eecs.umich.edu/~comar/)

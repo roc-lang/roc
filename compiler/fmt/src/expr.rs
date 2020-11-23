@@ -833,6 +833,12 @@ pub fn fmt_record<'a>(
         if is_multiline {
             let field_indent = indent + INDENT;
             for field in loc_fields.iter() {
+                // comma addition is handled by the `format_field_multiline` function
+                // since we can have stuff like:
+                // { x # comment
+                // , y
+                // }
+                // In this case, we have to move the comma before the comment.
                 format_field_multiline(buf, &field.value, field_indent, "");
             }
 
@@ -894,7 +900,7 @@ fn format_field_multiline<'a, T>(
             }
 
             buf.push_str(separator_prefix);
-            buf.push('?');
+            buf.push_str("? ");
             ann.value.format(buf, indent);
             buf.push(',');
         }
@@ -904,10 +910,28 @@ fn format_field_multiline<'a, T>(
             buf.push(',');
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
+            // We have something like that:
+            // ```
+            // # comment
+            // field,
+            // ```
+            // we'd like to preserve this
+
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
             format_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
+            // We have somethig like that:
+            // ```
+            // field # comment
+            // , otherfield
+            // ```
+            // we'd like to transform it into:
+            // ```
+            // field,
+            // # comment
+            // otherfield
+            // ```
             format_field_multiline(buf, sub_field, indent, separator_prefix);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
         }

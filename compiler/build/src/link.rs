@@ -248,6 +248,16 @@ fn link_macos(
         }
     };
 
+    // This path only exists on macOS Big Sur, and it causes ld errors
+    // on Catalina if it's specified with -L, so we replace it with a
+    // redundant -lSystem if the directory isn't there.
+    let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
+    let big_sur_fix = if Path::new(big_sur_path).exists() {
+        format!("-L{}", big_sur_path)
+    } else {
+        String::from("-lSystem")
+    };
+
     Ok((
         // NOTE: order of arguments to `ld` matters here!
         // The `-l` flags should go after the `.o` arguments
@@ -263,7 +273,7 @@ fn link_macos(
             .args(&[
                 // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
                 // for discussion and further references
-                "-L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib",
+                &big_sur_fix,
                 "-lSystem",
                 "-lresolv",
                 "-lpthread",
