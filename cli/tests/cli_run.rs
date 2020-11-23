@@ -27,7 +27,10 @@ mod cli_run {
         let out = if use_valgrind {
             let (valgrind_out, raw_xml) =
                 run_with_valgrind(&[file.with_file_name("app").to_str().unwrap()]);
-            let memory_errors = extract_valgrind_errors(&raw_xml);
+            let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
+                panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was:\n\n{:?}\n\nother valgrind output was:\n\n{:?}", err, valgrind_out, raw_xml);
+            });
+
             if !memory_errors.is_empty() {
                 panic!("{:?}", memory_errors);
             }
