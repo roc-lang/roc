@@ -1740,7 +1740,7 @@ mod test_parse {
             Defs(
                 &[&Located::new(
                     0,
-                    0,
+                    1,
                     0,
                     6,
                     Def::Annotation(
@@ -1762,8 +1762,8 @@ mod test_parse {
                     ),
                 )],
                 &Located::new(
-                    2,
-                    2,
+                    3,
+                    3,
                     0,
                     2,
                     Expr::SpaceBefore(&Expr::Num("42"), &[Newline, Newline]),
