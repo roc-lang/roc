@@ -19,11 +19,12 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
-use target_lexicon::{BinaryFormat, Triple};
+use target_lexicon::Triple;
 
-pub mod elf;
-pub mod run_roc;
-pub mod x86_64;
+mod generic64;
+mod object_builder;
+pub use object_builder::build_module;
+mod run_roc;
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
@@ -34,21 +35,6 @@ pub struct Env<'a> {
 
 // INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
 const INLINED_SYMBOLS: [Symbol; 2] = [Symbol::NUM_ABS, Symbol::NUM_ADD];
-
-/// build_module is the high level builder/delegator.
-/// It takes the request to build a module and output the object file for the module.
-pub fn build_module<'a>(
-    env: &'a Env,
-    target: &Triple,
-    procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-) -> Result<Object, String> {
-    match target.binary_format {
-        BinaryFormat::Elf => elf::build_module(env, target, procedures),
-        x => Err(format! {
-        "the binary format, {:?}, is not yet implemented",
-        x}),
-    }
-}
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
