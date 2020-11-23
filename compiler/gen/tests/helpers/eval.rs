@@ -1,5 +1,6 @@
 use libloading::Library;
 use roc_build::link::module_to_dylib;
+use roc_build::program::FunctionIterator;
 use roc_collections::all::{MutMap, MutSet};
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -153,6 +154,15 @@ pub fn helper<'a>(
         roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
+
+    // mark our zig-defined builtins as internal
+    use inkwell::module::Linkage;
+    for function in FunctionIterator::from_module(module) {
+        let name = function.get_name().to_str().unwrap();
+        if name.starts_with("roc_builtins") {
+            function.set_linkage(Linkage::Internal);
+        }
+    }
 
     // Compile and add all the Procs before adding main
     let env = roc_gen::llvm::build::Env {

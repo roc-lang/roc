@@ -2,6 +2,7 @@ use crate::repl::eval;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::module_to_dylib;
+use roc_build::program::FunctionIterator;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
@@ -110,6 +111,15 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         let context = Context::create();
         let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
         let builder = context.create_builder();
+
+        // mark our zig-defined builtins as internal
+        use inkwell::module::Linkage;
+        for function in FunctionIterator::from_module(module) {
+            let name = function.get_name().to_str().unwrap();
+            if name.starts_with("roc_builtins") {
+                function.set_linkage(Linkage::Internal);
+            }
+        }
 
         debug_assert_eq!(exposed_to_host.len(), 1);
         let (main_fn_symbol, main_fn_var) = exposed_to_host.iter().next().unwrap();
