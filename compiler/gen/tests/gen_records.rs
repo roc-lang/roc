@@ -844,4 +844,49 @@ mod gen_records {
             (bool, bool)
         );
     }
+
+    #[test]
+    #[ignore]
+    fn alignment_in_record() {
+        assert_evals_to!(
+            indoc!("{ c: 32, b: if True then Red else if True then Green else Blue, a: 1 == 1 }"),
+            (32i64, true, 2u8),
+            (i64, bool, u8)
+        );
+    }
+    #[test]
+    fn blue_and_present() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+                f { x: Blue, y: 7 }
+                "#
+            ),
+            7,
+            i64
+        );
+    }
+
+    #[test]
+    fn blue_and_absent() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+                f { x: Blue }
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 }
