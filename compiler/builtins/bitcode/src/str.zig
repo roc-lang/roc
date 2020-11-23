@@ -57,7 +57,7 @@ const RocStr = struct {
         }
     }
 
-    pub fn eq(self: *const RocStr, other: *const RocStr) bool {
+    pub fn eq(self: RocStr, other: RocStr) bool {
         const self_bytes_ptr: ?[*]const u8 = self.str_bytes;
         const other_bytes_ptr: ?[*]const u8 = other.str_bytes;
 
@@ -76,8 +76,8 @@ const RocStr = struct {
 
         const self_bytes_nonnull: [*]const u8 = self_bytes_ptr orelse unreachable;
         const other_bytes_nonnull: [*]const u8 = other_bytes_ptr orelse unreachable;
-        const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, self);
-        const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, other);
+        const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
+        const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
         const self_bytes: [*]const u8 = if (self_len < @sizeOf(RocStr)) self_u8_ptr else self_bytes_nonnull;
         const other_bytes: [*]const u8 = if (other_len < @sizeOf(RocStr)) other_u8_ptr else other_bytes_nonnull;
 
@@ -95,12 +95,12 @@ const RocStr = struct {
         return true;
     }
 
-    pub fn is_small_str(self: *const RocStr) bool {
+    pub fn is_small_str(self: RocStr) bool {
         return @bitCast(isize, self.str_len) < 0;
     }
 
-    pub fn len(self: *const RocStr) usize {
-        const bytes: [*]const u8 = @ptrCast([*]const u8, self);
+    pub fn len(self: RocStr) usize {
+        const bytes: [*]const u8 = @ptrCast([*]const u8, &self);
         const last_byte = bytes[@sizeOf(RocStr) - 1];
         const small_len = @as(usize, last_byte ^ 0b1000_0000);
         const big_len = self.str_len;
@@ -116,7 +116,7 @@ const RocStr = struct {
     // This is useful so that (for example) we can write into an `alloca`
     // if the C string only needs to live long enough to be passed as an
     // argument to a C function - like the file path argument to `fopen`.
-    pub fn write_cstr(self: *const RocStr, dest: [*]u8) void {
+    pub fn write_cstr(self: RocStr, dest: [*]u8) void {
         const len: usize = self.len();
         const small_src = @ptrCast(*u8, self);
         const big_src = self.str_bytes_ptr;
@@ -145,7 +145,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(roc_str1.eq(&roc_str2));
+        expect(roc_str1.eq(roc_str2));
     }
 
     test "RocStr.eq: not equal different length" {
@@ -159,7 +159,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!roc_str1.eq(&roc_str2));
+        expect(!roc_str1.eq(roc_str2));
     }
 
     test "RocStr.eq: not equal same length" {
@@ -173,7 +173,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!roc_str1.eq(&roc_str2));
+        expect(!roc_str1.eq(roc_str2));
     }
 };
 
@@ -251,7 +251,7 @@ test "strSplitInPlace: no delimiter" {
     };
 
     expectEqual(array.len, expected.len);
-    expect(array[0].eq(&expected[0]));
+    expect(array[0].eq(expected[0]));
 }
 
 test "strSplitInPlace: empty end" {
@@ -292,8 +292,8 @@ test "strSplitInPlace: empty end" {
 
         expectEqual(array.len, 3);
         expectEqual(array[0].str_len, 0);
-        expect(array[0].eq(&firstExpectedRocStr));
-        expect(array[1].eq(&secondExpectedRocStr));
+        expect(array[0].eq(firstExpectedRocStr));
+        expect(array[1].eq(secondExpectedRocStr));
         expectEqual(array[2].str_len, 0);
 }
 
@@ -332,7 +332,7 @@ test "strSplitInPlace: delimiter on sides" {
 
     expectEqual(array.len, 3);
     expectEqual(array[0].str_len, 0);
-    expect(array[1].eq(&expectedRocStr));
+    expect(array[1].eq(expectedRocStr));
     expectEqual(array[2].str_len, 0);
 }
 
@@ -385,9 +385,9 @@ test "strSplitInPlace: three pieces" {
     };
 
     expectEqual(expected_array.len, array.len);
-    expect(array[0].eq(&expected_array[0]));
-    expect(array[1].eq(&expected_array[1]));
-    expect(array[2].eq(&expected_array[2]));
+    expect(array[0].eq(expected_array[0]));
+    expect(array[1].eq(expected_array[1]));
+    expect(array[2].eq(expected_array[2]));
 }
 
 // This is used for `Str.split : Str, Str -> Array Str
