@@ -2,6 +2,7 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
+use inkwell::values::FunctionValue;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
 use roc_mono::layout::LayoutIds;
@@ -69,6 +70,15 @@ pub fn gen_from_mono_module(
 
     // strip Zig debug stuff
     // module.strip_debug_info();
+
+    // mark our zig-defined builtins as internal
+    use inkwell::module::Linkage;
+    for function in FunctionIterator::from_module(module) {
+        let name = function.get_name().to_str().unwrap();
+        if name.starts_with("roc_builtins") {
+            function.set_linkage(Linkage::Internal);
+        }
+    }
 
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
@@ -158,4 +168,31 @@ pub fn gen_from_mono_module(
     target_machine
         .write_to_file(&env.module, FileType::Object, &app_o_file)
         .expect("Writing .o file failed");
+}
+
+struct FunctionIterator<'ctx> {
+    next: Option<FunctionValue<'ctx>>,
+}
+
+impl<'ctx> FunctionIterator<'ctx> {
+    fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
+        Self {
+            next: module.get_first_function(),
+        }
+    }
+}
+
+impl<'ctx> Iterator for FunctionIterator<'ctx> {
+    type Item = FunctionValue<'ctx>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next {
+            Some(function) => {
+                self.next = function.get_next_function();
+
+                Some(function)
+            }
+            None => None,
+        }
+    }
 }
