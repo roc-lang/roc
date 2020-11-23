@@ -170,12 +170,12 @@ pub fn gen_from_mono_module(
         .expect("Writing .o file failed");
 }
 
-struct FunctionIterator<'ctx> {
+pub struct FunctionIterator<'ctx> {
     next: Option<FunctionValue<'ctx>>,
 }
 
 impl<'ctx> FunctionIterator<'ctx> {
-    fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
+    pub fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
         Self {
             next: module.get_first_function(),
         }
