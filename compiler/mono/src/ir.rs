@@ -5313,6 +5313,20 @@ pub fn from_can_pattern<'a>(
                         }],
                     };
 
+                    let mut arguments = arguments.clone();
+
+                    arguments.sort_by(|arg1, arg2| {
+                        let ptr_bytes = 8;
+
+                        let layout1 = layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
+                        let layout2 = layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
+
+                        let size1 = layout1.alignment_bytes(ptr_bytes);
+                        let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                        size2.cmp(&size1)
+                    });
+
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
                         mono_args.push((

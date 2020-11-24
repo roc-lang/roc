@@ -760,11 +760,42 @@ mod gen_tags {
     }
 
     #[test]
-    fn alignment_in_single_tag() {
+    fn alignment_in_single_tag_construction() {
         assert_evals_to!(indoc!("Three (1 == 1) 32"), (32i64, true), (i64, bool));
 
         assert_evals_to!(
             indoc!("Three (1 == 1) (if True then Red else if True then Green else Blue) 32"),
+            (32i64, true, 2u8),
+            (i64, bool, u8)
+        );
+    }
+
+    #[test]
+    fn alignment_in_single_tag_pattern_match() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x = Three (1 == 1) 32
+
+                when x is
+                    Three bool int -> 
+                        { bool, int }
+                #"
+            ),
+            (32i64, true),
+            (i64, bool)
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+
+                when x is
+                    Three bool color int -> 
+                        { bool, color, int }
+                #"
+            ),
             (32i64, true, 2u8),
             (i64, bool, u8)
         );
