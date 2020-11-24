@@ -128,7 +128,8 @@ mod solve_expr {
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+        let mut buffer =
+            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
 
         for line in src.lines() {
             // indent the body!
@@ -2054,7 +2055,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Peano : [ S Peano, Z ]
 
@@ -2138,7 +2139,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -2194,7 +2195,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 map =
                     \peano ->
@@ -2632,7 +2633,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 boom = \_ -> boom {}
 
@@ -2978,7 +2979,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
 
                 main : List x
@@ -2998,7 +2999,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
 
                 main =
@@ -3019,7 +3020,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Bar : [ Bar ]
                 Foo : [ Foo Bar Int, Empty ]
@@ -3045,7 +3046,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Foo : [ @Foo [ @Bar ] Int, @Empty ]
 
@@ -3070,7 +3071,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 State a : { count : Int, x : a }
 
@@ -3095,7 +3096,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 # The color of a node. Leaves are considered Black.
                 NodeColor : [ Red, Black ]
@@ -3128,7 +3129,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k), Empty ]
 
@@ -3153,7 +3154,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -3383,7 +3384,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
@@ -3423,7 +3424,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -3499,7 +3500,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ partitionHelp ] imports []
+                app "test" provides [ partitionHelp ] to "./platform"
 
                 swap : Int, Int, List a -> List a
                 swap = \i, j, list ->
@@ -3537,7 +3538,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
@@ -3559,7 +3560,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
@@ -3583,7 +3584,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 

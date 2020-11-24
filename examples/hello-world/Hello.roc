@@ -1,4 +1,4 @@
-app Hello provides [ main ] imports []
+app "hello-world" provides [ main ] to "./platform"
 
 greeting =
     hi = "Hello"

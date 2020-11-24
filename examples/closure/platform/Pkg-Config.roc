@@ -1,5 +1,12 @@
-platform roc/quicksort
-    provides []
-    requires {}
+platform examples/closure
+    requires { main : Effect {} }
+    exposes []
+    packages {}
     imports []
-    effects Effect {}
+    provides [ mainForHost ]
+    effects Effect
+        {
+            putChar : Int -> Effect {},
+            putLine : Str -> Effect {},
+            getLine : Effect Str
+        }
