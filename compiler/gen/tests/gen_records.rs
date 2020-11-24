@@ -853,6 +853,7 @@ mod gen_records {
             (i64, bool, u8)
         );
     }
+
     #[test]
     fn blue_and_present() {
         assert_evals_to!(

@@ -758,4 +758,15 @@ mod gen_tags {
             i64
         );
     }
+
+    #[test]
+    fn alignment_in_single_tag() {
+        assert_evals_to!(indoc!("Three (1 == 1) 32"), (32i64, true), (i64, bool));
+
+        assert_evals_to!(
+            indoc!("Three (1 == 1) (if True then Red else if True then Green else Blue) 32"),
+            (32i64, true, 2u8),
+            (i64, bool, u8)
+        );
+    }
 }

@@ -2384,7 +2384,7 @@ pub fn with_hole<'a>(
         Tag {
             variant_var,
             name: tag_name,
-            arguments: args,
+            arguments: mut args,
             ..
         } => {
             use crate::layout::UnionVariant::*;
@@ -2421,11 +2421,34 @@ pub fn with_hole<'a>(
                 }
 
                 Unwrapped(field_layouts) => {
+                    let mut field_symbols_temp =
+                        Vec::with_capacity_in(field_layouts.len(), env.arena);
+
+                    for (var, arg) in args.drain(..) {
+                        // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
+                        let layout = layout_cache
+                            .from_var(env.arena, var, env.subs)
+                            .unwrap_or_else(|err| {
+                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                            });
+
+                        let alignment = layout.alignment_bytes(8);
+
+                        let symbol = possible_reuse_symbol(env, procs, &arg.value);
+                        field_symbols_temp.push((
+                            alignment,
+                            symbol,
+                            ((var, arg), &*env.arena.alloc(symbol)),
+                        ));
+                    }
+                    field_symbols_temp.sort_by(|a, b| b.0.cmp(&a.0));
+
                     let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
 
-                    for (_, arg) in args.iter() {
-                        field_symbols.push(possible_reuse_symbol(env, procs, &arg.value));
+                    for (_, symbol, _) in field_symbols_temp.iter() {
+                        field_symbols.push(*symbol);
                     }
+
                     let field_symbols = field_symbols.into_bump_slice();
 
                     // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
@@ -2438,7 +2461,7 @@ pub fn with_hole<'a>(
                     // even though this was originally a Tag, we treat it as a Struct from now on
                     let stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
 
-                    let iter = args.into_iter().rev().zip(field_symbols.iter().rev());
+                    let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
                     assign_to_symbols(env, procs, layout_cache, iter, stmt)
                 }
                 Wrapped(sorted_tag_layouts) => {
