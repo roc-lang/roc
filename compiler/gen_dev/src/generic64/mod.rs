@@ -36,7 +36,7 @@ pub trait Assembler<GPReg> {
     fn mov_register64bit_stackoffset32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32);
     fn mov_stackoffset32bit_register64bit<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg);
     fn neg_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
-    fn ret_near<'a>(buf: &mut Vec<'a, u8>);
+    fn ret<'a>(buf: &mut Vec<'a, u8>);
     fn sub_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
     fn pop_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
     fn push_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
@@ -179,7 +179,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         if !self.leaf_function {
             ASM::pop_register64bit(&mut out, CC::frame_pointer());
         }
-        ASM::ret_near(&mut out);
+        ASM::ret(&mut out);
 
         Ok((out.into_bump_slice(), &[]))
     }

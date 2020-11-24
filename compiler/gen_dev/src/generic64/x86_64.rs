@@ -325,7 +325,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `RET` -> Near return to calling procedure.
-    fn ret_near<'a>(buf: &mut Vec<'a, u8>) {
+    fn ret<'a>(buf: &mut Vec<'a, u8>) {
         buf.push(0xC3);
     }
 
@@ -530,10 +530,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ret_near() {
+    fn test_ret() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        X86_64Assembler::ret_near(&mut buf);
+        X86_64Assembler::ret(&mut buf);
         assert_eq!(&[0xC3], &buf[..]);
     }
 

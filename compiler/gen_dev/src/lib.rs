@@ -37,6 +37,7 @@ const INLINED_SYMBOLS: [Symbol; 2] = [Symbol::NUM_ABS, Symbol::NUM_ADD];
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
+#[allow(dead_code)]
 enum Relocation<'a> {
     LocalData { offset: u64, data: &'a [u8] },
     LinkedFunction { offset: u64, name: &'a str },
