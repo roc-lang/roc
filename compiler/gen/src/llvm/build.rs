@@ -1,7 +1,7 @@
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk_backwards,
+    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_len, str_split, str_starts_with, CHAR_LAYOUT,
@@ -2491,8 +2491,28 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_contains(env, parent, elem, elem_layout, list, list_layout)
         }
-        ListWalkRight => {
-            // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+        ListWalk => {
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            let (default, default_layout) = load_symbol_and_layout(env, scope, &args[2]);
+
+            list_walk(
+                env,
+                parent,
+                list,
+                list_layout,
+                func,
+                func_layout,
+                default,
+                default_layout,
+            )
+        }
+        ListWalkBackwards => {
+            // List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
             debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);

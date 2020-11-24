@@ -267,13 +267,13 @@ mod gen_list {
     fn list_walk_backwards_with_str() {
         assert_evals_to!(
             r#"List.walkBackwards [ "x", "y", "z" ] Str.concat "<""#,
-            RocStr::from("zyx<"),
+            RocStr::from("xyz<"),
             RocStr
         );
 
         assert_evals_to!(
             r#"List.walkBackwards [ "Third", "Second", "First" ] Str.concat "Fourth""#,
-            RocStr::from("FirstSecondThirdFourth"),
+            RocStr::from("ThirdSecondFirstFourth"),
             RocStr
         );
     }
