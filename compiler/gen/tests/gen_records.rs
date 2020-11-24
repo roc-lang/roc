@@ -846,7 +846,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn alignment_in_record() {
         assert_evals_to!(
             indoc!("{ c: 32, b: if True then Red else if True then Green else Blue, a: 1 == 1 }"),

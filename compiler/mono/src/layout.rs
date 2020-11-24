@@ -927,7 +927,20 @@ fn sort_record_fields_help<'a>(
         }
     }
 
-    sorted_fields.sort_by(|(label1, _, _), (label2, _, _)| label1.cmp(label2));
+    sorted_fields.sort_by(
+        |(label1, _, res_layout1), (label2, _, res_layout2)| match res_layout1 {
+            Ok(layout1) | Err(layout1) => match res_layout2 {
+                Ok(layout2) | Err(layout2) => {
+                    let ptr_bytes = 8;
+
+                    let size1 = layout1.alignment_bytes(ptr_bytes);
+                    let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                    size2.cmp(&size1).then(label1.cmp(label2))
+                }
+            },
+        },
+    );
 
     sorted_fields
 }

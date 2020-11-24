@@ -1943,14 +1943,14 @@ mod test_mono {
                     ret Test.13;
 
                 procedure Test.1 (Test.6):
-                    let Test.18 = Index 0 Test.6;
+                    let Test.18 = Index 1 Test.6;
                     let Test.19 = false;
                     let Test.20 = lowlevel Eq Test.19 Test.18;
                     if Test.20 then
-                        let Test.8 = Index 1 Test.6;
+                        let Test.8 = Index 0 Test.6;
                         ret Test.8;
                     else
-                        let Test.10 = Index 1 Test.6;
+                        let Test.10 = Index 0 Test.6;
                         ret Test.10;
 
                 procedure Test.1 (Test.6):
@@ -1971,12 +1971,12 @@ mod test_mono {
                     let Test.32 = false;
                     let Test.26 = Struct {Test.32};
                     let Test.3 = CallByName Test.1 Test.26;
-                    let Test.24 = true;
-                    let Test.25 = 11i64;
+                    let Test.24 = 11i64;
+                    let Test.25 = true;
                     let Test.23 = Struct {Test.24, Test.25};
                     let Test.4 = CallByName Test.1 Test.23;
-                    let Test.21 = false;
-                    let Test.22 = 7i64;
+                    let Test.21 = 7i64;
+                    let Test.22 = false;
                     let Test.15 = Struct {Test.21, Test.22};
                     let Test.2 = CallByName Test.1 Test.15;
                     let Test.14 = CallByName Num.16 Test.2 Test.3;
