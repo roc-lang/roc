@@ -1,6 +1,10 @@
 { }:
 
-with {
+let
+  splitSystem = builtins.split "-" builtins.currentSystem;
+  currentArch = builtins.elemAt splitSystem 0;
+  currentOS = builtins.elemAt splitSystem 2;
+in with {
   # Look here for information about how pin version of nixpkgs
   #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
   pkgs = import (builtins.fetchGit {
@@ -10,7 +14,8 @@ with {
     rev = "502845c3e31ef3de0e424f3fcb09217df2ce6df6";
   }) { };
 
-  isMacOS = builtins.currentSystem == "x86_64-darwin";
+  isMacOS = currentOS == "darwin";
+  isAarch64 = currentArch == "aarch64";
 };
 
 with (pkgs);
@@ -42,7 +47,7 @@ let
     [ ];
 
   llvmPkgs = pkgs.llvmPackages_10;
-  zig = import ./nix/zig.nix { inherit pkgs isMacOS; };
+  zig = import ./nix/zig.nix { inherit pkgs isMacOS isAarch64; };
   inputs = [
     # build libraries
     rustc
