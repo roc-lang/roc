@@ -123,7 +123,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     }
 
     fn set_not_leaf_function(&mut self) {
-        self.leaf_function = true;
+        self.leaf_function = false;
         // If this is not a leaf function, it can't use the shadow space.
         self.stack_size = CC::shadow_space_size() as i32 - CC::red_zone_size() as i32;
     }
