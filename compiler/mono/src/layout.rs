@@ -866,6 +866,15 @@ fn layout_from_flat_type<'a>(
                     tag_layout.push(Layout::from_var(env, var)?);
                 }
 
+                tag_layout.sort_by(|layout1, layout2| {
+                    let ptr_bytes = 8;
+
+                    let size1 = layout1.alignment_bytes(ptr_bytes);
+                    let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                    size2.cmp(&size1)
+                });
+
                 tag_layouts.push(tag_layout.into_bump_slice());
             }
 
