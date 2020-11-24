@@ -810,6 +810,7 @@ pub fn list_sum<'a, 'ctx, 'env>(
 }
 
 /// List.walk : List elem, (elem -> accum -> accum), accum -> accum
+#[allow(clippy::too_many_arguments)]
 pub fn list_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,

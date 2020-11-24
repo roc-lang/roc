@@ -306,6 +306,26 @@ mod gen_list {
     }
 
     #[test]
+    fn list_walk_with_str() {
+        assert_evals_to!(
+            r#"List.walk [ "x", "y", "z" ] Str.concat "<""#,
+            RocStr::from("zyx<"),
+            RocStr
+        );
+
+        assert_evals_to!(
+            r#"List.walk [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+            RocStr::from("FirstSecondThirdFourth"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn list_walk_substraction() {
+        assert_evals_to!(r#"List.walk [ 1, 2 ] Num.sub 1"#, 2, i64);
+    }
+
+    #[test]
     fn list_keep_if_empty_list_of_int() {
         assert_evals_to!(
             indoc!(
