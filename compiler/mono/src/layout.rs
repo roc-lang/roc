@@ -1099,6 +1099,15 @@ pub fn union_sorted_tags_help<'a>(
                     }
                 }
 
+                arg_layouts.sort_by(|layout1, layout2| {
+                    let ptr_bytes = 8;
+
+                    let size1 = layout1.alignment_bytes(ptr_bytes);
+                    let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                    size2.cmp(&size1)
+                });
+
                 answer.push((tag_name, arg_layouts.into_bump_slice()));
             }
 

@@ -2472,12 +2472,33 @@ pub fn with_hole<'a>(
                         .find(|(_, (key, _))| key == &tag_name)
                         .expect("tag must be in its own type");
 
+                    let mut field_symbols_temp = Vec::with_capacity_in(args.len(), env.arena);
+
+                    for (var, arg) in args.drain(..) {
+                        // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
+                        let layout = layout_cache
+                            .from_var(env.arena, var, env.subs)
+                            .unwrap_or_else(|err| {
+                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                            });
+
+                        let alignment = layout.alignment_bytes(8);
+
+                        let symbol = possible_reuse_symbol(env, procs, &arg.value);
+                        field_symbols_temp.push((
+                            alignment,
+                            symbol,
+                            ((var, arg), &*env.arena.alloc(symbol)),
+                        ));
+                    }
+                    field_symbols_temp.sort_by(|a, b| b.0.cmp(&a.0));
+
                     let mut field_symbols: Vec<Symbol> = Vec::with_capacity_in(args.len(), arena);
                     let tag_id_symbol = env.unique_symbol();
                     field_symbols.push(tag_id_symbol);
 
-                    for (_, arg) in args.iter() {
-                        field_symbols.push(possible_reuse_symbol(env, procs, &arg.value));
+                    for (_, symbol, _) in field_symbols_temp.iter() {
+                        field_symbols.push(*symbol);
                     }
 
                     let mut layouts: Vec<&'a [Layout<'a>]> =
@@ -2498,7 +2519,11 @@ pub fn with_hole<'a>(
                     };
 
                     let mut stmt = Stmt::Let(assigned, tag, layout, hole);
-                    let iter = args.into_iter().rev().zip(field_symbols.iter().rev());
+                    let iter = field_symbols_temp
+                        .drain(..)
+                        .map(|x| x.2 .0)
+                        .rev()
+                        .zip(field_symbols.iter().rev());
 
                     stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
 
@@ -5369,6 +5394,20 @@ pub fn from_can_pattern<'a>(
 
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     // disregard the tag discriminant layout
+
+                    let mut arguments = arguments.clone();
+
+                    arguments.sort_by(|arg1, arg2| {
+                        let ptr_bytes = 8;
+
+                        let layout1 = layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
+                        let layout2 = layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
+
+                        let size1 = layout1.alignment_bytes(ptr_bytes);
+                        let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                        size2.cmp(&size1)
+                    });
 
                     // TODO make this assert pass, it currently does not because
                     // 0-sized values are dropped out
