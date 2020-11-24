@@ -71,7 +71,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
         Symbol::LIST_KEEP_IF => list_keep_if,
-        Symbol::LIST_WALK_RIGHT => list_walk_right,
+        Symbol::LIST_WALK_BACKWARDS => list_walk_backwards,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -1314,7 +1314,7 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
-fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
+fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let func_var = var_store.fresh();
     let accum_var = var_store.fresh();

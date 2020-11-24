@@ -811,7 +811,7 @@ pub fn list_sum<'a, 'ctx, 'env>(
 
 /// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
 #[allow(clippy::too_many_arguments)]
-pub fn list_walk_right<'a, 'ctx, 'env>(
+pub fn list_walk_backwards<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     list: BasicValueEnum<'ctx>,

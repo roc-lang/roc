@@ -2927,11 +2927,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_walk_right() {
+    fn list_walk_backwards() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.walkRight
+                List.walkBackwards
                 "#
             ),
             "List a, (a, b -> b), b -> b",
@@ -2939,7 +2939,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_walk_right_example() {
+    fn list_walk_backwards_example() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -2947,7 +2947,7 @@ mod solve_expr {
                 empty =
                     []
 
-                List.walkRight empty (\a, b -> a + b) 0
+                List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
             "Int",

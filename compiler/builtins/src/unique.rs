@@ -781,7 +781,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //           , Attr Shared (Attr u a -> b -> b)
     //           , b
     //          -> b
-    add_type(Symbol::LIST_WALK_RIGHT, {
+    add_type(Symbol::LIST_WALK_BACKWARDS, {
         let_tvars! { u, a, b, star1, closure };
 
         unique_function(

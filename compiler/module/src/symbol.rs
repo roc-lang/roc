@@ -684,7 +684,7 @@ define_builtins! {
         6 LIST_MAP: "map"
         7 LIST_LEN: "len"
         8 LIST_FOLDL: "foldl"
-        9 LIST_WALK_RIGHT: "walkRight"
+        9 LIST_WALK_BACKWARDS: "walkBackwards"
         10 LIST_CONCAT: "concat"
         11 LIST_FIRST: "first"
         12 LIST_SINGLE: "single"

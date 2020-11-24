@@ -2236,11 +2236,11 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_walk_right_sum() {
+    fn list_walk_backwards_sum() {
         infer_eq(
             indoc!(
                 r#"
-                    sum = \list -> List.walkRight list Num.add 0
+                    sum = \list -> List.walkBackwards list Num.add 0
 
                     sum
                 "#
@@ -2321,11 +2321,11 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_walk_right_reverse() {
+    fn list_walk_backwards_reverse() {
         infer_eq(
             indoc!(
                 r#"
-                    reverse = \list -> List.walkRight list (\e, l -> List.append l e) []
+                    reverse = \list -> List.walkBackwards list (\e, l -> List.append l e) []
 
                     reverse
                 "#
@@ -3133,11 +3133,11 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_walk_right() {
+    fn list_walk_backwards() {
         infer_eq(
             indoc!(
                 r#"
-                List.walkRight 
+                List.walkBackwards
                 "#
             ),
             "Attr * (Attr (* | b) (List (Attr b a)), Attr Shared (Attr b a, c -> c), c -> c)",
@@ -3145,7 +3145,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_walk_right_example() {
+    fn list_walk_backwards_example() {
         infer_eq(
             indoc!(
                 r#"
@@ -3153,7 +3153,7 @@ mod solve_uniq_expr {
                 empty = 
                     []
 
-                List.walkRight empty (\a, b -> a + b) 0
+                List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
             "Attr a Int",
