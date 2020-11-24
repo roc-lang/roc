@@ -1736,6 +1736,45 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn multiline_type_signature() {
+        assert_parses_to(
+            "f :\n    {}\n\n42",
+            Defs(
+                &[&Located::new(
+                    0,
+                    1,
+                    0,
+                    6,
+                    Def::Annotation(
+                        Located::new(0, 0, 0, 1, Pattern::Identifier("f")),
+                        Located::new(
+                            1,
+                            1,
+                            4,
+                            6,
+                            TypeAnnotation::SpaceBefore(
+                                &TypeAnnotation::Record {
+                                    fields: &[],
+                                    ext: None,
+                                    final_comments: &[],
+                                },
+                                &[Newline],
+                            ),
+                        ),
+                    ),
+                )],
+                &Located::new(
+                    3,
+                    3,
+                    0,
+                    2,
+                    Expr::SpaceBefore(&Expr::Num("42"), &[Newline, Newline]),
+                ),
+            ),
+        );
+    }
+
     // #[test]
     // fn type_signature_function_def() {
     //     use TypeAnnotation;
