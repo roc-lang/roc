@@ -3,7 +3,7 @@ use roc_std::RocList;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "Quicksort_quicksort_1_exposed"]
+    #[link_name = "roc__quicksort_1_exposed"]
     fn quicksort(list: RocList<i64>, output: &mut RocCallResult<RocList<i64>>) -> ();
 }
 

@@ -109,7 +109,7 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
-        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
+        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
         let builder = context.create_builder();
 
         // mark our zig-defined builtins as internal
@@ -274,7 +274,8 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app Repl provides [ replOutput ] imports []\n\nreplOutput =\n");
+    let mut buffer =
+        String::from("app \"app\" provides [ replOutput ] to \"./platform\"\n\nreplOutput =\n");
 
     for line in src.lines() {
         // indent the body!

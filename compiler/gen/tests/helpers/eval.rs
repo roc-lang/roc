@@ -4,7 +4,7 @@ use roc_build::program::FunctionIterator;
 use roc_collections::all::{MutMap, MutSet};
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+    let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!

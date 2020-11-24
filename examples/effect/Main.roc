@@ -1,4 +1,4 @@
-app Main provides [ main ] imports [ Effect, RBTree ]
+app "effect-example" provides [ main ] imports [ Effect, RBTree ]
 
 toAndFro : Int
 toAndFro =

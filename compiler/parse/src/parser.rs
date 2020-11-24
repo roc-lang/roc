@@ -1037,7 +1037,11 @@ macro_rules! one_or_more {
                         }
                     }
                 }
-                Err((_, new_state)) => Err(unexpected_eof(0, new_state.attempting, new_state)),
+                Err((_, new_state)) => Err($crate::parser::unexpected_eof(
+                    0,
+                    new_state.attempting,
+                    new_state,
+                )),
             }
         }
     };
@@ -1083,9 +1087,9 @@ macro_rules! either {
             let original_attempting = state.attempting;
 
             match $p1.parse(arena, state) {
-                Ok((output, state)) => Ok((Either::First(output), state)),
+                Ok((output, state)) => Ok(($crate::parser::Either::First(output), state)),
                 Err((_, state)) => match $p2.parse(arena, state) {
-                    Ok((output, state)) => Ok((Either::Second(output), state)),
+                    Ok((output, state)) => Ok(($crate::parser::Either::Second(output), state)),
                     Err((fail, state)) => Err((
                         Fail {
                             attempting: original_attempting,
