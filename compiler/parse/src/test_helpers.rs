@@ -12,10 +12,10 @@ pub fn parse_expr_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<
     parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
 }
 
-#[allow(dead_code)]
 pub fn parse_header_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Module<'a>, Fail> {
     let state = State::new(input.trim().as_bytes(), Attempting::Module);
     let answer = header().parse(arena, state);
+
     answer
         .map(|(loc_expr, _)| loc_expr)
         .map_err(|(fail, _)| fail)

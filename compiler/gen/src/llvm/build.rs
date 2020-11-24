@@ -1707,7 +1707,8 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
 ) {
-    let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
+    let c_function_name: String =
+        format!("roc_{}_exposed", roc_function.get_name().to_str().unwrap());
 
     let result = expose_function_to_host_help(env, roc_function, &c_function_name);
 

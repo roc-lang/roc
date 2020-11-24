@@ -1,4 +1,4 @@
-app Quicksort provides [ quicksort ] imports []
+app "quicksort" provides [ quicksort ] to "./platform"
 
 quicksort = \originalList ->
 
@@ -52,11 +52,5 @@ quicksort = \originalList ->
             _ ->
                 []
 
-    n = List.len originalList 
+    n = List.len originalList
     quicksortHelp originalList 0 (n - 1)
-
-
-
-
-
-

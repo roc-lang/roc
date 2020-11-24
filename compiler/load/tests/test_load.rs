@@ -23,6 +23,7 @@ mod test_load {
     use roc_collections::all::MutMap;
     use roc_constrain::module::SubsByModule;
     use roc_load::file::LoadedModule;
+    use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
@@ -148,7 +149,10 @@ mod test_load {
             .get_name(loaded_module.module_id)
             .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(expected_name, &InlinableString::from(module_name));
+        // App module names are hardcoded and not based on anything user-specified
+        if expected_name != ModuleName::APP {
+            assert_eq!(expected_name, &InlinableString::from(module_name));
+        }
 
         loaded_module
     }
@@ -238,31 +242,34 @@ mod test_load {
                 "RBTree",
                 indoc!(
                     r#"
-                interface RBTree exposes [ Dict, empty ] imports []
+                        interface RBTree exposes [ Dict, empty ] imports []
 
-                # The color of a node. Leaves are considered Black.
-                NodeColor : [ Red, Black ]
+                        # The color of a node. Leaves are considered Black.
+                        NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                        Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
 
-                # Create an empty dictionary.
-                empty : Dict k v
-                empty =
-                    Empty
-                "#
+                        # Create an empty dictionary.
+                        empty : Dict k v
+                        empty =
+                            Empty
+                    "#
                 ),
             ),
             (
                 "Main",
                 indoc!(
                     r#"
-                app Test provides [ main ] imports [ RBTree ]
+                        app "test-app" 
+                            packages { blah: "./blah" } 
+                            imports [ RBTree ] 
+                            provides [ main ] to blah
 
-                empty : RBTree.Dict Int Int
-                empty = RBTree.empty
+                        empty : RBTree.Dict Int Int
+                        empty = RBTree.empty
 
-                main = empty
-                "#
+                        main = empty
+                    "#
                 ),
             ),
         ];
