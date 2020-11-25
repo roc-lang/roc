@@ -1730,17 +1730,8 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     };
                     let region = loc_ident.region;
                     let loc_pattern = Located { region, value };
-                    let (spaces_after_colon, state) = space0(min_indent).parse(arena, state)?;
-                    let (parsed_expr, state) =
-                        parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)?;
 
-                    let answer = if spaces_after_colon.is_empty() {
-                        parsed_expr
-                    } else {
-                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_colon)
-                    };
-
-                    Ok((answer, state))
+                    parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)
                 }
                 (None, None) => {
                     // We got nothin'
@@ -1977,17 +1968,8 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_colon)
                     };
                     let loc_pattern = Located { region, value };
-                    let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
-                    let (parsed_expr, state) =
-                        parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)?;
 
-                    let answer = if spaces_after_equals.is_empty() {
-                        parsed_expr
-                    } else {
-                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
-                    };
-
-                    Ok((answer, state))
+                    parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)
                 }
             }
         },

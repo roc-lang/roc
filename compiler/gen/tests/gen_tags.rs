@@ -417,7 +417,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Maybe a : [ Just a, Nothing ]
 
@@ -630,7 +630,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Maybe a : [ Nothing, Just a ]
 

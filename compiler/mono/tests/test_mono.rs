@@ -18,7 +18,8 @@ mod test_mono {
     use roc_mono::layout::Layout;
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+        let mut buffer =
+            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
 
         for line in src.lines() {
             // indent the body!
@@ -1277,7 +1278,7 @@ mod test_mono {
             compiles_to_ir(
                 indoc!(
                     r#"
-                    app Test provides [ main ] imports []
+                    app "test" provides [ main ] to "./platform"
 
                     swap = \list ->
                         when Pair (List.get list 0) (List.get list 0) is
@@ -1373,7 +1374,7 @@ mod test_mono {
             compiles_to_ir(
                 indoc!(
                     r#"
-                    app Test provides [ main ] imports []
+                    app "test" provides [ main ] to "./platform"
 
                     partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
@@ -1409,7 +1410,7 @@ mod test_mono {
             compiles_to_ir(
                 indoc!(
                     r#"
-                    app Test provides [ main ] imports []
+                    app "test" provides [ main ] to "./platform"
 
                     quicksortHelp : List (Num a), Int, Int -> List (Num a)
                     quicksortHelp = \list, low, high ->
@@ -1618,7 +1619,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 mkPairOf = \x -> Pair x x
 
@@ -1650,7 +1651,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 fst = \x, _ -> x
 
@@ -1687,7 +1688,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 x : List Int
                 x = [1,2,3]
@@ -2103,7 +2104,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 swap : Int, Int, List a -> List a
                 swap = \i, j, list ->
@@ -2260,7 +2261,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 foo = \{} ->
                     x = 42
@@ -2302,7 +2303,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 foo = \{} ->
                     x = 41

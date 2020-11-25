@@ -59,7 +59,21 @@ esac
 wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
 add-apt-repository "${REPO_NAME}"
 apt-get update
-apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clangd-$LLVM_VERSION libc++abi-dev libunwind-dev valgrind
+apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clangd-$LLVM_VERSION libc++abi-dev libunwind-dev libc6-dbg
+
+wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
+tar -xf valgrind-3.16.1.tar.bz2
+mv valgrind-3.16.1 ~
+pushd ~/valgrind-3.16.1
+apt-get install -y autotools-dev automake
+./autogen.sh
+./configure
+make -j`nproc`
+sudo make install
+popd
+
+# Report current valgrind version, to confirm it installed properly
+valgrind --version
 
 # install zig - can't use apt-get since we require at least a specific commit later then the most recent tag (0.6.0)
 wget -c https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz --no-check-certificate

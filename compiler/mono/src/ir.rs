@@ -907,7 +907,13 @@ where
     if PRETTY_PRINT_IR_SYMBOLS {
         alloc.text(format!("{:?}", symbol))
     } else {
-        alloc.text(format!("{}", symbol))
+        let text = format!("{}", symbol);
+
+        if text.starts_with(".") {
+            alloc.text("Test").append(text)
+        } else {
+            alloc.text(text)
+        }
     }
 }
 
@@ -917,7 +923,7 @@ where
     D::Doc: Clone,
     A: Clone,
 {
-    alloc.text(format!("{}", symbol.0))
+    symbol_to_doc(alloc, symbol.0)
 }
 
 impl<'a> Expr<'a> {
@@ -1101,7 +1107,9 @@ impl<'a> Stmt<'a> {
                     .chain(std::iter::once(default_doc));
                 //
                 alloc
-                    .text(format!("switch {}:", cond_symbol))
+                    .text("switch ")
+                    .append(symbol_to_doc(alloc, *cond_symbol))
+                    .append(":")
                     .append(alloc.hardline())
                     .append(
                         alloc.intersperse(branches_docs, alloc.hardline().append(alloc.hardline())),
@@ -1115,7 +1123,9 @@ impl<'a> Stmt<'a> {
                 fail,
                 ..
             } => alloc
-                .text(format!("if {} then", branching_symbol))
+                .text("if ")
+                .append(symbol_to_doc(alloc, *branching_symbol))
+                .append(" then")
                 .append(alloc.hardline())
                 .append(pass.to_doc(alloc).indent(4))
                 .append(alloc.hardline())

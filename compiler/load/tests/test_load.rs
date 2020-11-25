@@ -23,6 +23,7 @@ mod test_load {
     use roc_collections::all::MutMap;
     use roc_constrain::module::SubsByModule;
     use roc_load::file::LoadedModule;
+    use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
@@ -148,7 +149,10 @@ mod test_load {
             .get_name(loaded_module.module_id)
             .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(expected_name, &InlinableString::from(module_name));
+        // App module names are hardcoded and not based on anything user-specified
+        if expected_name != ModuleName::APP {
+            assert_eq!(expected_name, &InlinableString::from(module_name));
+        }
 
         loaded_module
     }
@@ -238,31 +242,34 @@ mod test_load {
                 "RBTree",
                 indoc!(
                     r#"
-                interface RBTree exposes [ Dict, empty ] imports []
+                        interface RBTree exposes [ Dict, empty ] imports []
 
-                # The color of a node. Leaves are considered Black.
-                NodeColor : [ Red, Black ]
+                        # The color of a node. Leaves are considered Black.
+                        NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                        Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
 
-                # Create an empty dictionary.
-                empty : Dict k v
-                empty =
-                    Empty
-                "#
+                        # Create an empty dictionary.
+                        empty : Dict k v
+                        empty =
+                            Empty
+                    "#
                 ),
             ),
             (
                 "Main",
                 indoc!(
                     r#"
-                app Test provides [ main ] imports [ RBTree ]
+                        app "test-app" 
+                            packages { blah: "./blah" } 
+                            imports [ RBTree ] 
+                            provides [ main ] to blah
 
-                empty : RBTree.Dict Int Int
-                empty = RBTree.empty
+                        empty : RBTree.Dict Int Int
+                        empty = RBTree.empty
 
-                main = empty
-                "#
+                        main = empty
+                    "#
                 ),
             ),
         ];
@@ -350,14 +357,14 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "Float",
-                "divisionFn" => "Float, Float -> Result Float [ DivByZero ]*",
-                "divisionTest" => "Result Float [ DivByZero ]*",
+                "floatTest" => "F64",
+                "divisionFn" => "F64, F64 -> Result F64 [ DivByZero ]*",
+                "divisionTest" => "Result F64 [ DivByZero ]*",
                 "intTest" => "Int",
-                "x" => "Float",
+                "x" => "F64",
                 "constantNum" => "Num *",
-                "divDep1ByDep2" => "Result Float [ DivByZero ]*",
-                "fromDep2" => "Float",
+                "divDep1ByDep2" => "Result F64 [ DivByZero ]*",
+                "fromDep2" => "F64",
             },
         );
     }
@@ -415,12 +422,12 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "findPath" => "{ costFunction : position, position -> Float, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
+                "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
                 "initialModel" => "position -> Model position",
                 "reconstructPath" => "Map position position, position -> List position",
                 "updateCost" => "position, position, Model position -> Model position",
-                "cheapestOpen" => "(position -> Float), Model position -> Result position [ KeyNotFound ]*",
-                "astar" => "(position, position -> Float), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
+                "cheapestOpen" => "(position -> F64), Model position -> Result position [ KeyNotFound ]*",
+                "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
             },
         );
     }
@@ -447,7 +454,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "Float",
+                "blah2" => "F64",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",
@@ -469,7 +476,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "Float",
+                "blah2" => "F64",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",

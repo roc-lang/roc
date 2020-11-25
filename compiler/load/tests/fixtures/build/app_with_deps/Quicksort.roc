@@ -1,6 +1,4 @@
-app Quicksort
-    provides [ swap, partition, partitionHelp, quicksort ]
-    imports []
+app "quicksort" provides [ swap, partition, partitionHelp, quicksort ] to "./platform"
 
 quicksort : List (Num a), Int, Int -> List (Num a)
 quicksort = \list, low, high ->

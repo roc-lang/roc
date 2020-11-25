@@ -1,4 +1,4 @@
-app QuicksortOneDef provides [ quicksort ] imports []
+app "quicksort" provides [ quicksort ] to "./platform"
 
 quicksort = \originalList ->
     quicksortHelp : List (Num a), Int, Int -> List (Num a)
@@ -53,5 +53,5 @@ quicksort = \originalList ->
 
 
 
-    n = List.len originalList 
+    n = List.len originalList
     quicksortHelp originalList 0 (n - 1)

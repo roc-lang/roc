@@ -327,7 +327,7 @@ impl<'a> Layout<'a> {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Int64))
             }
-            Alias(Symbol::NUM_FLOAT, args, _) => {
+            Alias(Symbol::NUM_F64, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
@@ -727,7 +727,7 @@ fn layout_from_flat_type<'a>(
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
-                Symbol::NUM_FLOAT => {
+                Symbol::NUM_F64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
                 }

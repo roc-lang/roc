@@ -599,7 +599,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    empty : List Float
+                    empty : List F64
                     empty =
                         []
 
@@ -1186,7 +1186,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Quicksort provides [ main ] imports []
+                app "quicksort" provides [ main ] to "./platform"
 
 
                 swap : Int, Int, List a -> List a

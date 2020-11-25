@@ -331,7 +331,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                     match &content {
                         Alias(nested, _, _) => match *nested {
                             Symbol::NUM_INTEGER => buf.push_str("Int"),
-                            Symbol::NUM_FLOATINGPOINT => buf.push_str("Float"),
+                            Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
 
                             _ => write_parens!(write_parens, buf, {
                                 buf.push_str("Num ");
@@ -344,7 +344,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                             match &attr_content {
                                 Alias(nested, _, _) => match *nested {
                                     Symbol::NUM_INTEGER => buf.push_str("Int"),
-                                    Symbol::NUM_FLOATINGPOINT => buf.push_str("Float"),
+                                    Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
                                     _ => write_parens!(write_parens, buf, {
                                         buf.push_str("Num ");
                                         write_content(env, content, subs, buf, parens);
@@ -757,7 +757,7 @@ fn write_apply(
                         buf.push_str("Int");
                     }
                     Symbol::NUM_FLOATINGPOINT if nested_args.is_empty() => {
-                        buf.push_str("Float");
+                        buf.push_str("F64");
                     }
                     Symbol::ATTR_ATTR => match nested_args
                         .get(1)
@@ -771,7 +771,7 @@ fn write_apply(
                                 buf.push_str("Int");
                             }
                             Symbol::NUM_FLOATINGPOINT if double_nested_args.is_empty() => {
-                                buf.push_str("Float");
+                                buf.push_str("F64");
                             }
                             _ => default_case(subs, arg_content),
                         },

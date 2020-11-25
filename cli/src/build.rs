@@ -85,6 +85,9 @@ pub fn build_file(
         buf
     );
 
+    let cwd = app_o_file.parent().unwrap();
+    let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+
     program::gen_from_mono_module(
         &arena,
         loaded,
@@ -106,11 +109,8 @@ pub fn build_file(
         size,
     );
 
-    let cwd = app_o_file.parent().unwrap();
-
     // Step 2: link the precompiled host and compiled app
     let host_input_path = cwd.join("platform").join("host.o");
-    let binary_path = cwd.join("app"); // TODO should be app.exe on Windows
 
     // TODO we should no longer need to do this once we have platforms on
     // a package repository, as we can then get precompiled hosts from there.
