@@ -909,7 +909,7 @@ where
     } else {
         let text = format!("{}", symbol);
 
-        if text.starts_with(".") {
+        if text.starts_with('.') {
             alloc.text("Test").append(text)
         } else {
             alloc.text(text)
