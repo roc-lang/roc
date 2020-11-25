@@ -839,7 +839,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn final_comment_record_type_definition() {
+    fn final_comment_in_empty_record_type_definition() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -854,6 +854,49 @@ mod test_fmt {
                 f :
                     {
                         # comment
+                    }
+                
+                f"#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiline_inside_empty_record_annotation() {
+        expr_formats_same(
+            indoc!(
+                r#"
+                f :
+                    {
+                    }
+
+                f"#
+            ),
+        );
+    }
+
+
+    #[test]
+    fn final_comment_record_annotation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                f :
+                    { 
+                        x: Int # comment 1
+                        ,
+                        # comment 2
+                    }
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f :
+                    {
+                        x : Int,
+                        # comment 1
+                        # comment 2
                     }
                 
                 f"#
