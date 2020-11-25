@@ -1054,7 +1054,7 @@ mod test_reporting {
 
                 This `Blue` global tag application has the type:
 
-                    [ Blue Float ]a
+                    [ Blue F64 ]a
 
                 But `f` needs the 1st argument to be:
 
@@ -1092,7 +1092,7 @@ mod test_reporting {
 
                 The 1st branch is a float of type:
 
-                    Float
+                    F64
 
                 But the type annotation on `x` says it should be:
 
@@ -1131,7 +1131,7 @@ mod test_reporting {
 
                 This `when`expression produces:
 
-                    Float
+                    F64
 
                 But the type annotation on `x` says it should be:
 
@@ -1167,7 +1167,7 @@ mod test_reporting {
 
                 The body is a float of type:
 
-                    Float
+                    F64
 
                 But the type annotation on `x` says it should be:
 
@@ -1373,8 +1373,8 @@ mod test_reporting {
 
                     Bool
                     Int
+                    F64
                     Num
-                    Map
                 "#
             ),
         )
@@ -1501,7 +1501,7 @@ mod test_reporting {
 
                 The body is a record of type:
 
-                    { x : Float }
+                    { x : F64 }
 
                 But the type annotation says it should be:
 
@@ -1644,7 +1644,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : { a : Int, b : Float, c : Bool }
+                x : { a : Int, b : F64, c : Bool }
                 x = { b: 4.0 }
 
                 x
@@ -1656,17 +1656,17 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : { a : Int, b : Float, c : Bool }
+                1│  x : { a : Int, b : F64, c : Bool }
                 2│  x = { b: 4.0 }
                         ^^^^^^^^^^
 
                 The body is a record of type:
 
-                    { b : Float }
+                    { b : F64 }
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int, b : Float, c : Bool }
+                    { a : Int, b : F64, c : Bool }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -1829,8 +1829,8 @@ mod test_reporting {
 
                     f
                     Int
+                    F64
                     Num
-                    Map
                "#
             ),
         )
@@ -2119,7 +2119,7 @@ mod test_reporting {
 
                 This argument is a float of type:
 
-                    Float
+                    F64
 
                 But `add` needs the 2nd argument to be:
 
@@ -2601,7 +2601,7 @@ mod test_reporting {
 
                 This argument is a record of type:
 
-                    { y : Float }
+                    { y : F64 }
 
                 But `f` needs the 1st argument to be:
 
@@ -2835,7 +2835,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : { foo : Int, bar : Float, foo : Str }
+                a : { foo : Int, bar : F64, foo : Str }
                 a = { bar: 3.0, foo: "foo" }
 
                 a
@@ -2847,13 +2847,13 @@ mod test_reporting {
 
                 This record type defines the `.foo` field twice!
 
-                1│  a : { foo : Int, bar : Float, foo : Str }
-                          ^^^^^^^^^               ^^^^^^^^^
+                1│  a : { foo : Int, bar : F64, foo : Str }
+                          ^^^^^^^^^             ^^^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1│  a : { foo : Int, bar : Float, foo : Str }
-                                                  ^^^^^^^^^
+                1│  a : { foo : Int, bar : F64, foo : Str }
+                                                ^^^^^^^^^
 
                 For clarity, remove the previous `.foo` definitions from this record
                 type.
@@ -2867,7 +2867,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : [ Foo Int, Bar Float, Foo Str ]
+                a : [ Foo Int, Bar F64, Foo Str ]
                 a = Foo "foo"
 
                 a
@@ -2879,13 +2879,13 @@ mod test_reporting {
 
                 This tag union type defines the `Foo` tag twice!
 
-                1│  a : [ Foo Int, Bar Float, Foo Str ]
-                          ^^^^^^^             ^^^^^^^
+                1│  a : [ Foo Int, Bar F64, Foo Str ]
+                          ^^^^^^^           ^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1│  a : [ Foo Int, Bar Float, Foo Str ]
-                                              ^^^^^^^
+                1│  a : [ Foo Int, Bar F64, Foo Str ]
+                                            ^^^^^^^
 
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
@@ -2978,7 +2978,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : Num Int Float
+                a : Num Int F64
                 a = 3
 
                 a
@@ -2990,8 +2990,8 @@ mod test_reporting {
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                1│  a : Num Int Float
-                        ^^^^^^^^^^^^^
+                1│  a : Num Int F64
+                        ^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -3004,7 +3004,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> Num Int Float
+                f : Bool -> Num Int F64
                 f = \_ -> 3
 
                 f
@@ -3016,8 +3016,8 @@ mod test_reporting {
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                1│  f : Bool -> Num Int Float
-                                ^^^^^^^^^^^^^
+                1│  f : Bool -> Num Int F64
+                                ^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#

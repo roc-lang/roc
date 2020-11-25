@@ -232,14 +232,14 @@ mod test_uniq_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "Attr Shared Float",
-                "divisionFn" => "Attr Shared (Attr * Float, Attr * Float -> Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*)))",
-                "divisionTest" =>  "Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*))",
+                "floatTest" => "Attr Shared F64",
+                "divisionFn" => "Attr Shared (Attr * F64, Attr * F64 -> Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*)))",
+                "divisionTest" =>  "Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*))",
                 "intTest" => "Attr * Int",
-                "x" => "Attr * Float",
+                "x" => "Attr * F64",
                 "constantNum" => "Attr * (Num (Attr * *))",
-                "divDep1ByDep2" => "Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*))",
-                "fromDep2" => "Attr * Float",
+                "divDep1ByDep2" => "Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*))",
+                "fromDep2" => "Attr * F64",
             },
         );
     }
@@ -253,12 +253,12 @@ mod test_uniq_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "findPath" => "Attr * (Attr * { costFunction : Attr Shared (Attr Shared position, Attr Shared position -> Attr * Float), end : Attr Shared position, moveFunction : Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), start : Attr Shared position } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))",
+                "findPath" => "Attr * (Attr * { costFunction : Attr Shared (Attr Shared position, Attr Shared position -> Attr * F64), end : Attr Shared position, moveFunction : Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), start : Attr Shared position } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))",
                 "initialModel" => "Attr * (Attr Shared position -> Attr * (Model (Attr Shared position)))",
                 "reconstructPath" => "Attr Shared (Attr Shared (Map (Attr * position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))",
                 "updateCost" => "Attr * (Attr Shared position, Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr Shared (Model (Attr Shared position)))",
-                "cheapestOpen" => "Attr * (Attr * (Attr Shared position -> Attr * Float), Attr (* | a | b | c) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))",
-                "astar" => "Attr Shared (Attr Shared (Attr Shared position, Attr Shared position -> Attr * Float), Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr * [ Err (Attr * [ KeyNotFound ]*), Ok (Attr * (List (Attr Shared position))) ]*)",
+                "cheapestOpen" => "Attr * (Attr * (Attr Shared position -> Attr * F64), Attr (* | a | b | c) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))",
+                "astar" => "Attr Shared (Attr Shared (Attr Shared position, Attr Shared position -> Attr * F64), Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr * [ Err (Attr * [ KeyNotFound ]*), Ok (Attr * (List (Attr Shared position))) ]*)",
             },
         );
     }
@@ -318,7 +318,7 @@ mod test_uniq_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "Attr * Float",
+                "blah2" => "Attr * F64",
                 "blah3" => "Attr * Str",
                 "str" => "Attr * Str",
                 "alwaysThree" => "Attr * (* -> Attr * Str)",

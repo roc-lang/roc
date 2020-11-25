@@ -612,7 +612,7 @@ define_builtins! {
         2 NUM_INT: "Int" imported // the Int.Int type alias
         3 NUM_INTEGER: "Integer" imported // Int : Num Integer
         4 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
-        5 NUM_FLOAT: "Float" imported // the Float.Float type alias
+        5 NUM_F64: "F64" imported // the Num.F64 type alias
         6 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
         7 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         8 NUM_MAX_INT: "maxInt"

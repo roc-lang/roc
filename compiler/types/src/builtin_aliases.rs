@@ -70,7 +70,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 
     // Float : Num FloatingPoint
     add_alias(
-        Symbol::NUM_FLOAT,
+        Symbol::NUM_F64,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
@@ -143,11 +143,7 @@ fn floatingpoint_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn float_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_FLOAT,
-        Vec::new(),
-        Box::new(float_alias_content()),
-    )
+    SolvedType::Alias(Symbol::NUM_F64, Vec::new(), Box::new(float_alias_content()))
 }
 
 #[inline(always)]
