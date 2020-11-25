@@ -619,7 +619,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    empty : List Float
+                    empty : List F64
                     empty =
                         []
 

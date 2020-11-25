@@ -169,7 +169,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Float");
+        infer_eq("0.5", "F64");
     }
 
     #[test]
@@ -762,7 +762,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -894,7 +894,7 @@ mod solve_expr {
     //             \l r -> l / r
     //         "#
     //         ),
-    //         "Float, Float -> Float",
+    //         "F64, F64 -> F64",
     //     );
     // }
 
@@ -906,7 +906,7 @@ mod solve_expr {
     //                 1 / 2
     //             "#
     //             ),
-    //             "Float",
+    //             "F64",
     //         );
     //     }
 
@@ -1026,7 +1026,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : F64 }");
     }
 
     #[test]
@@ -1414,12 +1414,12 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float
+                   float : F64
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1433,7 +1433,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1442,13 +1442,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Float
+                   float : Num.F64
                    float = 5.5
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1457,13 +1457,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float
+                   float : F64
                    float = 5.5
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1478,7 +1478,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1578,7 +1578,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1613,7 +1613,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : Float }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
         );
     }
 
@@ -1791,7 +1791,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -2523,7 +2523,7 @@ mod solve_expr {
                 Num.toFloat
                 "#
             ),
-            "Num * -> Float",
+            "Num * -> F64",
         );
     }
 
@@ -2535,7 +2535,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "Float, Float -> Float",
+            "F64, F64 -> F64",
         );
     }
 
@@ -2547,7 +2547,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "Float -> Int",
+            "F64 -> Int",
         );
     }
 
@@ -2559,7 +2559,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "Float -> Int",
+            "F64 -> Int",
         );
     }
 
@@ -2583,7 +2583,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "Float -> Float",
+            "F64 -> F64",
         );
     }
 
@@ -2850,7 +2850,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : Float, z : Int }",
+            "{ x : Num a, y : F64, z : Int }",
         );
     }
 
@@ -2867,7 +2867,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : Float, z : c }, b : { blah : Str, x : Num a, y : Float, z : c } }",
+            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
         );
     }
 

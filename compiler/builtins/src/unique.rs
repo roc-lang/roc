@@ -1177,7 +1177,7 @@ fn float_type(u: VarId) -> SolvedType {
         vec![
             flex(u),
             SolvedType::Alias(
-                Symbol::NUM_FLOAT,
+                Symbol::NUM_F64,
                 Vec::new(),
                 Box::new(builtin_aliases::num_type(SolvedType::Apply(
                     Symbol::ATTR_ATTR,
