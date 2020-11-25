@@ -326,7 +326,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             SpaceBefore(ann, spaces) => {
                 newline(buf, indent + INDENT);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
-                ann.format_with_options(buf, parens, Newlines::No, indent + INDENT)
+                ann.format_with_options(buf, parens, Newlines::No, indent)
             }
             SpaceAfter(ann, spaces) => {
                 ann.format_with_options(buf, parens, newlines, indent);
@@ -406,9 +406,10 @@ fn format_assigned_field_help<'a, T>(
     T: Formattable<'a>,
 {
     use self::AssignedField::*;
-
+    dbg!("in format assigne_field");
     match zelf {
         RequiredValue(name, spaces, ann) => {
+            dbg!(&name, &spaces);
             if is_multiline {
                 newline(buf, indent);
             }
