@@ -781,25 +781,18 @@ mod test_fmt {
         );
     }
 
-    // // TODO This raises a parse error:
-    // // NotYetImplemented("TODO the : in this declaration seems outdented")
-    // #[test]
-    // fn comments_in_record_annotation() {
-    //     expr_formats_to(
-    //         indoc!(
-    //             r#"
-    //             f :
-    //                 {}
+    #[test]
+    fn comments_in_record_annotation() {
+        expr_formats_same(
+            indoc!(
+                r#"
+                f : # comment
+                    {}
 
-    //             f"#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //             f : b {}
-    //             f"#
-    //         ),
-    //     );
-    // }
+                f"#
+            ),
+        );
+    }
 
     #[test]
     fn def_closure() {
