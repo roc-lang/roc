@@ -293,7 +293,7 @@ mod gen_primitives {
             indoc!(
                 r#"
                 wrapper = \{} ->
-                    alwaysFloatIdentity : Int -> (Float -> Float)
+                    alwaysFloatIdentity : Int -> (F64 -> F64)
                     alwaysFloatIdentity = \_ ->
                         (\a -> a)
 
@@ -1016,11 +1016,11 @@ mod gen_primitives {
                 runEffect : Effect a -> a
                 runEffect = \@Effect thunk -> thunk {}
 
-                foo : Effect Float
+                foo : Effect F64
                 foo =
                     succeed 3.14
 
-                main : Float
+                main : F64
                 main =
                     runEffect foo
 
@@ -1041,14 +1041,14 @@ mod gen_primitives {
                 # succeed : a -> ({} -> a)
                 succeed = \x -> \{} -> x
 
-                foo : {} -> Float
+                foo : {} -> F64
                 foo =
                     succeed 3.14
 
                 # runEffect : ({} ->  a) -> a
                 runEffect = \thunk -> thunk {}
 
-                main : Float
+                main : F64
                 main =
                     runEffect foo
                 "#

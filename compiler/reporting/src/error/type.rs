@@ -1624,8 +1624,8 @@ fn to_diff<'b>(
                 _ => false,
             };
             let is_float = |t: &ErrorType| match t {
-                ErrorType::Type(Symbol::NUM_FLOAT, _) => true,
-                ErrorType::Alias(Symbol::NUM_FLOAT, _, _) => true,
+                ErrorType::Type(Symbol::NUM_F64, _) => true,
+                ErrorType::Alias(Symbol::NUM_F64, _, _) => true,
 
                 _ => false,
             };

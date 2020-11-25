@@ -1160,7 +1160,7 @@ fn write_error_type_help(
                     buf.push_str("Int");
                 }
                 Type(Symbol::NUM_FLOATINGPOINT, _) => {
-                    buf.push_str("Float");
+                    buf.push_str("F64");
                 }
                 other => {
                     let write_parens = parens == Parens::InTypeParam;
@@ -1278,7 +1278,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                     buf.push_str("Int");
                 }
                 Type(Symbol::NUM_FLOATINGPOINT, _) => {
-                    buf.push_str("Float");
+                    buf.push_str("F64");
                 }
                 other => {
                     let write_parens = parens == Parens::InTypeParam;

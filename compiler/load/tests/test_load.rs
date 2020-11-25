@@ -357,14 +357,14 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "Float",
-                "divisionFn" => "Float, Float -> Result Float [ DivByZero ]*",
-                "divisionTest" => "Result Float [ DivByZero ]*",
+                "floatTest" => "F64",
+                "divisionFn" => "F64, F64 -> Result F64 [ DivByZero ]*",
+                "divisionTest" => "Result F64 [ DivByZero ]*",
                 "intTest" => "Int",
-                "x" => "Float",
+                "x" => "F64",
                 "constantNum" => "Num *",
-                "divDep1ByDep2" => "Result Float [ DivByZero ]*",
-                "fromDep2" => "Float",
+                "divDep1ByDep2" => "Result F64 [ DivByZero ]*",
+                "fromDep2" => "F64",
             },
         );
     }
@@ -422,12 +422,12 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "findPath" => "{ costFunction : position, position -> Float, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
+                "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
                 "initialModel" => "position -> Model position",
                 "reconstructPath" => "Map position position, position -> List position",
                 "updateCost" => "position, position, Model position -> Model position",
-                "cheapestOpen" => "(position -> Float), Model position -> Result position [ KeyNotFound ]*",
-                "astar" => "(position, position -> Float), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
+                "cheapestOpen" => "(position -> F64), Model position -> Result position [ KeyNotFound ]*",
+                "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
             },
         );
     }
@@ -454,7 +454,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "Float",
+                "blah2" => "F64",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",
@@ -476,7 +476,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "Float",
+                "blah2" => "F64",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",
