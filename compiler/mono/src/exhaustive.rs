@@ -11,6 +11,12 @@ pub struct Union {
     pub render_as: RenderAs,
 }
 
+impl Union {
+    pub fn size(&self) -> usize {
+        self.alternatives.len()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RenderAs {
     Tag,

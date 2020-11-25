@@ -1085,7 +1085,10 @@ pub fn union_sorted_tags_help<'a>(
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
                 // add the tag discriminant (size currently always hardcoded to i64)
-                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+                let (_, tag_id_layout) =
+                    crate::ir::Literal::tag_id_literal_and_layout(num_tags as u64, 0);
+
+                arg_layouts.push(tag_id_layout);
 
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {

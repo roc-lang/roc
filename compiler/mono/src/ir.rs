@@ -896,6 +896,30 @@ impl<'a> Literal<'a> {
             Str(lit) => alloc.text(format!("{:?}", lit)),
         }
     }
+
+    pub fn tag_id_literal(union_size: u64, tag_id: u16) -> Self {
+        /*
+        match union_size {
+            0..=1 => unreachable!(),
+            2 => Literal::Bool(tag_id != 0),
+            3..=255 => Literal::Byte(tag_id as u8),
+            _ => Literal::Int(tag_id as i64),
+        }
+        */
+        Literal::Int(tag_id as i64)
+    }
+
+    pub fn tag_id_literal_and_layout(union_size: u64, tag_id: u16) -> (Self, Layout<'a>) {
+        /*
+        match union_size {
+            0..=1 => unreachable!(),
+            2 => (Literal::Bool(tag_id != 0), Layout::Builtin(Builtin::Int1)),
+            3..=255 => (Literal::Byte(tag_id as u8), Layout::Builtin(Builtin::Int8)),
+            _ => (Literal::Int(tag_id as i64), Layout::Builtin(Builtin::Int64)),
+        }
+        */
+        (Literal::Int(tag_id as i64), Layout::Builtin(Builtin::Int64))
+    }
 }
 
 fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
@@ -2495,10 +2519,26 @@ pub fn with_hole<'a>(
 
                     let mut field_symbols: Vec<Symbol> = Vec::with_capacity_in(args.len(), arena);
                     let tag_id_symbol = env.unique_symbol();
-                    field_symbols.push(tag_id_symbol);
 
-                    for (_, symbol, _) in field_symbols_temp.iter() {
+                    let (tag_id_literal, tag_id_layout) =
+                        Literal::tag_id_literal_and_layout(union_size as u64, tag_id as u16);
+
+                    let tag_id_alignment = tag_id_layout.alignment_bytes(8);
+                    let mut opt_tag_id_symbol = Some(tag_id_symbol);
+
+                    for (alignment, symbol, _) in field_symbols_temp.iter() {
+                        if tag_id_alignment >= *alignment {
+                            if let Some(symbol) = opt_tag_id_symbol {
+                                field_symbols.push(symbol);
+                                opt_tag_id_symbol = None;
+                            }
+                        }
+
                         field_symbols.push(*symbol);
+                    }
+
+                    if let Some(symbol) = opt_tag_id_symbol {
+                        field_symbols.push(symbol);
                     }
 
                     let mut layouts: Vec<&'a [Layout<'a>]> =
@@ -2523,15 +2563,15 @@ pub fn with_hole<'a>(
                         .drain(..)
                         .map(|x| x.2 .0)
                         .rev()
-                        .zip(field_symbols.iter().rev());
+                        .zip(field_symbols.iter().filter(|x| **x != tag_id_symbol).rev());
 
                     stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
 
                     // define the tag id
                     stmt = Stmt::Let(
                         tag_id_symbol,
-                        Expr::Literal(Literal::Int(tag_id as i64)),
-                        Layout::Builtin(Builtin::Int64),
+                        Expr::Literal(tag_id_literal),
+                        tag_id_layout,
                         arena.alloc(stmt),
                     );
 
@@ -5393,7 +5433,6 @@ pub fn from_can_pattern<'a>(
                         .expect("tag must be in its own type");
 
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                    // disregard the tag discriminant layout
 
                     let mut arguments = arguments.clone();
 

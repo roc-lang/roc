@@ -1066,21 +1066,39 @@ fn test_to_equality<'a>(
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
 
-            let lhs = Expr::Literal(Literal::Int(tag_id as i64));
+            let (tag_id_literal, tag_id_layout) =
+                Literal::tag_id_literal_and_layout(union.size() as u64, tag_id as u16);
+            let lhs = Expr::Literal(tag_id_literal);
 
             let mut field_layouts =
                 bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
 
             // add the tag discriminant
-            field_layouts.push(Layout::Builtin(Builtin::Int64));
+            let ptr_bytes = 8;
+            let tag_id_layout_size = tag_id_layout.alignment_bytes(ptr_bytes);
+            let mut opt_index = None;
+            for (_, layout) in arguments.into_iter() {
+                let size = layout.alignment_bytes(ptr_bytes);
 
-            for (_, layout) in arguments {
+                if size <= tag_id_layout_size && opt_index.is_none() {
+                    opt_index = Some(field_layouts.len() as u64);
+                    field_layouts.push(tag_id_layout.clone());
+                }
+
                 field_layouts.push(layout);
             }
+
+            let index = if let Some(done) = opt_index {
+                done
+            } else {
+                field_layouts.push(tag_id_layout.clone());
+                field_layouts.len() as u64 - 1
+            };
+
             let field_layouts = field_layouts.into_bump_slice();
 
             let rhs = Expr::AccessAtIndex {
-                index: 0,
+                index,
                 field_layouts,
                 structure: path_symbol,
                 wrapped: Wrapped::MultiTagUnion,
@@ -1089,15 +1107,10 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             let rhs_symbol = env.unique_symbol();
 
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-            stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
+            stores.push((lhs_symbol, tag_id_layout.clone(), lhs));
+            stores.push((rhs_symbol, tag_id_layout.clone(), rhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int64),
-            )
+            (stores, lhs_symbol, rhs_symbol, tag_id_layout.clone())
         }
         Test::IsInt(test_int) => {
             let lhs = Expr::Literal(Literal::Int(test_int));
