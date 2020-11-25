@@ -4452,29 +4452,67 @@ fn store_pattern<'a>(
         | BitLiteral { .. }
         | StrLiteral(_) => {}
         AppliedTag {
-            arguments, layout, ..
+            arguments,
+            layout,
+            tag_id,
+            union,
+            ..
         } => {
             let wrapped = Wrapped::from_layout(layout);
             let write_tag = wrapped == Wrapped::MultiTagUnion;
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
 
+            // if we write the tag, we must insert it in the correct position according to the
+            // alignment requirements
+            let mut tag_id_index = 0;
             if write_tag {
-                // add an element for the tag discriminant
-                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+                let (_, tag_id_layout) =
+                    Literal::tag_id_literal_and_layout(union.size() as u64, *tag_id as u16);
+                let ptr_bytes = 8;
+
+                let tag_id_alignment = tag_id_layout.alignment_bytes(ptr_bytes);
+                let mut opt_tag_id_layout = Some(tag_id_layout);
+
+                for (_, layout) in arguments {
+                    let alignment = layout.alignment_bytes(ptr_bytes);
+
+                    // insert at the first location where the alignment of the tag_id_layout is bigger than or equal
+                    // to the alignment of the field's layout
+                    if tag_id_alignment >= alignment {
+                        if let Some(tag_id_layout) = opt_tag_id_layout {
+                            tag_id_index = arg_layouts.len();
+                            arg_layouts.push(tag_id_layout);
+                            opt_tag_id_layout = None;
+                        }
+                    }
+
+                    arg_layouts.push(layout.clone());
+                }
+
+                // if all field layouts are bigger than the tag_id_layout
+                // it will not have been inserted. Insert it at the end
+                if let Some(tag_id_layout) = opt_tag_id_layout {
+                    tag_id_index = arg_layouts.len();
+                    arg_layouts.push(tag_id_layout);
+                }
+            } else {
+                arg_layouts.extend(arguments.iter().map(|x| x.1.clone()));
             }
 
-            for (_, layout) in arguments {
-                arg_layouts.push(layout.clone());
-            }
+            let arg_layouts = arg_layouts.into_bump_slice();
 
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-                let index = if write_tag { index + 1 } else { index };
+                let index = if write_tag && index >= tag_id_index {
+                    index + 1
+                } else {
+                    index
+                };
 
                 let load = Expr::AccessAtIndex {
                     wrapped,
                     index: index as u64,
-                    field_layouts: arg_layouts.clone().into_bump_slice(),
+                    field_layouts: arg_layouts,
                     structure: outer_symbol,
                 };
 
@@ -5423,6 +5461,15 @@ pub fn from_can_pattern<'a>(
                         .find(|(_, (key, _))| key == tag_name)
                         .expect("tag must be in its own type");
 
+                    // figure out where to store the tag id
+                    let (_, tag_id_layout) =
+                        Literal::tag_id_literal_and_layout(union.size() as u64, tag_id as u16);
+
+                    let tag_id_index = argument_layouts
+                        .iter()
+                        .position(|x| x == &tag_id_layout)
+                        .unwrap();
+
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
                     let mut arguments = arguments.clone();
@@ -5442,7 +5489,11 @@ pub fn from_can_pattern<'a>(
                     // TODO make this assert pass, it currently does not because
                     // 0-sized values are dropped out
                     // debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
-                    let it = argument_layouts[1..].iter();
+
+                    // here we filter the tag_id_layout from the argument layouts
+                    let it = argument_layouts[0..tag_id_index]
+                        .iter()
+                        .chain(argument_layouts[tag_id_index + 1..].iter());
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((
                             from_can_pattern(env, layout_cache, &loc_pat.value),
