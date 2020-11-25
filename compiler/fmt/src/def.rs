@@ -36,7 +36,11 @@ impl<'a> Formattable<'a> for Def<'a> {
         match self {
             Annotation(loc_pattern, loc_annotation) => {
                 loc_pattern.format(buf, indent);
-                buf.push_str(" : ");
+                if loc_annotation.is_multiline() {
+                    buf.push_str(" :");
+                } else {
+                    buf.push_str(" : ");
+                }
                 loc_annotation.format(buf, indent);
             }
             Alias { name, vars, ann } => {

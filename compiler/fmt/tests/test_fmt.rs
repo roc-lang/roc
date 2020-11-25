@@ -770,7 +770,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f : 
+                f :
                     {
                         y : Int,
                         x : Int,
@@ -782,11 +782,41 @@ mod test_fmt {
     }
 
     #[test]
-    fn comments_in_record_annotation() {
-        expr_formats_same(
+    fn multiline_type_definition() {
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    Int
+
+                f"#
+        ));
+    }
+
+    #[test]
+    fn multiline_empty_record_type_definition() {
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    {}
+
+                f"#
+        ));
+    }
+
+    #[test]
+    fn type_definition_comment_after_colon() {
+        expr_formats_to(
             indoc!(
                 r#"
                 f : # comment
+                    {}
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f :
+                    # comment
                     {}
 
                 f"#

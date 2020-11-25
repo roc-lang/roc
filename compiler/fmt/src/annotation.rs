@@ -37,10 +37,6 @@ pub enum Newlines {
     No,
 }
 
-pub fn fmt_annotation<'a>(buf: &mut String<'a>, annotation: &'a TypeAnnotation<'a>, indent: u16) {
-    annotation.format(buf, indent);
-}
-
 pub trait Formattable<'a> {
     fn is_multiline(&self) -> bool;
 
@@ -313,8 +309,18 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 rhs.value.format(buf, indent);
             }
 
-            SpaceBefore(ann, _spaces) | SpaceAfter(ann, _spaces) => {
-                ann.format_with_options(buf, parens, newlines, indent)
+            SpaceBefore(ann, spaces) => {
+                newline(buf, indent + INDENT);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+                ann.format_with_options(buf, parens, newlines, indent + INDENT)
+            }
+            SpaceAfter(ann, spaces) => {
+                ann.format_with_options(buf, parens, newlines, indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+                // seems like a lot of spaceAfter are not constructible
+                // since most of the time we use "SpaceBefore".
+                // Is this specific case really unreachable?
+                unreachable!("cannot have space after type annotation");
             }
 
             Malformed(raw) => buf.push_str(raw),
