@@ -22,7 +22,7 @@ pub fn helper<'a>(
     stdlib: roc_builtins::std::StdLib,
     _leak: bool,
     lazy_literals: bool,
-) -> (&'static str, Vec<roc_problem::can::Problem>, Library) {
+) -> (String, Vec<roc_problem::can::Problem>, Library) {
     use std::path::{Path, PathBuf};
 
     //let stdlib_mode = stdlib.mode;
@@ -77,6 +77,17 @@ pub fn helper<'a>(
     */
 
     debug_assert_eq!(exposed_to_host.len(), 1);
+    let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
+
+    let (_, main_fn_layout) = procedures
+        .keys()
+        .find(|(s, _)| *s == main_fn_symbol)
+        .unwrap()
+        .clone();
+    let mut layout_ids = roc_mono::layout::LayoutIds::default();
+    let main_fn_name = layout_ids
+        .get(main_fn_symbol, &main_fn_layout)
+        .to_symbol_string(main_fn_symbol, &interns);
 
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
@@ -180,7 +191,7 @@ pub fn helper<'a>(
 
     let lib = Library::new(path).expect("failed to load shared library");
 
-    ("Test_main_1", delayed_errors, lib)
+    (main_fn_name, delayed_errors, lib)
 }
 
 #[macro_export]
