@@ -782,6 +782,20 @@ mod test_fmt {
     }
 
     #[test]
+    fn trailing_comma_in_record_annotation_same() {
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    {
+                        y : Int,
+                        x : Int,
+                    }
+
+                f"#
+        ));
+    }
+
+    #[test]
     fn multiline_type_definition() {
         expr_formats_same(indoc!(
             r#"
@@ -819,6 +833,29 @@ mod test_fmt {
                     # comment
                     {}
 
+                f"#
+            ),
+        );
+    }
+
+    #[test]
+    fn final_comment_record_type_definition() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                f :
+                    { # comment
+                    }
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f :
+                    {
+                        # comment
+                    }
+                
                 f"#
             ),
         );

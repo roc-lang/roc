@@ -38,10 +38,21 @@ impl<'a> Formattable<'a> for Def<'a> {
                 loc_pattern.format(buf, indent);
                 if loc_annotation.is_multiline() {
                     buf.push_str(" :");
+                    loc_annotation.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::Yes,
+                        indent,
+                    );
                 } else {
                     buf.push_str(" : ");
+                    loc_annotation.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::No,
+                        indent,
+                    );
                 }
-                loc_annotation.format(buf, indent);
             }
             Alias { name, vars, ann } => {
                 buf.push_str(name.value);
