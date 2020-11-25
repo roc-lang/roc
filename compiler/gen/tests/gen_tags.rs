@@ -33,44 +33,7 @@ mod gen_tags {
     }
 
     #[test]
-    fn applied_tag_nothing() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                Maybe a : [ Just a, Nothing ]
-
-                x : Maybe Int
-                x = Nothing
-
-                x
-                "#
-            ),
-            1,
-            (i64, i64),
-            |(tag, _)| tag
-        );
-    }
-
-    #[test]
-    fn applied_tag_just() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                Maybe a : [ Just a, Nothing ]
-
-                y : Maybe Int
-                y = Just 0x4
-
-                y
-                "#
-            ),
-            (0, 0x4),
-            (i64, i64)
-        );
-    }
-
-    #[test]
-    fn applied_tag_just_ir() {
+    fn applied_tag_just_int() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -829,6 +792,32 @@ mod gen_tags {
             (1, 32i64, true, 2u8),
             (i64, i64, bool, u8)
         );
+        //        assert_evals_to!(
+        //            indoc!(
+        //                r"#
+        //                x : [ Three Bool Int, Empty ]
+        //                x = Three (1 == 1) 32
+        //
+        //                x
+        //
+        //                #"
+        //            ),
+        //            (32i64, true, true),
+        //            (i64, bool, bool)
+        //        );
+        //
+        //        assert_evals_to!(
+        //            indoc!(
+        //                r"#
+        //                x : [ Three Bool [ Red, Green, Blue ] Int, Empty ]
+        //                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+        //
+        //                x
+        //                #"
+        //            ),
+        //            (32i64, true, true, 2u8),
+        //            (i64, bool, bool, u8)
+        //        );
     }
 
     #[test]

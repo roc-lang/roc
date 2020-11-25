@@ -898,26 +898,17 @@ impl<'a> Literal<'a> {
     }
 
     pub fn tag_id_literal(union_size: u64, tag_id: u16) -> Self {
-        /*
-        match union_size {
-            0..=1 => unreachable!(),
-            2 => Literal::Bool(tag_id != 0),
-            3..=255 => Literal::Byte(tag_id as u8),
-            _ => Literal::Int(tag_id as i64),
-        }
-        */
-        Literal::Int(tag_id as i64)
+        Self::tag_id_literal_and_layout(union_size, tag_id).0
     }
 
-    pub fn tag_id_literal_and_layout(union_size: u64, tag_id: u16) -> (Self, Layout<'a>) {
-        /*
-        match union_size {
-            0..=1 => unreachable!(),
-            2 => (Literal::Bool(tag_id != 0), Layout::Builtin(Builtin::Int1)),
-            3..=255 => (Literal::Byte(tag_id as u8), Layout::Builtin(Builtin::Int8)),
-            _ => (Literal::Int(tag_id as i64), Layout::Builtin(Builtin::Int64)),
-        }
-        */
+    pub fn tag_id_literal_and_layout(_union_size: u64, tag_id: u16) -> (Self, Layout<'a>) {
+        // TODO make the discriminant size smaller if the union size allows it. e.g.
+        //        match union_size {
+        //            0..=1 => unreachable!(),
+        //            2 => (Literal::Bool(tag_id != 0), Layout::Builtin(Builtin::Int1)),
+        //            3..=255 => (Literal::Byte(tag_id as u8), Layout::Builtin(Builtin::Int8)),
+        //            _ => (Literal::Int(tag_id as i64), Layout::Builtin(Builtin::Int64)),
+        //        }
         (Literal::Int(tag_id as i64), Layout::Builtin(Builtin::Int64))
     }
 }
