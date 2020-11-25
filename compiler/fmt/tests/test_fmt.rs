@@ -863,18 +863,15 @@ mod test_fmt {
 
     #[test]
     fn multiline_inside_empty_record_annotation() {
-        expr_formats_same(
-            indoc!(
-                r#"
+        expr_formats_same(indoc!(
+            r#"
                 f :
                     {
                     }
 
                 f"#
-            ),
-        );
+        ));
     }
-
 
     #[test]
     fn final_comment_record_annotation() {
