@@ -312,6 +312,12 @@ impl fmt::Debug for ModuleId {
 
 /// Stores a mapping between ModuleId and InlinableString.
 ///
+/// base.Task
+/// 1. build mapping from short name to package
+/// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
+/// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
+/// 4. throw away short names. stash the module id in the can env under the resolved module name
+/// 5. test:
 /// Each module name is stored twice, for faster lookups.
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Debug, Clone)]
