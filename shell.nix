@@ -4,10 +4,10 @@ with {
   # Look here for information about how pin version of nixpkgs
   #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
   pkgs = import (builtins.fetchGit {
-    name = "nixpkgs-2020-10-24";
-    url = "https://github.com/nixos/nixpkgs-channels/";
+    name = "nixpkgs-2020-11-24";
+    url = "https://github.com/nixos/nixpkgs/";
     ref = "refs/heads/nixpkgs-unstable";
-    rev = "502845c3e31ef3de0e424f3fcb09217df2ce6df6";
+    rev = "6625284c397b44bc9518a5a1567c1b5aae455c08";
   }) { };
 
   isMacOS = builtins.currentSystem == "x86_64-darwin";
