@@ -5,6 +5,8 @@ use inkwell::targets::{CodeModel, FileType, RelocMode};
 use libloading::{Error, Library};
 use roc_gen::llvm::build::OptLevel;
 use std::io;
+use std::env;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
@@ -25,7 +27,6 @@ pub fn link(
 ) -> io::Result<(Child, PathBuf)> {
     match target {
         Triple {
-            architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Linux,
             ..
         } => link_linux(target, output_path, input_paths, link_type),
@@ -46,9 +47,11 @@ pub fn rebuild_host(host_input_path: &Path) {
     let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
     let host_dest = host_input_path.with_file_name("host.o");
 
+    let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     // Compile host.c
     let output = Command::new("clang")
         .env_clear()
+        .env("PATH", &env_path)
         .args(&[
             "-c",
             c_host_src.to_str().unwrap(),
@@ -75,6 +78,7 @@ pub fn rebuild_host(host_input_path: &Path) {
 
         let output = Command::new("ld")
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[
                 "-r",
                 "-L",
@@ -103,6 +107,7 @@ pub fn rebuild_host(host_input_path: &Path) {
 
         let output = Command::new("ld")
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[
                 "-r",
                 c_host_dest.to_str().unwrap(),
@@ -145,18 +150,29 @@ fn link_linux(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let libcrt_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
-        Path::new("/usr/lib/x86_64-linux-gnu")
+    let arch = arch_str(target);
+    let usr_lib_path = Path::new("/usr/lib").to_path_buf();
+    let usr_lib_gnu_path = usr_lib_path.join(format!("{}-linux-gnu", arch));
+    let lib_gnu_path = Path::new("/lib/").join(format!("{}-linux-gnu", arch));
+
+    let libcrt_path = if usr_lib_gnu_path.exists() {
+        &usr_lib_gnu_path
     } else {
-        Path::new("/usr/lib")
+        &usr_lib_path
     };
 
-    let libgcc_path = if Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
-        Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1")
-    } else if Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
-        Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")
+    let libgcc_name = "libgcc_s.so.1";
+    let libgcc_path = if lib_gnu_path.join(libgcc_name).exists() {
+        lib_gnu_path.join(libgcc_name)
+    } else if usr_lib_gnu_path.join(libgcc_name).exists() {
+        usr_lib_gnu_path.join(libgcc_name)
     } else {
-        Path::new("/usr/lib/libgcc_s.so.1")
+        usr_lib_path.join(libgcc_name)
+    };
+    let ld_linux = match target.architecture {
+        Architecture::X86_64 => "/lib64/ld-linux-x86-64.so.2",
+        Architecture::Aarch64(_)  => "/lib/ld-linux-aarch64.so.1",
+        _ => panic!("TODO gracefully handle unsupported linux architecture: {:?}", target.architecture),
     };
 
     let mut soname;
@@ -194,12 +210,16 @@ fn link_linux(
         }
     };
 
+    let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Ok((
         Command::new("ld")
             // Don't allow LD_ env vars to affect this
             .env_clear()
+            .env("PATH", &env_path)
+            // Keep NIX_ env vars
+            .envs(env::vars().filter(|&(ref k, _)| k.starts_with("NIX_")).collect::<HashMap<String, String>>())
             .args(&[
                 "-arch",
                 arch_str(target),
@@ -207,7 +227,7 @@ fn link_linux(
                 libcrt_path.join("crtn.o").to_str().unwrap(),
             ])
             .args(&base_args)
-            .args(&["-dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
+            .args(&["-dynamic-linker", ld_linux])
             .args(input_paths)
             .args(&[
                 // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
@@ -220,6 +240,7 @@ fn link_linux(
                 "-lutil",
                 "-lc_nonshared",
                 "-lc++",
+                "-lc++abi",
                 "-lunwind",
                 libgcc_path.to_str().unwrap(),
                 // Output
