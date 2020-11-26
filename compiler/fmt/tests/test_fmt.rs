@@ -770,7 +770,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f : 
+                f :
                     {
                         y : Int,
                         x : Int,
@@ -781,25 +781,125 @@ mod test_fmt {
         );
     }
 
-    // // TODO This raises a parse error:
-    // // NotYetImplemented("TODO the : in this declaration seems outdented")
-    // #[test]
-    // fn comments_in_record_annotation() {
-    //     expr_formats_to(
-    //         indoc!(
-    //             r#"
-    //             f :
-    //                 {}
+    #[test]
+    fn trailing_comma_in_record_annotation_same() {
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    {
+                        y : Int,
+                        x : Int,
+                    }
 
-    //             f"#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //             f : b {}
-    //             f"#
-    //         ),
-    //     );
-    // }
+                f"#
+        ));
+    }
+
+    #[test]
+    fn multiline_type_definition() {
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    Int
+
+                f"#
+        ));
+    }
+
+    #[test]
+    fn multiline_empty_record_type_definition() {
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    {}
+
+                f"#
+        ));
+    }
+
+    #[test]
+    fn type_definition_comment_after_colon() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                f : # comment
+                    {}
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f :
+                    # comment
+                    {}
+
+                f"#
+            ),
+        );
+    }
+
+    #[test]
+    fn final_comment_in_empty_record_type_definition() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                f :
+                    { # comment
+                    }
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f :
+                    {
+                        # comment
+                    }
+                
+                f"#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiline_inside_empty_record_annotation() {
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    {
+                    }
+
+                f"#
+        ));
+    }
+
+    #[test]
+    fn final_comment_record_annotation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                f :
+                    { 
+                        x: Int # comment 1
+                        ,
+                        # comment 2
+                    }
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f :
+                    {
+                        x : Int,
+                        # comment 1
+                        # comment 2
+                    }
+                
+                f"#
+            ),
+        );
+    }
 
     #[test]
     fn def_closure() {

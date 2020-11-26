@@ -544,7 +544,7 @@ fn annotation<'a>(
             ascii_char(b':'),
             // Spaces after the ':' (at a normal indentation level) and then the type.
             // The type itself must be indented more than the pattern and ':'
-            space0_before(type_annotation::located(indented_more), indented_more)
+            space0_before(type_annotation::located(indented_more), min_indent)
         )
     )
 }
@@ -835,7 +835,7 @@ fn parse_def_signature<'a>(
                 // It should be indented more than the original, and it will
                 // end when outdented again.
                 and_then_with_indent_level(
-                    type_annotation::located(indented_more),
+                    space0_before(type_annotation::located(indented_more), min_indent),
                     // The first annotation may be immediately (spaces_then_comment_or_newline())
                     // followed by a body at the exact same indent_level
                     // leading to an AnnotatedBody in this case
