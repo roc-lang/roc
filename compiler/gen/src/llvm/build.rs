@@ -1806,7 +1806,8 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
-    let size_function_name: String = format!("{}_size", roc_function.get_name().to_str().unwrap());
+    let size_function_name: String =
+        format!("roc_{}_size", roc_function.get_name().to_str().unwrap());
 
     let size_function = env.module.add_function(
         size_function_name.as_str(),
@@ -2119,8 +2120,9 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     // STEP 1: build function header
 
+    // e.g. `roc__main_1_Fx_caller`
     let function_name = format!(
-        "{}_{}_caller",
+        "roc_{}_{}_caller",
         def_name,
         alias_symbol.ident_string(&env.interns)
     );
@@ -2200,7 +2202,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
     let size_function_name: String = format!(
-        "{}_{}_size",
+        "roc_{}_{}_size",
         def_name,
         alias_symbol.ident_string(&env.interns)
     );
