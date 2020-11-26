@@ -150,10 +150,9 @@ fn link_linux(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let arch = arch_str(target);
     let usr_lib_path = Path::new("/usr/lib").to_path_buf();
-    let usr_lib_gnu_path = usr_lib_path.join(format!("{}-linux-gnu", arch));
-    let lib_gnu_path = Path::new("/lib/").join(format!("{}-linux-gnu", arch));
+    let usr_lib_gnu_path = usr_lib_path.join(format!("{}-linux-gnu", target.architecture));
+    let lib_gnu_path = Path::new("/lib/").join(format!("{}-linux-gnu", target.architecture));
 
     let libcrt_path = if usr_lib_gnu_path.exists() {
         &usr_lib_gnu_path
