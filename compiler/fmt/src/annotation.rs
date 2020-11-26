@@ -331,10 +331,10 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             SpaceAfter(ann, spaces) => {
                 ann.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                // seems like a lot of spaceAfter are not constructible
-                // since most of the time we use "SpaceBefore".
-                // Is this specific case really unreachable?
-                unreachable!("cannot have space after type annotation");
+                // seems like this SpaceAfter is not constructible
+                // so this branch hasn't be tested. Please add some test if 
+                // this branch is actually reached and remove this dbg_assert.
+                debug_assert!(false);
             }
 
             Malformed(raw) => buf.push_str(raw),
