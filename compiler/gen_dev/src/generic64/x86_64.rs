@@ -99,6 +99,7 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
     }
     const STACK_POINTER: X86_64GPReg = X86_64GPReg::RSP;
     const FRAME_POINTER: X86_64GPReg = X86_64GPReg::RBP;
+    const STACK_ALIGNMENT: u8 = 16;
     const SHADOW_SPACE_SIZE: u8 = 0;
     const RED_ZONE_SIZE: u8 = 128;
 }
@@ -150,6 +151,7 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
     }
     const STACK_POINTER: X86_64GPReg = X86_64GPReg::RSP;
     const FRAME_POINTER: X86_64GPReg = X86_64GPReg::RBP;
+    const STACK_ALIGNMENT: u8 = 16;
     const SHADOW_SPACE_SIZE: u8 = 32;
     const RED_ZONE_SIZE: u8 = 0;
 }

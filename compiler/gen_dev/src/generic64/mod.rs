@@ -21,6 +21,7 @@ pub trait CallConv<GPReg: GPRegTrait> {
     const STACK_POINTER: GPReg;
     const FRAME_POINTER: GPReg;
 
+    const STACK_ALIGNMENT: u8;
     const SHADOW_SPACE_SIZE: u8;
     // It may be worth ignoring the red zone and keeping things simpler.
     const RED_ZONE_SIZE: u8;
@@ -158,15 +159,31 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
             ASM::push_register64bit(&mut out, *reg);
             pop_order.push(*reg);
         }
+
+        // Keep stack aligned while modifying stack.
+        let alignment = self.stack_size % CC::STACK_ALIGNMENT as i32;
+        let offset = if alignment == 0 {
+            0
+        } else {
+            CC::STACK_ALIGNMENT as i32 - alignment
+        };
         if self.stack_size > 0 {
-            ASM::sub_register64bit_immediate32bit(&mut out, CC::STACK_POINTER, self.stack_size);
+            ASM::sub_register64bit_immediate32bit(
+                &mut out,
+                CC::STACK_POINTER,
+                self.stack_size + offset,
+            );
         }
 
         // Add function body.
         out.extend(&self.buf);
 
         if self.stack_size > 0 {
-            ASM::add_register64bit_immediate32bit(&mut out, CC::STACK_POINTER, self.stack_size);
+            ASM::add_register64bit_immediate32bit(
+                &mut out,
+                CC::STACK_POINTER,
+                self.stack_size + offset,
+            );
         }
         // Restore data in callee saved regs.
         while let Some(reg) = pop_order.pop() {
@@ -299,7 +316,6 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
         match val {
             Some(SymbolStorage::GPRegeg(reg)) => {
                 let offset = self.stack_size;
-                self.stack_size += 8;
                 if let Some(size) = self.stack_size.checked_add(8) {
                     self.stack_size = size;
                 } else {
