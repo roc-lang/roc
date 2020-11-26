@@ -809,9 +809,9 @@ pub fn list_sum<'a, 'ctx, 'env>(
     builder.build_load(accum_alloca, "load_final_acum")
 }
 
-/// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+/// List.walk : List elem, (elem -> accum -> accum), accum -> accum
 #[allow(clippy::too_many_arguments)]
-pub fn list_walk_right<'a, 'ctx, 'env>(
+pub fn list_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     list: BasicValueEnum<'ctx>,
@@ -876,6 +876,98 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
             };
 
             incrementing_elem_loop(
+                builder,
+                ctx,
+                parent,
+                list_ptr,
+                len,
+                "#index",
+                walk_right_loop,
+            );
+        }
+
+        _ => {
+            unreachable!(
+                "Invalid function basic value enum or layout for List.keepIf : {:?}",
+                (func, func_layout)
+            );
+        }
+    }
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    builder.build_load(accum_alloca, "load_final_acum")
+}
+
+/// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+#[allow(clippy::too_many_arguments)]
+pub fn list_walk_backwards<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    default: BasicValueEnum<'ctx>,
+    default_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let list_wrapper = list.into_struct_value();
+    let len = list_len(env.builder, list_wrapper);
+
+    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
+    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
+    builder.build_store(accum_alloca, default);
+
+    let then_block = ctx.append_basic_block(parent, "then");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    let condition = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "list_non_empty",
+    );
+
+    builder.build_conditional_branch(condition, then_block, cont_block);
+
+    builder.position_at_end(then_block);
+
+    match (func, func_layout) {
+        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, _)) => {
+            let elem_layout = match list_layout {
+                Layout::Builtin(Builtin::List(_, layout)) => layout,
+                _ => unreachable!("can only fold over a list"),
+            };
+
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+            let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+
+            let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
+                // load current accumulator
+                let current = builder.build_load(accum_alloca, "retrieve_accum");
+
+                let call_site_value =
+                    builder.build_call(func_ptr, &[elem, current], "#walk_right_func");
+
+                // set the calling convention explicitly for this call
+                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                let new_current = call_site_value
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
+                builder.build_store(accum_alloca, new_current);
+            };
+
+            decrementing_elem_loop(
                 builder,
                 ctx,
                 parent,
@@ -1537,6 +1629,7 @@ where
     let current_index = builder
         .build_load(index_alloca, index_name)
         .into_int_value();
+
     let next_index = builder.build_int_sub(current_index, one, "nextindex");
 
     builder.build_store(index_alloca, next_index);
@@ -1546,7 +1639,7 @@ where
 
     // #index >= 0
     let condition = builder.build_int_compare(
-        IntPredicate::UGE,
+        IntPredicate::SGE,
         next_index,
         ctx.i64_type().const_zero(),
         "bounds_check",
