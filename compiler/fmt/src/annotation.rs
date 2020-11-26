@@ -37,10 +37,6 @@ pub enum Newlines {
     No,
 }
 
-pub fn fmt_annotation<'a>(buf: &mut String<'a>, annotation: &'a TypeAnnotation<'a>, indent: u16) {
-    annotation.format(buf, indent);
-}
-
 pub trait Formattable<'a> {
     fn is_multiline(&self) -> bool;
 
@@ -85,13 +81,16 @@ where
 }
 
 macro_rules! format_sequence {
-    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $t:ident) => {
-        // is it a multiline type annotation?
-        if $items.iter().any(|item| item.value.is_multiline()) {
+    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $final_comments:expr, $newline:expr, $t:ident) => {
+        let is_multiline =
+            $items.iter().any(|item| item.value.is_multiline()) || !$final_comments.is_empty();
+
+        if is_multiline {
             let braces_indent = $indent + INDENT;
             let item_indent = braces_indent + INDENT;
-
-            newline($buf, braces_indent);
+            if ($newline == Newlines::Yes) {
+                newline($buf, braces_indent);
+            }
             $buf.push($start);
 
             for item in $items.iter() {
@@ -139,10 +138,12 @@ macro_rules! format_sequence {
                     }
                 }
             }
+            fmt_comments_only($buf, $final_comments.iter(), NewlineAt::Top, item_indent);
             newline($buf, braces_indent);
             $buf.push($end);
         } else {
             // is_multiline == false
+            // there is no comment to add
             $buf.push($start);
             let mut iter = $items.iter().peekable();
             while let Some(item) = iter.next() {
@@ -285,9 +286,9 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             TagUnion {
                 tags,
                 ext,
-                final_comments: _,
+                final_comments,
             } => {
-                format_sequence!(buf, indent, '[', ']', tags, Tag);
+                format_sequence!(buf, indent, '[', ']', tags, final_comments, newlines, Tag);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -297,9 +298,18 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             Record {
                 fields,
                 ext,
-                final_comments: _,
+                final_comments,
             } => {
-                format_sequence!(buf, indent, '{', '}', fields, AssignedField);
+                format_sequence!(
+                    buf,
+                    indent,
+                    '{',
+                    '}',
+                    fields,
+                    final_comments,
+                    newlines,
+                    AssignedField
+                );
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -313,8 +323,18 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 rhs.value.format(buf, indent);
             }
 
-            SpaceBefore(ann, _spaces) | SpaceAfter(ann, _spaces) => {
-                ann.format_with_options(buf, parens, newlines, indent)
+            SpaceBefore(ann, spaces) => {
+                newline(buf, indent + INDENT);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+                ann.format_with_options(buf, parens, Newlines::No, indent)
+            }
+            SpaceAfter(ann, spaces) => {
+                ann.format_with_options(buf, parens, newlines, indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+                // seems like this SpaceAfter is not constructible
+                // so this branch hasn't be tested. Please add some test if
+                // this branch is actually reached and remove this dbg_assert.
+                debug_assert!(false);
             }
 
             Malformed(raw) => buf.push_str(raw),
