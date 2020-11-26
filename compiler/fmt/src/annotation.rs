@@ -332,7 +332,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 ann.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 // seems like this SpaceAfter is not constructible
-                // so this branch hasn't be tested. Please add some test if 
+                // so this branch hasn't be tested. Please add some test if
                 // this branch is actually reached and remove this dbg_assert.
                 debug_assert!(false);
             }
