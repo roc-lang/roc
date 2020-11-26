@@ -4,9 +4,9 @@ use inkwell::module::Module;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
 use libloading::{Error, Library};
 use roc_gen::llvm::build::OptLevel;
-use std::io;
-use std::env;
 use std::collections::HashMap;
+use std::env;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
@@ -171,8 +171,11 @@ fn link_linux(
     };
     let ld_linux = match target.architecture {
         Architecture::X86_64 => "/lib64/ld-linux-x86-64.so.2",
-        Architecture::Aarch64(_)  => "/lib/ld-linux-aarch64.so.1",
-        _ => panic!("TODO gracefully handle unsupported linux architecture: {:?}", target.architecture),
+        Architecture::Aarch64(_) => "/lib/ld-linux-aarch64.so.1",
+        _ => panic!(
+            "TODO gracefully handle unsupported linux architecture: {:?}",
+            target.architecture
+        ),
     };
 
     let mut soname;
@@ -219,7 +222,11 @@ fn link_linux(
             .env_clear()
             .env("PATH", &env_path)
             // Keep NIX_ env vars
-            .envs(env::vars().filter(|&(ref k, _)| k.starts_with("NIX_")).collect::<HashMap<String, String>>())
+            .envs(
+                env::vars()
+                    .filter(|&(ref k, _)| k.starts_with("NIX_"))
+                    .collect::<HashMap<String, String>>(),
+            )
             .args(&[
                 "-arch",
                 arch_str(target),
