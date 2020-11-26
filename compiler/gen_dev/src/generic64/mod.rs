@@ -1,6 +1,6 @@
 use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
-use roc_collections::all::{ImSet, MutMap, MutSet};
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{Literal, Stmt};
 use std::marker::PhantomData;
@@ -8,25 +8,25 @@ use target_lexicon::Triple;
 
 pub mod x86_64;
 
-pub trait CallConv<GPReg> {
-    fn gp_param_regs() -> &'static [GPReg];
-    fn gp_return_regs() -> &'static [GPReg];
-    fn gp_default_free_regs() -> &'static [GPReg];
+pub trait CallConv<GPReg: GPRegTrait> {
+    const GP_PARAM_REGS: &'static [GPReg];
+    const GP_RETURN_REGS: &'static [GPReg];
+    const GP_DEFAULT_FREE_REGS: &'static [GPReg];
 
-    // A linear scan of an array may be faster than a set technically.
-    // That being said, fastest would likely be a trait based on calling convention/register.
-    fn caller_saved_regs() -> ImSet<GPReg>;
-    fn callee_saved_regs() -> ImSet<GPReg>;
+    fn callee_saved(reg: &GPReg) -> bool;
+    fn caller_saved_regs(reg: &GPReg) -> bool {
+        !Self::callee_saved(reg)
+    }
 
-    fn stack_pointer() -> GPReg;
-    fn frame_pointer() -> GPReg;
+    const STACK_POINTER: GPReg;
+    const FRAME_POINTER: GPReg;
 
-    fn shadow_space_size() -> u8;
+    const SHADOW_SPACE_SIZE: u8;
     // It may be worth ignoring the red zone and keeping things simpler.
-    fn red_zone_size() -> u8;
+    const RED_ZONE_SIZE: u8;
 }
 
-pub trait Assembler<GPReg> {
+pub trait Assembler<GPReg: GPRegTrait> {
     fn add_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
     fn add_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
     fn cmovl_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
@@ -43,7 +43,7 @@ pub trait Assembler<GPReg> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum SymbolStorage<GPReg> {
+enum SymbolStorage<GPReg: GPRegTrait> {
     // These may need layout, but I am not sure.
     // I think whenever a symbol would be used, we specify layout anyways.
     GPRegeg(GPReg),
@@ -109,7 +109,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     }
 
     fn reset(&mut self) {
-        self.stack_size = -(CC::red_zone_size() as i32);
+        self.stack_size = -(CC::RED_ZONE_SIZE as i32);
         self.leaf_function = true;
         self.last_seen_map.clear();
         self.free_map.clear();
@@ -119,13 +119,13 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         self.gp_free_regs.clear();
         self.gp_used_regs.clear();
         self.gp_free_regs
-            .extend_from_slice(CC::gp_default_free_regs());
+            .extend_from_slice(CC::GP_DEFAULT_FREE_REGS);
     }
 
     fn set_not_leaf_function(&mut self) {
         self.leaf_function = false;
         // If this is not a leaf function, it can't use the shadow space.
-        self.stack_size = CC::shadow_space_size() as i32 - CC::red_zone_size() as i32;
+        self.stack_size = CC::SHADOW_SPACE_SIZE as i32 - CC::RED_ZONE_SIZE as i32;
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
@@ -149,12 +149,8 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
 
         if !self.leaf_function {
             // I believe that this will have to move away from push and to mov to be generic across backends.
-            ASM::push_register64bit(&mut out, CC::frame_pointer());
-            ASM::mov_register64bit_register64bit(
-                &mut out,
-                CC::frame_pointer(),
-                CC::stack_pointer(),
-            );
+            ASM::push_register64bit(&mut out, CC::FRAME_POINTER);
+            ASM::mov_register64bit_register64bit(&mut out, CC::FRAME_POINTER, CC::STACK_POINTER);
         }
         // Save data in all callee saved regs.
         let mut pop_order = bumpalo::vec![in self.env.arena];
@@ -163,21 +159,21 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
             pop_order.push(*reg);
         }
         if self.stack_size > 0 {
-            ASM::sub_register64bit_immediate32bit(&mut out, CC::stack_pointer(), self.stack_size);
+            ASM::sub_register64bit_immediate32bit(&mut out, CC::STACK_POINTER, self.stack_size);
         }
 
         // Add function body.
         out.extend(&self.buf);
 
         if self.stack_size > 0 {
-            ASM::add_register64bit_immediate32bit(&mut out, CC::stack_pointer(), self.stack_size);
+            ASM::add_register64bit_immediate32bit(&mut out, CC::STACK_POINTER, self.stack_size);
         }
         // Restore data in callee saved regs.
         while let Some(reg) = pop_order.pop() {
             ASM::pop_register64bit(&mut out, reg);
         }
         if !self.leaf_function {
-            ASM::pop_register64bit(&mut out, CC::frame_pointer());
+            ASM::pop_register64bit(&mut out, CC::FRAME_POINTER);
         }
         ASM::ret(&mut out);
 
@@ -234,11 +230,11 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.get(sym);
         match val {
-            Some(SymbolStorage::GPRegeg(reg)) if *reg == CC::gp_return_regs()[0] => Ok(()),
+            Some(SymbolStorage::GPRegeg(reg)) if *reg == CC::GP_RETURN_REGS[0] => Ok(()),
             Some(SymbolStorage::GPRegeg(reg)) => {
                 // If it fits in a general purpose register, just copy it over to.
                 // Technically this can be optimized to produce shorter instructions if less than 64bits.
-                ASM::mov_register64bit_register64bit(&mut self.buf, CC::gp_return_regs()[0], *reg);
+                ASM::mov_register64bit_register64bit(&mut self.buf, CC::GP_RETURN_REGS[0], *reg);
                 Ok(())
             }
             Some(x) => Err(format!(
@@ -258,7 +254,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
     fn claim_gp_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
         let reg = if !self.gp_free_regs.is_empty() {
             let free_reg = self.gp_free_regs.pop().unwrap();
-            if CC::callee_saved_regs().contains(&free_reg) {
+            if CC::callee_saved(&free_reg) {
                 self.used_callee_saved_regs.insert(free_reg);
             }
             Ok(free_reg)

@@ -1,6 +1,5 @@
 use crate::generic64::{Assembler, CallConv, GPRegTrait};
 use bumpalo::collections::Vec;
-use roc_collections::all::ImSet;
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -29,7 +28,7 @@ impl GPRegTrait for X86_64GPReg {}
 const REX: u8 = 0x40;
 const REX_W: u8 = REX + 0x8;
 
-fn add_rm_extension(reg: X86_64GPReg, byte: u8) -> u8 {
+const fn add_rm_extension(reg: X86_64GPReg, byte: u8) -> u8 {
     if reg as u8 > 7 {
         byte + 1
     } else {
@@ -37,11 +36,11 @@ fn add_rm_extension(reg: X86_64GPReg, byte: u8) -> u8 {
     }
 }
 
-fn add_opcode_extension(reg: X86_64GPReg, byte: u8) -> u8 {
+const fn add_opcode_extension(reg: X86_64GPReg, byte: u8) -> u8 {
     add_rm_extension(reg, byte)
 }
 
-fn add_reg_extension(reg: X86_64GPReg, byte: u8) -> u8 {
+const fn add_reg_extension(reg: X86_64GPReg, byte: u8) -> u8 {
     if reg as u8 > 7 {
         byte + 4
     } else {
@@ -54,157 +53,105 @@ pub struct X86_64WindowsFastcall {}
 pub struct X86_64SystemV {}
 
 impl CallConv<X86_64GPReg> for X86_64SystemV {
-    fn gp_param_regs() -> &'static [X86_64GPReg] {
-        &[
-            X86_64GPReg::RDI,
-            X86_64GPReg::RSI,
-            X86_64GPReg::RDX,
-            X86_64GPReg::RCX,
-            X86_64GPReg::R8,
-            X86_64GPReg::R9,
-        ]
+    const GP_PARAM_REGS: &'static [X86_64GPReg] = &[
+        X86_64GPReg::RDI,
+        X86_64GPReg::RSI,
+        X86_64GPReg::RDX,
+        X86_64GPReg::RCX,
+        X86_64GPReg::R8,
+        X86_64GPReg::R9,
+    ];
+    const GP_RETURN_REGS: &'static [X86_64GPReg] = &[X86_64GPReg::RAX, X86_64GPReg::RDX];
+
+    const GP_DEFAULT_FREE_REGS: &'static [X86_64GPReg] = &[
+        // The regs we want to use first should be at the end of this vec.
+        // We will use pop to get which reg to use next
+        // Use callee saved regs last.
+        X86_64GPReg::RBX,
+        // Don't use frame pointer: X86_64GPReg::RBP,
+        X86_64GPReg::R12,
+        X86_64GPReg::R13,
+        X86_64GPReg::R14,
+        X86_64GPReg::R15,
+        // Use caller saved regs first.
+        X86_64GPReg::RAX,
+        X86_64GPReg::RCX,
+        X86_64GPReg::RDX,
+        // Don't use stack pionter: X86_64GPReg::RSP,
+        X86_64GPReg::RSI,
+        X86_64GPReg::RDI,
+        X86_64GPReg::R8,
+        X86_64GPReg::R9,
+        X86_64GPReg::R10,
+        X86_64GPReg::R11,
+    ];
+    #[inline(always)]
+    fn callee_saved(reg: &X86_64GPReg) -> bool {
+        matches!(
+            reg,
+            X86_64GPReg::RBX
+                | X86_64GPReg::RBP
+                | X86_64GPReg::R12
+                | X86_64GPReg::R13
+                | X86_64GPReg::R14
+                | X86_64GPReg::R15
+        )
     }
-    fn gp_return_regs() -> &'static [X86_64GPReg] {
-        &[X86_64GPReg::RAX, X86_64GPReg::RDX]
-    }
-    fn gp_default_free_regs() -> &'static [X86_64GPReg] {
-        &[
-            // The regs we want to use first should be at the end of this vec.
-            // We will use pop to get which reg to use next
-            // Use callee saved regs last.
-            X86_64GPReg::RBX,
-            // Don't use frame pointer: X86_64GPReg::RBP,
-            X86_64GPReg::R12,
-            X86_64GPReg::R13,
-            X86_64GPReg::R14,
-            X86_64GPReg::R15,
-            // Use caller saved regs first.
-            X86_64GPReg::RAX,
-            X86_64GPReg::RCX,
-            X86_64GPReg::RDX,
-            // Don't use stack pionter: X86_64GPReg::RSP,
-            X86_64GPReg::RSI,
-            X86_64GPReg::RDI,
-            X86_64GPReg::R8,
-            X86_64GPReg::R9,
-            X86_64GPReg::R10,
-            X86_64GPReg::R11,
-        ]
-    }
-    fn caller_saved_regs() -> ImSet<X86_64GPReg> {
-        // TODO: stop using vec! here. I was just have trouble with some errors, but it shouldn't be needed.
-        ImSet::from(vec![
-            X86_64GPReg::RAX,
-            X86_64GPReg::RCX,
-            X86_64GPReg::RDX,
-            X86_64GPReg::RSP,
-            X86_64GPReg::RSI,
-            X86_64GPReg::RDI,
-            X86_64GPReg::R8,
-            X86_64GPReg::R9,
-            X86_64GPReg::R10,
-            X86_64GPReg::R11,
-        ])
-    }
-    fn callee_saved_regs() -> ImSet<X86_64GPReg> {
-        // TODO: stop using vec! here. I was just have trouble with some errors, but it shouldn't be needed.
-        ImSet::from(vec![
-            X86_64GPReg::RBX,
-            X86_64GPReg::RBP,
-            X86_64GPReg::R12,
-            X86_64GPReg::R13,
-            X86_64GPReg::R14,
-            X86_64GPReg::R15,
-        ])
-    }
-    fn stack_pointer() -> X86_64GPReg {
-        X86_64GPReg::RSP
-    }
-    fn frame_pointer() -> X86_64GPReg {
-        X86_64GPReg::RBP
-    }
-    fn shadow_space_size() -> u8 {
-        0
-    }
-    fn red_zone_size() -> u8 {
-        128
-    }
+    const STACK_POINTER: X86_64GPReg = X86_64GPReg::RSP;
+    const FRAME_POINTER: X86_64GPReg = X86_64GPReg::RBP;
+    const SHADOW_SPACE_SIZE: u8 = 0;
+    const RED_ZONE_SIZE: u8 = 128;
 }
 
 impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
-    fn gp_param_regs() -> &'static [X86_64GPReg] {
-        &[
-            X86_64GPReg::RCX,
-            X86_64GPReg::RDX,
-            X86_64GPReg::R8,
-            X86_64GPReg::R9,
-        ]
+    const GP_PARAM_REGS: &'static [X86_64GPReg] = &[
+        X86_64GPReg::RCX,
+        X86_64GPReg::RDX,
+        X86_64GPReg::R8,
+        X86_64GPReg::R9,
+    ];
+    const GP_RETURN_REGS: &'static [X86_64GPReg] = &[X86_64GPReg::RAX];
+    const GP_DEFAULT_FREE_REGS: &'static [X86_64GPReg] = &[
+        // The regs we want to use first should be at the end of this vec.
+        // We will use pop to get which reg to use next
+        // Use callee saved regs last.
+        X86_64GPReg::RBX,
+        // Don't use frame pointer: X86_64GPReg::RBP,
+        X86_64GPReg::RSI,
+        // Don't use stack pionter: X86_64GPReg::RSP,
+        X86_64GPReg::RDI,
+        X86_64GPReg::R12,
+        X86_64GPReg::R13,
+        X86_64GPReg::R14,
+        X86_64GPReg::R15,
+        // Use caller saved regs first.
+        X86_64GPReg::RAX,
+        X86_64GPReg::RCX,
+        X86_64GPReg::RDX,
+        X86_64GPReg::R8,
+        X86_64GPReg::R9,
+        X86_64GPReg::R10,
+        X86_64GPReg::R11,
+    ];
+    #[inline(always)]
+    fn callee_saved(reg: &X86_64GPReg) -> bool {
+        matches!(
+            reg,
+            X86_64GPReg::RBX
+                | X86_64GPReg::RBP
+                | X86_64GPReg::RSI
+                | X86_64GPReg::RSP
+                | X86_64GPReg::RDI
+                | X86_64GPReg::R12
+                | X86_64GPReg::R13
+                | X86_64GPReg::R14
+                | X86_64GPReg::R15
+        )
     }
-    fn gp_return_regs() -> &'static [X86_64GPReg] {
-        &[X86_64GPReg::RAX]
-    }
-    fn gp_default_free_regs() -> &'static [X86_64GPReg] {
-        &[
-            // The regs we want to use first should be at the end of this vec.
-            // We will use pop to get which reg to use next
-            // Use callee saved regs last.
-            X86_64GPReg::RBX,
-            // Don't use frame pointer: X86_64GPReg::RBP,
-            X86_64GPReg::RSI,
-            // Don't use stack pionter: X86_64GPReg::RSP,
-            X86_64GPReg::RDI,
-            X86_64GPReg::R12,
-            X86_64GPReg::R13,
-            X86_64GPReg::R14,
-            X86_64GPReg::R15,
-            // Use caller saved regs first.
-            X86_64GPReg::RAX,
-            X86_64GPReg::RCX,
-            X86_64GPReg::RDX,
-            X86_64GPReg::R8,
-            X86_64GPReg::R9,
-            X86_64GPReg::R10,
-            X86_64GPReg::R11,
-        ]
-    }
-    fn caller_saved_regs() -> ImSet<X86_64GPReg> {
-        // TODO: stop using vec! here. I was just have trouble with some errors, but it shouldn't be needed.
-        ImSet::from(vec![
-            X86_64GPReg::RAX,
-            X86_64GPReg::RCX,
-            X86_64GPReg::RDX,
-            X86_64GPReg::R8,
-            X86_64GPReg::R9,
-            X86_64GPReg::R10,
-            X86_64GPReg::R11,
-        ])
-    }
-    fn callee_saved_regs() -> ImSet<X86_64GPReg> {
-        // TODO: stop using vec! here. I was just have trouble with some errors, but it shouldn't be needed.
-        ImSet::from(vec![
-            X86_64GPReg::RBX,
-            X86_64GPReg::RBP,
-            X86_64GPReg::RSI,
-            X86_64GPReg::RSP,
-            X86_64GPReg::RDI,
-            X86_64GPReg::R12,
-            X86_64GPReg::R13,
-            X86_64GPReg::R14,
-            X86_64GPReg::R15,
-        ])
-    }
-    fn stack_pointer() -> X86_64GPReg {
-        X86_64GPReg::RSP
-    }
-    fn frame_pointer() -> X86_64GPReg {
-        X86_64GPReg::RBP
-    }
-    fn shadow_space_size() -> u8 {
-        32
-    }
-    fn red_zone_size() -> u8 {
-        0
-    }
+    const STACK_POINTER: X86_64GPReg = X86_64GPReg::RSP;
+    const FRAME_POINTER: X86_64GPReg = X86_64GPReg::RBP;
+    const SHADOW_SPACE_SIZE: u8 = 32;
+    const RED_ZONE_SIZE: u8 = 0;
 }
 
 impl Assembler<X86_64GPReg> for X86_64Assembler {
@@ -215,6 +162,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     // Please keep these in alphanumeric order.
 
     /// `ADD r/m64, imm32` -> Add imm32 sign-extended to 64-bits from r/m64.
+    #[inline(always)]
     fn add_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         // This can be optimized if the immediate is 1 byte.
         let rex = add_rm_extension(dst, REX_W);
@@ -225,6 +173,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `ADD r/m64,r64` -> Add r64 to r/m64.
+    #[inline(always)]
     fn add_register64bit_register64bit<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
@@ -238,6 +187,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
+    #[inline(always)]
     fn cmovl_register64bit_register64bit<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
@@ -251,6 +201,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
+    #[inline(always)]
     fn mov_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         let rex = add_rm_extension(dst, REX_W);
         let dst_mod = dst as u8 % 8;
@@ -260,6 +211,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `MOV r64, imm64` -> Move imm64 to r64.
+    #[inline(always)]
     fn mov_register64bit_immediate64bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i64) {
         if imm <= i32::MAX as i64 && imm >= i32::MIN as i64 {
             Self::mov_register64bit_immediate32bit(buf, dst, imm as i32)
@@ -273,6 +225,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `MOV r/m64,r64` -> Move r64 to r/m64.
+    #[inline(always)]
     fn mov_register64bit_register64bit<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
@@ -286,6 +239,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `MOV r64,r/m64` -> Move r/m64 to r64.
+    #[inline(always)]
     fn mov_register64bit_stackoffset32bit<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
@@ -302,6 +256,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `MOV r/m64,r64` -> Move r64 to r/m64.
+    #[inline(always)]
     fn mov_stackoffset32bit_register64bit<'a>(
         buf: &mut Vec<'a, u8>,
         offset: i32,
@@ -318,6 +273,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `NEG r/m64` -> Two's complement negate r/m64.
+    #[inline(always)]
     fn neg_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let rex = add_rm_extension(reg, REX_W);
         let reg_mod = reg as u8 % 8;
@@ -325,11 +281,13 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `RET` -> Near return to calling procedure.
+    #[inline(always)]
     fn ret<'a>(buf: &mut Vec<'a, u8>) {
         buf.push(0xC3);
     }
 
     /// `SUB r/m64, imm32` -> Subtract imm32 sign-extended to 64-bits from r/m64.
+    #[inline(always)]
     fn sub_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         // This can be optimized if the immediate is 1 byte.
         let rex = add_rm_extension(dst, REX_W);
@@ -340,6 +298,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `POP r64` -> Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit operand size.
+    #[inline(always)]
     fn pop_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let reg_mod = reg as u8 % 8;
         if reg as u8 > 7 {
@@ -351,6 +310,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 
     /// `PUSH r64` -> Push r64,
+    #[inline(always)]
     fn push_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let reg_mod = reg as u8 % 8;
         if reg as u8 > 7 {
