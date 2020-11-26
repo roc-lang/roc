@@ -69,7 +69,7 @@ pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallCo
     literal_map: MutMap<Symbol, Literal<'a>>,
 
     // This should probably be smarter than a vec.
-    // There are certain registers we should always use first. With pushing and poping, this could get mixed.
+    // There are certain registers we should always use first. With pushing and popping, this could get mixed.
     gp_free_regs: Vec<'a, GPReg>,
 
     // The last major thing we need is a way to decide what reg to free when all of them are full.
