@@ -145,7 +145,7 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc",
  "miniz_oxide",
- "object",
+ "object 0.20.0",
  "rustc-demangle",
 ]
 
@@ -482,6 +482,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32fast"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81156fece84ab6a9f2afdb109ce3ae577e42b1228441eded99bd77f627953b1a"
+dependencies = [
+ "cfg-if 1.0.0",
+]
+
+[[package]]
 name = "criterion"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -760,6 +769,18 @@ name = "fixedbitset"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
+
+[[package]]
+name = "flate2"
+version = "1.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7411863d55df97a419aa64cb4d2f167103ea9d767e2c54a1868b7ac3f6b47129"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crc32fast",
+ "libc",
+ "miniz_oxide",
+]
 
 [[package]]
 name = "fnv"
@@ -1722,6 +1743,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ab52be62400ca80aa00285d25253d7f7c437b7375c4de678f5405d3afe82ca5"
 
 [[package]]
+name = "object"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d3b63360ec3cb337817c2dbd47ab4a0f170d285d8e5a2064600f3def1402397"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "wasmparser",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2574,6 +2607,45 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
+ "tokio",
+]
+
+[[package]]
+name = "roc_gen_dev"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "im",
+ "im-rc",
+ "indoc",
+ "inlinable_string",
+ "itertools",
+ "libc",
+ "libloading",
+ "maplit",
+ "object 0.22.0",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_std",
+ "roc_types",
+ "roc_unify",
+ "roc_uniq",
+ "target-lexicon",
+ "tempfile",
  "tokio",
 ]
 
@@ -3533,6 +3605,12 @@ name = "wasm-bindgen-shared"
 version = "0.2.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d649a3145108d7d3fbcde896a468d1bd636791823c9921135218ad89be08307"
+
+[[package]]
+name = "wasmparser"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32fddd575d477c6e9702484139cf9f23dcd554b06d185ed0f56c857dd3a47aa6"
 
 [[package]]
 name = "wayland-client"
