@@ -406,10 +406,9 @@ fn format_assigned_field_help<'a, T>(
     T: Formattable<'a>,
 {
     use self::AssignedField::*;
-    dbg!("in format assigne_field");
+
     match zelf {
         RequiredValue(name, spaces, ann) => {
-            dbg!(&name, &spaces);
             if is_multiline {
                 newline(buf, indent);
             }
