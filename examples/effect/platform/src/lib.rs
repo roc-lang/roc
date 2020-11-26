@@ -95,7 +95,12 @@ pub fn rust_main() -> isize {
 
                 let closure_data_ptr = buffer.offset(16);
 
-                call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8)
+                let result =
+                    call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8);
+
+                std::alloc::dealloc(buffer, layout);
+
+                result
             }
             Err(msg) => {
                 std::alloc::dealloc(buffer, layout);

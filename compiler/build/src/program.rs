@@ -20,6 +20,7 @@ pub fn gen_from_mono_module(
     target: Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
+    emit_debug_info: bool,
 ) {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
@@ -161,7 +162,9 @@ pub fn gen_from_mono_module(
 
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
-    if true {
+    if emit_debug_info {
+        module.strip_debug_info();
+
         let mut app_ll_file = std::path::PathBuf::from(app_o_file);
         app_ll_file.set_extension("ll");
 
@@ -217,19 +220,18 @@ pub fn gen_from_mono_module(
             ])
             .output()
             .unwrap();
+    } else {
+        // Emit the .o file
 
-        return;
+        let reloc = RelocMode::Default;
+        let model = CodeModel::Default;
+        let target_machine =
+            target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
+
+        target_machine
+            .write_to_file(&env.module, FileType::Object, &app_o_file)
+            .expect("Writing .o file failed");
     }
-
-    // Emit the .o file
-
-    let reloc = RelocMode::Default;
-    let model = CodeModel::Default;
-    let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
-
-    target_machine
-        .write_to_file(&env.module, FileType::Object, &app_o_file)
-        .expect("Writing .o file failed");
 }
 
 pub struct FunctionIterator<'ctx> {
