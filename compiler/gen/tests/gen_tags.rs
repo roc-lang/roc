@@ -417,7 +417,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Maybe a : [ Just a, Nothing ]
 
@@ -481,7 +481,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 2 is
                         2 if False -> 0
                         _ -> 42
@@ -499,7 +499,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 2 is
                         2 if True -> 42
                         _ -> 0
@@ -517,7 +517,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 2 is
                         _ if False -> 0
                         _ -> 42
@@ -630,14 +630,14 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Maybe a : [ Nothing, Just a ]
 
                 x : Maybe (Maybe Int)
                 x = Just (Just 41)
 
-                main = 
+                main =
                     x
                 "#
             ),
@@ -701,11 +701,11 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-            wrapper = \{} -> 
+            wrapper = \{} ->
                 x : [ Red, White, Blue ]
                 x = Blue
 
-                y = 
+                y =
                     when x is
                         Red -> 1
                         White -> 2
@@ -726,8 +726,8 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
-                    y = 
+                wrapper = \{} ->
+                    y =
                         when 1 + 2 is
                             3 -> 3
                             1 -> 1
@@ -745,7 +745,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-            y = 
+            y =
                 if 1 + 2 > 0 then
                     3
                 else
@@ -756,6 +756,116 @@ mod gen_tags {
             ),
             3,
             i64
+        );
+    }
+
+    #[test]
+    fn alignment_in_single_tag_construction() {
+        assert_evals_to!(indoc!("Three (1 == 1) 32"), (32i64, true), (i64, bool));
+
+        assert_evals_to!(
+            indoc!("Three (1 == 1) (if True then Red else if True then Green else Blue) 32"),
+            (32i64, true, 2u8),
+            (i64, bool, u8)
+        );
+    }
+
+    #[test]
+    fn alignment_in_single_tag_pattern_match() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x = Three (1 == 1) 32
+
+                when x is
+                    Three bool int ->
+                        { bool, int }
+                #"
+            ),
+            (32i64, true),
+            (i64, bool)
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+
+                when x is
+                    Three bool color int ->
+                        { bool, color, int }
+                #"
+            ),
+            (32i64, true, 2u8),
+            (i64, bool, u8)
+        );
+    }
+
+    #[test]
+    fn alignment_in_multi_tag_construction() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x : [ Three Bool Int, Empty ]
+                x = Three (1 == 1) 32
+
+                x
+
+                #"
+            ),
+            (1, 32i64, true),
+            (i64, i64, bool)
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x : [ Three Bool [ Red, Green, Blue ] Int, Empty ]
+                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+
+                x
+                #"
+            ),
+            (1, 32i64, true, 2u8),
+            (i64, i64, bool, u8)
+        );
+    }
+
+    #[test]
+    fn alignment_in_multi_tag_pattern_match() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x : [ Three Bool Int, Empty ]
+                x = Three (1 == 1) 32
+
+                when x is
+                    Three bool int ->
+                        { bool, int }
+
+                    Empty ->
+                        { bool: False, int: 0 }
+                #"
+            ),
+            (32i64, true),
+            (i64, bool)
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r"#
+                x : [ Three Bool [ Red, Green, Blue ] Int, Empty ]
+                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+
+                when x is
+                    Three bool color int ->
+                        { bool, color, int }
+                    Empty ->
+                        { bool: False, color: Red, int: 0 }
+                #"
+            ),
+            (32i64, true, 2u8),
+            (i64, bool, u8)
         );
     }
 }

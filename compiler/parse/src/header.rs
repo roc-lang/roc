@@ -1,15 +1,43 @@
-use crate::ast::CommentOrNewline;
+use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
+use crate::blankspace::space0;
+use crate::ident::lowercase_ident;
+use crate::module::package_name;
+use crate::parser::{ascii_char, optional, Either, Parser};
+use crate::string_literal;
 use bumpalo::collections::Vec;
 use inlinable_string::InlinableString;
 use roc_region::all::Loc;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct PackageName<'a> {
     pub account: &'a str,
     pub pkg: &'a str,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub enum Version<'a> {
+    Exact(&'a str),
+    Range {
+        min: &'a str,
+        min_comparison: VersionComparison,
+        max: &'a str,
+        max_comparison: VersionComparison,
+    },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+pub enum VersionComparison {
+    AllowsEqual,
+    DisallowsEqual,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum PackageOrPath<'a> {
+    Package(PackageName<'a>, Version<'a>),
+    Path(StrLiteral<'a>),
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
 
 impl<'a> Into<&'a str> for ModuleName<'a> {
@@ -34,15 +62,14 @@ impl<'a> ModuleName<'a> {
     }
 }
 
-// TODO is this all duplicated from parse::ast?
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterfaceHeader<'a> {
     pub name: Loc<ModuleName<'a>>,
-    pub exposes: Vec<'a, Loc<Exposes<'a>>>,
-    pub imports: Vec<'a, (ModuleName<'a>, Vec<'a, Loc<Imports<'a>>>)>,
+    pub exposes: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
-    pub after_interface: &'a [CommentOrNewline<'a>],
+    pub after_interface_keyword: &'a [CommentOrNewline<'a>],
     pub before_exposes: &'a [CommentOrNewline<'a>],
     pub after_exposes: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
@@ -50,30 +77,209 @@ pub struct InterfaceHeader<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum To<'a> {
+    ExistingPackage(&'a str),
+    NewPackage(PackageOrPath<'a>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
-    pub imports: Vec<'a, (ModuleName<'a>, Loc<Imports<'a>>)>,
+    pub name: Loc<StrLiteral<'a>>,
+    pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+    pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub to: Loc<To<'a>>,
 
     // Potential comments and newlines - these will typically all be empty.
+    pub after_app_keyword: &'a [CommentOrNewline<'a>],
+    pub before_packages: &'a [CommentOrNewline<'a>],
+    pub after_packages: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub before_provides: &'a [CommentOrNewline<'a>],
+    pub after_provides: &'a [CommentOrNewline<'a>],
+    pub before_to: &'a [CommentOrNewline<'a>],
+    pub after_to: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PackageHeader<'a> {
+    pub name: Loc<PackageName<'a>>,
+    pub exposes: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageOrPath<'a>>)>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+
+    // Potential comments and newlines - these will typically all be empty.
+    pub after_package_keyword: &'a [CommentOrNewline<'a>],
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub after_exposes: &'a [CommentOrNewline<'a>],
+    pub before_packages: &'a [CommentOrNewline<'a>],
+    pub after_packages: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Exposes<'a> {
-    /// e.g. `Task`
-    Ident(&'a str),
+pub struct PlatformHeader<'a> {
+    pub name: Loc<PackageName<'a>>,
+    pub requires: Vec<'a, Loc<TypedIdent<'a>>>,
+    pub exposes: Vec<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
+    pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+    pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub effects: Effects<'a>,
 
-    // Spaces
-    SpaceBefore(&'a Exposes<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a Exposes<'a>, &'a [CommentOrNewline<'a>]),
+    // Potential comments and newlines - these will typically all be empty.
+    pub after_platform_keyword: &'a [CommentOrNewline<'a>],
+    pub before_requires: &'a [CommentOrNewline<'a>],
+    pub after_requires: &'a [CommentOrNewline<'a>],
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub after_exposes: &'a [CommentOrNewline<'a>],
+    pub before_packages: &'a [CommentOrNewline<'a>],
+    pub after_packages: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub before_provides: &'a [CommentOrNewline<'a>],
+    pub after_provides: &'a [CommentOrNewline<'a>],
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Imports<'a> {
-    /// e.g. `Task` or `Task.{ Task, after }`
-    Ident(&'a str, Vec<'a, &'a str>),
+pub struct Effects<'a> {
+    pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
+    pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
+    pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
+    pub type_name: &'a str,
+    pub entries: Vec<'a, Loc<TypedIdent<'a>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExposesEntry<'a, T> {
+    /// e.g. `Task`
+    Exposed(T),
 
     // Spaces
-    SpaceBefore(&'a Imports<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a Imports<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a ExposesEntry<'a, T>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ExposesEntry<'a, T>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a, T> Spaceable<'a> for ExposesEntry<'a, T> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        ExposesEntry::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        ExposesEntry::SpaceAfter(self, spaces)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImportsEntry<'a> {
+    /// e.g. `Task` or `Task.{ Task, after }`
+    Module(ModuleName<'a>, Vec<'a, Loc<ExposesEntry<'a, &'a str>>>),
+
+    /// e.g. `base.Task` or `base.Task.{ after }` or `base.{ Task.{ Task, after } }`
+    Package(&'a str, Vec<'a, Loc<&'a ImportsEntry<'a>>>),
+
+    // Spaces
+    SpaceBefore(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a> ExposesEntry<'a, &'a str> {
+    pub fn as_str(&'a self) -> &'a str {
+        use ExposesEntry::*;
+
+        match self {
+            Exposed(string) => string,
+            SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => sub_entry.as_str(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedIdent<'a> {
+    /// e.g.
+    ///
+    /// printLine : Str -> Effect {}
+    Entry {
+        ident: Loc<&'a str>,
+        spaces_before_colon: &'a [CommentOrNewline<'a>],
+        ann: Loc<TypeAnnotation<'a>>,
+    },
+
+    // Spaces
+    SpaceBefore(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PackageEntry<'a> {
+    Entry {
+        shorthand: &'a str,
+        spaces_after_shorthand: &'a [CommentOrNewline<'a>],
+        package_or_path: Loc<PackageOrPath<'a>>,
+    },
+
+    // Spaces
+    SpaceBefore(&'a PackageEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a PackageEntry<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a> Spaceable<'a> for PackageEntry<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        PackageEntry::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        PackageEntry::SpaceAfter(self, spaces)
+    }
+}
+
+pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>> {
+    move |arena, state| {
+        // You may optionally have a package shorthand,
+        // e.g. "uc" in `uc: roc/unicode 1.0.0`
+        //
+        // (Indirect dependencies don't have a shorthand.)
+        let (opt_shorthand, state) = optional(and!(
+            skip_second!(lowercase_ident(), ascii_char(b':')),
+            space0(1)
+        ))
+        .parse(arena, state)?;
+        let (package_or_path, state) = loc!(package_or_path()).parse(arena, state)?;
+        let entry = match opt_shorthand {
+            Some((shorthand, spaces_after_shorthand)) => PackageEntry::Entry {
+                shorthand,
+                spaces_after_shorthand,
+                package_or_path,
+            },
+            None => PackageEntry::Entry {
+                shorthand: "",
+                spaces_after_shorthand: &[],
+                package_or_path,
+            },
+        };
+
+        Ok((entry, state))
+    }
+}
+
+pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>> {
+    map!(
+        either!(
+            string_literal::parse(),
+            and!(
+                package_name(),
+                skip_first!(one_or_more!(ascii_char(b' ')), package_version())
+            )
+        ),
+        |answer| {
+            match answer {
+                Either::First(str_literal) => PackageOrPath::Path(str_literal),
+                Either::Second((name, version)) => PackageOrPath::Package(name, version),
+            }
+        }
+    )
+}
+
+fn package_version<'a>() -> impl Parser<'a, Version<'a>> {
+    move |_, _| todo!("TODO parse package version")
 }

@@ -21,7 +21,7 @@ macro_rules! tag_union {
     ($min_indent:expr) => {
         map!(
             and!(
-                collection!(
+                collection_trailing_sep!(
                     ascii_char(b'['),
                     loc!(tag_type($min_indent)),
                     ascii_char(b','),
@@ -33,12 +33,13 @@ macro_rules! tag_union {
                     move |arena, state| allocated(term($min_indent)).parse(arena, state)
                 )
             ),
-            |(tags, ext): (
-                Vec<'a, Located<Tag<'a>>>,
+            |((tags, final_comments), ext): (
+                (Vec<'a, Located<Tag<'a>>>, &'a [CommentOrNewline<'a>]),
                 Option<&'a Located<TypeAnnotation<'a>>>,
             )| TypeAnnotation::TagUnion {
                 tags: tags.into_bump_slice(),
                 ext,
+                final_comments
             }
         )
     };
@@ -153,7 +154,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
-
+    type Fields<'a> = Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>;
     map!(
         and!(
             record_without_update!(
@@ -165,12 +166,15 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
                 move |arena, state| allocated(term(min_indent)).parse(arena, state)
             )
         ),
-        |(fields, ext): (
-            Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>,
+        |((fields, final_comments), ext): (
+            (Fields<'a>, &'a [CommentOrNewline<'a>]),
             Option<&'a Located<TypeAnnotation<'a>>>,
-        )| Record {
-            fields: fields.into_bump_slice(),
-            ext
+        )| {
+            Record {
+                fields: fields.into_bump_slice(),
+                ext,
+                final_comments,
+            }
         }
     )
 }
@@ -342,7 +346,7 @@ fn parse_concrete_type<'a>(
         //
         // If we made it this far and don't have a next_char, then necessarily
         // we have consumed a '.' char previously.
-        return malformed(next_char.or_else(|| Some('.')), arena, state, parts);
+        return malformed(next_char.or(Some('.')), arena, state, parts);
     }
 
     if part_buf.is_empty() {

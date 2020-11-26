@@ -777,11 +777,38 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // walkRight : Attr (* | u) (List (Attr u a))
+    // walk : Attr (* | u) (List (Attr u a))
     //           , Attr Shared (Attr u a -> b -> b)
     //           , b
     //          -> b
-    add_type(Symbol::LIST_WALK_RIGHT, {
+    add_type(Symbol::LIST_WALK, {
+        let_tvars! { u, a, b, star1, closure };
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        container(star1, vec![u]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
+                shared(SolvedType::Func(
+                    vec![attr_type(u, a), flex(b)],
+                    Box::new(flex(closure)),
+                    Box::new(flex(b)),
+                )),
+                flex(b),
+            ],
+            flex(b),
+        )
+    });
+
+    // walkBackwards : Attr (* | u) (List (Attr u a))
+    //           , Attr Shared (Attr u a -> b -> b)
+    //           , b
+    //          -> b
+    add_type(Symbol::LIST_WALK_BACKWARDS, {
         let_tvars! { u, a, b, star1, closure };
 
         unique_function(
@@ -1063,6 +1090,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
     });
 
+    // Str.startsWith : Attr * Str, Attr * Str -> Attr * Bool
+    add_type(Symbol::STR_STARTS_WITH, {
+        let_tvars! { star1, star2, star3 };
+        unique_function(vec![str_type(star1), str_type(star2)], bool_type(star3))
+    });
+
     // Str.countGraphemes : Attr * Str, -> Attr * Int
     add_type(Symbol::STR_COUNT_GRAPHEMES, {
         let_tvars! { star1, star2 };
@@ -1144,7 +1177,7 @@ fn float_type(u: VarId) -> SolvedType {
         vec![
             flex(u),
             SolvedType::Alias(
-                Symbol::NUM_FLOAT,
+                Symbol::NUM_F64,
                 Vec::new(),
                 Box::new(builtin_aliases::num_type(SolvedType::Apply(
                     Symbol::ATTR_ATTR,

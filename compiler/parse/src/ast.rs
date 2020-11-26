@@ -1,7 +1,6 @@
-use crate::header::{ModuleName, PackageName};
+use crate::header::{AppHeader, ImportsEntry, InterfaceHeader, PlatformHeader, TypedIdent};
 use crate::ident::Ident;
 use bumpalo::collections::String;
-use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Region};
@@ -14,112 +13,10 @@ pub enum Module<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct InterfaceHeader<'a> {
-    pub name: Loc<ModuleName<'a>>,
-    pub exposes: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-
-    // Potential comments and newlines - these will typically all be empty.
-    pub after_interface_keyword: &'a [CommentOrNewline<'a>],
-    pub before_exposes: &'a [CommentOrNewline<'a>],
-    pub after_exposes: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch<'a> {
     pub patterns: &'a [Loc<Pattern<'a>>],
     pub value: Loc<Expr<'a>>,
     pub guard: Option<Loc<Expr<'a>>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AppHeader<'a> {
-    pub name: Loc<ModuleName<'a>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-
-    // Potential comments and newlines - these will typically all be empty.
-    pub after_app_keyword: &'a [CommentOrNewline<'a>],
-    pub before_provides: &'a [CommentOrNewline<'a>],
-    pub after_provides: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PlatformHeader<'a> {
-    pub name: Loc<PackageName<'a>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub requires: Vec<'a, Loc<TypedIdent<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-    pub effects: Effects<'a>,
-
-    // Potential comments and newlines - these will typically all be empty.
-    pub after_platform_keyword: &'a [CommentOrNewline<'a>],
-    pub before_provides: &'a [CommentOrNewline<'a>],
-    pub after_provides: &'a [CommentOrNewline<'a>],
-    pub before_requires: &'a [CommentOrNewline<'a>],
-    pub after_requires: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Effects<'a> {
-    pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
-    pub type_name: &'a str,
-    pub entries: Vec<'a, Loc<TypedIdent<'a>>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum TypedIdent<'a> {
-    /// e.g.
-    ///
-    /// printLine : Str -> Effect {}
-    Entry {
-        ident: Loc<&'a str>,
-        spaces_before_colon: &'a [CommentOrNewline<'a>],
-        ann: Loc<TypeAnnotation<'a>>,
-    },
-
-    // Spaces
-    SpaceBefore(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ExposesEntry<'a> {
-    /// e.g. `Task`
-    Ident(&'a str),
-
-    // Spaces
-    SpaceBefore(&'a ExposesEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a ExposesEntry<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ImportsEntry<'a> {
-    /// e.g. `Task` or `Task.{ Task, after }`
-    Module(ModuleName<'a>, Vec<'a, Loc<ExposesEntry<'a>>>),
-
-    // Spaces
-    SpaceBefore(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-impl<'a> ExposesEntry<'a> {
-    pub fn as_str(&'a self) -> &'a str {
-        use ExposesEntry::*;
-
-        match self {
-            Ident(string) => string,
-            SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => sub_entry.as_str(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -322,6 +219,7 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// A tag union, e.g. `[
@@ -330,6 +228,7 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
         /// This is None if it's a closed tag union like `[ Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// The `*` type variable, e.g. in (List *)
@@ -628,15 +527,6 @@ impl<'a> Spaceable<'a> for TypeAnnotation<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         TypeAnnotation::SpaceAfter(self, spaces)
-    }
-}
-
-impl<'a> Spaceable<'a> for ExposesEntry<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ExposesEntry::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ExposesEntry::SpaceAfter(self, spaces)
     }
 }
 

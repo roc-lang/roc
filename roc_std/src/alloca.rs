@@ -6,7 +6,7 @@ use libc::{c_void, size_t};
 
 #[link(name = "alloca")]
 extern "C" {
-    #[no_mangle]
+    #[allow(dead_code)]
     fn c_alloca(_: size_t) -> *mut c_void;
 }
 

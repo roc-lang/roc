@@ -895,7 +895,7 @@ macro_rules! collection_trailing_sep {
                             $delimiter,
                             $crate::blankspace::space0_around($elem, $min_indent)
                         ),
-                        $crate::blankspace::spaces0($min_indent)
+                        $crate::blankspace::space0($min_indent)
                     ),
                     $closing_brace
                 )
@@ -1037,7 +1037,11 @@ macro_rules! one_or_more {
                         }
                     }
                 }
-                Err((_, new_state)) => Err(unexpected_eof(0, new_state.attempting, new_state)),
+                Err((_, new_state)) => Err($crate::parser::unexpected_eof(
+                    0,
+                    new_state.attempting,
+                    new_state,
+                )),
             }
         }
     };
@@ -1083,9 +1087,9 @@ macro_rules! either {
             let original_attempting = state.attempting;
 
             match $p1.parse(arena, state) {
-                Ok((output, state)) => Ok((Either::First(output), state)),
+                Ok((output, state)) => Ok(($crate::parser::Either::First(output), state)),
                 Err((_, state)) => match $p2.parse(arena, state) {
-                    Ok((output, state)) => Ok((Either::Second(output), state)),
+                    Ok((output, state)) => Ok(($crate::parser::Either::Second(output), state)),
                     Err((fail, state)) => Err((
                         Fail {
                             attempting: original_attempting,
@@ -1157,7 +1161,7 @@ macro_rules! record_field {
 #[macro_export]
 macro_rules! record_without_update {
     ($val_parser:expr, $min_indent:expr) => {
-        collection!(
+        collection_trailing_sep!(
             ascii_char(b'{'),
             loc!(record_field!($val_parser, $min_indent)),
             ascii_char(b','),
@@ -1193,14 +1197,6 @@ macro_rules! record {
                     // We specifically allow space characters inside here, so that
                     // `{  }` can be successfully parsed as an empty record, and then
                     // changed by the formatter back into `{}`.
-                    //
-                    // We don't allow newlines or comments in the middle of empty
-                    // roc_collections because those are normally stored in an Expr,
-                    // and there's no Expr in which to store them in an empty collection!
-                    //
-                    // We could change the AST to add extra storage specifically to
-                    // support empty literals containing newlines or comments, but this
-                    // does not seem worth even the tiniest regression in compiler performance.
                     zero_or_more!($crate::parser::ascii_char(b' ')),
                     skip_second!(
                         and!(

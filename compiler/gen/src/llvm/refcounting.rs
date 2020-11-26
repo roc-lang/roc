@@ -79,19 +79,13 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 
     pub fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
-        let ptr_as_int = env
+        let data_ptr = env
             .builder
             .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
             .unwrap()
-            .into_int_value();
+            .into_pointer_value();
 
-        let ptr = env.builder.build_int_to_ptr(
-            ptr_as_int,
-            env.context.i64_type().ptr_type(AddressSpace::Generic),
-            "list_int_to_ptr",
-        );
-
-        Self::from_ptr_to_data(env, ptr)
+        Self::from_ptr_to_data(env, data_ptr)
     }
 
     pub fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
@@ -133,7 +127,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let block = env.builder.get_insert_block().expect("to be in a function");
         let di_location = env.builder.get_current_debug_location().unwrap();
 
-        let alignment = layout.alignment_bytes(env.ptr_bytes);
+        let alignment = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
 
         let fn_name = &format!("decrement_refcounted_ptr_{}", alignment);
 

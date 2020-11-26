@@ -95,7 +95,7 @@ where
     )
 }
 
-/// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
+/// Parses the given expression with 0 or more (spaces/comments/newlines) before it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
 pub fn space0_before<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
@@ -119,7 +119,7 @@ where
     )
 }
 
-/// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
+/// Parses the given expression with 1 or more (spaces/comments/newlines) before it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
 pub fn space1_before<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>

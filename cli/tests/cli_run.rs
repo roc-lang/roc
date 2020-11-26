@@ -17,7 +17,13 @@ mod cli_run {
     use serial_test::serial;
     use std::path::Path;
 
-    fn check_output(file: &Path, flags: &[&str], expected_ending: &str, use_valgrind: bool) {
+    fn check_output(
+        file: &Path,
+        executable_filename: &str,
+        flags: &[&str],
+        expected_ending: &str,
+        use_valgrind: bool,
+    ) {
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
         if !compile_out.stderr.is_empty() {
             panic!(compile_out.stderr);
@@ -26,14 +32,31 @@ mod cli_run {
 
         let out = if use_valgrind {
             let (valgrind_out, raw_xml) =
-                run_with_valgrind(&[file.with_file_name("app").to_str().unwrap()]);
-            let memory_errors = extract_valgrind_errors(&raw_xml);
-            if !memory_errors.is_empty() {
-                panic!("{:?}", memory_errors);
+                run_with_valgrind(&[file.with_file_name(executable_filename).to_str().unwrap()]);
+
+            if valgrind_out.status.success() {
+                let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
+                    panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
+                });
+
+                if !memory_errors.is_empty() {
+                    panic!("{:?}", memory_errors);
+                }
+            } else {
+                let exit_code = match valgrind_out.status.code() {
+                    Some(code) => format!("exit code {}", code),
+                    None => "no exit code".to_string(),
+                };
+
+                panic!("`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", exit_code, valgrind_out.stdout, valgrind_out.stderr);
             }
+
             valgrind_out
         } else {
-            run_cmd(file.with_file_name("app").to_str().unwrap(), &[])
+            run_cmd(
+                file.with_file_name(executable_filename).to_str().unwrap(),
+                &[],
+            )
         };
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
@@ -49,6 +72,7 @@ mod cli_run {
     fn run_hello_world() {
         check_output(
             &example_file("hello-world", "Hello.roc"),
+            "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
             true,
@@ -60,6 +84,7 @@ mod cli_run {
     fn run_hello_world_optimized() {
         check_output(
             &example_file("hello-world", "Hello.roc"),
+            "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
             true,
@@ -71,6 +96,7 @@ mod cli_run {
     fn run_quicksort_not_optimized() {
         check_output(
             &example_file("quicksort", "Quicksort.roc"),
+            "quicksort",
             &[],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             false,
@@ -82,6 +108,7 @@ mod cli_run {
     fn run_quicksort_optimized() {
         check_output(
             &example_file("quicksort", "Quicksort.roc"),
+            "quicksort",
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             false,
@@ -95,6 +122,7 @@ mod cli_run {
     fn run_quicksort_valgrind() {
         check_output(
             &example_file("quicksort", "Quicksort.roc"),
+            "quicksort",
             &[],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             true,
@@ -108,6 +136,7 @@ mod cli_run {
     fn run_quicksort_optimized_valgrind() {
         check_output(
             &example_file("quicksort", "Quicksort.roc"),
+            "quicksort",
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             true,
@@ -119,6 +148,7 @@ mod cli_run {
     fn run_multi_module() {
         check_output(
             &example_file("multi-module", "Quicksort.roc"),
+            "quicksort",
             &[],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             false,
@@ -130,6 +160,7 @@ mod cli_run {
     fn run_multi_module_optimized() {
         check_output(
             &example_file("multi-module", "Quicksort.roc"),
+            "quicksort",
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             false,
@@ -143,6 +174,7 @@ mod cli_run {
     fn run_multi_module_valgrind() {
         check_output(
             &example_file("multi-module", "Quicksort.roc"),
+            "quicksort",
             &[],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             true,
@@ -156,6 +188,7 @@ mod cli_run {
     fn run_multi_module_optimized_valgrind() {
         check_output(
             &example_file("multi-module", "Quicksort.roc"),
+            "quicksort",
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             true,
@@ -178,6 +211,7 @@ mod cli_run {
     fn run_multi_dep_str_unoptimized() {
         check_output(
             &fixture_file("multi-dep-str", "Main.roc"),
+            "multi-dep-str",
             &[],
             "I am Dep2.str2\n",
             true,
@@ -189,6 +223,7 @@ mod cli_run {
     fn run_multi_dep_str_optimized() {
         check_output(
             &fixture_file("multi-dep-str", "Main.roc"),
+            "multi-dep-str",
             &["--optimize"],
             "I am Dep2.str2\n",
             true,
@@ -200,6 +235,7 @@ mod cli_run {
     fn run_multi_dep_thunk_unoptimized() {
         check_output(
             &fixture_file("multi-dep-thunk", "Main.roc"),
+            "multi-dep-thunk",
             &[],
             "I am Dep2.value2\n",
             true,
@@ -211,6 +247,7 @@ mod cli_run {
     fn run_multi_dep_thunk_optimized() {
         check_output(
             &fixture_file("multi-dep-thunk", "Main.roc"),
+            "multi-dep-thunk",
             &["--optimize"],
             "I am Dep2.value2\n",
             true,

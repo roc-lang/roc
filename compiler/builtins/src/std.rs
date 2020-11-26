@@ -411,6 +411,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![str_type()], Box::new(bool_type())),
     );
 
+    // startsWith : Str, Str -> Bool
+    add_type(
+        Symbol::STR_STARTS_WITH,
+        top_level_function(vec![str_type(), str_type()], Box::new(bool_type())),
+    );
+
     // countGraphemes : Str -> Int
     add_type(
         Symbol::STR_COUNT_GRAPHEMES,
@@ -483,9 +489,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // walkRight : List elem, (elem -> accum -> accum), accum -> accum
+    // walk : List elem, (elem -> accum -> accum), accum -> accum
     add_type(
-        Symbol::LIST_WALK_RIGHT,
+        Symbol::LIST_WALK,
+        top_level_function(
+            vec![
+                list_type(flex(TVAR1)),
+                closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
+                flex(TVAR2),
+            ],
+            Box::new(flex(TVAR2)),
+        ),
+    );
+
+    // walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+    add_type(
+        Symbol::LIST_WALK_BACKWARDS,
         top_level_function(
             vec![
                 list_type(flex(TVAR1)),

@@ -4,7 +4,7 @@ use crate::llvm::build::{
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
-use crate::llvm::convert::{collection, ptr_int};
+use crate::llvm::convert::collection;
 use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -60,17 +60,20 @@ pub fn str_split<'a, 'ctx, 'env>(
                     let ret_list_ptr =
                         allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
 
-                    // convert `*mut RocStr` to `*mut i128`
-                    let ret_list_ptr_u128s = builder.build_bitcast(
+                    // get the RocStr type defined by zig
+                    let roc_str_type = env.module.get_struct_type("str.RocStr").unwrap();
+
+                    // convert `*mut { *mut u8, i64 }` to `*mut RocStr`
+                    let ret_list_ptr_zig_rocstr = builder.build_bitcast(
                         ret_list_ptr,
-                        ctx.i128_type().ptr_type(AddressSpace::Generic),
-                        "ret_u128_list",
+                        roc_str_type.ptr_type(AddressSpace::Generic),
+                        "convert_to_zig_rocstr",
                     );
 
                     call_void_bitcode_fn(
                         env,
                         &[
-                            ret_list_ptr_u128s,
+                            ret_list_ptr_zig_rocstr,
                             BasicValueEnum::IntValue(segment_count),
                             BasicValueEnum::PointerValue(str_bytes_ptr),
                             BasicValueEnum::IntValue(str_len),
@@ -532,8 +535,6 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
         }
         Smallness::Big => {
             let clone_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, len);
-            let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
             // TODO check if malloc returned null; if so, runtime error for OOM!
 
@@ -551,7 +552,7 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
             struct_val = builder
                 .build_insert_value(
                     struct_type.get_undef(),
-                    ptr_as_int,
+                    clone_ptr,
                     Builtin::WRAPPER_PTR,
                     "insert_ptr",
                 )
@@ -666,6 +667,50 @@ fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntVa
         len,
         env.ptr_int().const_zero(),
         "str_len_is_nonzero",
+    )
+}
+
+/// Str.startsWith : Str, Str -> Bool
+pub fn str_starts_with<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _inplace: InPlace,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    str_symbol: Symbol,
+    prefix_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let str_ptr = ptr_from_symbol(scope, str_symbol);
+    let prefix_ptr = ptr_from_symbol(scope, prefix_symbol);
+
+    let ret_type = BasicTypeEnum::IntType(ctx.bool_type());
+
+    load_str(
+        env,
+        parent,
+        *str_ptr,
+        ret_type,
+        |str_bytes_ptr, str_len, _str_smallness| {
+            load_str(
+                env,
+                parent,
+                *prefix_ptr,
+                ret_type,
+                |prefix_bytes_ptr, prefix_len, _prefix_smallness| {
+                    call_bitcode_fn(
+                        env,
+                        &[
+                            BasicValueEnum::PointerValue(str_bytes_ptr),
+                            BasicValueEnum::IntValue(str_len),
+                            BasicValueEnum::PointerValue(prefix_bytes_ptr),
+                            BasicValueEnum::IntValue(prefix_len),
+                        ],
+                        &bitcode::STR_STARTS_WITH,
+                    )
+                },
+            )
+        },
     )
 }
 

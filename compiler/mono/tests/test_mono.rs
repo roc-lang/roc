@@ -18,7 +18,8 @@ mod test_mono {
     use roc_mono::layout::Layout;
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+        let mut buffer =
+            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
 
         for line in src.lines() {
             // indent the body!
@@ -189,9 +190,9 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.8 = 0i64;
-                    let Test.9 = 3i64;
-                    let Test.2 = Just Test.8 Test.9;
+                    let Test.9 = 0i64;
+                    let Test.8 = 3i64;
+                    let Test.2 = Just Test.9 Test.8;
                     let Test.5 = 0i64;
                     let Test.6 = Index 0 Test.2;
                     let Test.7 = lowlevel Eq Test.5 Test.6;
@@ -218,10 +219,10 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
+                    let Test.10 = 1i64;
                     let Test.8 = 1i64;
-                    let Test.9 = 1i64;
-                    let Test.10 = 2i64;
-                    let Test.4 = These Test.8 Test.9 Test.10;
+                    let Test.9 = 2i64;
+                    let Test.4 = These Test.10 Test.8 Test.9;
                     switch Test.4:
                         case 2:
                             let Test.1 = Index 1 Test.4;
@@ -317,14 +318,14 @@ mod test_mono {
                     let Test.17 = 0i64;
                     let Test.13 = lowlevel NotEq #Attr.3 Test.17;
                     if Test.13 then
-                        let Test.15 = 1i64;
-                        let Test.16 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
-                        let Test.14 = Ok Test.15 Test.16;
+                        let Test.16 = 1i64;
+                        let Test.15 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
+                        let Test.14 = Ok Test.16 Test.15;
                         ret Test.14;
                     else
-                        let Test.11 = 0i64;
-                        let Test.12 = Struct {};
-                        let Test.10 = Err Test.11 Test.12;
+                        let Test.12 = 0i64;
+                        let Test.11 = Struct {};
+                        let Test.10 = Err Test.12 Test.11;
                         ret Test.10;
 
                 procedure Test.0 ():
@@ -388,9 +389,9 @@ mod test_mono {
                     ret Test.5;
 
                 procedure Test.0 ():
-                    let Test.10 = 0i64;
-                    let Test.11 = 41i64;
-                    let Test.1 = Just Test.10 Test.11;
+                    let Test.11 = 0i64;
+                    let Test.10 = 41i64;
+                    let Test.1 = Just Test.11 Test.10;
                     let Test.7 = 0i64;
                     let Test.8 = Index 0 Test.1;
                     let Test.9 = lowlevel Eq Test.7 Test.8;
@@ -515,11 +516,11 @@ mod test_mono {
                     ret Test.6;
 
                 procedure Test.0 ():
-                    let Test.17 = 0i64;
-                    let Test.19 = 0i64;
-                    let Test.20 = 41i64;
-                    let Test.18 = Just Test.19 Test.20;
-                    let Test.2 = Just Test.17 Test.18;
+                    let Test.18 = 0i64;
+                    let Test.20 = 0i64;
+                    let Test.19 = 41i64;
+                    let Test.17 = Just Test.20 Test.19;
+                    let Test.2 = Just Test.18 Test.17;
                     joinpoint Test.14:
                         let Test.8 = 1i64;
                         ret Test.8;
@@ -562,8 +563,8 @@ mod test_mono {
                     ret Test.6;
 
                 procedure Test.0 ():
-                    let Test.14 = 2i64;
                     let Test.15 = 3i64;
+                    let Test.14 = 2i64;
                     let Test.3 = Struct {Test.14, Test.15};
                     joinpoint Test.11:
                         let Test.1 = Index 0 Test.3;
@@ -809,9 +810,9 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.1 (Test.4):
-                    let Test.18 = 1i64;
-                    let Test.19 = 2i64;
-                    let Test.2 = Ok Test.18 Test.19;
+                    let Test.19 = 1i64;
+                    let Test.18 = 2i64;
+                    let Test.2 = Ok Test.19 Test.18;
                     joinpoint Test.8 Test.3:
                         ret Test.3;
                     in
@@ -1277,7 +1278,7 @@ mod test_mono {
             compiles_to_ir(
                 indoc!(
                     r#"
-                    app Test provides [ main ] imports []
+                    app "test" provides [ main ] to "./platform"
 
                     swap = \list ->
                         when Pair (List.get list 0) (List.get list 0) is
@@ -1299,14 +1300,14 @@ mod test_mono {
                     let Test.38 = lowlevel ListLen #Attr.2;
                     let Test.34 = lowlevel NumLt #Attr.3 Test.38;
                     if Test.34 then
-                        let Test.36 = 1i64;
-                        let Test.37 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-                        let Test.35 = Ok Test.36 Test.37;
+                        let Test.37 = 1i64;
+                        let Test.36 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+                        let Test.35 = Ok Test.37 Test.36;
                         ret Test.35;
                     else
-                        let Test.32 = 0i64;
-                        let Test.33 = Struct {};
-                        let Test.31 = Err Test.32 Test.33;
+                        let Test.33 = 0i64;
+                        let Test.32 = Struct {};
+                        let Test.31 = Err Test.33 Test.32;
                         ret Test.31;
 
                 procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
@@ -1320,9 +1321,9 @@ mod test_mono {
 
                 procedure Test.1 (Test.2):
                     let Test.39 = 0i64;
-                    let Test.28 = CallByName List.3 Test.2 Test.39;
+                    let Test.29 = CallByName List.3 Test.2 Test.39;
                     let Test.30 = 0i64;
-                    let Test.29 = CallByName List.3 Test.2 Test.30;
+                    let Test.28 = CallByName List.3 Test.2 Test.30;
                     let Test.7 = Struct {Test.28, Test.29};
                     joinpoint Test.25:
                         let Test.18 = Array [];
@@ -1373,7 +1374,7 @@ mod test_mono {
             compiles_to_ir(
                 indoc!(
                     r#"
-                    app Test provides [ main ] imports []
+                    app "test" provides [ main ] to "./platform"
 
                     partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
@@ -1409,7 +1410,7 @@ mod test_mono {
             compiles_to_ir(
                 indoc!(
                     r#"
-                    app Test provides [ main ] imports []
+                    app "test" provides [ main ] to "./platform"
 
                     quicksortHelp : List (Num a), Int, Int -> List (Num a)
                     quicksortHelp = \list, low, high ->
@@ -1618,7 +1619,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 mkPairOf = \x -> Pair x x
 
@@ -1650,7 +1651,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 fst = \x, _ -> x
 
@@ -1687,7 +1688,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 x : List Int
                 x = [1,2,3]
@@ -1763,14 +1764,14 @@ mod test_mono {
                     let Test.15 = lowlevel ListLen #Attr.2;
                     let Test.11 = lowlevel NumLt #Attr.3 Test.15;
                     if Test.11 then
-                        let Test.13 = 1i64;
-                        let Test.14 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-                        let Test.12 = Ok Test.13 Test.14;
+                        let Test.14 = 1i64;
+                        let Test.13 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+                        let Test.12 = Ok Test.14 Test.13;
                         ret Test.12;
                     else
-                        let Test.9 = 0i64;
-                        let Test.10 = Struct {};
-                        let Test.8 = Err Test.9 Test.10;
+                        let Test.10 = 0i64;
+                        let Test.9 = Struct {};
+                        let Test.8 = Err Test.10 Test.9;
                         ret Test.8;
 
                 procedure Test.1 (Test.2):
@@ -1808,14 +1809,14 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.4 = 0i64;
-                    let Test.6 = 0i64;
-                    let Test.8 = 0i64;
+                    let Test.5 = 0i64;
+                    let Test.7 = 0i64;
+                    let Test.9 = 0i64;
                     let Test.10 = 1i64;
-                    let Test.9 = Z Test.10;
-                    let Test.7 = S Test.8 Test.9;
-                    let Test.5 = S Test.6 Test.7;
-                    let Test.2 = S Test.4 Test.5;
+                    let Test.8 = Z Test.10;
+                    let Test.6 = S Test.9 Test.8;
+                    let Test.4 = S Test.7 Test.6;
+                    let Test.2 = S Test.5 Test.4;
                     ret Test.2;
                 "#
             ),
@@ -1840,14 +1841,14 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.8 = 0i64;
-                    let Test.10 = 0i64;
-                    let Test.12 = 0i64;
+                    let Test.9 = 0i64;
+                    let Test.11 = 0i64;
+                    let Test.13 = 0i64;
                     let Test.14 = 1i64;
-                    let Test.13 = Z Test.14;
-                    let Test.11 = S Test.12 Test.13;
-                    let Test.9 = S Test.10 Test.11;
-                    let Test.2 = S Test.8 Test.9;
+                    let Test.12 = Z Test.14;
+                    let Test.10 = S Test.13 Test.12;
+                    let Test.8 = S Test.11 Test.10;
+                    let Test.2 = S Test.9 Test.8;
                     let Test.5 = 1i64;
                     let Test.6 = Index 0 Test.2;
                     dec Test.2;
@@ -1882,14 +1883,14 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.14 = 0i64;
-                    let Test.16 = 0i64;
-                    let Test.18 = 0i64;
+                    let Test.15 = 0i64;
+                    let Test.17 = 0i64;
+                    let Test.19 = 0i64;
                     let Test.20 = 1i64;
-                    let Test.19 = Z Test.20;
-                    let Test.17 = S Test.18 Test.19;
-                    let Test.15 = S Test.16 Test.17;
-                    let Test.2 = S Test.14 Test.15;
+                    let Test.18 = Z Test.20;
+                    let Test.16 = S Test.19 Test.18;
+                    let Test.14 = S Test.17 Test.16;
+                    let Test.2 = S Test.15 Test.14;
                     let Test.11 = 0i64;
                     let Test.12 = Index 0 Test.2;
                     let Test.13 = lowlevel Eq Test.11 Test.12;
@@ -1943,14 +1944,14 @@ mod test_mono {
                     ret Test.13;
 
                 procedure Test.1 (Test.6):
-                    let Test.18 = Index 0 Test.6;
+                    let Test.18 = Index 1 Test.6;
                     let Test.19 = false;
                     let Test.20 = lowlevel Eq Test.19 Test.18;
                     if Test.20 then
-                        let Test.8 = Index 1 Test.6;
+                        let Test.8 = Index 0 Test.6;
                         ret Test.8;
                     else
-                        let Test.10 = Index 1 Test.6;
+                        let Test.10 = Index 0 Test.6;
                         ret Test.10;
 
                 procedure Test.1 (Test.6):
@@ -1971,12 +1972,12 @@ mod test_mono {
                     let Test.32 = false;
                     let Test.26 = Struct {Test.32};
                     let Test.3 = CallByName Test.1 Test.26;
-                    let Test.24 = true;
-                    let Test.25 = 11i64;
+                    let Test.24 = 11i64;
+                    let Test.25 = true;
                     let Test.23 = Struct {Test.24, Test.25};
                     let Test.4 = CallByName Test.1 Test.23;
-                    let Test.21 = false;
-                    let Test.22 = 7i64;
+                    let Test.21 = 7i64;
+                    let Test.22 = false;
                     let Test.15 = Struct {Test.21, Test.22};
                     let Test.2 = CallByName Test.1 Test.15;
                     let Test.14 = CallByName Num.16 Test.2 Test.3;
@@ -2010,11 +2011,11 @@ mod test_mono {
                     ret Test.6;
 
                 procedure Test.0 ():
-                    let Test.17 = 0i64;
-                    let Test.19 = 0i64;
-                    let Test.20 = 41i64;
-                    let Test.18 = Just Test.19 Test.20;
-                    let Test.2 = Just Test.17 Test.18;
+                    let Test.18 = 0i64;
+                    let Test.20 = 0i64;
+                    let Test.19 = 41i64;
+                    let Test.17 = Just Test.20 Test.19;
+                    let Test.2 = Just Test.18 Test.17;
                     joinpoint Test.14:
                         let Test.8 = 1i64;
                         ret Test.8;
@@ -2103,7 +2104,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 swap : Int, Int, List a -> List a
                 swap = \i, j, list ->
@@ -2128,14 +2129,14 @@ mod test_mono {
                     let Test.40 = lowlevel ListLen #Attr.2;
                     let Test.36 = lowlevel NumLt #Attr.3 Test.40;
                     if Test.36 then
-                        let Test.38 = 1i64;
-                        let Test.39 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-                        let Test.37 = Ok Test.38 Test.39;
+                        let Test.39 = 1i64;
+                        let Test.38 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+                        let Test.37 = Ok Test.39 Test.38;
                         ret Test.37;
                     else
-                        let Test.34 = 0i64;
-                        let Test.35 = Struct {};
-                        let Test.33 = Err Test.34 Test.35;
+                        let Test.35 = 0i64;
+                        let Test.34 = Struct {};
+                        let Test.33 = Err Test.35 Test.34;
                         ret Test.33;
 
                 procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
@@ -2148,8 +2149,8 @@ mod test_mono {
                         ret #Attr.2;
 
                 procedure Test.1 (Test.2, Test.3, Test.4):
-                    let Test.31 = CallByName List.3 Test.4 Test.2;
                     let Test.32 = CallByName List.3 Test.4 Test.3;
+                    let Test.31 = CallByName List.3 Test.4 Test.2;
                     let Test.12 = Struct {Test.31, Test.32};
                     joinpoint Test.28:
                         let Test.21 = Array [];
@@ -2260,7 +2261,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 foo = \{} ->
                     x = 42
@@ -2302,7 +2303,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 foo = \{} ->
                     x = 41

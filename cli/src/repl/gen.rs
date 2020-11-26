@@ -2,6 +2,7 @@ use crate::repl::eval;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::module_to_dylib;
+use roc_build::program::FunctionIterator;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
@@ -17,7 +18,7 @@ pub enum ReplOutput {
     NoProblems { expr: String, expr_type: String },
 }
 
-pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fail> {
+pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fail> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
@@ -108,8 +109,17 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
-        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
+        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
         let builder = context.create_builder();
+
+        // mark our zig-defined builtins as internal
+        use inkwell::module::Linkage;
+        for function in FunctionIterator::from_module(module) {
+            let name = function.get_name().to_str().unwrap();
+            if name.starts_with("roc_builtins") {
+                function.set_linkage(Linkage::Internal);
+            }
+        }
 
         debug_assert_eq!(exposed_to_host.len(), 1);
         let (main_fn_symbol, main_fn_var) = exposed_to_host.iter().next().unwrap();
@@ -208,6 +218,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput
                 );
             }
         }
+
         let (main_fn_name, main_fn) = roc_gen::llvm::build::promote_to_main_function(
             &env,
             &mut layout_ids,
@@ -263,7 +274,8 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app Repl provides [ replOutput ] imports []\n\nreplOutput =\n");
+    let mut buffer =
+        String::from("app \"app\" provides [ replOutput ] to \"./platform\"\n\nreplOutput =\n");
 
     for line in src.lines() {
         // indent the body!

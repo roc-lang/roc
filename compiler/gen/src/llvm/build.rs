@@ -1,9 +1,11 @@
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk_right,
+    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
-use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, str_split, CHAR_LAYOUT};
+use crate::llvm::build_str::{
+    str_concat, str_count_graphemes, str_len, str_split, str_starts_with, CHAR_LAYOUT,
+};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -384,6 +386,9 @@ pub fn construct_optimization_passes<'a>(
     fpm.add_instruction_combining_pass();
     fpm.add_tail_call_elimination_pass();
 
+    // remove unused global values (e.g. those defined by zig, but unused in user code)
+    mpm.add_global_dce_pass();
+
     let pmb = PassManagerBuilder::create();
     match opt_level {
         OptLevel::Normal => {
@@ -448,6 +453,7 @@ fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
         },
         Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
         Layout::Builtin(Builtin::Str) => InPlace::Clone,
+        Layout::Builtin(Builtin::Int1) => InPlace::Clone,
         _ => unreachable!("Layout {:?} does not have an inplace", layout),
     }
 }
@@ -550,11 +556,9 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     let len_type = env.ptr_int();
                     let len = len_type.const_int(bytes_len, false);
 
+                    // NOTE we rely on CHAR_LAYOUT turning into a `i8`
                     let ptr = allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, len);
-                    let int_type = ptr_int(ctx, ptr_bytes);
-                    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
                     let struct_type = collection(ctx, ptr_bytes);
-                    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
 
                     let mut struct_val;
 
@@ -562,9 +566,9 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     struct_val = builder
                         .build_insert_value(
                             struct_type.get_undef(),
-                            ptr_as_int,
+                            ptr,
                             Builtin::WRAPPER_PTR,
-                            "insert_ptr",
+                            "insert_ptr_str_literal",
                         )
                         .unwrap();
 
@@ -731,7 +735,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Insert field exprs into struct_val
                 for (index, field_val) in field_vals.into_iter().enumerate() {
                     struct_val = builder
-                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .build_insert_value(
+                            struct_val,
+                            field_val,
+                            index as u32,
+                            "insert_record_field",
+                        )
                         .unwrap();
                 }
 
@@ -781,7 +790,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Insert field exprs into struct_val
                 for (index, field_val) in field_vals.into_iter().enumerate() {
                     struct_val = builder
-                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .build_insert_value(
+                            struct_val,
+                            field_val,
+                            index as u32,
+                            "insert_single_tag_field",
+                        )
                         .unwrap();
                 }
 
@@ -844,7 +858,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // Insert field exprs into struct_val
             for (index, field_val) in field_vals.into_iter().enumerate() {
                 struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                    .build_insert_value(
+                        struct_val,
+                        field_val,
+                        index as u32,
+                        "insert_multi_tag_field",
+                    )
                     .unwrap();
             }
 
@@ -1067,7 +1086,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
     let len_type = env.ptr_int();
 
-    let extra_bytes = layout.alignment_bytes(env.ptr_bytes);
+    let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
 
     let ptr = {
         // number of bytes we will allocated
@@ -1097,7 +1116,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
         let index = match extra_bytes {
             n if n == env.ptr_bytes => 1,
             n if n == 2 * env.ptr_bytes => 2,
-            _ => unreachable!("invalid extra_bytes"),
+            _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
         };
 
         let index_intvalue = int_type.const_int(index, false);
@@ -1168,8 +1187,10 @@ fn list_literal<'a, 'ctx, 'env>(
     }
 
     let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr = cast_basic_basic(builder, ptr.into(), u8_ptr_type.into());
+
     let struct_type = collection(ctx, ptr_bytes);
     let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
     let mut struct_val;
@@ -1178,9 +1199,9 @@ fn list_literal<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_list_literal",
         )
         .unwrap();
 
@@ -1701,7 +1722,8 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
 ) {
-    let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
+    let c_function_name: String =
+        format!("roc_{}_exposed", roc_function.get_name().to_str().unwrap());
 
     let result = expose_function_to_host_help(env, roc_function, &c_function_name);
 
@@ -2365,6 +2387,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_concat(env, inplace, scope, parent, args[0], args[1])
         }
+        StrStartsWith => {
+            // Str.startsWith : Str, Str -> Bool
+            debug_assert_eq!(args.len(), 2);
+
+            let inplace = get_inplace_from_layout(layout);
+
+            str_starts_with(env, inplace, scope, parent, args[0], args[1])
+        }
         StrSplit => {
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
@@ -2477,8 +2507,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_contains(env, parent, elem, elem_layout, list, list_layout)
         }
-        ListWalkRight => {
-            // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+        ListWalk => {
             debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2487,7 +2516,28 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(env, scope, &args[2]);
 
-            list_walk_right(
+            list_walk(
+                env,
+                parent,
+                list,
+                list_layout,
+                func,
+                func_layout,
+                default,
+                default_layout,
+            )
+        }
+        ListWalkBackwards => {
+            // List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            let (default, default_layout) = load_symbol_and_layout(env, scope, &args[2]);
+
+            list_walk_backwards(
                 env,
                 parent,
                 list,

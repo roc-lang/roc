@@ -349,6 +349,10 @@ pub fn canonicalize_expr<'a>(
             // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
             output.tail_call = None;
 
+            for arg_out in outputs {
+                output.references = output.references.union(arg_out.references);
+            }
+
             let expr = match fn_expr.value {
                 Var(symbol) => {
                     output.references.calls.insert(symbol);
@@ -399,10 +403,6 @@ pub fn canonicalize_expr<'a>(
                     )
                 }
             };
-
-            for arg_out in outputs {
-                output.references = output.references.union(arg_out.references);
-            }
 
             (expr, output)
         }

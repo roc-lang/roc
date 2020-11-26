@@ -8,11 +8,42 @@ extern crate inkwell;
 extern crate libc;
 extern crate roc_gen;
 
+use core;
+use roc_std::RocStr;
+
 #[macro_use]
 mod helpers;
 
+const ROC_STR_MEM_SIZE: usize = core::mem::size_of::<RocStr>();
+
 #[cfg(test)]
 mod gen_str {
+    use crate::ROC_STR_MEM_SIZE;
+    use std::cmp::min;
+
+    fn small_str(str: &str) -> [u8; ROC_STR_MEM_SIZE] {
+        let mut bytes: [u8; ROC_STR_MEM_SIZE] = Default::default();
+
+        let mut index: usize = 0;
+        while index < ROC_STR_MEM_SIZE {
+            bytes[index] = 0;
+            index += 1;
+        }
+
+        let str_bytes = str.as_bytes();
+
+        let output_len: usize = min(str_bytes.len(), ROC_STR_MEM_SIZE);
+        index = 0;
+        while index < output_len {
+            bytes[index] = str_bytes[index];
+            index += 1;
+        }
+
+        bytes[ROC_STR_MEM_SIZE - 1] = 0b1000_0000 ^ (output_len as u8);
+
+        bytes
+    }
+
     #[test]
     fn str_split_bigger_delimiter_small_str() {
         assert_evals_to!(
@@ -29,51 +60,59 @@ mod gen_str {
             indoc!(
                 r#"
                     when List.first (Str.split "JJJ" "JJJJ there") is
-                        Ok str -> 
+                        Ok str ->
                             Str.countGraphemes str
-                            
+        
                         _ ->
                             -1
-                            
+        
                 "#
             ),
             3,
             i64
         );
-
-        // assert_evals_to!(
-        //     indoc!(
-        //         r#"
-        //             when List.first (Str.split "JJJJJ" "JJJJ there") is
-        //                 Ok str ->
-        //                     str
-        //                         |> Str.concat str
-        //                         |> Str.concat str
-        //                         |> Str.concat str
-        //                         |> Str.concat str
-        //
-        //                 _ ->
-        //                     "Not Str!"
-        //
-        //         "#
-        //     ),
-        //     "JJJJJJJJJJJJJJJJJJJJJJJJJ",
-        //     &'static str
-        // );
     }
 
-    // #[test]
-    // fn str_split_small_str_big_delimiter() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 Str.split "JJJ" "0123456789abcdefghi"
-    //             "#
-    //         ),
-    //         &["JJJ"],
-    //         &'static [&'static str]
-    //     );
-    // }
+    #[test]
+    fn str_split_str_concat_repeated() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.first (Str.split "JJJJJ" "JJJJ there") is
+                        Ok str ->
+                            str
+                                |> Str.concat str
+                                |> Str.concat str
+                                |> Str.concat str
+                                |> Str.concat str
+        
+                        _ ->
+                            "Not Str!"
+        
+                "#
+            ),
+            "JJJJJJJJJJJJJJJJJJJJJJJJJ",
+            &'static str
+        );
+    }
+
+    #[test]
+    fn str_split_small_str_bigger_delimiter() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when
+                        List.first
+                            (Str.split "JJJ" "0123456789abcdefghi")
+                    is 
+                        Ok str -> str
+                        _ -> ""
+                "#
+            ),
+            small_str("JJJ"),
+            [u8; ROC_STR_MEM_SIZE]
+        );
+    }
 
     #[test]
     fn str_split_big_str_small_delimiter() {
@@ -98,21 +137,21 @@ mod gen_str {
         );
     }
 
-    // #[test]
-    // fn str_split_small_str_small_delimiter() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 Str.split "J!J!J" "!"
-    //             "#
-    //         ),
-    //         &["J", "J", "J"],
-    //         &'static [&'static str]
-    //     );
-    // }
+    #[test]
+    fn str_split_small_str_small_delimiter() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "J!J!J" "!"
+                "#
+            ),
+            &[small_str("J"), small_str("J"), small_str("J")],
+            &'static [[u8; ROC_STR_MEM_SIZE]]
+        );
+    }
 
     #[test]
-    fn str_split_bigger_delimiter_big_str() {
+    fn str_split_bigger_delimiter_big_strs() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -126,20 +165,74 @@ mod gen_str {
         );
     }
 
-    // #[test]
-    // fn str_split_big_str() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 Str.split
-    //                     "hello 0123456789abcdef there 0123456789abcdef "
-    //                     " 0123456789abcdef "
-    //             "#
-    //         ),
-    //         &["hello", "there"],
-    //         &'static [&'static str]
-    //     );
-    // }
+    #[test]
+    fn str_split_empty_strs() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "" ""
+                "#
+            ),
+            &[small_str("")],
+            &'static [[u8; ROC_STR_MEM_SIZE]]
+        )
+    }
+
+    #[test]
+    fn str_split_minimal_example() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split "a," ","
+                "#
+            ),
+            &[small_str("a"), small_str("")],
+            &'static [[u8; ROC_STR_MEM_SIZE]]
+        )
+    }
+
+    #[test]
+    fn str_split_small_str_big_delimiter() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split
+                        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
+                        "---- ---- ---- ---- ----"
+                        |> List.len
+                "#
+            ),
+            3,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split
+                        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
+                        "---- ---- ---- ---- ----"
+                "#
+            ),
+            &[small_str("1"), small_str("2"), small_str("")],
+            &'static [[u8; ROC_STR_MEM_SIZE]]
+        );
+    }
+
+    #[test]
+    fn str_split_small_str_20_char_delimiter() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.split
+                        "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
+                        "|-- -- -- -- -- -- |"
+                "#
+            ),
+            &[small_str("3"), small_str("4"), small_str("")],
+            &'static [[u8; ROC_STR_MEM_SIZE]]
+        );
+    }
 
     #[test]
     fn str_concat_big_to_big() {
@@ -332,8 +425,22 @@ mod gen_str {
     }
 
     #[test]
+    fn str_starts_with() {
+        assert_evals_to!(r#"Str.startsWith "hello world" "hell""#, true, bool);
+        assert_evals_to!(r#"Str.startsWith "hello world" """#, true, bool);
+        assert_evals_to!(r#"Str.startsWith "nope" "hello world""#, false, bool);
+        assert_evals_to!(r#"Str.startsWith "hell" "hello world""#, false, bool);
+        assert_evals_to!(r#"Str.startsWith "" "hello world""#, false, bool);
+    }
+
+    #[test]
     fn str_count_graphemes_small_str() {
         assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
+    }
+
+    #[test]
+    fn str_count_graphemes_three_js() {
+        assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
     }
 
     #[test]
@@ -343,5 +450,37 @@ mod gen_str {
             45,
             usize
         );
+    }
+
+    #[test]
+    fn str_starts_with_same_big_str() {
+        assert_evals_to!(
+            r#"Str.startsWith "123456789123456789" "123456789123456789""#,
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn str_starts_with_different_big_str() {
+        assert_evals_to!(
+            r#"Str.startsWith "12345678912345678910" "123456789123456789""#,
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn str_starts_with_same_small_str() {
+        assert_evals_to!(r#"Str.startsWith "1234" "1234""#, true, bool);
+    }
+
+    #[test]
+    fn str_starts_with_different_small_str() {
+        assert_evals_to!(r#"Str.startsWith "1234" "12""#, true, bool);
+    }
+    #[test]
+    fn str_starts_with_false_small_str() {
+        assert_evals_to!(r#"Str.startsWith "1234" "23""#, false, bool);
     }
 }

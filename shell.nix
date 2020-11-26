@@ -1,16 +1,21 @@
 { }:
 
-with {
+let
+  splitSystem = builtins.split "-" builtins.currentSystem;
+  currentArch = builtins.elemAt splitSystem 0;
+  currentOS = builtins.elemAt splitSystem 2;
+in with {
   # Look here for information about how pin version of nixpkgs
   #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
   pkgs = import (builtins.fetchGit {
-    name = "nixpkgs-2020-10-24";
-    url = "https://github.com/nixos/nixpkgs-channels/";
+    name = "nixpkgs-2020-11-24";
+    url = "https://github.com/nixos/nixpkgs/";
     ref = "refs/heads/nixpkgs-unstable";
-    rev = "502845c3e31ef3de0e424f3fcb09217df2ce6df6";
+    rev = "6625284c397b44bc9518a5a1567c1b5aae455c08";
   }) { };
 
-  isMacOS = builtins.currentSystem == "x86_64-darwin";
+  isMacOS = currentOS == "darwin";
+  isAarch64 = currentArch == "aarch64";
 };
 
 with (pkgs);
@@ -41,10 +46,8 @@ let
   ] else
     [ ];
 
-  llvmPkg = pkgs.llvm_10;
-  lldPkg = pkgs.lld_10; # this should match llvm's version
-  clangPkg = pkgs.clang_10; # this should match llvm's version
-  zig = import ./nix/zig.nix { inherit pkgs isMacOS; };
+  llvmPkgs = pkgs.llvmPackages_10;
+  zig = import ./nix/zig.nix { inherit pkgs isMacOS isAarch64; };
   inputs = [
     # build libraries
     rustc
@@ -54,8 +57,8 @@ let
     cmake
     git
     python3
-    llvmPkg
-    clangPkg
+    llvmPkgs.llvm
+    llvmPkgs.clang
     valgrind
     pkg-config
     zig
@@ -64,7 +67,7 @@ let
     libxml2
     zlib
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
-    lldPkg
+    llvmPkgs.lld
     # dev tools
     rust-analyzer
     # (import ./nix/zls.nix { inherit pkgs zig; })
@@ -73,10 +76,10 @@ let
 
 in mkShell {
   buildInputs = inputs ++ darwin-frameworks ++ linux-only;
-  LLVM_SYS_100_PREFIX = "${llvmPkg}";
+  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
 
   APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
-    ([ pkgconfig libcxx libcxxabi libunwind ] ++ linux-only);
+    ([ pkgconfig llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-only);
 
   # Aliases don't work cross shell, so we do this
   shellHook = ''

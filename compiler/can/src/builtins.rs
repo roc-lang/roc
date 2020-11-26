@@ -53,6 +53,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_CONCAT => str_concat,
         Symbol::STR_SPLIT => str_split,
         Symbol::STR_IS_EMPTY => str_is_empty,
+        Symbol::STR_STARTS_WITH => str_starts_with,
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
@@ -70,7 +71,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
         Symbol::LIST_KEEP_IF => list_keep_if,
-        Symbol::LIST_WALK_RIGHT => list_walk_right,
+        Symbol::LIST_WALK => list_walk,
+        Symbol::LIST_WALK_BACKWARDS => list_walk_backwards,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -967,6 +969,26 @@ fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// Str.startsWith : Str, Str -> Bool
+fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrStartsWith,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        bool_var,
+    )
+}
+
 /// Str.countGraphemes : Str -> Int
 fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
@@ -1292,14 +1314,43 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
-fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// List.walk : List elem, (elem -> accum -> accum), accum -> accum
+fn list_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let func_var = var_store.fresh();
     let accum_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::ListWalkRight,
+        op: LowLevel::ListWalk,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (func_var, Var(Symbol::ARG_2)),
+            (accum_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: accum_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (list_var, Symbol::ARG_1),
+            (func_var, Symbol::ARG_2),
+            (accum_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        accum_var,
+    )
+}
+
+/// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let accum_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListWalkBackwards,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (func_var, Var(Symbol::ARG_2)),

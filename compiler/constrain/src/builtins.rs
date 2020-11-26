@@ -74,7 +74,7 @@ pub fn str_type() -> Type {
 #[inline(always)]
 pub fn num_float() -> Type {
     Type::Alias(
-        Symbol::NUM_FLOAT,
+        Symbol::NUM_F64,
         vec![],
         Box::new(num_num(num_floatingpoint())),
     )

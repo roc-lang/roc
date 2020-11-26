@@ -2,8 +2,7 @@ use crate::llvm::build::{
     allocate_with_refcount_help, build_num_binop, cast_basic_basic, Env, InPlace,
 };
 use crate::llvm::compare::build_eq;
-use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
-use crate::llvm::refcounting::PointerToRefcount;
+use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
@@ -810,9 +809,9 @@ pub fn list_sum<'a, 'ctx, 'env>(
     builder.build_load(accum_alloca, "load_final_acum")
 }
 
-/// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+/// List.walk : List elem, (elem -> accum -> accum), accum -> accum
 #[allow(clippy::too_many_arguments)]
-pub fn list_walk_right<'a, 'ctx, 'env>(
+pub fn list_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     list: BasicValueEnum<'ctx>,
@@ -877,6 +876,98 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
             };
 
             incrementing_elem_loop(
+                builder,
+                ctx,
+                parent,
+                list_ptr,
+                len,
+                "#index",
+                walk_right_loop,
+            );
+        }
+
+        _ => {
+            unreachable!(
+                "Invalid function basic value enum or layout for List.keepIf : {:?}",
+                (func, func_layout)
+            );
+        }
+    }
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    builder.build_load(accum_alloca, "load_final_acum")
+}
+
+/// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+#[allow(clippy::too_many_arguments)]
+pub fn list_walk_backwards<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    default: BasicValueEnum<'ctx>,
+    default_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let list_wrapper = list.into_struct_value();
+    let len = list_len(env.builder, list_wrapper);
+
+    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
+    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
+    builder.build_store(accum_alloca, default);
+
+    let then_block = ctx.append_basic_block(parent, "then");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    let condition = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "list_non_empty",
+    );
+
+    builder.build_conditional_branch(condition, then_block, cont_block);
+
+    builder.position_at_end(then_block);
+
+    match (func, func_layout) {
+        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, _)) => {
+            let elem_layout = match list_layout {
+                Layout::Builtin(Builtin::List(_, layout)) => layout,
+                _ => unreachable!("can only fold over a list"),
+            };
+
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+            let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+
+            let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
+                // load current accumulator
+                let current = builder.build_load(accum_alloca, "retrieve_accum");
+
+                let call_site_value =
+                    builder.build_call(func_ptr, &[elem, current], "#walk_right_func");
+
+                // set the calling convention explicitly for this call
+                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                let new_current = call_site_value
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
+                builder.build_store(accum_alloca, new_current);
+            };
+
+            decrementing_elem_loop(
                 builder,
                 ctx,
                 parent,
@@ -1538,6 +1629,7 @@ where
     let current_index = builder
         .build_load(index_alloca, index_name)
         .into_int_value();
+
     let next_index = builder.build_int_sub(current_index, one, "nextindex");
 
     builder.build_store(index_alloca, next_index);
@@ -1547,7 +1639,7 @@ where
 
     // #index >= 0
     let condition = builder.build_int_compare(
-        IntPredicate::UGE,
+        IntPredicate::SGE,
         next_index,
         ctx.i64_type().const_zero(),
         "bounds_check",
@@ -1762,12 +1854,7 @@ pub fn load_list<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
 ) -> (IntValue<'ctx>, PointerValue<'ctx>) {
-    let ptr_as_int = builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
-        .unwrap()
-        .into_int_value();
-
-    let ptr = builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr");
+    let ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
     let length = builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
@@ -1782,12 +1869,14 @@ pub fn load_list_ptr<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
 ) -> PointerValue<'ctx> {
-    let ptr_as_int = builder
+    // a `*mut u8` pointer
+    let generic_ptr = builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
         .unwrap()
-        .into_int_value();
+        .into_pointer_value();
 
-    builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr")
+    // cast to the expected pointer type
+    cast_basic_basic(builder, generic_ptr.into(), ptr_type.into()).into_pointer_value()
 }
 
 pub fn clone_nonempty_list<'a, 'ctx, 'env>(
@@ -1812,9 +1901,6 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, inplace, elem_layout, list_len);
 
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
-
     // TODO check if malloc returned null; if so, runtime error for OOM!
 
     // Either memcpy or deep clone the array elements
@@ -1831,6 +1917,9 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     }
 
     // Create a fresh wrapper struct for the newly populated array
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr = cast_basic_basic(builder, clone_ptr.into(), u8_ptr_type.into());
+
     let struct_type = collection(ctx, env.ptr_bytes);
     let mut struct_val;
 
@@ -1838,9 +1927,9 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_clone_nonempty_list",
         )
         .unwrap();
 
@@ -1917,16 +2006,18 @@ pub fn allocate_list<'a, 'ctx, 'env>(
 
 pub fn store_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    list_ptr: PointerValue<'ctx>,
+    pointer_to_first_element: PointerValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
     let builder = env.builder;
 
     let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
     let struct_type = collection(ctx, ptr_bytes);
+
+    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let generic_ptr =
+        cast_basic_basic(builder, pointer_to_first_element.into(), u8_ptr_type.into());
 
     let mut struct_val;
 
@@ -1934,9 +2025,9 @@ pub fn store_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_as_int,
+            generic_ptr,
             Builtin::WRAPPER_PTR,
-            "insert_ptr",
+            "insert_ptr_store_list",
         )
         .unwrap();
 

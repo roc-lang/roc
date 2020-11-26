@@ -5,6 +5,7 @@
 pub enum LowLevel {
     StrConcat,
     StrIsEmpty,
+    StrStartsWith,
     StrSplit,
     StrCountGraphemes,
     ListLen,
@@ -21,7 +22,8 @@ pub enum LowLevel {
     ListJoin,
     ListMap,
     ListKeepIf,
-    ListWalkRight,
+    ListWalk,
+    ListWalkBackwards,
     ListSum,
     NumAdd,
     NumAddWrap,

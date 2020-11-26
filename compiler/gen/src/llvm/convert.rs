@@ -203,26 +203,13 @@ pub fn block_of_memory<'ctx>(
 
 /// Two usize values. Could be a wrapper for a List or a Str.
 ///
-/// It would be nicer if we could store this as a tuple containing one usize
-/// and one pointer. However, if we do that, we run into a problem with the
-/// empty list: it doesn't know what pointer type it should initailize to,
-/// so it can only create an empty (usize, usize) struct.
-///
-/// This way, we always initialize it to (usize, usize), and then if there's
-/// actually a pointer, we use build_int_to_ptr and build_ptr_to_int to convert
-/// the field when necessary. (It's not allowed to cast the entire struct from
-/// (usize, usize) to (usize, ptr) or vice versa.)
+/// This way, we always initialize it to (*mut u8, usize), and may have to cast the pointer type
+/// for lists.
 pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
-    let int_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
+    let usize_type = ptr_int(ctx, ptr_bytes);
+    let u8_ptr = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
-    ctx.struct_type(&[int_type, int_type], false)
-}
-
-/// Two usize values.
-pub fn collection_int_wrapper(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
-    let usize_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
-
-    ctx.struct_type(&[usize_type, usize_type], false)
+    ctx.struct_type(&[u8_ptr.into(), usize_type.into()], false)
 }
 
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {

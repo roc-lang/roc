@@ -13,6 +13,9 @@ jobs:
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
 
+      - name: Run Zig tests
+        run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
+
       - name: Enable LLD
         run: sudo ./ci/enable-lld.sh
 
@@ -36,6 +39,12 @@ jobs:
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache compiled valgrind
+        uses: actions/cache@v1
+        with:
+          path: ~/valgrind-3.6.1/
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - uses: actions-rs/cargo@v1
         name: cargo fmt --check
