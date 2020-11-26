@@ -735,7 +735,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Insert field exprs into struct_val
                 for (index, field_val) in field_vals.into_iter().enumerate() {
                     struct_val = builder
-                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .build_insert_value(
+                            struct_val,
+                            field_val,
+                            index as u32,
+                            "insert_record_field",
+                        )
                         .unwrap();
                 }
 
@@ -785,7 +790,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Insert field exprs into struct_val
                 for (index, field_val) in field_vals.into_iter().enumerate() {
                     struct_val = builder
-                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .build_insert_value(
+                            struct_val,
+                            field_val,
+                            index as u32,
+                            "insert_single_tag_field",
+                        )
                         .unwrap();
                 }
 
@@ -848,7 +858,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // Insert field exprs into struct_val
             for (index, field_val) in field_vals.into_iter().enumerate() {
                 struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                    .build_insert_value(
+                        struct_val,
+                        field_val,
+                        index as u32,
+                        "insert_multi_tag_field",
+                    )
                     .unwrap();
             }
 
