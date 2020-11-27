@@ -27,8 +27,8 @@ mod test_parse {
         self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
     };
     use roc_parse::header::{
-        AppHeader, Effects, ExposesEntry, InterfaceHeader, ModuleName, PackageEntry, PackageName,
-        PackageOrPath, PlatformHeader, To,
+        AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+        PackageName, PackageOrPath, PlatformHeader, To,
     };
     use roc_parse::module::{app_header, interface_header, module_defs, platform_header};
     use roc_parse::parser::{Fail, FailReason, Parser, State};
@@ -2358,16 +2358,19 @@ mod test_parse {
         use ExposesEntry::Exposed;
         use PackageOrPath::Path;
 
+        let newlines = &[Newline];
         let pkg_entry = PackageEntry::Entry {
             shorthand: "base",
             spaces_after_shorthand: &[],
-            package_or_path: Located::new(0, 0, 33, 45, Path(PlainLine("./platform"))),
+            package_or_path: Located::new(1, 1, 21, 33, Path(PlainLine("./platform"))),
         };
-        let loc_pkg_entry = Located::new(0, 0, 27, 45, pkg_entry);
+        let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
         let packages = bumpalo::vec![in &arena; loc_pkg_entry];
-        let imports = Vec::new_in(&arena);
-        let provide_entry = Located::new(0, 0, 59, 68, Exposed("quicksort"));
+        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
+        let loc_import = Located::new(2, 2, 14, 25, import);
+        let imports = bumpalo::vec![in &arena; loc_import];
+        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
         let provides = bumpalo::vec![in &arena; provide_entry];
         let module_name = StrLiteral::PlainLine("quicksort");
         let expected = AppHeader {
@@ -2375,13 +2378,13 @@ mod test_parse {
             packages,
             imports,
             provides,
-            to: Located::new(0, 0, 74, 78, To::ExistingPackage("base")),
+            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
             after_app_keyword: &[],
-            before_packages: &[],
+            before_packages: newlines,
             after_packages: &[],
-            before_imports: &[],
+            before_imports: newlines,
             after_imports: &[],
-            before_provides: &[],
+            before_provides: newlines,
             after_provides: &[],
             before_to: &[],
             after_to: &[],
@@ -2389,7 +2392,10 @@ mod test_parse {
 
         let src = indoc!(
             r#"
-                app "quicksort" packages { base: "./platform" } provides [ quicksort ] to base
+                app "quicksort"
+                    packages { base: "./platform" }
+                    imports [ foo.Bar.Baz ]
+                    provides [ quicksort ] to base
             "#
         );
         let actual = app_header()
