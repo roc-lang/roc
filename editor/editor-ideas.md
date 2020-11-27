@@ -70,6 +70,8 @@ Thoughts and ideas possibly taken from above inspirations or separate.
     * Makes sense for unit tests, keeps the test close to the source
     * Doesn't necessarily make sense for integration or e2e testing
     * Maybe easier to manually trigger a test related to exactly what code you're writing
+* Ability to generate unit tests for a selected function in context menu
+    * A table should appear to enter input and expected output pairs quickly 
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation
