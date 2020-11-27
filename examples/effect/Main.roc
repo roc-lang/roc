@@ -6,4 +6,3 @@ app "effect-example"
 main : Task {}
 main =
     Task.putLine "Hello world"
-    

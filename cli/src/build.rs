@@ -24,6 +24,7 @@ pub fn build_file(
     src_dir: PathBuf,
     roc_file_path: PathBuf,
     opt_level: OptLevel,
+    emit_debug_info: bool,
     link_type: LinkType,
 ) -> Result<PathBuf, LoadingProblem> {
     let compilation_start = SystemTime::now();
@@ -95,6 +96,7 @@ pub fn build_file(
         Triple::host(),
         &app_o_file,
         opt_level,
+        emit_debug_info,
     );
 
     println!("\nSuccess! 🎉\n\n\t➡ {}\n", app_o_file.display());

@@ -4,6 +4,7 @@ use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::types::RecordField;
 use std::collections::HashMap;
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
@@ -789,59 +790,30 @@ fn layout_from_flat_type<'a>(
             }
         }
         Record(fields, ext_var) => {
-            // Sort the fields by label
-            let mut sorted_fields = Vec::with_capacity_in(fields.len(), arena);
-            sorted_fields.extend(fields.into_iter());
-
             // extract any values from the ext_var
             let mut fields_map = MutMap::default();
+            fields_map.extend(fields);
             match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut fields_map) {
                 Ok(()) | Err((_, Content::FlexVar(_))) => {}
                 Err(_) => unreachable!("this would have been a type error"),
             }
 
-            sorted_fields.extend(fields_map.into_iter());
-
-            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+            let sorted_fields = sort_record_fields_help(env, fields_map);
 
             // Determine the layouts of the fields, maintaining sort order
             let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
 
-            for (label, field) in sorted_fields {
-                use LayoutProblem::*;
-
-                let field_var = {
-                    use roc_types::types::RecordField::*;
-                    match field {
-                        Optional(_) => {
-                            // when an optional field reaches this stage, the field was truly
-                            // optional, and not unified to be demanded or required
-                            // therefore, there is no such field on the record, and we ignore this
-                            // field from now on.
-                            continue;
-                        }
-                        Required(var) => var,
-                        Demanded(var) => var,
-                    }
-                };
-
-                match Layout::from_var(env, field_var) {
+            for (_, _, res_layout) in sorted_fields {
+                match res_layout {
                     Ok(layout) => {
                         // Drop any zero-sized fields like {}.
                         if !layout.is_dropped_because_empty() {
                             layouts.push(layout);
                         }
                     }
-                    Err(UnresolvedTypeVar(v)) => {
-                        // Invalid field!
-                        panic!(
-                            r"I hit an unresolved type var {:?} when determining the layout of {:?} of record field: {:?} : {:?}",
-                            field_var, v, label, field
-                        );
-                    }
-                    Err(Erroneous) => {
-                        // Invalid field!
-                        panic!("TODO gracefully handle record with invalid field.var");
+                    Err(_) => {
+                        // optional field, ignore
+                        continue;
                     }
                 }
             }
@@ -894,6 +866,15 @@ fn layout_from_flat_type<'a>(
                     tag_layout.push(Layout::from_var(env, var)?);
                 }
 
+                tag_layout.sort_by(|layout1, layout2| {
+                    let ptr_bytes = 8;
+
+                    let size1 = layout1.alignment_bytes(ptr_bytes);
+                    let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                    size2.cmp(&size1)
+                });
+
                 tag_layouts.push(tag_layout.into_bump_slice());
             }
 
@@ -924,37 +905,53 @@ pub fn sort_record_fields<'a>(
     };
 
     match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => {
-            // Sort the fields by label
-            let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), arena);
-
-            use roc_types::types::RecordField;
-            for (label, field) in fields_map {
-                let var = match field {
-                    RecordField::Demanded(v) => v,
-                    RecordField::Required(v) => v,
-                    RecordField::Optional(v) => {
-                        let layout =
-                            Layout::from_var(&mut env, v).expect("invalid layout from var");
-                        sorted_fields.push((label, v, Err(layout)));
-                        continue;
-                    }
-                };
-
-                let layout = Layout::from_var(&mut env, var).expect("invalid layout from var");
-
-                // Drop any zero-sized fields like {}
-                if !layout.is_dropped_because_empty() {
-                    sorted_fields.push((label, var, Ok(layout)));
-                }
-            }
-
-            sorted_fields.sort_by(|(label1, _, _), (label2, _, _)| label1.cmp(label2));
-
-            sorted_fields
-        }
+        Ok(()) | Err((_, Content::FlexVar(_))) => sort_record_fields_help(&mut env, fields_map),
         Err(other) => panic!("invalid content in record variable: {:?}", other),
     }
+}
+
+fn sort_record_fields_help<'a>(
+    env: &mut Env<'a, '_>,
+    fields_map: MutMap<Lowercase, RecordField<Variable>>,
+) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
+    // Sort the fields by label
+    let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), env.arena);
+
+    for (label, field) in fields_map {
+        let var = match field {
+            RecordField::Demanded(v) => v,
+            RecordField::Required(v) => v,
+            RecordField::Optional(v) => {
+                let layout = Layout::from_var(env, v).expect("invalid layout from var");
+                sorted_fields.push((label, v, Err(layout)));
+                continue;
+            }
+        };
+
+        let layout = Layout::from_var(env, var).expect("invalid layout from var");
+
+        // Drop any zero-sized fields like {}
+        if !layout.is_dropped_because_empty() {
+            sorted_fields.push((label, var, Ok(layout)));
+        }
+    }
+
+    sorted_fields.sort_by(
+        |(label1, _, res_layout1), (label2, _, res_layout2)| match res_layout1 {
+            Ok(layout1) | Err(layout1) => match res_layout2 {
+                Ok(layout2) | Err(layout2) => {
+                    let ptr_bytes = 8;
+
+                    let size1 = layout1.alignment_bytes(ptr_bytes);
+                    let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                    size2.cmp(&size1).then(label1.cmp(label2))
+                }
+            },
+        },
+    );
+
+    sorted_fields
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1059,6 +1056,15 @@ pub fn union_sorted_tags_help<'a>(
                 }
             }
 
+            layouts.sort_by(|layout1, layout2| {
+                let ptr_bytes = 8;
+
+                let size1 = layout1.alignment_bytes(ptr_bytes);
+                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                size2.cmp(&size1)
+            });
+
             if layouts.is_empty() {
                 if contains_zero_sized {
                     UnionVariant::UnitWithArguments
@@ -1101,6 +1107,15 @@ pub fn union_sorted_tags_help<'a>(
                         }
                     }
                 }
+
+                arg_layouts.sort_by(|layout1, layout2| {
+                    let ptr_bytes = 8;
+
+                    let size1 = layout1.alignment_bytes(ptr_bytes);
+                    let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                    size2.cmp(&size1)
+                });
 
                 answer.push((tag_name, arg_layouts.into_bump_slice()));
             }

@@ -7,16 +7,16 @@ use std::alloc::Layout;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "roc__main_1_exposed"]
+    #[link_name = "Main_rocMain_1_exposed"]
     fn roc_main(output: *mut u8) -> ();
 
-    #[link_name = "roc__main_1_size"]
+    #[link_name = "Main_rocMain_1_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__main_1_Fx_caller"]
+    #[link_name = "Main_rocMain_1_Fx_caller"]
     fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
 
-    #[link_name = "roc__main_1_Fx_size"]
+    #[link_name = "Main_rocMain_1_Fx_size"]
     fn size_Fx() -> i64;
 }
 
@@ -60,12 +60,13 @@ unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const
             buffer as *mut u8,
         );
 
-        let output = &*(buffer as *mut RocCallResult<()>);
+        let output = &*(buffer as *mut RocCallResult<i64>);
 
-        match output.into() {
-            Ok(_) => 0,
-            Err(e) => panic!("failed with {}", e),
-        }
+        //        match output.into() {
+        //            Ok(v) => v,
+        //            Err(e) => panic!("failed with {}", e),
+        //        }
+        32
     })
 }
 
@@ -95,12 +96,7 @@ pub fn rust_main() -> isize {
 
                 let closure_data_ptr = buffer.offset(16);
 
-                let result =
-                    call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8);
-
-                std::alloc::dealloc(buffer, layout);
-
-                result
+                call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8)
             }
             Err(msg) => {
                 std::alloc::dealloc(buffer, layout);
@@ -113,10 +109,8 @@ pub fn rust_main() -> isize {
     let duration = end_time.duration_since(start_time).unwrap();
 
     println!(
-        "Roc closure took {:.4} ms to compute this answer: {:?}",
+        "Roc execution took {:.4} ms",
         duration.as_secs_f64() * 1000.0,
-        // truncate the answer, so stdout is not swamped
-        answer
     );
 
     // Exit code
