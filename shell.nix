@@ -66,6 +66,9 @@ let
     libffi
     libxml2
     zlib
+    llvmPkgs.libcxx
+    llvmPkgs.libcxxabi
+    libunwind
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
     # dev tools
@@ -79,7 +82,7 @@ in mkShell {
   LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
 
   APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
-    ([ pkgconfig llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-only);
+    ([ pkg-config llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-only);
 
   # Aliases don't work cross shell, so we do this
   shellHook = ''

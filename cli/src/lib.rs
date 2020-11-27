@@ -14,6 +14,7 @@ use target_lexicon::Triple;
 pub mod build;
 pub mod repl;
 
+pub static FLAG_DEBUG: &str = "debug";
 pub static FLAG_OPTIMIZE: &str = "optimize";
 pub static FLAG_ROC_FILE: &str = "ROC_FILE";
 pub static DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -34,6 +35,12 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
                     .required(false),
             )
+            .arg(
+                Arg::with_name(FLAG_DEBUG)
+                    .long(FLAG_DEBUG)
+                    .help("Store LLVM debug information in the generated program")
+                    .required(false),
+            )
         )
         .subcommand(App::new("run")
             .about("Build and run a program")
@@ -46,6 +53,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_DEBUG)
+                    .long(FLAG_DEBUG)
+                    .help("Store LLVM debug information in the generated program")
                     .required(false),
             )
         )
@@ -70,6 +83,8 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
     } else {
         OptLevel::Normal
     };
+    let emit_debug_info = matches.is_present(FLAG_DEBUG);
+
     let path = Path::new(filename).canonicalize().unwrap();
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
@@ -92,8 +107,15 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
         }
     });
 
-    let binary_path = build::build_file(target, src_dir, path, opt_level, LinkType::Executable)
-        .expect("TODO gracefully handle build_file failing");
+    let binary_path = build::build_file(
+        target,
+        src_dir,
+        path,
+        opt_level,
+        emit_debug_info,
+        LinkType::Executable,
+    )
+    .expect("TODO gracefully handle build_file failing");
 
     if run_after_build {
         // Run the compiled app

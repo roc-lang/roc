@@ -20,6 +20,7 @@ pub fn gen_from_mono_module(
     target: Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
+    emit_debug_info: bool,
 ) {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
@@ -159,15 +160,78 @@ pub fn gen_from_mono_module(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    // Emit the .o file
+    // annotate the LLVM IR output with debug info
+    // so errors are reported with the line number of the LLVM source
+    if emit_debug_info {
+        module.strip_debug_info();
 
-    let reloc = RelocMode::Default;
-    let model = CodeModel::Default;
-    let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
+        let mut app_ll_file = std::path::PathBuf::from(app_o_file);
+        app_ll_file.set_extension("ll");
 
-    target_machine
-        .write_to_file(&env.module, FileType::Object, &app_o_file)
-        .expect("Writing .o file failed");
+        let mut app_ll_dbg_file = std::path::PathBuf::from(app_o_file);
+        app_ll_dbg_file.set_extension("dbg.ll");
+
+        let mut app_bc_file = std::path::PathBuf::from(app_o_file);
+        app_bc_file.set_extension("bc");
+
+        use std::process::Command;
+
+        // write the ll code to a file, so we can modify it
+        module.print_to_file(&app_ll_file).unwrap();
+
+        // run the debugir https://github.com/vaivaswatha/debugir tool
+        match Command::new("debugir")
+            .env_clear()
+            .args(&[app_ll_file.to_str().unwrap()])
+            .output()
+        {
+            Ok(_) => {}
+            Err(error) => {
+                use std::io::ErrorKind;
+                match error.kind() {
+                    ErrorKind::NotFound => panic!(
+                        r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
+                    ),
+                    _ => panic!("{:?}", error),
+                }
+            }
+        }
+
+        // assemble the .ll into a .bc
+        let _ = Command::new("llvm-as-10")
+            .env_clear()
+            .args(&[
+                app_ll_dbg_file.to_str().unwrap(),
+                "-o",
+                app_bc_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        // write the .o file. Note that this builds the .o for the local machine,
+        // and ignores the `target_machine` entirely.
+        let _ = Command::new("llc-10")
+            .env_clear()
+            .args(&[
+                "-filetype=obj",
+                app_bc_file.to_str().unwrap(),
+                "-o",
+                app_o_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+    } else {
+        // Emit the .o file
+
+        let reloc = RelocMode::Default;
+        let model = CodeModel::Default;
+        let target_machine =
+            target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
+
+        target_machine
+            .write_to_file(&env.module, FileType::Object, &app_o_file)
+            .expect("Writing .o file failed");
+    }
 }
 
 pub struct FunctionIterator<'ctx> {
