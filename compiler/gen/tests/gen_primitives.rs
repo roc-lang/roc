@@ -293,7 +293,7 @@ mod gen_primitives {
             indoc!(
                 r#"
                 wrapper = \{} ->
-                    alwaysFloatIdentity : Int -> (Float -> Float)
+                    alwaysFloatIdentity : Int -> (F64 -> F64)
                     alwaysFloatIdentity = \_ ->
                         (\a -> a)
 
@@ -535,7 +535,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                app LinkedListLen0 provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 pi = 3.1415
 
@@ -553,7 +553,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -580,7 +580,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app LinkedListLenTwice0 provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -607,7 +607,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -634,7 +634,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -661,7 +661,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -689,7 +689,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -717,7 +717,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -744,7 +744,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
@@ -907,7 +907,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 x = 42
 
@@ -928,7 +928,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 foo = \{} ->
                     x = 41
@@ -951,7 +951,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 foo = \{} ->
                     x = 41
@@ -978,7 +978,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 foo = \{} ->
                     x = 41
@@ -1006,7 +1006,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Effect a : [ @Effect ({} -> a) ]
 
@@ -1016,11 +1016,11 @@ mod gen_primitives {
                 runEffect : Effect a -> a
                 runEffect = \@Effect thunk -> thunk {}
 
-                foo : Effect Float
+                foo : Effect F64
                 foo =
                     succeed 3.14
 
-                main : Float
+                main : F64
                 main =
                     runEffect foo
 
@@ -1036,19 +1036,19 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 # succeed : a -> ({} -> a)
                 succeed = \x -> \{} -> x
 
-                foo : {} -> Float
+                foo : {} -> F64
                 foo =
                     succeed 3.14
 
                 # runEffect : ({} ->  a) -> a
                 runEffect = \thunk -> thunk {}
 
-                main : Float
+                main : F64
                 main =
                     runEffect foo
                 "#
@@ -1063,7 +1063,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Effect a : [ @Effect ({} -> a) ]
 
@@ -1085,7 +1085,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Effect a : [ @Effect ({} -> a) ]
 
@@ -1110,7 +1110,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -1144,7 +1144,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -1175,7 +1175,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 State a : { count : Int, x : a }
 
@@ -1202,7 +1202,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -1284,7 +1284,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -1323,7 +1323,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
@@ -1353,7 +1353,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -1393,7 +1393,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -1444,7 +1444,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -1470,7 +1470,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -1498,7 +1498,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -1527,7 +1527,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -1552,7 +1552,7 @@ mod gen_primitives {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 BTree : [ Node BTree BTree, Leaf Int ]
 

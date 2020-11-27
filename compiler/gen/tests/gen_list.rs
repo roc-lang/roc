@@ -237,11 +237,11 @@ mod gen_list {
     }
 
     #[test]
-    fn list_walk_right_empty_all_inline() {
+    fn list_walk_backwards_empty_all_inline() {
         assert_evals_to!(
             indoc!(
                 r#"
-                List.walkRight [0x1] (\a, b -> a + b) 0
+                List.walkBackwards [0x1] (\a, b -> a + b) 0
                 "#
             ),
             1,
@@ -255,7 +255,7 @@ mod gen_list {
                 empty =
                     []
 
-                List.walkRight empty (\a, b -> a + b) 0
+                List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
             0,
@@ -264,22 +264,22 @@ mod gen_list {
     }
 
     #[test]
-    fn list_walk_right_with_str() {
+    fn list_walk_backwards_with_str() {
         assert_evals_to!(
-            r#"List.walkRight [ "x", "y", "z" ] Str.concat "<""#,
-            RocStr::from("zyx<"),
+            r#"List.walkBackwards [ "x", "y", "z" ] Str.concat "<""#,
+            RocStr::from("xyz<"),
             RocStr
         );
 
         assert_evals_to!(
-            r#"List.walkRight [ "Third", "Second", "First" ] Str.concat "Fourth""#,
-            RocStr::from("FirstSecondThirdFourth"),
+            r#"List.walkBackwards [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+            RocStr::from("ThirdSecondFirstFourth"),
             RocStr
         );
     }
 
     #[test]
-    fn list_walk_right_with_record() {
+    fn list_walk_backwards_with_record() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -295,7 +295,7 @@ mod gen_list {
                         Zero -> { r & zeroes: r.zeroes + 1 }
                         One -> { r & ones: r.ones + 1 }
 
-                finalCounts = List.walkRight byte acc initialCounts
+                finalCounts = List.walkBackwards byte acc initialCounts
 
                 finalCounts.ones * 10 + finalCounts.zeroes
                 "#
@@ -303,6 +303,26 @@ mod gen_list {
             35,
             i64
         );
+    }
+
+    #[test]
+    fn list_walk_with_str() {
+        assert_evals_to!(
+            r#"List.walk [ "x", "y", "z" ] Str.concat "<""#,
+            RocStr::from("zyx<"),
+            RocStr
+        );
+
+        assert_evals_to!(
+            r#"List.walk [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+            RocStr::from("FirstSecondThirdFourth"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn list_walk_substraction() {
+        assert_evals_to!(r#"List.walk [ 1, 2 ] Num.sub 1"#, 2, i64);
     }
 
     #[test]
@@ -599,7 +619,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    empty : List Float
+                    empty : List F64
                     empty =
                         []
 
@@ -1186,7 +1206,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Quicksort provides [ main ] imports []
+                app "quicksort" provides [ main ] to "./platform"
 
 
                 swap : Int, Int, List a -> List a

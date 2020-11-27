@@ -1,4 +1,4 @@
-app Main provides [ main ] imports [ Dep1 ]
+app "multi-dep-str" imports [ Dep1 ] provides [ main ] to "./platform"
 
 main : Str
 main = Dep1.str1

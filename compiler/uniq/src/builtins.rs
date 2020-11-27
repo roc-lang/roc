@@ -30,7 +30,7 @@ pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) 
 pub fn float_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
-    let float_type = builtin_type(Symbol::NUM_FLOAT, vec![]);
+    let float_type = builtin_type(Symbol::NUM_F64, vec![]);
     let expected_literal = ForReason(reason, float_type, region);
 
     exists(

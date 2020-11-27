@@ -544,7 +544,7 @@ fn annotation<'a>(
             ascii_char(b':'),
             // Spaces after the ':' (at a normal indentation level) and then the type.
             // The type itself must be indented more than the pattern and ':'
-            space0_before(type_annotation::located(indented_more), indented_more)
+            space0_before(type_annotation::located(indented_more), min_indent)
         )
     )
 }
@@ -835,7 +835,7 @@ fn parse_def_signature<'a>(
                 // It should be indented more than the original, and it will
                 // end when outdented again.
                 and_then_with_indent_level(
-                    type_annotation::located(indented_more),
+                    space0_before(type_annotation::located(indented_more), min_indent),
                     // The first annotation may be immediately (spaces_then_comment_or_newline())
                     // followed by a body at the exact same indent_level
                     // leading to an AnnotatedBody in this case
@@ -1730,17 +1730,8 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     };
                     let region = loc_ident.region;
                     let loc_pattern = Located { region, value };
-                    let (spaces_after_colon, state) = space0(min_indent).parse(arena, state)?;
-                    let (parsed_expr, state) =
-                        parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)?;
 
-                    let answer = if spaces_after_colon.is_empty() {
-                        parsed_expr
-                    } else {
-                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_colon)
-                    };
-
-                    Ok((answer, state))
+                    parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)
                 }
                 (None, None) => {
                     // We got nothin'
@@ -1977,17 +1968,8 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_colon)
                     };
                     let loc_pattern = Located { region, value };
-                    let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
-                    let (parsed_expr, state) =
-                        parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)?;
 
-                    let answer = if spaces_after_equals.is_empty() {
-                        parsed_expr
-                    } else {
-                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
-                    };
-
-                    Ok((answer, state))
+                    parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)
                 }
             }
         },

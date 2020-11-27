@@ -161,18 +161,18 @@ pub struct ValgrindErrorXWhat {
 }
 
 #[allow(dead_code)]
-pub fn extract_valgrind_errors(xml: &str) -> Vec<ValgrindError> {
-    let parsed_xml: ValgrindOutput =
-        from_str(xml).unwrap_or_else(|err|
-            panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nRaw valgrind output was:\n\n{}", err, xml));
-    parsed_xml
+pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xml_rs::Error> {
+    let parsed_xml: ValgrindOutput = from_str(xml)?;
+    let answer = parsed_xml
         .fields
         .iter()
         .filter_map(|field| match field {
             ValgrindField::Error(err) => Some(err.clone()),
             _ => None,
         })
-        .collect()
+        .collect();
+
+    Ok(answer)
 }
 
 #[allow(dead_code)]

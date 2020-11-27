@@ -21,13 +21,16 @@ mod test_parse {
     use roc_parse::ast::CommentOrNewline::*;
     use roc_parse::ast::Expr::{self, *};
     use roc_parse::ast::Pattern::{self, *};
-    use roc_parse::ast::StrLiteral::*;
+    use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
-        self, Attempting, Def, EscapedChar, InterfaceHeader, Spaceable, TypeAnnotation, WhenBranch,
+        self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
     };
-    use roc_parse::header::ModuleName;
-    use roc_parse::module::{interface_header, module_defs};
+    use roc_parse::header::{
+        AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+        PackageName, PackageOrPath, PlatformHeader, To,
+    };
+    use roc_parse::module::{app_header, interface_header, module_defs, platform_header};
     use roc_parse::parser::{Fail, FailReason, Parser, State};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
@@ -1733,6 +1736,83 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn multiline_type_signature() {
+        assert_parses_to(
+            "f :\n    {}\n\n42",
+            Defs(
+                &[&Located::new(
+                    0,
+                    1,
+                    0,
+                    6,
+                    Def::Annotation(
+                        Located::new(0, 0, 0, 1, Pattern::Identifier("f")),
+                        Located::new(
+                            1,
+                            1,
+                            4,
+                            6,
+                            TypeAnnotation::SpaceBefore(
+                                &TypeAnnotation::Record {
+                                    fields: &[],
+                                    ext: None,
+                                    final_comments: &[],
+                                },
+                                &[Newline],
+                            ),
+                        ),
+                    ),
+                )],
+                &Located::new(
+                    3,
+                    3,
+                    0,
+                    2,
+                    Expr::SpaceBefore(&Expr::Num("42"), &[Newline, Newline]),
+                ),
+            ),
+        );
+    }
+
+    #[test]
+    fn multiline_type_signature_with_comment() {
+        assert_parses_to(
+            "f :# comment\n    {}\n\n42",
+            Defs(
+                &[&Located::new(
+                    0,
+                    1,
+                    0,
+                    6,
+                    Def::Annotation(
+                        Located::new(0, 0, 0, 1, Pattern::Identifier("f")),
+                        Located::new(
+                            1,
+                            1,
+                            4,
+                            6,
+                            TypeAnnotation::SpaceBefore(
+                                &TypeAnnotation::Record {
+                                    fields: &[],
+                                    ext: None,
+                                    final_comments: &[],
+                                },
+                                &[LineComment(" comment")],
+                            ),
+                        ),
+                    ),
+                )],
+                &Located::new(
+                    3,
+                    3,
+                    0,
+                    2,
+                    Expr::SpaceBefore(&Expr::Num("42"), &[Newline, Newline]),
+                ),
+            ),
+        );
+    }
     // #[test]
     // fn type_signature_function_def() {
     //     use TypeAnnotation;
@@ -2200,7 +2280,243 @@ mod test_parse {
     // MODULE
 
     #[test]
-    fn empty_module() {
+    fn empty_app_header() {
+        let arena = Bump::new();
+        let packages = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let provides = Vec::new_in(&arena);
+        let module_name = StrLiteral::PlainLine("test-app");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 14, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(0, 0, 53, 57, To::ExistingPackage("blah")),
+            after_app_keyword: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "test-app" packages {} imports [] provides [] to blah
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn minimal_app_header() {
+        use PackageOrPath::Path;
+
+        let arena = Bump::new();
+        let packages = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let provides = Vec::new_in(&arena);
+        let module_name = StrLiteral::PlainLine("test-app");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 14, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(0, 0, 30, 38, To::NewPackage(Path(PlainLine("./blah")))),
+            after_app_keyword: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "test-app" provides [] to "./blah"
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn full_app_header() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let newlines = &[Newline];
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "base",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(1, 1, 21, 33, Path(PlainLine("./platform"))),
+        };
+        let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
+        let arena = Bump::new();
+        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
+        let loc_import = Located::new(2, 2, 14, 25, import);
+        let imports = bumpalo::vec![in &arena; loc_import];
+        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let module_name = StrLiteral::PlainLine("quicksort");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 15, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
+            after_app_keyword: &[],
+            before_packages: newlines,
+            after_packages: &[],
+            before_imports: newlines,
+            after_imports: &[],
+            before_provides: newlines,
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "quicksort"
+                    packages { base: "./platform" }
+                    imports [ foo.Bar.Baz ]
+                    provides [ quicksort ] to base
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn empty_platform_header() {
+        let pkg_name = PackageName {
+            account: "rtfeldman",
+            pkg: "blah",
+        };
+        let arena = Bump::new();
+        let effects = Effects {
+            type_name: "Blah",
+            entries: Vec::new_in(&arena),
+            spaces_before_effects_keyword: &[],
+            spaces_after_effects_keyword: &[],
+            spaces_after_type_name: &[],
+        };
+        let expected = PlatformHeader {
+            name: Located::new(0, 0, 9, 23, pkg_name),
+            requires: Vec::new_in(&arena),
+            exposes: Vec::new_in(&arena),
+            packages: Vec::new_in(&arena),
+            imports: Vec::new_in(&arena),
+            provides: Vec::new_in(&arena),
+            effects,
+            after_platform_keyword: &[],
+            before_requires: &[],
+            after_requires: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+        };
+
+        let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects Blah {}";
+        let actual = platform_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn nonempty_platform_header() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let newlines = &[Newline];
+        let pkg_name = PackageName {
+            account: "foo",
+            pkg: "barbaz",
+        };
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "foo",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(3, 3, 20, 27, Path(PlainLine("./foo"))),
+        };
+        let loc_pkg_entry = Located::new(3, 3, 15, 27, pkg_entry);
+        let arena = Bump::new();
+        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let imports = Vec::new_in(&arena);
+        let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let effects = Effects {
+            type_name: "Effect",
+            entries: Vec::new_in(&arena),
+            spaces_before_effects_keyword: newlines,
+            spaces_after_effects_keyword: &[],
+            spaces_after_type_name: &[],
+        };
+        let expected = PlatformHeader {
+            name: Located::new(0, 0, 9, 19, pkg_name),
+            requires: Vec::new_in(&arena),
+            exposes: Vec::new_in(&arena),
+            packages,
+            imports,
+            provides,
+            effects,
+            after_platform_keyword: &[],
+            before_requires: newlines,
+            after_requires: &[],
+            before_exposes: newlines,
+            after_exposes: &[],
+            before_packages: newlines,
+            after_packages: &[],
+            before_imports: newlines,
+            after_imports: &[],
+            before_provides: newlines,
+            after_provides: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                platform foo/barbaz
+                    requires {}
+                    exposes []
+                    packages { foo: "./foo" }
+                    imports []
+                    provides [ mainForHost ]
+                    effects Effect {}
+            "#
+        );
+        let actual = platform_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn empty_interface_header() {
         let arena = Bump::new();
         let exposes = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);

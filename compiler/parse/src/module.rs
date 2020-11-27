@@ -1,15 +1,17 @@
-use crate::ast::{
-    AppHeader, Attempting, CommentOrNewline, Def, Effects, ExposesEntry, ImportsEntry,
-    InterfaceHeader, Module, PlatformHeader, TypedIdent,
-};
+use crate::ast::{Attempting, CommentOrNewline, Def, Module};
 use crate::blankspace::{space0, space0_around, space0_before, space1};
 use crate::expr::def;
-use crate::header::{ModuleName, PackageName};
+use crate::header::{
+    package_entry, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
+    InterfaceHeader, ModuleName, PackageEntry, PackageName, PackageOrPath, PlatformHeader, To,
+    TypedIdent,
+};
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::{
     self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
-    unexpected_eof, ParseResult, Parser, State,
+    unexpected_eof, Either, ParseResult, Parser, State,
 };
+use crate::string_literal;
 use crate::type_annotation;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -44,7 +46,7 @@ pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
                 ascii_string("interface"),
                 and!(space1(1), loc!(module_name()))
             ),
-            and!(exposes(), imports())
+            and!(exposes_values(), imports())
         ),
         |(
             (after_interface_keyword, name),
@@ -173,66 +175,114 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
 }
 
 #[inline(always)]
-fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
-    parser::map(
+pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
+    map_with_arena!(
         and!(
-            skip_first!(ascii_string("app"), and!(space1(1), loc!(module_name()))),
-            and!(provides(), imports())
-        ),
-        |(
-            (after_app_keyword, name),
-            (
-                ((before_provides, after_provides), provides),
-                ((before_imports, after_imports), imports),
+            skip_first!(
+                ascii_string("app"),
+                and!(space1(1), loc!(string_literal::parse()))
             ),
-        )| {
+            and!(
+                optional(packages()),
+                and!(optional(imports()), provides_to())
+            )
+        ),
+        |arena, ((after_app_keyword, name), (opt_pkgs, (opt_imports, provides)))| {
+            let (before_packages, after_packages, package_entries) = match opt_pkgs {
+                Some(pkgs) => {
+                    let pkgs: Packages<'a> = pkgs; // rustc must be told the type here
+
+                    (
+                        pkgs.before_packages_keyword,
+                        pkgs.after_packages_keyword,
+                        pkgs.entries,
+                    )
+                }
+                None => (&[] as _, &[] as _, Vec::new_in(arena)),
+            };
+
+            // rustc must be told the type here
+            #[allow(clippy::type_complexity)]
+            let opt_imports: Option<(
+                (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+                Vec<'a, Located<ImportsEntry<'a>>>,
+            )> = opt_imports;
+
+            let ((before_imports, after_imports), imports) =
+                opt_imports.unwrap_or_else(|| ((&[] as _, &[] as _), Vec::new_in(arena)));
+            let provides: ProvidesTo<'a> = provides; // rustc must be told the type here
+
             AppHeader {
                 name,
-                provides,
+                packages: package_entries,
                 imports,
+                provides: provides.entries,
+                to: provides.to,
                 after_app_keyword,
-                before_provides,
-                after_provides,
+                before_packages,
+                after_packages,
                 before_imports,
                 after_imports,
+                before_provides: provides.before_provides_keyword,
+                after_provides: provides.after_provides_keyword,
+                before_to: provides.before_to_keyword,
+                after_to: provides.after_to_keyword,
             }
-        },
+        }
     )
 }
 
 #[inline(always)]
-fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
+pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
     parser::map(
         and!(
             skip_first!(
                 ascii_string("platform"),
                 and!(space1(1), loc!(package_name()))
             ),
-            and!(provides(), and!(requires(), and!(imports(), effects())))
+            and!(
+                and!(
+                    and!(requires(), and!(exposes_modules(), packages())),
+                    and!(imports(), provides_without_to())
+                ),
+                effects()
+            )
         ),
         |(
             (after_platform_keyword, name),
             (
-                ((before_provides, after_provides), provides),
                 (
-                    ((before_requires, after_requires), requires),
-                    (((before_imports, after_imports), imports), effects),
+                    (
+                        ((before_requires, after_requires), requires),
+                        (((before_exposes, after_exposes), exposes), packages),
+                    ),
+                    (
+                        ((before_imports, after_imports), imports),
+                        ((before_provides, after_provides), provides),
+                    ),
                 ),
+                effects,
             ),
         )| {
             PlatformHeader {
                 name,
-                provides,
                 requires,
+                exposes,
+                packages: packages.entries,
                 imports,
+                provides,
                 effects,
                 after_platform_keyword,
-                before_provides,
-                after_provides,
                 before_requires,
                 after_requires,
+                before_exposes,
+                after_exposes,
+                before_packages: packages.before_packages_keyword,
+                after_packages: packages.after_packages_keyword,
                 before_imports,
                 after_imports,
+                before_provides,
+                after_provides,
             }
         },
     )
@@ -243,19 +293,80 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
     zero_or_more!(space0_around(loc(def(0)), 0))
 }
 
+struct ProvidesTo<'a> {
+    entries: Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+    to: Located<To<'a>>,
+
+    before_provides_keyword: &'a [CommentOrNewline<'a>],
+    after_provides_keyword: &'a [CommentOrNewline<'a>],
+    before_to_keyword: &'a [CommentOrNewline<'a>],
+    after_to_keyword: &'a [CommentOrNewline<'a>],
+}
+
 #[inline(always)]
-fn provides<'a>() -> impl Parser<
+fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
+    map!(
+        and!(
+            and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
+            and!(
+                collection!(
+                    ascii_char(b'['),
+                    loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
+                    ascii_char(b','),
+                    ascii_char(b']'),
+                    1
+                ),
+                and!(
+                    space1(1),
+                    skip_first!(
+                        ascii_string("to"),
+                        and!(
+                            space1(1),
+                            loc!(either!(lowercase_ident(), package_or_path()))
+                        )
+                    )
+                )
+            )
+        ),
+        |(
+            (before_provides_keyword, after_provides_keyword),
+            (entries, (before_to_keyword, (after_to_keyword, loc_to))),
+        )| {
+            let loc_to: Located<Either<&'a str, PackageOrPath<'a>>> = loc_to;
+            let to_val = match loc_to.value {
+                Either::First(pkg) => To::ExistingPackage(pkg),
+                Either::Second(pkg) => To::NewPackage(pkg),
+            };
+            let to = Located {
+                value: to_val,
+                region: loc_to.region,
+            };
+
+            ProvidesTo {
+                entries,
+                to,
+                before_provides_keyword,
+                after_provides_keyword,
+                before_to_keyword,
+                after_to_keyword,
+            }
+        }
+    )
+}
+
+#[inline(always)]
+fn provides_without_to<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a>>>,
+        Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
         collection!(
             ascii_char(b'['),
-            loc!(exposes_entry()),
+            loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
             ascii_char(b','),
             ascii_char(b']'),
             1
@@ -284,22 +395,72 @@ fn requires<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn exposes<'a>() -> impl Parser<
+fn exposes_values<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a>>>,
+        Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
         collection!(
             ascii_char(b'['),
-            loc!(exposes_entry()),
+            loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
             ascii_char(b','),
             ascii_char(b']'),
             1
         )
+    )
+}
+
+#[inline(always)]
+fn exposes_modules<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
+    ),
+> {
+    and!(
+        and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
+        collection!(
+            ascii_char(b'['),
+            loc!(map!(module_name(), ExposesEntry::Exposed)),
+            ascii_char(b','),
+            ascii_char(b']'),
+            1
+        )
+    )
+}
+
+struct Packages<'a> {
+    entries: Vec<'a, Located<PackageEntry<'a>>>,
+
+    before_packages_keyword: &'a [CommentOrNewline<'a>],
+    after_packages_keyword: &'a [CommentOrNewline<'a>],
+}
+
+#[inline(always)]
+fn packages<'a>() -> impl Parser<'a, Packages<'a>> {
+    map!(
+        and!(
+            and!(skip_second!(space1(1), ascii_string("packages")), space1(1)),
+            collection!(
+                ascii_char(b'{'),
+                loc!(package_entry()),
+                ascii_char(b','),
+                ascii_char(b'}'),
+                1
+            )
+        ),
+        |((before_packages_keyword, after_packages_keyword), entries)| {
+            Packages {
+                entries,
+                before_packages_keyword,
+                after_packages_keyword,
+            }
+        }
     )
 }
 
@@ -383,22 +544,22 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
 }
 
 #[inline(always)]
-fn exposes_entry<'a>() -> impl Parser<'a, ExposesEntry<'a>> {
-    map!(unqualified_ident(), ExposesEntry::Ident)
-}
-
-#[inline(always)]
+#[allow(clippy::type_complexity)]
 fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
     map_with_arena!(
         and!(
-            // e.g. `Task`
-            module_name(),
+            and!(
+                // e.g. `base.`
+                optional(skip_second!(lowercase_ident(), ascii_char(b'.'))),
+                // e.g. `Task`
+                module_name()
+            ),
             // e.g. `.{ Task, after}`
             optional(skip_first!(
                 ascii_char(b'.'),
                 collection!(
                     ascii_char(b'{'),
-                    loc!(exposes_entry()),
+                    loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
                     ascii_char(b','),
                     ascii_char(b'}'),
                     1
@@ -406,13 +567,17 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             ))
         ),
         |arena,
-         (module_name, opt_values): (
-            ModuleName<'a>,
-            Option<Vec<'a, Located<ExposesEntry<'a>>>>
+         ((opt_shortname, module_name), opt_values): (
+            (Option<&'a str>, ModuleName<'a>),
+            Option<Vec<'a, Located<ExposesEntry<'a, &'a str>>>>
         )| {
             let exposed_values = opt_values.unwrap_or_else(|| Vec::new_in(arena));
 
-            ImportsEntry::Module(module_name, exposed_values)
+            match opt_shortname {
+                Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),
+
+                None => ImportsEntry::Module(module_name, exposed_values),
+            }
         }
     )
 }

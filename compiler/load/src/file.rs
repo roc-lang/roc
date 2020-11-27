@@ -19,9 +19,8 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
-use roc_parse::ast::{
-    self, Attempting, ExposesEntry, ImportsEntry, PlatformHeader, TypeAnnotation, TypedIdent,
-};
+use roc_parse::ast::{self, Attempting, StrLiteral, TypeAnnotation};
+use roc_parse::header::{ExposesEntry, ImportsEntry, PlatformHeader, TypedIdent};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
@@ -39,6 +38,9 @@ use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+/// Default name for the binary generated for an app, if an invalid one was specified.
+const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
@@ -534,7 +536,7 @@ pub enum BuildProblem<'a> {
 #[derive(Debug)]
 struct ModuleHeader<'a> {
     module_id: ModuleId,
-    module_name: ModuleName,
+    module_name: AppOrInterfaceName<'a>,
     module_path: PathBuf,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<ModuleName, ModuleId>,
@@ -581,6 +583,7 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
+    pub output_path: Box<str>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
@@ -599,7 +602,7 @@ pub struct VariablySizedLayouts<'a> {
 #[derive(Debug)]
 struct ParsedModule<'a> {
     module_id: ModuleId,
-    module_name: ModuleName,
+    module_name: AppOrInterfaceName<'a>,
     module_path: PathBuf,
     src: &'a str,
     module_timing: ModuleTiming,
@@ -618,7 +621,7 @@ enum Msg<'a> {
     CanonicalizedAndConstrained {
         constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
-        module_docs: ModuleDocumentation,
+        module_docs: Option<ModuleDocumentation>,
     },
     MadeEffectModule {
         constrained_module: ConstrainedModule,
@@ -672,6 +675,7 @@ struct State<'a> {
     pub goal_phase: Phase,
     pub stdlib: StdLib,
     pub exposed_types: SubsByModule,
+    pub output_path: Option<&'a str>,
 
     pub headers_parsed: MutSet<ModuleId>,
 
@@ -1243,6 +1247,7 @@ where
                 root_id,
                 goal_phase,
                 stdlib,
+                output_path: None,
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
@@ -1427,6 +1432,22 @@ fn update<'a>(
                 .sources
                 .insert(parsed.module_id, (parsed.module_path.clone(), parsed.src));
 
+            // If this was an app module, set the output path to be
+            // the module's declared "name".
+            //
+            // e.g. for `app "blah"` we should generate an output file named "blah"
+            match &parsed.module_name {
+                AppOrInterfaceName::App(output_str) => match output_str {
+                    StrLiteral::PlainLine(path) => {
+                        state.output_path = Some(path);
+                    }
+                    _ => {
+                        todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
+                    }
+                },
+                AppOrInterfaceName::Interface(_) => {}
+            }
+
             let module_id = parsed.module_id;
 
             state.module_cache.parsed.insert(parsed.module_id, parsed);
@@ -1450,10 +1471,9 @@ fn update<'a>(
                 .can_problems
                 .insert(module_id, canonicalization_problems);
 
-            state
-                .module_cache
-                .documentation
-                .insert(module_id, module_docs);
+            if let Some(docs) = module_docs {
+                state.module_cache.documentation.insert(module_id, docs);
+            }
 
             state
                 .module_cache
@@ -1751,6 +1771,7 @@ fn finish_specialization<'a>(
     let State {
         procedures,
         module_cache,
+        output_path,
         ..
     } = state;
 
@@ -1771,6 +1792,7 @@ fn finish_specialization<'a>(
         can_problems,
         mono_problems,
         type_problems,
+        output_path: output_path.unwrap_or(DEFAULT_APP_OUTPUT_PATH).into(),
         exposed_to_host,
         module_id: state.root_id,
         subs,
@@ -1967,7 +1989,10 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => Ok(send_header(
-            header.name,
+            Located {
+                region: header.name.region,
+                value: AppOrInterfaceName::Interface(header.name.value),
+            },
             filename,
             header.exposes.into_bump_slice(),
             header.imports.into_bump_slice(),
@@ -1981,7 +2006,10 @@ fn parse_header<'a>(
             pkg_config_dir.pop();
 
             let (module_id, app_module_header_msg) = send_header(
-                header.name,
+                Located {
+                    region: header.name.region,
+                    value: AppOrInterfaceName::App(header.name.value),
+                },
                 filename,
                 header.provides.into_bump_slice(),
                 header.imports.into_bump_slice(),
@@ -2083,21 +2111,35 @@ fn load_from_str<'a>(
     )
 }
 
+#[derive(Debug)]
+enum AppOrInterfaceName<'a> {
+    /// A filename
+    App(StrLiteral<'a>),
+    Interface(roc_parse::header::ModuleName<'a>),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn send_header<'a>(
-    name: Located<roc_parse::header::ModuleName<'a>>,
+    loc_name: Located<AppOrInterfaceName<'a>>,
     filename: PathBuf,
-    exposes: &'a [Located<ExposesEntry<'a>>],
+    exposes: &'a [Located<ExposesEntry<'a, &'a str>>],
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    let declared_name: ModuleName = name.value.as_str().into();
+    use AppOrInterfaceName::*;
 
-    // TODO check to see if declared_name is consistent with filename.
-    // If it isn't, report a problem!
+    let declared_name: ModuleName = match &loc_name.value {
+        App(_) => ModuleName::APP.into(),
+        Interface(module_name) => {
+            // TODO check to see if module_name is consistent with filename.
+            // If it isn't, report a problem!
+
+            module_name.as_str().into()
+        }
+    };
 
     let mut imported: Vec<(ModuleName, Vec<Ident>, Region)> = Vec::with_capacity(imports.len());
     let mut imported_modules: MutSet<ModuleId> = MutSet::default();
@@ -2200,15 +2242,13 @@ fn send_header<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-
-    // Send the header the main thread for processing,
     (
         home,
         Msg::Header(ModuleHeader {
             module_id: home,
             module_path: filename,
             exposed_ident_ids: ident_ids,
-            module_name: declared_name,
+            module_name: loc_name.value,
             imported_modules,
             deps_by_name,
             exposes: exposed,
@@ -2619,8 +2659,14 @@ fn canonicalize_and_constrain<'a>(
 
     // Generate documentation information
     // TODO: store timing information?
-    let module_docs =
-        crate::docs::generate_module_docs(module_name, &exposed_ident_ids, &parsed_defs);
+    let module_docs = match module_name {
+        AppOrInterfaceName::App(_) => None,
+        AppOrInterfaceName::Interface(name) => Some(crate::docs::generate_module_docs(
+            name.as_str().into(),
+            &exposed_ident_ids,
+            &parsed_defs,
+        )),
+    };
 
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
@@ -2737,7 +2783,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 }
 
 fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
-    use roc_parse::ast::ImportsEntry::*;
+    use roc_parse::header::ImportsEntry::*;
 
     match entry {
         Module(module_name, exposes) => {
@@ -2750,6 +2796,10 @@ fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
             (module_name.as_str().into(), exposed)
         }
 
+        Package(_package_name, _module_name, _exposes) => {
+            todo!("TODO support exposing package-qualified module names.");
+        }
+
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
             // Ignore spaces.
             exposed_from_import(*sub_entry)
@@ -2757,11 +2807,11 @@ fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
     }
 }
 
-fn ident_from_exposed(entry: &ExposesEntry<'_>) -> Ident {
-    use roc_parse::ast::ExposesEntry::*;
+fn ident_from_exposed(entry: &ExposesEntry<'_, &str>) -> Ident {
+    use roc_parse::header::ExposesEntry::*;
 
     match entry {
-        Ident(ident) => (*ident).into(),
+        Exposed(ident) => (*ident).into(),
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => ident_from_exposed(sub_entry),
     }
 }

@@ -489,9 +489,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // walkRight : List elem, (elem -> accum -> accum), accum -> accum
+    // walk : List elem, (elem -> accum -> accum), accum -> accum
     add_type(
-        Symbol::LIST_WALK_RIGHT,
+        Symbol::LIST_WALK,
+        top_level_function(
+            vec![
+                list_type(flex(TVAR1)),
+                closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
+                flex(TVAR2),
+            ],
+            Box::new(flex(TVAR2)),
+        ),
+    );
+
+    // walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+    add_type(
+        Symbol::LIST_WALK_BACKWARDS,
         top_level_function(
             vec![
                 list_type(flex(TVAR1)),

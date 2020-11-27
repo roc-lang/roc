@@ -128,7 +128,8 @@ mod solve_expr {
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+        let mut buffer =
+            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
 
         for line in src.lines() {
             // indent the body!
@@ -168,7 +169,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Float");
+        infer_eq("0.5", "F64");
     }
 
     #[test]
@@ -761,7 +762,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -893,7 +894,7 @@ mod solve_expr {
     //             \l r -> l / r
     //         "#
     //         ),
-    //         "Float, Float -> Float",
+    //         "F64, F64 -> F64",
     //     );
     // }
 
@@ -905,7 +906,7 @@ mod solve_expr {
     //                 1 / 2
     //             "#
     //             ),
-    //             "Float",
+    //             "F64",
     //         );
     //     }
 
@@ -1025,7 +1026,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : F64 }");
     }
 
     #[test]
@@ -1413,12 +1414,12 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float
+                   float : F64
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1432,7 +1433,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1441,13 +1442,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Float
+                   float : Num.F64
                    float = 5.5
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1456,13 +1457,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float
+                   float : F64
                    float = 5.5
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1477,7 +1478,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1577,7 +1578,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1612,7 +1613,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : Float }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
         );
     }
 
@@ -1790,7 +1791,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -2054,7 +2055,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Peano : [ S Peano, Z ]
 
@@ -2138,7 +2139,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -2194,7 +2195,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 map =
                     \peano ->
@@ -2522,7 +2523,7 @@ mod solve_expr {
                 Num.toFloat
                 "#
             ),
-            "Num * -> Float",
+            "Num * -> F64",
         );
     }
 
@@ -2534,7 +2535,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "Float, Float -> Float",
+            "F64, F64 -> F64",
         );
     }
 
@@ -2546,7 +2547,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "Float -> Int",
+            "F64 -> Int",
         );
     }
 
@@ -2558,7 +2559,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "Float -> Int",
+            "F64 -> Int",
         );
     }
 
@@ -2582,7 +2583,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "Float -> Float",
+            "F64 -> F64",
         );
     }
 
@@ -2632,7 +2633,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 boom = \_ -> boom {}
 
@@ -2849,7 +2850,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : Float, z : Int }",
+            "{ x : Num a, y : F64, z : Int }",
         );
     }
 
@@ -2866,7 +2867,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : Float, z : c }, b : { blah : Str, x : Num a, y : Float, z : c } }",
+            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
         );
     }
 
@@ -2927,11 +2928,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_walk_right() {
+    fn list_walk_backwards() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.walkRight
+                List.walkBackwards
                 "#
             ),
             "List a, (a, b -> b), b -> b",
@@ -2939,7 +2940,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_walk_right_example() {
+    fn list_walk_backwards_example() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -2947,7 +2948,7 @@ mod solve_expr {
                 empty =
                     []
 
-                List.walkRight empty (\a, b -> a + b) 0
+                List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
             "Int",
@@ -2978,7 +2979,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
 
                 main : List x
@@ -2998,7 +2999,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
 
                 main =
@@ -3019,7 +3020,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Bar : [ Bar ]
                 Foo : [ Foo Bar Int, Empty ]
@@ -3045,7 +3046,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Foo : [ @Foo [ @Bar ] Int, @Empty ]
 
@@ -3070,7 +3071,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 State a : { count : Int, x : a }
 
@@ -3095,7 +3096,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 # The color of a node. Leaves are considered Black.
                 NodeColor : [ Red, Black ]
@@ -3128,7 +3129,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k), Empty ]
 
@@ -3153,7 +3154,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -3383,7 +3384,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
@@ -3423,7 +3424,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 
@@ -3499,7 +3500,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ partitionHelp ] imports []
+                app "test" provides [ partitionHelp ] to "./platform"
 
                 swap : Int, Int, List a -> List a
                 swap = \i, j, list ->
@@ -3537,7 +3538,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
@@ -3559,7 +3560,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 Dict k : [ Node k (Dict k) (Dict k), Empty ]
 
@@ -3583,7 +3584,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 NodeColor : [ Red, Black ]
 

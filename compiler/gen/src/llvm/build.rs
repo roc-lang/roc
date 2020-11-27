@@ -1,7 +1,7 @@
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk_right,
+    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_len, str_split, str_starts_with, CHAR_LAYOUT,
@@ -735,7 +735,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Insert field exprs into struct_val
                 for (index, field_val) in field_vals.into_iter().enumerate() {
                     struct_val = builder
-                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .build_insert_value(
+                            struct_val,
+                            field_val,
+                            index as u32,
+                            "insert_record_field",
+                        )
                         .unwrap();
                 }
 
@@ -785,7 +790,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Insert field exprs into struct_val
                 for (index, field_val) in field_vals.into_iter().enumerate() {
                     struct_val = builder
-                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .build_insert_value(
+                            struct_val,
+                            field_val,
+                            index as u32,
+                            "insert_single_tag_field",
+                        )
                         .unwrap();
                 }
 
@@ -848,7 +858,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // Insert field exprs into struct_val
             for (index, field_val) in field_vals.into_iter().enumerate() {
                 struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                    .build_insert_value(
+                        struct_val,
+                        field_val,
+                        index as u32,
+                        "insert_multi_tag_field",
+                    )
                     .unwrap();
             }
 
@@ -1707,12 +1722,10 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
 ) {
-    let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
+    let c_function_name: String =
+        format!("roc_{}_exposed", roc_function.get_name().to_str().unwrap());
 
-    let result = expose_function_to_host_help(env, roc_function, &c_function_name);
-
-    let subprogram = env.new_subprogram(&c_function_name);
-    result.set_subprogram(subprogram);
+    expose_function_to_host_help(env, roc_function, &c_function_name);
 }
 
 fn expose_function_to_host_help<'a, 'ctx, 'env>(
@@ -1790,7 +1803,8 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
-    let size_function_name: String = format!("{}_size", roc_function.get_name().to_str().unwrap());
+    let size_function_name: String =
+        format!("roc_{}_size", roc_function.get_name().to_str().unwrap());
 
     let size_function = env.module.add_function(
         size_function_name.as_str(),
@@ -1798,9 +1812,29 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
         Some(Linkage::External),
     );
 
+    let subprogram = env.new_subprogram(&size_function_name);
+    size_function.set_subprogram(subprogram);
+
     let entry = context.append_basic_block(size_function, "entry");
 
     builder.position_at_end(entry);
+
+    let func_scope = size_function.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        env.context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(env.context, loc);
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
@@ -1996,6 +2030,9 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         env.module
             .add_function(&wrapper_function_name, wrapper_function_type, None);
 
+    let subprogram = env.new_subprogram(wrapper_function_name);
+    wrapper_function.set_subprogram(subprogram);
+
     // our exposed main function adheres to the C calling convention
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
 
@@ -2004,6 +2041,23 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 
     let basic_block = context.append_basic_block(wrapper_function, "entry");
     builder.position_at_end(basic_block);
+
+    let func_scope = wrapper_function.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        env.context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(env.context, loc);
 
     let result = invoke_and_catch(
         env,
@@ -2103,8 +2157,9 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     // STEP 1: build function header
 
+    // e.g. `roc__main_1_Fx_caller`
     let function_name = format!(
-        "{}_{}_caller",
+        "roc_{}_{}_caller",
         def_name,
         alias_symbol.ident_string(&env.interns)
     );
@@ -2184,7 +2239,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
     let size_function_name: String = format!(
-        "{}_{}_size",
+        "roc_{}_{}_size",
         def_name,
         alias_symbol.ident_string(&env.interns)
     );
@@ -2491,8 +2546,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_contains(env, parent, elem, elem_layout, list, list_layout)
         }
-        ListWalkRight => {
-            // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+        ListWalk => {
             debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2501,7 +2555,28 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(env, scope, &args[2]);
 
-            list_walk_right(
+            list_walk(
+                env,
+                parent,
+                list,
+                list_layout,
+                func,
+                func_layout,
+                default,
+                default_layout,
+            )
+        }
+        ListWalkBackwards => {
+            // List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            let (default, default_layout) = load_symbol_and_layout(env, scope, &args[2]);
+
+            list_walk_backwards(
                 env,
                 parent,
                 list,

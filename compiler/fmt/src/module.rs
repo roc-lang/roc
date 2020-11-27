@@ -1,8 +1,7 @@
 use crate::spaces::{fmt_spaces, INDENT};
 use bumpalo::collections::{String, Vec};
-use roc_parse::ast::{
-    AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, Module, PlatformHeader,
-};
+use roc_parse::ast::Module;
+use roc_parse::header::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, PlatformHeader};
 use roc_region::all::Located;
 
 pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
@@ -113,7 +112,7 @@ fn fmt_imports<'a>(
 
 fn fmt_exposes<'a>(
     buf: &mut String<'a>,
-    loc_entries: &'a Vec<'a, Located<ExposesEntry<'a>>>,
+    loc_entries: &'a Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     indent: u16,
 ) {
     buf.push('[');
@@ -137,11 +136,11 @@ fn fmt_exposes<'a>(
     buf.push(']');
 }
 
-fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>, indent: u16) {
-    use roc_parse::ast::ExposesEntry::*;
+fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a, &'a str>, indent: u16) {
+    use roc_parse::header::ExposesEntry::*;
 
     match entry {
-        Ident(ident) => buf.push_str(ident),
+        Exposed(ident) => buf.push_str(ident),
 
         SpaceBefore(sub_entry, spaces) => {
             fmt_spaces(buf, spaces.iter(), indent);
@@ -155,7 +154,7 @@ fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>, inde
 }
 
 fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>, indent: u16) {
-    use roc_parse::ast::ImportsEntry::*;
+    use roc_parse::header::ImportsEntry::*;
 
     match entry {
         Module(module, loc_exposes_entries) => {
@@ -174,6 +173,10 @@ fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>, inde
 
                 buf.push_str(" }");
             }
+        }
+
+        Package(_pkg, _name, _entries) => {
+            todo!("TODO Format imported package");
         }
 
         SpaceBefore(sub_entry, spaces) => {
