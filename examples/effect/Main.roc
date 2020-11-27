@@ -1,31 +1,18 @@
-app "effect-example" provides [ main ] imports [ Effect, RBTree ]
-
-toAndFro : Int
-toAndFro =
-    empty : RBTree.Dict Int {}
-    empty = RBTree.empty
-
-    empty
-        |> (\d -> RBTree.insert 1 {} d)
-        |> RBTree.toList
-        |> List.len
-
-
+app "effect-example" imports [ Effect ] provides [ main ] to "./platform"
 
 
 main : Effect.Effect {} as Fx
 main =
-    # if RBTree.isEmpty empty then
-    if toAndFro == 2 then
-        Effect.putLine "Yay"
-            |> Effect.after (\{} -> Effect.getLine)
-            |> Effect.after (\line -> Effect.putLine line)
-    else
-        Effect.putLine "Nay"
+    when if 1 == 1 then True 3 else False 3.14 is
+        True 3 -> Effect.putLine "Yay"
+        _ -> Effect.putLine "Yay"
 
-
-#    Effect.always "Write a thing"
-#        |> Effect.map (\line -> Str.concat line "!")
-#        |> Effect.after (\line -> Effect.putLine line)
-#        |> Effect.after (\{} -> Effect.getLine)
-#        |> Effect.after (\line -> Effect.putLine line)
+# main : Effect.Effect {} as Fx
+# main =
+#     if RBTree.isEmpty (RBTree.insert 1 2 Empty) then
+#         Effect.putLine "Yay"
+#             |> Effect.after (\{} -> Effect.getLine)
+#             |> Effect.after (\line -> Effect.putLine line)
+#     else
+#         Effect.putLine "Nay"
+# 
