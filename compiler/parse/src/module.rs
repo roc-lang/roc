@@ -547,8 +547,12 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
 fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
     map_with_arena!(
         and!(
-            // e.g. `Task`
-            module_name(),
+            and!(
+                // e.g. `base.`
+                optional(skip_second!(lowercase_ident(), ascii_char(b'.'))),
+                // e.g. `Task`
+                module_name()
+            ),
             // e.g. `.{ Task, after}`
             optional(skip_first!(
                 ascii_char(b'.'),
@@ -562,13 +566,17 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             ))
         ),
         |arena,
-         (module_name, opt_values): (
-            ModuleName<'a>,
+         ((opt_shortname, module_name), opt_values): (
+            (Option<&'a str>, ModuleName<'a>),
             Option<Vec<'a, Located<ExposesEntry<'a, &'a str>>>>
         )| {
             let exposed_values = opt_values.unwrap_or_else(|| Vec::new_in(arena));
 
-            ImportsEntry::Module(module_name, exposed_values)
+            match opt_shortname {
+                Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),
+
+                None => ImportsEntry::Module(module_name, exposed_values),
+            }
         }
     )
 }
