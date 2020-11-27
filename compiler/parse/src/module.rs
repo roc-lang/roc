@@ -544,6 +544,7 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
 }
 
 #[inline(always)]
+#[allow(clippy::type_complexity)]
 fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
     map_with_arena!(
         and!(
