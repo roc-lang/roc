@@ -8,7 +8,7 @@ use target_lexicon::Triple;
 
 pub mod x86_64;
 
-pub trait CallConv<GPReg: GPRegTrait> {
+pub trait CallConv<GPReg: GPRegTrait, ASM: Assembler<GPReg>> {
     const GP_PARAM_REGS: &'static [GPReg];
     const GP_RETURN_REGS: &'static [GPReg];
     const GP_DEFAULT_FREE_REGS: &'static [GPReg];
@@ -19,12 +19,22 @@ pub trait CallConv<GPReg: GPRegTrait> {
     }
 
     const STACK_POINTER: GPReg;
-    const FRAME_POINTER: GPReg;
+    fn setup_stack<'a>(
+        buf: &mut Vec<'a, u8>,
+        leaf_function: bool,
+        saved_regs: &[GPReg],
+        requested_stack_size: u32,
+    ) -> Result<u32, String>;
+    fn cleanup_stack<'a>(
+        buf: &mut Vec<'a, u8>,
+        leaf_function: bool,
+        saved_regs: &[GPReg],
+        requested_stack_size: u32,
+    ) -> Result<(), String>;
 
     const STACK_ALIGNMENT: u8;
     const SHADOW_SPACE_SIZE: u8;
-    // It may be worth ignoring the red zone and keeping things simpler.
-    const RED_ZONE_SIZE: u8;
+    const MAX_STACK_SIZE: u32;
 }
 
 pub trait Assembler<GPReg: GPRegTrait> {
@@ -48,13 +58,13 @@ enum SymbolStorage<GPReg: GPRegTrait> {
     // These may need layout, but I am not sure.
     // I think whenever a symbol would be used, we specify layout anyways.
     GPRegeg(GPReg),
-    Stack(i32),
-    StackAndGPRegeg(GPReg, i32),
+    Stack(u32),
+    StackAndGPRegeg(GPReg, u32),
 }
 
 pub trait GPRegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
 
-pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> {
+pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> {
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
@@ -78,13 +88,13 @@ pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallCo
     // For now just a vec of used registers and the symbols they contain.
     gp_used_regs: Vec<'a, (GPReg, Symbol)>,
 
-    stack_size: i32,
+    stack_size: u32,
 
     // used callee saved regs must be tracked for pushing and popping at the beginning/end of the function.
     used_callee_saved_regs: MutSet<GPReg>,
 }
 
-impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<'a>
+impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Backend<'a>
     for Backend64Bit<'a, GPReg, ASM, CC>
 {
     fn new(env: &'a Env, _target: &Triple) -> Result<Self, String> {
@@ -110,7 +120,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     }
 
     fn reset(&mut self) {
-        self.stack_size = -(CC::RED_ZONE_SIZE as i32);
+        self.stack_size = 0;
         self.leaf_function = true;
         self.last_seen_map.clear();
         self.free_map.clear();
@@ -125,8 +135,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
 
     fn set_not_leaf_function(&mut self) {
         self.leaf_function = false;
-        // If this is not a leaf function, it can't use the shadow space.
-        self.stack_size = CC::SHADOW_SPACE_SIZE as i32 - CC::RED_ZONE_SIZE as i32;
+        self.stack_size = CC::SHADOW_SPACE_SIZE as u32;
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
@@ -148,50 +157,17 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
         let mut out = bumpalo::vec![in self.env.arena];
 
-        if !self.leaf_function {
-            // I believe that this will have to move away from push and to mov to be generic across backends.
-            ASM::push_register64bit(&mut out, CC::FRAME_POINTER);
-            ASM::mov_register64bit_register64bit(&mut out, CC::FRAME_POINTER, CC::STACK_POINTER);
-        }
-        // Save data in all callee saved regs.
-        let mut pop_order = bumpalo::vec![in self.env.arena];
-        for reg in &self.used_callee_saved_regs {
-            ASM::push_register64bit(&mut out, *reg);
-            pop_order.push(*reg);
-        }
-
-        // Keep stack aligned while modifying stack.
-        let alignment = self.stack_size % CC::STACK_ALIGNMENT as i32;
-        let offset = if alignment == 0 {
-            0
-        } else {
-            CC::STACK_ALIGNMENT as i32 - alignment
-        };
-        if self.stack_size > 0 {
-            ASM::sub_register64bit_immediate32bit(
-                &mut out,
-                CC::STACK_POINTER,
-                self.stack_size + offset,
-            );
-        }
+        // Setup stack.
+        let mut used_regs = bumpalo::vec![in self.env.arena];
+        used_regs.extend(&self.used_callee_saved_regs);
+        let aligned_stack_size =
+            CC::setup_stack(&mut out, self.leaf_function, &used_regs, self.stack_size)?;
 
         // Add function body.
         out.extend(&self.buf);
 
-        if self.stack_size > 0 {
-            ASM::add_register64bit_immediate32bit(
-                &mut out,
-                CC::STACK_POINTER,
-                self.stack_size + offset,
-            );
-        }
-        // Restore data in callee saved regs.
-        while let Some(reg) = pop_order.pop() {
-            ASM::pop_register64bit(&mut out, reg);
-        }
-        if !self.leaf_function {
-            ASM::pop_register64bit(&mut out, CC::FRAME_POINTER);
-        }
+        // Cleanup stack.
+        CC::cleanup_stack(&mut out, self.leaf_function, &used_regs, aligned_stack_size)?;
         ASM::ret(&mut out);
 
         Ok((out.into_bump_slice(), &[]))
@@ -265,7 +241,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
 
 /// This impl block is for ir related instructions that need backend specific information.
 /// For example, loading a symbol for doing a computation.
-impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
+impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>>
     Backend64Bit<'a, GPReg, ASM, CC>
 {
     fn claim_gp_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
@@ -315,18 +291,9 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
         let val = self.symbols_map.remove(sym);
         match val {
             Some(SymbolStorage::GPRegeg(reg)) => {
-                let offset = self.stack_size;
-                if let Some(size) = self.stack_size.checked_add(8) {
-                    self.stack_size = size;
-                } else {
-                    return Err(format!(
-                        "Ran out of stack space while saving symbol: {}",
-                        sym
-                    ));
-                }
+                let offset = self.increase_stack_size(8)?;
                 ASM::mov_stackoffset32bit_register64bit(&mut self.buf, offset as i32, reg);
-                self.symbols_map
-                    .insert(*sym, SymbolStorage::Stack(offset as i32));
+                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
                 Ok(())
             }
             Some(SymbolStorage::StackAndGPRegeg(_, offset)) => {
@@ -338,6 +305,20 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
                 Ok(())
             }
             None => Err(format!("Unknown symbol: {}", sym)),
+        }
+    }
+
+    /// increase_stack_size increase the current stack size and returns the offset of the stack.
+    fn increase_stack_size(&mut self, amount: u32) -> Result<u32, String> {
+        let offset = self.stack_size;
+        if let Some(new_size) = self.stack_size.checked_add(amount) {
+            if new_size > CC::MAX_STACK_SIZE {
+                return Err("Ran out of stack space".to_string());
+            }
+            self.stack_size = new_size;
+            Ok(offset)
+        } else {
+            Err("Ran out of stack space".to_string())
         }
     }
 }
