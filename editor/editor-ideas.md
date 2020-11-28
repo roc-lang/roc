@@ -73,6 +73,9 @@ Thoughts and ideas possibly taken from above inspirations or separate.
     * Maybe easier to manually trigger a test related to exactly what code you're writing
 * Ability to generate unit tests for a selected function in context menu
     * A table should appear to enter input and expected output pairs quickly 
+* Ability to show import connection within project visually
+    * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
+* Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation
