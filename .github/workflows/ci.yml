@@ -11,10 +11,10 @@ jobs:
       - uses: actions/checkout@v1
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v11
+        uses: cachix/install-nix-action@v12
 
       - name: Use Cachix
-        uses: cachix/cachix-action@v6
+        uses: cachix/cachix-action@v8
         with:
           name: signingKey
           authToken: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjJDIwNzgiLCJqdGkiOiI5MWM2NGQyZS04NjdjLTQzYjItOTAyYS1iMTgwOTlkYjc4ZDgiLCJzY29wZXMiOiJjYWNoZSJ9.jOFRg8JJfpnHv-82sryXdZKXSnLrDijysp6RKtpW2Fk'
