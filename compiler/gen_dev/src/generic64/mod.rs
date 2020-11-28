@@ -8,7 +8,7 @@ use target_lexicon::Triple;
 
 pub mod x86_64;
 
-pub trait CallConv<GPReg: GPRegTrait, ASM: Assembler<GPReg>> {
+pub trait CallConv<GPReg: GPRegTrait> {
     const GP_PARAM_REGS: &'static [GPReg];
     const GP_RETURN_REGS: &'static [GPReg];
     const GP_DEFAULT_FREE_REGS: &'static [GPReg];
@@ -37,20 +37,20 @@ pub trait CallConv<GPReg: GPRegTrait, ASM: Assembler<GPReg>> {
     const MAX_STACK_SIZE: u32;
 }
 
+/// Assembler contains calls to the backend assembly generator.
+/// These calls do not necessarily map directly to a single assembly instruction.
+/// They are higher level in cases where an instruction would not be common and shared between multiple architectures.
+/// Thus, some backends will need to use mulitiple instructions to preform a single one of this calls.
+/// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
+/// dst should always come before sources.
 pub trait Assembler<GPReg: GPRegTrait> {
-    fn add_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn add_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn cmovl_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn mov_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
+    fn add_reg64_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
     fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i64);
     fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
     fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32);
     fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg);
-    fn neg_reg64<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
+    fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
     fn ret<'a>(buf: &mut Vec<'a, u8>);
-    fn sub_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
-    fn push_reg64<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,7 +64,7 @@ enum SymbolStorage<GPReg: GPRegTrait> {
 
 pub trait GPRegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
 
-pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> {
+pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> {
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
@@ -94,7 +94,7 @@ pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallCo
     used_callee_saved_regs: MutSet<GPReg>,
 }
 
-impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Backend<'a>
+impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<'a>
     for Backend64Bit<'a, GPReg, ASM, CC>
 {
     fn new(env: &'a Env, _target: &Triple) -> Result<Self, String> {
@@ -176,9 +176,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Bac
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
         let dst_reg = self.claim_gp_reg(dst)?;
         let src_reg = self.load_to_reg(src)?;
-        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
-        ASM::neg_reg64(&mut self.buf, dst_reg);
-        ASM::cmovl_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+        ASM::abs_reg64_reg64(&mut self.buf, dst_reg, src_reg);
         Ok(())
     }
 
@@ -190,9 +188,8 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Bac
     ) -> Result<(), String> {
         let dst_reg = self.claim_gp_reg(dst)?;
         let src1_reg = self.load_to_reg(src1)?;
-        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src1_reg);
         let src2_reg = self.load_to_reg(src2)?;
-        ASM::add_reg64_reg64(&mut self.buf, dst_reg, src2_reg);
+        ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
         Ok(())
     }
 
@@ -241,7 +238,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Bac
 
 /// This impl block is for ir related instructions that need backend specific information.
 /// For example, loading a symbol for doing a computation.
-impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>>
+impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
     Backend64Bit<'a, GPReg, ASM, CC>
 {
     fn claim_gp_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
