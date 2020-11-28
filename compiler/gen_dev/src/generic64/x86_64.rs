@@ -105,15 +105,15 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64SystemV {
         requested_stack_size: u32,
     ) -> Result<u32, String> {
         if !leaf_function {
-            X86_64Assembler::push_register64bit(buf, X86_64GPReg::RBP);
-            X86_64Assembler::mov_register64bit_register64bit(
+            X86_64Assembler::push_reg64(buf, X86_64GPReg::RBP);
+            X86_64Assembler::mov_reg64_reg64(
                 buf,
                 X86_64GPReg::RBP,
                 Self::STACK_POINTER,
             );
         }
         for reg in saved_regs {
-            X86_64Assembler::push_register64bit(buf, *reg);
+            X86_64Assembler::push_reg64(buf, *reg);
         }
         let alignment =
             (8 * saved_regs.len() + requested_stack_size as usize) % Self::STACK_ALIGNMENT as usize;
@@ -127,7 +127,7 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64SystemV {
                 return Err("Ran out of stack space".to_string());
             }
             if aligned_stack_size > 0 {
-                X86_64Assembler::sub_register64bit_immediate32bit(
+                X86_64Assembler::sub_reg64_imm32(
                     buf,
                     Self::STACK_POINTER,
                     aligned_stack_size as i32,
@@ -146,22 +146,22 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64SystemV {
         aligned_stack_size: u32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
-            X86_64Assembler::add_register64bit_immediate32bit(
+            X86_64Assembler::add_reg64_imm32(
                 buf,
                 Self::STACK_POINTER,
                 aligned_stack_size as i32,
             );
         }
         for reg in saved_regs.iter().rev() {
-            X86_64Assembler::pop_register64bit(buf, *reg);
+            X86_64Assembler::pop_reg64(buf, *reg);
         }
         if !leaf_function {
-            X86_64Assembler::mov_register64bit_register64bit(
+            X86_64Assembler::mov_reg64_reg64(
                 buf,
                 Self::STACK_POINTER,
                 X86_64GPReg::RBP,
             );
-            X86_64Assembler::pop_register64bit(buf, X86_64GPReg::RBP);
+            X86_64Assembler::pop_reg64(buf, X86_64GPReg::RBP);
         }
         Ok(())
     }
@@ -224,15 +224,15 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64WindowsFastcall {
         requested_stack_size: u32,
     ) -> Result<u32, String> {
         if !leaf_function {
-            X86_64Assembler::push_register64bit(buf, X86_64GPReg::RBP);
-            X86_64Assembler::mov_register64bit_register64bit(
+            X86_64Assembler::push_reg64(buf, X86_64GPReg::RBP);
+            X86_64Assembler::mov_reg64_reg64(
                 buf,
                 X86_64GPReg::RBP,
                 Self::STACK_POINTER,
             );
         }
         for reg in saved_regs {
-            X86_64Assembler::push_register64bit(buf, *reg);
+            X86_64Assembler::push_reg64(buf, *reg);
         }
         let alignment =
             (8 * saved_regs.len() + requested_stack_size as usize) % Self::STACK_ALIGNMENT as usize;
@@ -246,7 +246,7 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64WindowsFastcall {
                 return Err("Ran out of stack space".to_string());
             }
             if aligned_stack_size > 0 {
-                X86_64Assembler::sub_register64bit_immediate32bit(
+                X86_64Assembler::sub_reg64_imm32(
                     buf,
                     Self::STACK_POINTER,
                     aligned_stack_size as i32,
@@ -265,22 +265,22 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64WindowsFastcall {
         aligned_stack_size: u32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
-            X86_64Assembler::add_register64bit_immediate32bit(
+            X86_64Assembler::add_reg64_imm32(
                 buf,
                 Self::STACK_POINTER,
                 aligned_stack_size as i32,
             );
         }
         for reg in saved_regs.iter().rev() {
-            X86_64Assembler::pop_register64bit(buf, *reg);
+            X86_64Assembler::pop_reg64(buf, *reg);
         }
         if !leaf_function {
-            X86_64Assembler::mov_register64bit_register64bit(
+            X86_64Assembler::mov_reg64_reg64(
                 buf,
                 Self::STACK_POINTER,
                 X86_64GPReg::RBP,
             );
-            X86_64Assembler::pop_register64bit(buf, X86_64GPReg::RBP);
+            X86_64Assembler::pop_reg64(buf, X86_64GPReg::RBP);
         }
         Ok(())
     }
@@ -299,7 +299,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `ADD r/m64, imm32` -> Add imm32 sign-extended to 64-bits from r/m64.
     #[inline(always)]
-    fn add_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
+    fn add_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         // This can be optimized if the immediate is 1 byte.
         let rex = add_rm_extension(dst, REX_W);
         let dst_mod = dst as u8 % 8;
@@ -310,7 +310,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `ADD r/m64,r64` -> Add r64 to r/m64.
     #[inline(always)]
-    fn add_register64bit_register64bit<'a>(
+    fn add_reg64_reg64<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
         src: X86_64GPReg,
@@ -324,7 +324,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
     #[inline(always)]
-    fn cmovl_register64bit_register64bit<'a>(
+    fn cmovl_reg64_reg64<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
         src: X86_64GPReg,
@@ -338,7 +338,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
     #[inline(always)]
-    fn mov_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
+    fn mov_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         let rex = add_rm_extension(dst, REX_W);
         let dst_mod = dst as u8 % 8;
         buf.reserve(7);
@@ -348,9 +348,9 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r64, imm64` -> Move imm64 to r64.
     #[inline(always)]
-    fn mov_register64bit_immediate64bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i64) {
+    fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i64) {
         if imm <= i32::MAX as i64 && imm >= i32::MIN as i64 {
-            Self::mov_register64bit_immediate32bit(buf, dst, imm as i32)
+            Self::mov_reg64_imm32(buf, dst, imm as i32)
         } else {
             let rex = add_opcode_extension(dst, REX_W);
             let dst_mod = dst as u8 % 8;
@@ -362,7 +362,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r/m64,r64` -> Move r64 to r/m64.
     #[inline(always)]
-    fn mov_register64bit_register64bit<'a>(
+    fn mov_reg64_reg64<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
         src: X86_64GPReg,
@@ -376,7 +376,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r64,r/m64` -> Move r/m64 to r64.
     #[inline(always)]
-    fn mov_register64bit_stackoffset32bit<'a>(
+    fn mov_reg64_stack32<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
         offset: i32,
@@ -393,7 +393,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r/m64,r64` -> Move r64 to r/m64.
     #[inline(always)]
-    fn mov_stackoffset32bit_register64bit<'a>(
+    fn mov_stack32_reg64<'a>(
         buf: &mut Vec<'a, u8>,
         offset: i32,
         src: X86_64GPReg,
@@ -410,7 +410,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `NEG r/m64` -> Two's complement negate r/m64.
     #[inline(always)]
-    fn neg_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+    fn neg_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let rex = add_rm_extension(reg, REX_W);
         let reg_mod = reg as u8 % 8;
         buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
@@ -424,7 +424,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `SUB r/m64, imm32` -> Subtract imm32 sign-extended to 64-bits from r/m64.
     #[inline(always)]
-    fn sub_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
+    fn sub_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         // This can be optimized if the immediate is 1 byte.
         let rex = add_rm_extension(dst, REX_W);
         let dst_mod = dst as u8 % 8;
@@ -435,7 +435,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `POP r64` -> Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit operand size.
     #[inline(always)]
-    fn pop_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+    fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let reg_mod = reg as u8 % 8;
         if reg as u8 > 7 {
             let rex = add_opcode_extension(reg, REX);
@@ -447,7 +447,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `PUSH r64` -> Push r64,
     #[inline(always)]
-    fn push_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+    fn push_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let reg_mod = reg as u8 % 8;
         if reg as u8 > 7 {
             let rex = add_opcode_extension(reg, REX);
@@ -468,7 +468,7 @@ mod tests {
     const TEST_I64: i64 = 0x12345678_9ABCDEF0;
 
     #[test]
-    fn test_add_register64bit_immediate32bit() {
+    fn test_add_reg64_imm32() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for (dst, expected) in &[
@@ -476,14 +476,14 @@ mod tests {
             (X86_64GPReg::R15, [0x49, 0x81, 0xC7]),
         ] {
             buf.clear();
-            X86_64Assembler::add_register64bit_immediate32bit(&mut buf, *dst, TEST_I32);
+            X86_64Assembler::add_reg64_imm32(&mut buf, *dst, TEST_I32);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
     }
 
     #[test]
-    fn test_add_register64bit_register64bit() {
+    fn test_add_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((dst, src), expected) in &[
@@ -493,13 +493,13 @@ mod tests {
             ((X86_64GPReg::R15, X86_64GPReg::R15), [0x4D, 0x01, 0xFF]),
         ] {
             buf.clear();
-            X86_64Assembler::add_register64bit_register64bit(&mut buf, *dst, *src);
+            X86_64Assembler::add_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
     }
 
     #[test]
-    fn test_cmovl_register64bit_register64bit() {
+    fn test_cmovl_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((dst, src), expected) in &[
@@ -521,13 +521,13 @@ mod tests {
             ),
         ] {
             buf.clear();
-            X86_64Assembler::cmovl_register64bit_register64bit(&mut buf, *dst, *src);
+            X86_64Assembler::cmovl_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
     }
 
     #[test]
-    fn test_mov_register64bit_immediate32bit() {
+    fn test_mov_reg64_imm32() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for (dst, expected) in &[
@@ -535,14 +535,14 @@ mod tests {
             (X86_64GPReg::R15, [0x49, 0xC7, 0xC7]),
         ] {
             buf.clear();
-            X86_64Assembler::mov_register64bit_immediate32bit(&mut buf, *dst, TEST_I32);
+            X86_64Assembler::mov_reg64_imm32(&mut buf, *dst, TEST_I32);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
     }
 
     #[test]
-    fn test_mov_register64bit_immediate64bit() {
+    fn test_mov_reg64_imm64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for (dst, expected) in &[
@@ -550,7 +550,7 @@ mod tests {
             (X86_64GPReg::R15, [0x49, 0xBF]),
         ] {
             buf.clear();
-            X86_64Assembler::mov_register64bit_immediate64bit(&mut buf, *dst, TEST_I64);
+            X86_64Assembler::mov_reg64_imm64(&mut buf, *dst, TEST_I64);
             assert_eq!(expected, &buf[..2]);
             assert_eq!(TEST_I64.to_le_bytes(), &buf[2..]);
         }
@@ -559,14 +559,14 @@ mod tests {
             (X86_64GPReg::R15, [0x49, 0xC7, 0xC7]),
         ] {
             buf.clear();
-            X86_64Assembler::mov_register64bit_immediate64bit(&mut buf, *dst, TEST_I32 as i64);
+            X86_64Assembler::mov_reg64_imm64(&mut buf, *dst, TEST_I32 as i64);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
     }
 
     #[test]
-    fn test_mov_register64bit_register64bit() {
+    fn test_mov_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((dst, src), expected) in &[
@@ -576,13 +576,13 @@ mod tests {
             ((X86_64GPReg::R15, X86_64GPReg::R15), [0x4D, 0x89, 0xFF]),
         ] {
             buf.clear();
-            X86_64Assembler::mov_register64bit_register64bit(&mut buf, *dst, *src);
+            X86_64Assembler::mov_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
     }
 
     #[test]
-    fn test_mov_register64bit_stackoffset32bit() {
+    fn test_mov_reg64_stack32() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((dst, offset), expected) in &[
@@ -590,14 +590,14 @@ mod tests {
             ((X86_64GPReg::R15, TEST_I32), [0x4C, 0x8B, 0xBC, 0x24]),
         ] {
             buf.clear();
-            X86_64Assembler::mov_register64bit_stackoffset32bit(&mut buf, *dst, *offset);
+            X86_64Assembler::mov_reg64_stack32(&mut buf, *dst, *offset);
             assert_eq!(expected, &buf[..4]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
         }
     }
 
     #[test]
-    fn test_mov_stackoffset32bit_register64bit() {
+    fn test_mov_stack32_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((offset, src), expected) in &[
@@ -605,14 +605,14 @@ mod tests {
             ((TEST_I32, X86_64GPReg::R15), [0x4C, 0x89, 0xBC, 0x24]),
         ] {
             buf.clear();
-            X86_64Assembler::mov_stackoffset32bit_register64bit(&mut buf, *offset, *src);
+            X86_64Assembler::mov_stack32_reg64(&mut buf, *offset, *src);
             assert_eq!(expected, &buf[..4]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
         }
     }
 
     #[test]
-    fn test_neg_register64bit() {
+    fn test_neg_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for (reg, expected) in &[
@@ -620,7 +620,7 @@ mod tests {
             (X86_64GPReg::R15, [0x49, 0xF7, 0xDF]),
         ] {
             buf.clear();
-            X86_64Assembler::neg_register64bit(&mut buf, *reg);
+            X86_64Assembler::neg_reg64(&mut buf, *reg);
             assert_eq!(expected, &buf[..]);
         }
     }
@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sub_register64bit_immediate32bit() {
+    fn test_sub_reg64_imm32() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for (dst, expected) in &[
@@ -642,14 +642,14 @@ mod tests {
             (X86_64GPReg::R15, [0x49, 0x81, 0xEF]),
         ] {
             buf.clear();
-            X86_64Assembler::sub_register64bit_immediate32bit(&mut buf, *dst, TEST_I32);
+            X86_64Assembler::sub_reg64_imm32(&mut buf, *dst, TEST_I32);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
     }
 
     #[test]
-    fn test_pop_register64bit() {
+    fn test_pop_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for (dst, expected) in &[
@@ -657,13 +657,13 @@ mod tests {
             (X86_64GPReg::R15, vec![0x41, 0x5F]),
         ] {
             buf.clear();
-            X86_64Assembler::pop_register64bit(&mut buf, *dst);
+            X86_64Assembler::pop_reg64(&mut buf, *dst);
             assert_eq!(&expected[..], &buf[..]);
         }
     }
 
     #[test]
-    fn test_push_register64bit() {
+    fn test_push_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for (src, expected) in &[
@@ -671,7 +671,7 @@ mod tests {
             (X86_64GPReg::R15, vec![0x41, 0x57]),
         ] {
             buf.clear();
-            X86_64Assembler::push_register64bit(&mut buf, *src);
+            X86_64Assembler::push_reg64(&mut buf, *src);
             assert_eq!(&expected[..], &buf[..]);
         }
     }

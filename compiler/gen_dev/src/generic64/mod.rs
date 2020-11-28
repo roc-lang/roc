@@ -38,19 +38,19 @@ pub trait CallConv<GPReg: GPRegTrait, ASM: Assembler<GPReg>> {
 }
 
 pub trait Assembler<GPReg: GPRegTrait> {
-    fn add_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn add_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn cmovl_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn mov_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn mov_register64bit_immediate64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i64);
-    fn mov_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn mov_register64bit_stackoffset32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32);
-    fn mov_stackoffset32bit_register64bit<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg);
-    fn neg_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
+    fn add_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
+    fn add_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
+    fn cmovl_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
+    fn mov_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
+    fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i64);
+    fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
+    fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32);
+    fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg);
+    fn neg_reg64<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
     fn ret<'a>(buf: &mut Vec<'a, u8>);
-    fn sub_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn pop_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
-    fn push_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
+    fn sub_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
+    fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
+    fn push_reg64<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -176,9 +176,9 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Bac
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
         let dst_reg = self.claim_gp_reg(dst)?;
         let src_reg = self.load_to_reg(src)?;
-        ASM::mov_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
-        ASM::neg_register64bit(&mut self.buf, dst_reg);
-        ASM::cmovl_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
+        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+        ASM::neg_reg64(&mut self.buf, dst_reg);
+        ASM::cmovl_reg64_reg64(&mut self.buf, dst_reg, src_reg);
         Ok(())
     }
 
@@ -190,9 +190,9 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Bac
     ) -> Result<(), String> {
         let dst_reg = self.claim_gp_reg(dst)?;
         let src1_reg = self.load_to_reg(src1)?;
-        ASM::mov_register64bit_register64bit(&mut self.buf, dst_reg, src1_reg);
+        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src1_reg);
         let src2_reg = self.load_to_reg(src2)?;
-        ASM::add_register64bit_register64bit(&mut self.buf, dst_reg, src2_reg);
+        ASM::add_reg64_reg64(&mut self.buf, dst_reg, src2_reg);
         Ok(())
     }
 
@@ -201,7 +201,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Bac
             Literal::Int(x) => {
                 let reg = self.claim_gp_reg(sym)?;
                 let val = *x;
-                ASM::mov_register64bit_immediate64bit(&mut self.buf, reg, val);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, val);
                 Ok(())
             }
             x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
@@ -227,7 +227,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>> Bac
             Some(SymbolStorage::GPRegeg(reg)) => {
                 // If it fits in a general purpose register, just copy it over to.
                 // Technically this can be optimized to produce shorter instructions if less than 64bits.
-                ASM::mov_register64bit_register64bit(&mut self.buf, CC::GP_RETURN_REGS[0], *reg);
+                ASM::mov_reg64_reg64(&mut self.buf, CC::GP_RETURN_REGS[0], *reg);
                 Ok(())
             }
             Some(x) => Err(format!(
@@ -280,7 +280,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>>
                 let reg = self.claim_gp_reg(sym)?;
                 self.symbols_map
                     .insert(*sym, SymbolStorage::StackAndGPRegeg(reg, offset));
-                ASM::mov_register64bit_stackoffset32bit(&mut self.buf, reg, offset as i32);
+                ASM::mov_reg64_stack32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
             None => Err(format!("Unknown symbol: {}", sym)),
@@ -292,7 +292,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg, ASM>>
         match val {
             Some(SymbolStorage::GPRegeg(reg)) => {
                 let offset = self.increase_stack_size(8)?;
-                ASM::mov_stackoffset32bit_register64bit(&mut self.buf, offset as i32, reg);
+                ASM::mov_stack32_reg64(&mut self.buf, offset as i32, reg);
                 self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
                 Ok(())
             }
