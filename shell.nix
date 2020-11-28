@@ -79,10 +79,12 @@ let
 
 in mkShell {
   buildInputs = inputs ++ macos-only ++ linux-only;
-  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
 
+  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
   APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
     ([ pkg-config llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-only);
+  GIT_SSL_CAINFO = /etc/ssl/certs/ca-certificates.crt;
+  SSL_CERT_FILE = /etc/ssl/certs/ca-certificates.crt;
 
   # Aliases don't work cross shell, so we do this
   shellHook = ''
