@@ -25,29 +25,6 @@ pub enum X86_64GPReg {
 
 impl GPRegTrait for X86_64GPReg {}
 
-const REX: u8 = 0x40;
-const REX_W: u8 = REX + 0x8;
-
-const fn add_rm_extension(reg: X86_64GPReg, byte: u8) -> u8 {
-    if reg as u8 > 7 {
-        byte + 1
-    } else {
-        byte
-    }
-}
-
-const fn add_opcode_extension(reg: X86_64GPReg, byte: u8) -> u8 {
-    add_rm_extension(reg, byte)
-}
-
-const fn add_reg_extension(reg: X86_64GPReg, byte: u8) -> u8 {
-    if reg as u8 > 7 {
-        byte + 4
-    } else {
-        byte
-    }
-}
-
 pub struct X86_64Assembler {}
 pub struct X86_64WindowsFastcall {}
 pub struct X86_64SystemV {}
@@ -106,11 +83,7 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64SystemV {
     ) -> Result<u32, String> {
         if !leaf_function {
             X86_64Assembler::push_reg64(buf, X86_64GPReg::RBP);
-            X86_64Assembler::mov_reg64_reg64(
-                buf,
-                X86_64GPReg::RBP,
-                Self::STACK_POINTER,
-            );
+            X86_64Assembler::mov_reg64_reg64(buf, X86_64GPReg::RBP, Self::STACK_POINTER);
         }
         for reg in saved_regs {
             X86_64Assembler::push_reg64(buf, *reg);
@@ -146,21 +119,13 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64SystemV {
         aligned_stack_size: u32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
-            X86_64Assembler::add_reg64_imm32(
-                buf,
-                Self::STACK_POINTER,
-                aligned_stack_size as i32,
-            );
+            X86_64Assembler::add_reg64_imm32(buf, Self::STACK_POINTER, aligned_stack_size as i32);
         }
         for reg in saved_regs.iter().rev() {
             X86_64Assembler::pop_reg64(buf, *reg);
         }
         if !leaf_function {
-            X86_64Assembler::mov_reg64_reg64(
-                buf,
-                Self::STACK_POINTER,
-                X86_64GPReg::RBP,
-            );
+            X86_64Assembler::mov_reg64_reg64(buf, Self::STACK_POINTER, X86_64GPReg::RBP);
             X86_64Assembler::pop_reg64(buf, X86_64GPReg::RBP);
         }
         Ok(())
@@ -225,11 +190,7 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64WindowsFastcall {
     ) -> Result<u32, String> {
         if !leaf_function {
             X86_64Assembler::push_reg64(buf, X86_64GPReg::RBP);
-            X86_64Assembler::mov_reg64_reg64(
-                buf,
-                X86_64GPReg::RBP,
-                Self::STACK_POINTER,
-            );
+            X86_64Assembler::mov_reg64_reg64(buf, X86_64GPReg::RBP, Self::STACK_POINTER);
         }
         for reg in saved_regs {
             X86_64Assembler::push_reg64(buf, *reg);
@@ -265,21 +226,13 @@ impl CallConv<X86_64GPReg, X86_64Assembler> for X86_64WindowsFastcall {
         aligned_stack_size: u32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
-            X86_64Assembler::add_reg64_imm32(
-                buf,
-                Self::STACK_POINTER,
-                aligned_stack_size as i32,
-            );
+            X86_64Assembler::add_reg64_imm32(buf, Self::STACK_POINTER, aligned_stack_size as i32);
         }
         for reg in saved_regs.iter().rev() {
             X86_64Assembler::pop_reg64(buf, *reg);
         }
         if !leaf_function {
-            X86_64Assembler::mov_reg64_reg64(
-                buf,
-                Self::STACK_POINTER,
-                X86_64GPReg::RBP,
-            );
+            X86_64Assembler::mov_reg64_reg64(buf, Self::STACK_POINTER, X86_64GPReg::RBP);
             X86_64Assembler::pop_reg64(buf, X86_64GPReg::RBP);
         }
         Ok(())
@@ -301,7 +254,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     #[inline(always)]
     fn add_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         // This can be optimized if the immediate is 1 byte.
-        let rex = add_rm_extension(dst, REX_W);
+        let rex = Self::add_rm_extension(dst, Self::REX_W);
         let dst_mod = dst as u8 % 8;
         buf.reserve(7);
         buf.extend(&[rex, 0x81, 0xC0 + dst_mod]);
@@ -310,13 +263,9 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `ADD r/m64,r64` -> Add r64 to r/m64.
     #[inline(always)]
-    fn add_reg64_reg64<'a>(
-        buf: &mut Vec<'a, u8>,
-        dst: X86_64GPReg,
-        src: X86_64GPReg,
-    ) {
-        let rex = add_rm_extension(dst, REX_W);
-        let rex = add_reg_extension(src, rex);
+    fn add_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+        let rex = Self::add_rm_extension(dst, Self::REX_W);
+        let rex = Self::add_reg_extension(src, rex);
         let dst_mod = dst as u8 % 8;
         let src_mod = (src as u8 % 8) << 3;
         buf.extend(&[rex, 0x01, 0xC0 + dst_mod + src_mod]);
@@ -324,13 +273,9 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
     #[inline(always)]
-    fn cmovl_reg64_reg64<'a>(
-        buf: &mut Vec<'a, u8>,
-        dst: X86_64GPReg,
-        src: X86_64GPReg,
-    ) {
-        let rex = add_reg_extension(dst, REX_W);
-        let rex = add_rm_extension(src, rex);
+    fn cmovl_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+        let rex = Self::add_reg_extension(dst, Self::REX_W);
+        let rex = Self::add_rm_extension(src, rex);
         let dst_mod = (dst as u8 % 8) << 3;
         let src_mod = src as u8 % 8;
         buf.extend(&[rex, 0x0F, 0x4C, 0xC0 + dst_mod + src_mod]);
@@ -339,7 +284,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
     #[inline(always)]
     fn mov_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
-        let rex = add_rm_extension(dst, REX_W);
+        let rex = Self::add_rm_extension(dst, Self::REX_W);
         let dst_mod = dst as u8 % 8;
         buf.reserve(7);
         buf.extend(&[rex, 0xC7, 0xC0 + dst_mod]);
@@ -352,7 +297,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
         if imm <= i32::MAX as i64 && imm >= i32::MIN as i64 {
             Self::mov_reg64_imm32(buf, dst, imm as i32)
         } else {
-            let rex = add_opcode_extension(dst, REX_W);
+            let rex = Self::add_opcode_extension(dst, Self::REX_W);
             let dst_mod = dst as u8 % 8;
             buf.reserve(10);
             buf.extend(&[rex, 0xB8 + dst_mod]);
@@ -362,13 +307,9 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r/m64,r64` -> Move r64 to r/m64.
     #[inline(always)]
-    fn mov_reg64_reg64<'a>(
-        buf: &mut Vec<'a, u8>,
-        dst: X86_64GPReg,
-        src: X86_64GPReg,
-    ) {
-        let rex = add_rm_extension(dst, REX_W);
-        let rex = add_reg_extension(src, rex);
+    fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+        let rex = Self::add_rm_extension(dst, Self::REX_W);
+        let rex = Self::add_reg_extension(src, rex);
         let dst_mod = dst as u8 % 8;
         let src_mod = (src as u8 % 8) << 3;
         buf.extend(&[rex, 0x89, 0xC0 + dst_mod + src_mod]);
@@ -376,15 +317,11 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r64,r/m64` -> Move r/m64 to r64.
     #[inline(always)]
-    fn mov_reg64_stack32<'a>(
-        buf: &mut Vec<'a, u8>,
-        dst: X86_64GPReg,
-        offset: i32,
-    ) {
+    fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, offset: i32) {
         // This can be optimized based on how many bytes the offset actually is.
         // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
         // Also, this may technically be faster genration since stack operations should be so common.
-        let rex = add_reg_extension(dst, REX_W);
+        let rex = Self::add_reg_extension(dst, Self::REX_W);
         let dst_mod = (dst as u8 % 8) << 3;
         buf.reserve(8);
         buf.extend(&[rex, 0x8B, 0x84 + dst_mod, 0x24]);
@@ -393,15 +330,11 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
 
     /// `MOV r/m64,r64` -> Move r64 to r/m64.
     #[inline(always)]
-    fn mov_stack32_reg64<'a>(
-        buf: &mut Vec<'a, u8>,
-        offset: i32,
-        src: X86_64GPReg,
-    ) {
+    fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: X86_64GPReg) {
         // This can be optimized based on how many bytes the offset actually is.
         // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
         // Also, this may technically be faster genration since stack operations should be so common.
-        let rex = add_reg_extension(src, REX_W);
+        let rex = Self::add_reg_extension(src, Self::REX_W);
         let src_mod = (src as u8 % 8) << 3;
         buf.reserve(8);
         buf.extend(&[rex, 0x89, 0x84 + src_mod, 0x24]);
@@ -411,7 +344,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     /// `NEG r/m64` -> Two's complement negate r/m64.
     #[inline(always)]
     fn neg_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
-        let rex = add_rm_extension(reg, REX_W);
+        let rex = Self::add_rm_extension(reg, Self::REX_W);
         let reg_mod = reg as u8 % 8;
         buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
     }
@@ -426,7 +359,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     #[inline(always)]
     fn sub_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
         // This can be optimized if the immediate is 1 byte.
-        let rex = add_rm_extension(dst, REX_W);
+        let rex = Self::add_rm_extension(dst, Self::REX_W);
         let dst_mod = dst as u8 % 8;
         buf.reserve(7);
         buf.extend(&[rex, 0x81, 0xE8 + dst_mod]);
@@ -438,7 +371,7 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let reg_mod = reg as u8 % 8;
         if reg as u8 > 7 {
-            let rex = add_opcode_extension(reg, REX);
+            let rex = Self::add_opcode_extension(reg, Self::REX);
             buf.extend(&[rex, 0x58 + reg_mod]);
         } else {
             buf.push(0x58 + reg_mod);
@@ -450,10 +383,34 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     fn push_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
         let reg_mod = reg as u8 % 8;
         if reg as u8 > 7 {
-            let rex = add_opcode_extension(reg, REX);
+            let rex = Self::add_opcode_extension(reg, Self::REX);
             buf.extend(&[rex, 0x50 + reg_mod]);
         } else {
             buf.push(0x50 + reg_mod);
+        }
+    }
+}
+impl X86_64Assembler {
+    const REX: u8 = 0x40;
+    const REX_W: u8 = Self::REX + 0x8;
+
+    const fn add_rm_extension(reg: X86_64GPReg, byte: u8) -> u8 {
+        if reg as u8 > 7 {
+            byte + 1
+        } else {
+            byte
+        }
+    }
+
+    const fn add_opcode_extension(reg: X86_64GPReg, byte: u8) -> u8 {
+        Self::add_rm_extension(reg, byte)
+    }
+
+    const fn add_reg_extension(reg: X86_64GPReg, byte: u8) -> u8 {
+        if reg as u8 > 7 {
+            byte + 4
+        } else {
+            byte
         }
     }
 }
