@@ -2796,7 +2796,7 @@ fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
             (module_name.as_str().into(), exposed)
         }
 
-        Package(_package_name, _exposes) => {
+        Package(_package_name, _module_name, _exposes) => {
             todo!("TODO support exposing package-qualified module names.");
         }
 

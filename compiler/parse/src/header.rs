@@ -177,7 +177,11 @@ pub enum ImportsEntry<'a> {
     Module(ModuleName<'a>, Vec<'a, Loc<ExposesEntry<'a, &'a str>>>),
 
     /// e.g. `base.Task` or `base.Task.{ after }` or `base.{ Task.{ Task, after } }`
-    Package(&'a str, Vec<'a, Loc<&'a ImportsEntry<'a>>>),
+    Package(
+        &'a str,
+        ModuleName<'a>,
+        Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    ),
 
     // Spaces
     SpaceBefore(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),

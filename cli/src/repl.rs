@@ -89,15 +89,16 @@ pub fn main() -> io::Result<()> {
 
     loop {
         let readline = editor.readline(PROMPT);
-        let pending_src = &mut editor
-            .helper_mut()
-            .expect("Editor helper was not set")
-            .pending_src;
 
         match readline {
             Ok(line) => {
-                //TODO rl.add_history_entry(line.as_str());
                 let trim_line = line.trim();
+                editor.add_history_entry(trim_line);
+
+                let pending_src = &mut editor
+                    .helper_mut()
+                    .expect("Editor helper was not set")
+                    .pending_src;
 
                 match trim_line.to_lowercase().as_str() {
                     "" => {
@@ -168,6 +169,10 @@ pub fn main() -> io::Result<()> {
                 // append the str to the src we're building up and continue.
                 // (We only need to append it here if it was empty before;
                 // otherwise, we already appended it before calling eval_and_format.)
+                let pending_src = &mut editor
+                    .helper_mut()
+                    .expect("Editor helper was not set")
+                    .pending_src;
 
                 if pending_src.is_empty() {
                     pending_src.push_str("");

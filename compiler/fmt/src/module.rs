@@ -175,7 +175,7 @@ fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>, inde
             }
         }
 
-        Package(_name, _entries) => {
+        Package(_pkg, _name, _entries) => {
             todo!("TODO Format imported package");
         }
 
