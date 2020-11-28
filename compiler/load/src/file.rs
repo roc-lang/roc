@@ -13,8 +13,8 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
+use roc_module::ident::{Ident, Lowercase, ModuleName, QualifiedModuleName, TagName};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, PackageModuleIds, Symbol};
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
@@ -346,6 +346,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                     // Provide mutexes of ModuleIds and IdentIds by module,
                     // so other modules can populate them as they load.
                     module_ids: Arc::clone(&state.arc_modules),
+                    package_module_ids: Arc::clone(&state.arc_package_modules),
                     ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
                     mode: state.stdlib.mode,
                 }
@@ -690,6 +691,7 @@ struct State<'a> {
 
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<ModuleIds>>,
+    pub arc_package_modules: Arc<Mutex<PackageModuleIds<'a>>>,
 
     pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 
@@ -819,6 +821,7 @@ enum BuildTask<'a> {
     LoadModule {
         module_name: ModuleName,
         module_ids: Arc<Mutex<ModuleIds>>,
+        package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
         mode: Mode,
     },
@@ -989,6 +992,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 
 struct LoadStart<'a> {
     pub arc_modules: Arc<Mutex<ModuleIds>>,
+    pub arc_package_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     pub root_id: ModuleId,
     pub root_msg: Msg<'a>,
@@ -1001,6 +1005,7 @@ impl<'a> LoadStart<'a> {
         mode: Mode,
     ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
+        let arc_package_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
@@ -1012,6 +1017,7 @@ impl<'a> LoadStart<'a> {
                 arena,
                 filename,
                 Arc::clone(&arc_modules),
+                Arc::clone(&arc_package_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
                 mode,
@@ -1020,6 +1026,7 @@ impl<'a> LoadStart<'a> {
 
         Ok(LoadStart {
             arc_modules,
+            arc_package_modules,
             ident_ids_by_module,
             root_id,
             root_msg,
@@ -1033,6 +1040,7 @@ impl<'a> LoadStart<'a> {
         mode: Mode,
     ) -> Result<Self, LoadingProblem> {
         let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
+        let arc_package_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
@@ -1045,6 +1053,7 @@ impl<'a> LoadStart<'a> {
                 filename,
                 src,
                 Arc::clone(&arc_modules),
+                Arc::clone(&arc_package_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
                 mode,
@@ -1053,6 +1062,7 @@ impl<'a> LoadStart<'a> {
 
         Ok(LoadStart {
             arc_modules,
+            arc_package_modules,
             ident_ids_by_module,
             root_id,
             root_msg,
@@ -1121,6 +1131,7 @@ where
 {
     let LoadStart {
         arc_modules,
+        arc_package_modules,
         ident_ids_by_module,
         root_id,
         root_msg,
@@ -1256,6 +1267,7 @@ where
                 headers_parsed,
                 loading_started,
                 arc_modules,
+                arc_package_modules,
                 constrained_ident_ids: IdentIds::exposed_builtins(0),
                 ident_ids_by_module,
                 declarations_by_id: MutMap::default(),
@@ -1913,6 +1925,7 @@ fn load_module<'a>(
     src_dir: &Path,
     module_name: ModuleName,
     module_ids: Arc<Mutex<ModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
@@ -1933,6 +1946,7 @@ fn load_module<'a>(
         arena,
         filename,
         module_ids,
+        package_module_ids,
         ident_ids_by_module,
         module_start_time,
         mode,
@@ -1971,6 +1985,7 @@ fn parse_header<'a>(
     read_file_duration: Duration,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
     src_bytes: &'a [u8],
@@ -1998,6 +2013,7 @@ fn parse_header<'a>(
             header.imports.into_bump_slice(),
             parse_state,
             module_ids,
+            package_module_ids,
             ident_ids_by_module,
             module_timing,
         )),
@@ -2015,6 +2031,7 @@ fn parse_header<'a>(
                 header.imports.into_bump_slice(),
                 parse_state,
                 module_ids.clone(),
+                package_module_ids,
                 ident_ids_by_module.clone(),
                 module_timing,
             );
@@ -2059,6 +2076,7 @@ fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
     mode: Mode,
@@ -2073,6 +2091,7 @@ fn load_filename<'a>(
             file_io_duration,
             filename,
             module_ids,
+            package_module_ids,
             ident_ids_by_module,
             mode,
             arena.alloc(bytes),
@@ -2092,6 +2111,7 @@ fn load_from_str<'a>(
     filename: PathBuf,
     src: &'a str,
     module_ids: Arc<Mutex<ModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
     mode: Mode,
@@ -2104,6 +2124,7 @@ fn load_from_str<'a>(
         file_io_duration,
         filename,
         module_ids,
+        package_module_ids,
         ident_ids_by_module,
         mode,
         src.as_bytes(),
@@ -2126,6 +2147,7 @@ fn send_header<'a>(
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<ModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
@@ -2141,16 +2163,18 @@ fn send_header<'a>(
         }
     };
 
-    let mut imported: Vec<(ModuleName, Vec<Ident>, Region)> = Vec::with_capacity(imports.len());
+    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+        Vec::with_capacity(imports.len());
     let mut imported_modules: MutSet<ModuleId> = MutSet::default();
+    let mut imported_package_modules: MutSet<ModuleId> = MutSet::default();
     let mut scope_size = 0;
 
     for loc_entry in imports {
-        let (module_name, exposed) = exposed_from_import(&loc_entry.value);
+        let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
 
         scope_size += exposed.len();
 
-        imported.push((module_name, exposed, loc_entry.region));
+        imported.push((qualified_module_name, exposed, loc_entry.region));
     }
 
     let num_exposes = exposes.len();
@@ -2167,6 +2191,7 @@ fn send_header<'a>(
     let ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
+        let mut package_module_ids = (*package_module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
         home = module_ids.get_or_insert(&declared_name.as_inline_str());
@@ -2178,16 +2203,30 @@ fn send_header<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [ base.Foo.{ bar } ]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
-        for (module_name, exposed_idents, region) in imported.into_iter() {
-            let cloned_module_name = module_name.clone();
-            let module_id = module_ids.get_or_insert(&module_name.into());
+        for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
+            let cloned_module_name = qualified_module_name.module.clone();
+            let module_id = match qualified_module_name.opt_package {
+                None => {
+                    let id = module_ids.get_or_insert(&qualified_module_name.module.into());
 
-            deps_by_name.insert(cloned_module_name, module_id);
+                    imported_modules.insert(id);
 
-            imported_modules.insert(module_id);
+                    deps_by_name.insert(cloned_module_name, id);
+
+                    id
+                }
+                Some(package) => {
+                    let id =
+                        package_module_ids.get_or_insert(&(package, cloned_module_name.into()));
+
+                    imported_package_modules.insert(id);
+
+                    id
+                }
+            };
 
             // Add the new exposed idents to the dep module's IdentIds, so
             // once that module later gets loaded, its lookups will resolve
@@ -2235,6 +2274,8 @@ fn send_header<'a>(
 
         ident_ids.clone()
     };
+
+    dbg!(package_module_ids);
 
     // Send the deps to the coordinator thread for processing,
     // then continue on to parsing and canonicalizing defs.
@@ -2782,7 +2823,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     Ok(Msg::Parsed(parsed))
 }
 
-fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
+fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Ident>) {
     use roc_parse::header::ImportsEntry::*;
 
     match entry {
@@ -2793,11 +2834,27 @@ fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
                 exposed.push(ident_from_exposed(&loc_entry.value));
             }
 
-            (module_name.as_str().into(), exposed)
+            let qualified_module_name = QualifiedModuleName {
+                opt_package: None,
+                module: module_name.as_str().into(),
+            };
+
+            (qualified_module_name, exposed)
         }
 
-        Package(_package_name, _module_name, _exposes) => {
-            todo!("TODO support exposing package-qualified module names.");
+        Package(package_name, module_name, exposes) => {
+            let mut exposed = Vec::with_capacity(exposes.len());
+
+            for loc_entry in exposes {
+                exposed.push(ident_from_exposed(&loc_entry.value));
+            }
+
+            let qualified_module_name = QualifiedModuleName {
+                opt_package: Some(package_name),
+                module: module_name.as_str().into(),
+            };
+
+            (qualified_module_name, exposed)
         }
 
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
@@ -3074,6 +3131,7 @@ fn run_task<'a>(
         LoadModule {
             module_name,
             module_ids,
+            package_module_ids,
             ident_ids_by_module,
             mode,
         } => load_module(
@@ -3081,6 +3139,7 @@ fn run_task<'a>(
             src_dir,
             module_name,
             module_ids,
+            package_module_ids,
             ident_ids_by_module,
             mode,
         )

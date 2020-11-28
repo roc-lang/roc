@@ -310,14 +310,71 @@ impl fmt::Debug for ModuleId {
     }
 }
 
-/// Stores a mapping between ModuleId and InlinableString.
-///
 /// base.Task
 /// 1. build mapping from short name to package
 /// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
 /// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
 /// 4. throw away short names. stash the module id in the can env under the resolved module name
 /// 5. test:
+
+type PackageModule<'a> = (&'a str, InlinableString);
+
+#[derive(Debug, Clone)]
+pub struct PackageModuleIds<'a> {
+    by_name: MutMap<PackageModule<'a>, ModuleId>,
+    by_id: Vec<PackageModule<'a>>,
+}
+
+impl<'a> PackageModuleIds<'a> {
+    pub fn get_or_insert(&mut self, module_name: &PackageModule<'a>) -> ModuleId {
+        match self.by_name.get(module_name) {
+            Some(id) => *id,
+            None => {
+                let by_id = &mut self.by_id;
+                let module_id = ModuleId(by_id.len() as u32);
+
+                by_id.push(module_name.clone());
+
+                self.by_name.insert(module_name.clone(), module_id);
+
+                if cfg!(debug_assertions) {
+                    Self::insert_debug_name(module_id, &module_name);
+                }
+
+                module_id
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn insert_debug_name(module_id: ModuleId, module_name: &PackageModule) {
+        let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
+
+        let (_package, module) = module_name;
+
+        names.insert(module_id.0, module.to_string().into());
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn insert_debug_name(_module_id: ModuleId, _module_name: &PackageModule) {
+        // By design, this is a no-op in release builds!
+    }
+
+    pub fn get_id(&self, module_name: &PackageModule<'a>) -> Option<&ModuleId> {
+        self.by_name.get(module_name)
+    }
+
+    pub fn get_name(&self, id: ModuleId) -> Option<&PackageModule> {
+        self.by_id.get(id.0 as usize)
+    }
+
+    pub fn available_modules(&self) -> impl Iterator<Item = &PackageModule> {
+        self.by_id.iter()
+    }
+}
+
+/// Stores a mapping between ModuleId and InlinableString.
+///
 /// Each module name is stored twice, for faster lookups.
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Debug, Clone)]
@@ -554,6 +611,18 @@ macro_rules! define_builtins {
                 )+
 
                 ModuleIds { by_name, by_id }
+            }
+        }
+
+        impl<'a> Default for PackageModuleIds<'a> {
+            fn default() -> Self {
+                // +1 because the user will be compiling at least 1 non-builtin module!
+                let capacity = $total + 1;
+
+                let by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
+                let by_id = Vec::with_capacity(capacity);
+
+                PackageModuleIds { by_name, by_id }
             }
         }
 
