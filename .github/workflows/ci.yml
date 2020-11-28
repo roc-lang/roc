@@ -1,5 +1,4 @@
-on: [pull_request]
-
+on: [pull_request] 
 name: CI
 
 jobs:
@@ -37,4 +36,4 @@ jobs:
       - name: Run checks and tests
         run: |
           nix-shell \
-            --run "pushd compiler/builtins/bitcode; ./run-tests.sh; popd; cargo fmt --all -- --check; cargo clippy -- -D warnings; cargo test -- --release"
+            --run "pushd compiler/builtins/bitcode; ./run-tests.sh; popd; cargo fmt --all -- --check; cargo clippy -- -D warnings; cargo test --release"
