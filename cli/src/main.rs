@@ -7,7 +7,11 @@ fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
 
     match matches.subcommand_name() {
-        None => roc_editor::launch(&[]),
+        None => {
+            let _ = roc_editor::launch(&[]);
+
+            Ok(())
+        }
         Some("build") => build(
             &Triple::host(),
             matches.subcommand_matches("build").unwrap(),
@@ -25,13 +29,19 @@ fn main() -> io::Result<()> {
                 .unwrap()
                 .values_of_os(DIRECTORY_OR_FILES)
             {
-                None => roc_editor::launch(&[]),
+                None => {
+                    let _ = roc_editor::launch(&[]);
+
+                    Ok(())
+                }
                 Some(values) => {
                     let paths = values
                         .map(|os_str| Path::new(os_str))
                         .collect::<Vec<&Path>>();
 
-                    roc_editor::launch(&paths)
+                    let _ = roc_editor::launch(&paths);
+
+                    Ok(())
                 }
             }
         }
