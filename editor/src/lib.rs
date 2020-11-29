@@ -11,21 +11,17 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-use crate::rect::Rect;
-use crate::vertex::Vertex;
 use iced::executor;
-use iced::{Application, Column, Command, Container, Element, Length, Settings, Subscription};
-use std::error::Error;
+use iced::{
+    button, keyboard, pane_grid, scrollable, Align, Application, Button, Column, Command,
+    Container, Element, HorizontalAlignment, Length, PaneGrid, Scrollable, Settings, Subscription,
+    Text,
+};
+use iced_native::{event, subscription, Event};
 use std::path::Path;
-use wgpu::util::DeviceExt;
-use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
-use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
-use winit::event_loop::ControlFlow;
 
 pub mod ast;
-mod rect;
 pub mod text_state;
-mod vertex;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -33,369 +29,368 @@ pub fn launch(_filepaths: &[&Path]) -> iced::Result {
     Editor::run(Settings::default())
 }
 
-#[derive(Default)]
-struct Editor;
+struct Editor<'a> {
+    panes: pane_grid::State<Buffer<'a>>,
+    panes_created: usize,
+    focus: Option<pane_grid::Pane>,
+}
 
-#[derive(Debug, Clone)]
-enum Message {}
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Split(pane_grid::Axis, pane_grid::Pane),
+    SplitFocused(pane_grid::Axis),
+    FocusAdjacent(pane_grid::Direction),
+    Clicked(pane_grid::Pane),
+    Dragged(pane_grid::DragEvent),
+    Resized(pane_grid::ResizeEvent),
+    Close(pane_grid::Pane),
+    CloseFocused,
+}
 
-impl Application for Editor {
+impl<'a> Application for Editor<'a> {
     type Message = Message;
     type Executor = executor::Default;
     type Flags = ();
 
     fn new(_flags: ()) -> (Self, Command<Message>) {
-        (Editor::default(), Command::none())
+        let initial_buffer = Buffer::new_empty(0);
+        let (panes, _) = pane_grid::State::new(initial_buffer);
+
+        let editor = Editor {
+            panes,
+            panes_created: 1,
+            focus: None,
+        };
+
+        (editor, Command::none())
     }
 
     fn title(&self) -> String {
         String::from("The rockin’ roc editor")
     }
 
-    fn update(&mut self, _message: Message) -> Command<Message> {
+    fn update(&mut self, message: Message) -> Command<Message> {
+        match message {
+            Message::Split(axis, pane) => {
+                let new_buffer = Buffer::new_empty(self.panes_created);
+
+                let result = self.panes.split(axis, &pane, new_buffer);
+
+                if let Some((pane, _)) = result {
+                    self.focus = Some(pane);
+                }
+
+                self.panes_created += 1;
+            }
+            Message::SplitFocused(axis) => {
+                if let Some(pane) = self.focus {
+                    let new_buffer = Buffer::new_empty(self.panes_created);
+
+                    let result = self.panes.split(axis, &pane, new_buffer);
+
+                    if let Some((pane, _)) = result {
+                        self.focus = Some(pane);
+                    }
+
+                    self.panes_created += 1;
+                }
+            }
+            Message::FocusAdjacent(direction) => {
+                if let Some(pane) = self.focus {
+                    if let Some(adjacent) = self.panes.adjacent(&pane, direction) {
+                        self.focus = Some(adjacent);
+                    }
+                }
+            }
+            Message::Clicked(pane) => {
+                self.focus = Some(pane);
+            }
+            Message::Resized(pane_grid::ResizeEvent { split, ratio }) => {
+                self.panes.resize(&split, ratio);
+            }
+            Message::Dragged(pane_grid::DragEvent::Dropped { pane, target }) => {
+                self.panes.swap(&pane, &target);
+            }
+            Message::Dragged(_) => {}
+            Message::Close(pane) => {
+                if let Some((_, sibling)) = self.panes.close(&pane) {
+                    self.focus = Some(sibling);
+                }
+            }
+            Message::CloseFocused => {
+                if let Some(pane) = self.focus {
+                    if let Some((_, sibling)) = self.panes.close(&pane) {
+                        self.focus = Some(sibling);
+                    }
+                }
+            }
+        }
+
         Command::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::none()
+        subscription::events_with(|event, status| {
+            if let event::Status::Captured = status {
+                return None;
+            }
+
+            match event {
+                Event::Keyboard(keyboard::Event::KeyPressed {
+                    modifiers,
+                    key_code,
+                }) if modifiers.is_command_pressed() => handle_hotkey(key_code),
+                _ => None,
+            }
+        })
     }
 
     fn view(&mut self) -> Element<Message> {
-        let content = Column::new();
+        let focus = self.focus;
+        let total_panes = self.panes.len();
 
-        Container::new(content)
+        let pane_grid = PaneGrid::new(&mut self.panes, |pane, buffer| {
+            let is_focused = focus == Some(pane);
+
+            let title_bar = pane_grid::TitleBar::new(format!("Pane {}", buffer.id))
+                .padding(10)
+                .style(style::TitleBar { is_focused });
+
+            pane_grid::Content::new(buffer.view(pane, total_panes))
+                .title_bar(title_bar)
+                .style(style::Pane { is_focused })
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .spacing(10)
+        .on_click(Message::Clicked)
+        .on_drag(Message::Dragged)
+        .on_resize(10, Message::Resized);
+
+        Container::new(pane_grid)
             .width(Length::Fill)
             .height(Length::Fill)
+            .padding(10)
             .into()
     }
 }
 
-fn run_event_loop() -> Result<(), Box<dyn Error>> {
-    env_logger::init();
+struct Buffer<'a> {
+    id: usize,
+    is_file: bool,
+    filepath: Option<&'a Path>,
+    scroll: scrollable::State,
+    split_horizontally: button::State,
+    split_vertically: button::State,
+    close: button::State,
+}
 
-    // Open window and create a surface
-    let event_loop = winit::event_loop::EventLoop::new();
+impl<'a> Buffer<'a> {
+    fn new(id: usize, is_file: bool, filepath: Option<&'a Path>) -> Self {
+        Buffer {
+            id,
+            is_file,
+            filepath,
+            scroll: scrollable::State::new(),
+            split_horizontally: button::State::new(),
+            split_vertically: button::State::new(),
+            close: button::State::new(),
+        }
+    }
 
-    let window = winit::window::WindowBuilder::new()
-        .build(&event_loop)
-        .unwrap();
+    fn new_empty(id: usize) -> Self {
+        Buffer {
+            id,
+            is_file: false,
+            filepath: None,
+            scroll: scrollable::State::new(),
+            split_horizontally: button::State::new(),
+            split_vertically: button::State::new(),
+            close: button::State::new(),
+        }
+    }
 
-    let instance = wgpu::Instance::new(wgpu::BackendBit::all());
+    fn view(&mut self, pane: pane_grid::Pane, total_panes: usize) -> Element<Message> {
+        let Buffer {
+            scroll,
+            split_horizontally,
+            split_vertically,
+            close,
+            ..
+        } = self;
 
-    let surface = unsafe { instance.create_surface(&window) };
-
-    // Initialize GPU
-    let (device, queue) = futures::executor::block_on(async {
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-            })
-            .await
-            .expect("Request adapter");
-
-        adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::empty(),
-                    limits: wgpu::Limits::default(),
-                    shader_validation: false,
-                },
-                None,
+        let button = |state, label, message, style| {
+            Button::new(
+                state,
+                Text::new(label)
+                    .width(Length::Fill)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .size(16),
             )
-            .await
-            .expect("Request device")
-    });
+            .width(Length::Fill)
+            .padding(8)
+            .on_press(message)
+            .style(style)
+        };
 
-    // Create staging belt and a local pool
-    let mut staging_belt = wgpu::util::StagingBelt::new(1024);
-    let mut local_pool = futures::executor::LocalPool::new();
-    let local_spawner = local_pool.spawner();
+        let mut controls = Column::new()
+            .spacing(5)
+            .max_width(150)
+            .push(button(
+                split_horizontally,
+                "Split horizontally",
+                Message::Split(pane_grid::Axis::Horizontal, pane),
+                style::Button::Primary,
+            ))
+            .push(button(
+                split_vertically,
+                "Split vertically",
+                Message::Split(pane_grid::Axis::Vertical, pane),
+                style::Button::Primary,
+            ));
 
-    // Prepare swap chain
-    let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-    let mut size = window.inner_size();
-    let mut swap_chain = device.create_swap_chain(
-        &surface,
-        &wgpu::SwapChainDescriptor {
-            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
-            format: render_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Immediate,
-        },
+        if total_panes > 1 {
+            controls = controls.push(button(
+                close,
+                "Close",
+                Message::Close(pane),
+                style::Button::Destructive,
+            ));
+        }
+
+        let content = Scrollable::new(scroll)
+            .width(Length::Fill)
+            .spacing(10)
+            .align_items(Align::Center)
+            .push(controls);
+
+        Container::new(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(5)
+            .center_y()
+            .into()
+    }
+}
+
+fn handle_hotkey(key_code: keyboard::KeyCode) -> Option<Message> {
+    use keyboard::KeyCode;
+    use pane_grid::{Axis, Direction};
+
+    let direction = match key_code {
+        KeyCode::Up => Some(Direction::Up),
+        KeyCode::Down => Some(Direction::Down),
+        KeyCode::Left => Some(Direction::Left),
+        KeyCode::Right => Some(Direction::Right),
+        _ => None,
+    };
+
+    match key_code {
+        KeyCode::V => Some(Message::SplitFocused(Axis::Vertical)),
+        KeyCode::H => Some(Message::SplitFocused(Axis::Horizontal)),
+        KeyCode::W => Some(Message::CloseFocused),
+        _ => direction.map(Message::FocusAdjacent),
+    }
+}
+
+mod style {
+    use iced::{button, container, Background, Color, Vector};
+
+    const SURFACE: Color = Color::from_rgb(
+        0xF2 as f32 / 255.0,
+        0xF3 as f32 / 255.0,
+        0xF5 as f32 / 255.0,
     );
 
-    // Prepare Triangle Pipeline
-    let triangle_vs_module =
-        device.create_shader_module(wgpu::include_spirv!("shaders/rect.vert.spv"));
-    let triangle_fs_module =
-        device.create_shader_module(wgpu::include_spirv!("shaders/rect.frag.spv"));
+    const ACTIVE: Color = Color::from_rgb(
+        0x72 as f32 / 255.0,
+        0x89 as f32 / 255.0,
+        0xDA as f32 / 255.0,
+    );
 
-    let triangle_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[],
-        push_constant_ranges: &[],
-    });
+    const HOVERED: Color = Color::from_rgb(
+        0x67 as f32 / 255.0,
+        0x7B as f32 / 255.0,
+        0xC4 as f32 / 255.0,
+    );
 
-    let triangle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&triangle_pipeline_layout),
-        vertex_stage: wgpu::ProgrammableStageDescriptor {
-            module: &triangle_vs_module,
-            entry_point: "main",
-        },
-        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
-            module: &triangle_fs_module,
-            entry_point: "main",
-        }),
-        // Use the default rasterizer state: no culling, no depth bias
-        rasterization_state: None,
-        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: &[wgpu::TextureFormat::Bgra8UnormSrgb.into()],
-        depth_stencil_state: None,
-        vertex_state: wgpu::VertexStateDescriptor {
-            index_format: wgpu::IndexFormat::Uint16,
-            vertex_buffers: &[Vertex::buffer_descriptor()],
-        },
-        sample_count: 1,
-        sample_mask: !0,
-        alpha_to_coverage_enabled: false,
-    });
-
-    // Prepare glyph_brush
-    let inconsolata =
-        ab_glyph::FontArc::try_from_slice(include_bytes!("../Inconsolata-Regular.ttf"))?;
-
-    let mut glyph_brush = GlyphBrushBuilder::using_font(inconsolata).build(&device, render_format);
-
-    let is_animating = true;
-    let mut text_state = String::new();
-    let mut keyboard_modifiers = ModifiersState::empty();
-
-    // Render loop
-    window.request_redraw();
-
-    event_loop.run(move |event, _, control_flow| {
-        // TODO dynamically switch this on/off depending on whether any
-        // animations are running. Should conserve CPU usage and battery life!
-        if is_animating {
-            *control_flow = ControlFlow::Poll;
-        } else {
-            *control_flow = ControlFlow::Wait;
-        }
-
-        match event {
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::CloseRequested,
-                ..
-            } => *control_flow = winit::event_loop::ControlFlow::Exit,
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::Resized(new_size),
-                ..
-            } => {
-                size = new_size;
-
-                swap_chain = device.create_swap_chain(
-                    &surface,
-                    &wgpu::SwapChainDescriptor {
-                        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
-                        format: render_format,
-                        width: size.width,
-                        height: size.height,
-                        present_mode: wgpu::PresentMode::Immediate,
-                    },
-                );
-            }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::ReceivedCharacter(ch),
-                ..
-            } => {
-                match ch {
-                    '\u{8}' | '\u{7f}' => {
-                        // In Linux, we get a '\u{8}' when you press backspace,
-                        // but in macOS we get '\u{7f}'.
-                        text_state.pop();
-                    }
-                    '\u{e000}'..='\u{f8ff}'
-                    | '\u{f0000}'..='\u{ffffd}'
-                    | '\u{100000}'..='\u{10fffd}' => {
-                        // These are private use characters; ignore them.
-                        // See http://www.unicode.org/faq/private_use.html
-                    }
-                    _ => {
-                        text_state.push(ch);
-                    }
-                }
-            }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::KeyboardInput { input, .. },
-                ..
-            } => {
-                if let Some(virtual_keycode) = input.virtual_keycode {
-                    handle_keydown(input.state, virtual_keycode, keyboard_modifiers);
-                }
-            }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::ModifiersChanged(modifiers),
-                ..
-            } => {
-                keyboard_modifiers = modifiers;
-            }
-            winit::event::Event::MainEventsCleared => window.request_redraw(),
-            winit::event::Event::RedrawRequested { .. } => {
-                // Get a command encoder for the current frame
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Redraw"),
-                });
-
-                // Get the next frame
-                let frame = swap_chain
-                    .get_current_frame()
-                    .expect("Failed to acquire next swap chain texture")
-                    .output;
-
-                // Test Rectangle
-                let test_rect_1 = Rect {
-                    top: 0.9,
-                    left: -0.8,
-                    width: 0.2,
-                    height: 0.3,
-                    color: [0.0, 1.0, 1.0],
-                };
-                let test_rect_2 = Rect {
-                    top: 0.0,
-                    left: 0.0,
-                    width: 0.5,
-                    height: 0.5,
-                    color: [1.0, 1.0, 0.0],
-                };
-                let mut rectangles = Vec::new();
-                rectangles.extend_from_slice(&test_rect_1.as_array());
-                rectangles.extend_from_slice(&test_rect_2.as_array());
-
-                let mut rect_index_buffers = Vec::new();
-                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
-                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
-                // Vertex Buffer for drawing rectangles
-                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&rectangles),
-                    usage: wgpu::BufferUsage::VERTEX,
-                });
-
-                // Index Buffer for drawing rectangles
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Index Buffer"),
-                    contents: bytemuck::cast_slice(&rect_index_buffers),
-                    usage: wgpu::BufferUsage::INDEX,
-                });
-
-                // Clear frame
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                            attachment: &frame.view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.007,
-                                    g: 0.007,
-                                    b: 0.007,
-                                    a: 1.0,
-                                }),
-                                store: true,
-                            },
-                        }],
-                        depth_stencil_attachment: None,
-                    });
-
-                    render_pass.set_pipeline(&triangle_pipeline);
-
-                    render_pass.set_vertex_buffer(
-                        0,                       // The buffer slot to use for this vertex buffer.
-                        vertex_buffer.slice(..), // Use the entire buffer.
-                    );
-
-                    render_pass.set_index_buffer(index_buffer.slice(..));
-
-                    render_pass.draw_indexed(
-                        0..((&rect_index_buffers).len() as u32), // Draw all of the vertices from our test data.
-                        0,                                       // Base Vertex
-                        0..1,                                    // Instances
-                    );
-                }
-
-                glyph_brush.queue(Section {
-                    screen_position: (30.0, 30.0),
-                    bounds: (size.width as f32, size.height as f32),
-                    text: vec![Text::new("Enter some text:")
-                        .with_color([0.4666, 0.2, 1.0, 1.0])
-                        .with_scale(40.0)],
-                    ..Section::default()
-                });
-
-                glyph_brush.queue(Section {
-                    screen_position: (30.0, 90.0),
-                    bounds: (size.width as f32, size.height as f32),
-                    text: vec![Text::new(format!("{}|", text_state).as_str())
-                        .with_color([1.0, 1.0, 1.0, 1.0])
-                        .with_scale(40.0)],
-                    ..Section::default()
-                });
-
-                // Draw the text!
-                glyph_brush
-                    .draw_queued(
-                        &device,
-                        &mut staging_belt,
-                        &mut encoder,
-                        &frame.view,
-                        size.width,
-                        size.height,
-                    )
-                    .expect("Draw queued");
-
-                staging_belt.finish();
-                queue.submit(Some(encoder.finish()));
-
-                // Recall unused staging buffers
-                use futures::task::SpawnExt;
-
-                local_spawner
-                    .spawn(staging_belt.recall())
-                    .expect("Recall staging belt");
-
-                local_pool.run_until_stalled();
-            }
-            _ => {
-                *control_flow = winit::event_loop::ControlFlow::Wait;
-            }
-        }
-    })
-}
-
-fn handle_keydown(
-    elem_state: ElementState,
-    virtual_keycode: VirtualKeyCode,
-    _modifiers: ModifiersState,
-) {
-    use winit::event::VirtualKeyCode::*;
-
-    if let ElementState::Released = elem_state {
-        return;
+    pub struct TitleBar {
+        pub is_focused: bool,
     }
 
-    match virtual_keycode {
-        Copy => {
-            todo!("copy");
+    impl container::StyleSheet for TitleBar {
+        fn style(&self) -> container::Style {
+            let pane = Pane {
+                is_focused: self.is_focused,
+            }
+            .style();
+
+            container::Style {
+                text_color: Some(Color::WHITE),
+                background: Some(pane.border_color.into()),
+                ..Default::default()
+            }
         }
-        Paste => {
-            todo!("paste");
+    }
+
+    pub struct Pane {
+        pub is_focused: bool,
+    }
+
+    impl container::StyleSheet for Pane {
+        fn style(&self) -> container::Style {
+            container::Style {
+                background: Some(Background::Color(SURFACE)),
+                border_width: 2.0,
+                border_color: if self.is_focused {
+                    Color::BLACK
+                } else {
+                    Color::from_rgb(0.7, 0.7, 0.7)
+                },
+                ..Default::default()
+            }
         }
-        Cut => {
-            todo!("cut");
+    }
+
+    pub enum Button {
+        Primary,
+        Destructive,
+    }
+
+    impl button::StyleSheet for Button {
+        fn active(&self) -> button::Style {
+            let (background, text_color) = match self {
+                Button::Primary => (Some(ACTIVE), Color::WHITE),
+                Button::Destructive => (None, Color::from_rgb8(0xFF, 0x47, 0x47)),
+            };
+
+            button::Style {
+                text_color,
+                background: background.map(Background::Color),
+                border_radius: 5.0,
+                shadow_offset: Vector::new(0.0, 0.0),
+                ..button::Style::default()
+            }
         }
-        _ => {}
+
+        fn hovered(&self) -> button::Style {
+            let active = self.active();
+
+            let background = match self {
+                Button::Primary => Some(HOVERED),
+                Button::Destructive => Some(Color {
+                    a: 0.2,
+                    ..active.text_color
+                }),
+            };
+
+            button::Style {
+                background: background.map(Background::Color),
+                ..active
+            }
+        }
     }
 }
+
+// In Linux, we get a '\u{8}' when you press backspace,
+// but in macOS we get '\u{7f}'.

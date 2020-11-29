@@ -5,7 +5,6 @@ authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
 description = "An editor for Roc"
 license = "Apache-2.0"
-exclude = ["src/shaders/*.spv"]
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
@@ -59,6 +58,7 @@ futures = "0.3"
 wgpu_glyph = "0.10"
 bytemuck = "1.4"
 iced = "0.2.0"
+iced_native = "0.3.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
@@ -67,8 +67,3 @@ indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 
-[build-dependencies]
-anyhow = "1.0"
-fs_extra = "1.1"
-glob = "0.3"
-shaderc = "0.6"
