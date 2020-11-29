@@ -27,6 +27,7 @@ These are potentially inspirational resources for the editor's design.
 * [Sketch-n-Sketch: Interactive SVG Programming with Direct Manipulation](https://youtu.be/YuGVC8VqXz0) by [Ravi Chugh](http://people.cs.uchicago.edu/~rchugh/)
 * [Xi](https://xi-editor.io/) modern text editor with concurrent editing (related to [Druid](https://github.com/linebender/druid))
 * [Self](https://selflanguage.org/) programming language
+* [Primitive](https://primitive.io/) code exploration in Virtual Reality
 
 ### Debugging
 
@@ -72,6 +73,14 @@ Thoughts and ideas possibly taken from above inspirations or separate.
     * Maybe easier to manually trigger a test related to exactly what code you're writing
 * Ability to generate unit tests for a selected function in context menu
     * A table should appear to enter input and expected output pairs quickly 
+* Ability to show import connection within project visually
+    * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
+* Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.
+* Ability to inline statements contained in called functions into the callee function for debugging.
+    * The value of expressions can be shown at the end of the line like in the [Inventing on Principle talk](https://youtu.be/8QiPFmIMxFc?t=1181)
+    * This would give a clear overview of the execution and should make it easy to pinpoint the line where the bug originates.
+    * That specific line can then be right clicked to go to the actual function.
+    * Having to jump around between different functions and files is unnecessary and makes it difficult to see the forest through the trees.
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation
