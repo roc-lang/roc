@@ -89,6 +89,25 @@ pub fn run_with_valgrind(args: &[&str]) -> (Out, String) {
 
     cmd.arg("--tool=memcheck");
     cmd.arg("--xml=yes");
+
+    // If you are having valgrind issues on MacOS, you may need to suppress some
+    // of the errors. Read more here: https://github.com/rtfeldman/roc/issues/746
+    if let Some(suppressions_file_os_str) = env::var_os("VALGRIND_SUPPRESSIONS") {
+        match suppressions_file_os_str.to_str() {
+            None => {
+                panic!("Could not determine suppression file location from OsStr");
+            }
+            Some(suppressions_file) => {
+                let mut buf = String::new();
+
+                buf.push_str("--suppressions=");
+                buf.push_str(suppressions_file);
+
+                cmd.arg(buf);
+            }
+        }
+    }
+
     cmd.arg(format!("--xml-file={}", filepath));
 
     for arg in args {
