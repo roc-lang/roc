@@ -7,7 +7,7 @@ const expect = testing.expect;
 extern fn malloc(size: usize) ?*u8;
 extern fn free([*]u8) void;
 
-const RocStr = struct {
+const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
 
@@ -119,14 +119,13 @@ const RocStr = struct {
         return if (self.is_small_str()) small_len else big_len;
     }
 
-    // Given a pointer to some memory of length (self.len() + 1) bytes,
-    // write this RocStr's contents into it as a nul-terminated C string.
+    // Given a pointer to some bytes, write the first (len) bytes of this
+    // RocStr's contents into it.
     //
-    // This is useful so that (for example) we can write into an `alloca`
-    // if the C string only needs to live long enough to be passed as an
-    // argument to a C function - like the file path argument to `fopen`.
-    pub fn write_cstr(self: RocStr, dest: [*]u8) void {
-        const len: usize = self.len();
+    // One use for this function is writing into an `alloca` for a C string that
+    // only needs to live long enough to be passed as an argument to
+    // a C function - like the file path argument to `fopen`.
+    pub fn memcpy(self: RocStr, dest: [*]u8, len: usize) void {
         const small_src = @ptrCast(*u8, self);
         const big_src = self.str_bytes_ptr;
 
@@ -135,12 +134,9 @@ const RocStr = struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        const src: [*]u8 = if (len < @sizeOf(RocStr)) small_src else big_src;
+        const src: [*]u8 = if (self.is_small_str()) small_src else big_src;
 
         @memcpy(dest, src, len);
-
-        // C strings must end in 0.
-        dest[len + 1] = 0;
     }
 
     test "RocStr.eq: equal" {
