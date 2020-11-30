@@ -132,15 +132,15 @@ pub fn rebuild_host(host_input_path: &Path) {
             .unwrap();
 
         validate_output("rust_host.o", "rm", output);
-    } else {
-        // Clean up rust_host.o
+    } else if c_host_dest.exists() {
+        // Clean up c_host.o
         let output = Command::new("mv")
             .env_clear()
             .args(&[c_host_dest, host_dest])
             .output()
             .unwrap();
 
-        validate_output("rust_host.o", "mv", output);
+        validate_output("c_host.o", "mv", output);
     }
 }
 
