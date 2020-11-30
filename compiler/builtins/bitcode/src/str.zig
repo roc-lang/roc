@@ -1,9 +1,11 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const unicode = std.unicode;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 
+<<<<<<< HEAD
 extern fn malloc(size: usize) ?*u8;
 extern fn free([*]u8) void;
 
@@ -20,7 +22,7 @@ const RocStr = extern struct {
 
     // This takes ownership of the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
-    pub fn init(bytes: [*]const u8, length: usize) RocStr {
+    pub fn init(allocator: *Allocator, bytes: [*]const u8, length: usize) RocStr {
         const rocStrSize = @sizeOf(RocStr);
 
         if (length < rocStrSize) {
@@ -50,22 +52,23 @@ const RocStr = extern struct {
 
             return ret_small_str;
         } else {
-            var new_bytes: [*]u8 = @ptrCast([*]u8, malloc(length));
-
-            @memcpy(new_bytes, bytes, length);
-
+            var new_bytes: []u8 = allocator.alloc(u8, length) catch unreachable;
+            var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
+            @memcpy(new_bytes_ptr, bytes, length);
             return RocStr{
-                .str_bytes = new_bytes,
+                .str_bytes = new_bytes_ptr,
                 .str_len = length,
             };
         }
     }
 
-    pub fn drop(self: RocStr) void {
-        if (!self.is_small_str()) {
-            const str_bytes: [*]u8 = self.str_bytes orelse unreachable;
-
-            free(str_bytes);
+    pub fn drop(self: RocStr, allocator: *Allocator) void {
+        if (!self.isSmallStr()) {
+            const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
+            const align_of_slice = @alignOf(*[]u8);
+            const slice_ptr: *[]u8 = @ptrCast(*[]u8, @alignCast(align_of_slice, str_bytes_ptr));
+            const slice_bytes: []u8 = slice_ptr.*;
+            allocator.free(slice_bytes);
         }
     }
 
@@ -107,7 +110,7 @@ const RocStr = extern struct {
         return true;
     }
 
-    pub fn is_small_str(self: RocStr) bool {
+    pub fn isSmallStr(self: RocStr) bool {
         return @bitCast(isize, self.str_len) < 0;
     }
 
@@ -119,7 +122,7 @@ const RocStr = extern struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        return if (self.is_small_str()) small_len else big_len;
+        return if (self.isSmallStr()) small_len else big_len;
     }
 
     pub fn is_empty(self: RocStr) bool {
@@ -150,53 +153,53 @@ const RocStr = extern struct {
         const str1_len = 3;
         var str1: [str1_len]u8 = "abc".*;
         const str1_ptr: [*]u8 = &str1;
-        var roc_str1 = RocStr.init(str1_ptr, str1_len);
+        var roc_str1 = RocStr.init(testing.allocator, str1_ptr, str1_len);
 
         const str2_len = 3;
         var str2: [str2_len]u8 = "abc".*;
         const str2_ptr: [*]u8 = &str2;
-        var roc_str2 = RocStr.init(str2_ptr, str2_len);
+        var roc_str2 = RocStr.init(testing.allocator, str2_ptr, str2_len);
 
         // TODO: fix those tests
         // expect(roc_str1.eq(roc_str2));
 
-        roc_str1.drop();
-        roc_str2.drop();
+        roc_str1.drop(testing.allocator);
+        roc_str2.drop(testing.allocator);
     }
 
     test "RocStr.eq: not equal different length" {
         const str1_len = 4;
         var str1: [str1_len]u8 = "abcd".*;
         const str1_ptr: [*]u8 = &str1;
-        var roc_str1 = RocStr.init(str1_ptr, str1_len);
+        var roc_str1 = RocStr.init(testing.allocator, str1_ptr, str1_len);
 
         const str2_len = 3;
         var str2: [str2_len]u8 = "abc".*;
         const str2_ptr: [*]u8 = &str2;
-        var roc_str2 = RocStr.init(str2_ptr, str2_len);
+        var roc_str2 = RocStr.init(testing.allocator, str2_ptr, str2_len);
 
         expect(!roc_str1.eq(roc_str2));
 
-        roc_str1.drop();
-        roc_str2.drop();
+        roc_str1.drop(testing.allocator);
+        roc_str2.drop(testing.allocator);
     }
 
     test "RocStr.eq: not equal same length" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "acb".*;
         const str1_ptr: [*]u8 = &str1;
-        var roc_str1 = RocStr.init(str1_ptr, str1_len);
+        var roc_str1 = RocStr.init(testing.allocator, str1_ptr, str1_len);
 
         const str2_len = 3;
         var str2: [str2_len]u8 = "abc".*;
         const str2_ptr: [*]u8 = &str2;
-        var roc_str2 = RocStr.init(str2_ptr, str2_len);
+        var roc_str2 = RocStr.init(testing.allocator, str2_ptr, str2_len);
 
         // TODO: fix those tests
         // expect(!roc_str1.eq(roc_str2));
 
-        roc_str1.drop();
-        roc_str2.drop();
+        roc_str1.drop(testing.allocator);
+        roc_str2.drop(testing.allocator);
     }
 };
 
@@ -228,7 +231,7 @@ pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, str_bytes: [*]const u
             if (matches_delimiter) {
                 const segment_len: usize = str_index - sliceStart_index;
 
-                array[ret_array_index] = RocStr.init(str_bytes + sliceStart_index, segment_len);
+                array[ret_array_index] = RocStr.init(testing.allocator, str_bytes + sliceStart_index, segment_len);
                 sliceStart_index = str_index + delimiter_len;
                 ret_array_index += 1;
                 str_index += delimiter_len;
@@ -238,7 +241,7 @@ pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, str_bytes: [*]const u
         }
     }
 
-    array[ret_array_index] = RocStr.init(str_bytes + sliceStart_index, str_len - sliceStart_index);
+    array[ret_array_index] = RocStr.init(testing.allocator, str_bytes + sliceStart_index, str_len - sliceStart_index);
 }
 
 test "strSplitInPlace: no delimiter" {
@@ -255,7 +258,7 @@ test "strSplitInPlace: no delimiter" {
     strSplitInPlace(array_ptr, 1, str_ptr, 3, delimiter_ptr, 1);
 
     var expected = [1]RocStr{
-        RocStr.init(str_ptr, 3),
+        RocStr.init(testing.allocator, str_ptr, 3),
     };
 
     expectEqual(array.len, expected.len);
@@ -263,11 +266,11 @@ test "strSplitInPlace: no delimiter" {
     //expect(array[0].eq(expected[0]));
 
     for (array) |roc_str| {
-        roc_str.drop();
+        roc_str.drop(testing.allocator);
     }
 
     for (expected) |roc_str| {
-        roc_str.drop();
+        roc_str.drop(testing.allocator);
     }
 }
 
@@ -293,12 +296,12 @@ test "strSplitInPlace: empty end" {
     const first_expected_str_len: usize = 1;
     var first_expected_str: [first_expected_str_len]u8 = "1".*;
     const first_expected_str_ptr: [*]u8 = &first_expected_str;
-    var firstExpectedRocStr = RocStr.init(first_expected_str_ptr, first_expected_str_len);
+    var firstExpectedRocStr = RocStr.init(testing.allocator, first_expected_str_ptr, first_expected_str_len);
 
     const second_expected_str_len: usize = 1;
     var second_expected_str: [second_expected_str_len]u8 = "2".*;
     const second_expected_str_ptr: [*]u8 = &second_expected_str;
-    var secondExpectedRocStr = RocStr.init(second_expected_str_ptr, second_expected_str_len);
+    var secondExpectedRocStr = RocStr.init(testing.allocator, second_expected_str_ptr, second_expected_str_len);
 
     // TODO: fix those tests
     // expectEqual(array.len, 3);
@@ -331,7 +334,7 @@ test "strSplitInPlace: delimiter on sides" {
     const expected_str_len: usize = 3;
     var expected_str: [expected_str_len]u8 = "ghi".*;
     const expected_str_ptr: [*]const u8 = &expected_str;
-    var expectedRocStr = RocStr.init(expected_str_ptr, expected_str_len);
+    var expectedRocStr = RocStr.init(testing.allocator, expected_str_ptr, expected_str_len);
 
     // TODO: fix those tests
     // expectEqual(array.len, 3);
