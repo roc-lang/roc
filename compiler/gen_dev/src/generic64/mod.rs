@@ -6,6 +6,7 @@ use roc_mono::ir::{Literal, Stmt};
 use std::marker::PhantomData;
 use target_lexicon::Triple;
 
+pub mod aarch64;
 pub mod x86_64;
 
 pub trait CallConv<GPReg: GPRegTrait> {
@@ -13,28 +14,25 @@ pub trait CallConv<GPReg: GPRegTrait> {
     const GP_RETURN_REGS: &'static [GPReg];
     const GP_DEFAULT_FREE_REGS: &'static [GPReg];
 
+    const SHADOW_SPACE_SIZE: u8;
+
     fn callee_saved(reg: &GPReg) -> bool;
     fn caller_saved_regs(reg: &GPReg) -> bool {
         !Self::callee_saved(reg)
     }
 
-    const STACK_POINTER: GPReg;
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
         saved_regs: &[GPReg],
-        requested_stack_size: u32,
-    ) -> Result<u32, String>;
+        requested_stack_size: i32,
+    ) -> Result<i32, String>;
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
         saved_regs: &[GPReg],
-        requested_stack_size: u32,
+        aligned_stack_size: i32,
     ) -> Result<(), String>;
-
-    const STACK_ALIGNMENT: u8;
-    const SHADOW_SPACE_SIZE: u8;
-    const MAX_STACK_SIZE: u32;
 }
 
 /// Assembler contains calls to the backend assembly generator.
@@ -58,8 +56,8 @@ enum SymbolStorage<GPReg: GPRegTrait> {
     // These may need layout, but I am not sure.
     // I think whenever a symbol would be used, we specify layout anyways.
     GPRegeg(GPReg),
-    Stack(u32),
-    StackAndGPRegeg(GPReg, u32),
+    Stack(i32),
+    StackAndGPRegeg(GPReg, i32),
 }
 
 pub trait GPRegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
@@ -88,7 +86,7 @@ pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallCo
     // For now just a vec of used registers and the symbols they contain.
     gp_used_regs: Vec<'a, (GPReg, Symbol)>,
 
-    stack_size: u32,
+    stack_size: i32,
 
     // used callee saved regs must be tracked for pushing and popping at the beginning/end of the function.
     used_callee_saved_regs: MutSet<GPReg>,
@@ -135,7 +133,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
 
     fn set_not_leaf_function(&mut self) {
         self.leaf_function = false;
-        self.stack_size = CC::SHADOW_SPACE_SIZE as u32;
+        self.stack_size = CC::SHADOW_SPACE_SIZE as i32;
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
@@ -306,12 +304,10 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
     }
 
     /// increase_stack_size increase the current stack size and returns the offset of the stack.
-    fn increase_stack_size(&mut self, amount: u32) -> Result<u32, String> {
+    fn increase_stack_size(&mut self, amount: i32) -> Result<i32, String> {
+        debug_assert!(amount > 0);
         let offset = self.stack_size;
         if let Some(new_size) = self.stack_size.checked_add(amount) {
-            if new_size > CC::MAX_STACK_SIZE {
-                return Err("Ran out of stack space".to_string());
-            }
             self.stack_size = new_size;
             Ok(offset)
         } else {

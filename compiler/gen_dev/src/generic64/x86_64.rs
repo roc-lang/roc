@@ -29,6 +29,8 @@ pub struct X86_64Assembler {}
 pub struct X86_64WindowsFastcall {}
 pub struct X86_64SystemV {}
 
+const STACK_ALIGNMENT: u8 = 16;
+
 impl CallConv<X86_64GPReg> for X86_64SystemV {
     const GP_PARAM_REGS: &'static [X86_64GPReg] = &[
         X86_64GPReg::RDI,
@@ -62,6 +64,8 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
         X86_64GPReg::R10,
         X86_64GPReg::R11,
     ];
+    const SHADOW_SPACE_SIZE: u8 = 0;
+
     #[inline(always)]
     fn callee_saved(reg: &X86_64GPReg) -> bool {
         matches!(
@@ -74,62 +78,24 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
                 | X86_64GPReg::R15
         )
     }
-    const STACK_POINTER: X86_64GPReg = X86_64GPReg::RSP;
+
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
         saved_regs: &[X86_64GPReg],
-        requested_stack_size: u32,
-    ) -> Result<u32, String> {
-        if !leaf_function {
-            push_reg64(buf, X86_64GPReg::RBP);
-            mov_reg64_reg64(buf, X86_64GPReg::RBP, Self::STACK_POINTER);
-        }
-        for reg in saved_regs {
-            push_reg64(buf, *reg);
-        }
-        let alignment =
-            (8 * saved_regs.len() + requested_stack_size as usize) % Self::STACK_ALIGNMENT as usize;
-        let offset = if alignment == 0 {
-            0
-        } else {
-            Self::STACK_ALIGNMENT - alignment as u8
-        };
-        if let Some(aligned_stack_size) = requested_stack_size.checked_add(offset as u32) {
-            if aligned_stack_size > Self::MAX_STACK_SIZE {
-                return Err("Ran out of stack space".to_string());
-            }
-            if aligned_stack_size > 0 {
-                sub_reg64_imm32(buf, Self::STACK_POINTER, aligned_stack_size as i32);
-            }
-            Ok(aligned_stack_size)
-        } else {
-            Err("Ran out of stack space".to_string())
-        }
+        requested_stack_size: i32,
+    ) -> Result<i32, String> {
+        x86_64_generic_setup_stack(buf, leaf_function, saved_regs, requested_stack_size)
     }
 
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
         saved_regs: &[X86_64GPReg],
-        aligned_stack_size: u32,
+        aligned_stack_size: i32,
     ) -> Result<(), String> {
-        if aligned_stack_size > 0 {
-            add_reg64_imm32(buf, Self::STACK_POINTER, aligned_stack_size as i32);
-        }
-        for reg in saved_regs.iter().rev() {
-            pop_reg64(buf, *reg);
-        }
-        if !leaf_function {
-            mov_reg64_reg64(buf, Self::STACK_POINTER, X86_64GPReg::RBP);
-            pop_reg64(buf, X86_64GPReg::RBP);
-        }
-        Ok(())
+        x86_64_generic_cleanup_stack(buf, leaf_function, saved_regs, aligned_stack_size)
     }
-
-    const STACK_ALIGNMENT: u8 = 16;
-    const SHADOW_SPACE_SIZE: u8 = 0;
-    const MAX_STACK_SIZE: u32 = i32::MAX as u32;
 }
 
 impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
@@ -143,11 +109,13 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
     const GP_DEFAULT_FREE_REGS: &'static [X86_64GPReg] = &[
         // The regs we want to use first should be at the end of this vec.
         // We will use pop to get which reg to use next
+
+        // Don't use stack pionter: X86_64GPReg::RSP,
+        // Don't use frame pointer: X86_64GPReg::RBP,
+
         // Use callee saved regs last.
         X86_64GPReg::RBX,
-        // Don't use frame pointer: X86_64GPReg::RBP,
         X86_64GPReg::RSI,
-        // Don't use stack pionter: X86_64GPReg::RSP,
         X86_64GPReg::RDI,
         X86_64GPReg::R12,
         X86_64GPReg::R13,
@@ -162,6 +130,8 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
         X86_64GPReg::R10,
         X86_64GPReg::R11,
     ];
+    const SHADOW_SPACE_SIZE: u8 = 32;
+
     #[inline(always)]
     fn callee_saved(reg: &X86_64GPReg) -> bool {
         matches!(
@@ -177,62 +147,83 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
                 | X86_64GPReg::R15
         )
     }
-    const STACK_POINTER: X86_64GPReg = X86_64GPReg::RSP;
+
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
         saved_regs: &[X86_64GPReg],
-        requested_stack_size: u32,
-    ) -> Result<u32, String> {
-        if !leaf_function {
-            push_reg64(buf, X86_64GPReg::RBP);
-            mov_reg64_reg64(buf, X86_64GPReg::RBP, Self::STACK_POINTER);
-        }
-        for reg in saved_regs {
-            push_reg64(buf, *reg);
-        }
-        let alignment =
-            (8 * saved_regs.len() + requested_stack_size as usize) % Self::STACK_ALIGNMENT as usize;
-        let offset = if alignment == 0 {
-            0
-        } else {
-            Self::STACK_ALIGNMENT - alignment as u8
-        };
-        if let Some(aligned_stack_size) = requested_stack_size.checked_add(offset as u32) {
-            if aligned_stack_size > Self::MAX_STACK_SIZE {
-                return Err("Ran out of stack space".to_string());
-            }
-            if aligned_stack_size > 0 {
-                sub_reg64_imm32(buf, Self::STACK_POINTER, aligned_stack_size as i32);
-            }
-            Ok(aligned_stack_size)
-        } else {
-            Err("Ran out of stack space".to_string())
-        }
+        requested_stack_size: i32,
+    ) -> Result<i32, String> {
+        x86_64_generic_setup_stack(buf, leaf_function, saved_regs, requested_stack_size)
     }
 
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
         saved_regs: &[X86_64GPReg],
-        aligned_stack_size: u32,
+        aligned_stack_size: i32,
     ) -> Result<(), String> {
-        if aligned_stack_size > 0 {
-            add_reg64_imm32(buf, Self::STACK_POINTER, aligned_stack_size as i32);
-        }
-        for reg in saved_regs.iter().rev() {
-            pop_reg64(buf, *reg);
-        }
-        if !leaf_function {
-            mov_reg64_reg64(buf, Self::STACK_POINTER, X86_64GPReg::RBP);
-            pop_reg64(buf, X86_64GPReg::RBP);
-        }
-        Ok(())
+        x86_64_generic_cleanup_stack(buf, leaf_function, saved_regs, aligned_stack_size)
+    }
+}
+
+#[inline(always)]
+fn x86_64_generic_setup_stack<'a>(
+    buf: &mut Vec<'a, u8>,
+    leaf_function: bool,
+    saved_regs: &[X86_64GPReg],
+    requested_stack_size: i32,
+) -> Result<i32, String> {
+    if !leaf_function {
+        push_reg64(buf, X86_64GPReg::RBP);
+        mov_reg64_reg64(buf, X86_64GPReg::RBP, X86_64GPReg::RSP);
+    }
+    for reg in saved_regs {
+        push_reg64(buf, *reg);
     }
 
-    const STACK_ALIGNMENT: u8 = 16;
-    const SHADOW_SPACE_SIZE: u8 = 32;
-    const MAX_STACK_SIZE: u32 = i32::MAX as u32;
+    // full size is upcast to i64 to make sure we don't overflow here.
+    let full_size = 8 * saved_regs.len() as i64 + requested_stack_size as i64;
+    let alignment = if full_size <= 0 {
+        0
+    } else {
+        full_size % STACK_ALIGNMENT as i64
+    };
+    let offset = if alignment == 0 {
+        0
+    } else {
+        STACK_ALIGNMENT - alignment as u8
+    };
+    if let Some(aligned_stack_size) = requested_stack_size.checked_add(offset as i32) {
+        if aligned_stack_size > 0 {
+            sub_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
+            Ok(aligned_stack_size)
+        } else {
+            Ok(0)
+        }
+    } else {
+        Err("Ran out of stack space".to_string())
+    }
+}
+
+#[inline(always)]
+fn x86_64_generic_cleanup_stack<'a>(
+    buf: &mut Vec<'a, u8>,
+    leaf_function: bool,
+    saved_regs: &[X86_64GPReg],
+    aligned_stack_size: i32,
+) -> Result<(), String> {
+    if aligned_stack_size > 0 {
+        add_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
+    }
+    for reg in saved_regs.iter().rev() {
+        pop_reg64(buf, *reg);
+    }
+    if !leaf_function {
+        mov_reg64_reg64(buf, X86_64GPReg::RSP, X86_64GPReg::RBP);
+        pop_reg64(buf, X86_64GPReg::RBP);
+    }
+    Ok(())
 }
 
 impl Assembler<X86_64GPReg> for X86_64Assembler {
