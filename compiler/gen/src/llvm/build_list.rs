@@ -3,12 +3,13 @@ use crate::llvm::build::{
 };
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
+use crate::llvm::refcounting::decrement_refcount_layout;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
-use roc_mono::layout::{Builtin, Layout, MemoryMode};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
@@ -1320,6 +1321,7 @@ pub fn list_keep_if_help<'a, 'ctx, 'env>(
 /// List.map : List before, (before -> after) -> List after
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     inplace: InPlace,
     parent: FunctionValue<'ctx>,
     func: BasicValueEnum<'ctx>,
@@ -1365,7 +1367,11 @@ pub fn list_map<'a, 'ctx, 'env>(
 
                 incrementing_elem_loop(builder, ctx, parent, list_ptr, len, "#index", list_loop);
 
-                store_list(env, ret_list_ptr, len)
+                let result = store_list(env, ret_list_ptr, len);
+
+                decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
+
+                result
             };
 
             if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
@@ -2044,6 +2050,7 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
     let bytes_per_element = len_type.const_int(elem_bytes, false);
 
+    // dbg!(bytes_per_element, length);
     let number_of_data_bytes = builder.build_int_mul(bytes_per_element, length, "data_length");
 
     let rc1 = match inplace {
