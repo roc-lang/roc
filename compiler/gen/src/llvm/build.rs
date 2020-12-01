@@ -2383,6 +2383,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 }
 
 #[derive(Copy, Clone)]
+#[repr(u8)]
 pub enum InPlace {
     InPlace,
     Clone,
