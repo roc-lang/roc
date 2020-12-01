@@ -176,7 +176,7 @@ fn x86_64_generic_setup_stack<'a>(
 ) -> Result<i32, String> {
     if !leaf_function {
         push_reg64(buf, X86_64GPReg::RBP);
-        mov_reg64_reg64(buf, X86_64GPReg::RBP, X86_64GPReg::RSP);
+        X86_64Assembler::mov_reg64_reg64(buf, X86_64GPReg::RBP, X86_64GPReg::RSP);
     }
     for reg in saved_regs {
         push_reg64(buf, *reg);
@@ -196,6 +196,7 @@ fn x86_64_generic_setup_stack<'a>(
     };
     if let Some(aligned_stack_size) = requested_stack_size.checked_add(offset as i32) {
         if aligned_stack_size > 0 {
+            // TODO: move this call to one using X86_64Assembler.
             sub_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
             Ok(aligned_stack_size)
         } else {
@@ -214,13 +215,14 @@ fn x86_64_generic_cleanup_stack<'a>(
     aligned_stack_size: i32,
 ) -> Result<(), String> {
     if aligned_stack_size > 0 {
+        // TODO: move this call to one using X86_64Assembler.
         add_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
     }
     for reg in saved_regs.iter().rev() {
         pop_reg64(buf, *reg);
     }
     if !leaf_function {
-        mov_reg64_reg64(buf, X86_64GPReg::RSP, X86_64GPReg::RBP);
+        X86_64Assembler::mov_reg64_reg64(buf, X86_64GPReg::RSP, X86_64GPReg::RBP);
         pop_reg64(buf, X86_64GPReg::RBP);
     }
     Ok(())

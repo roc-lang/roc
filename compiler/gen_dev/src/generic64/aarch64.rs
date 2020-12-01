@@ -35,7 +35,8 @@ pub enum AArch64GPReg {
     X28 = 28,
     FP = 29,
     LR = 30,
-    ZR = 31,
+    /// This can mean Zero or Stack Pointer depending on the context.
+    ZRSP = 31,
 }
 
 impl GPRegTrait for AArch64GPReg {}
@@ -68,7 +69,7 @@ impl CallConv<AArch64GPReg> for AArch64Call {
         // Don't user indirect result location: AArch64GPReg::XR,
         // Don't use platform register: AArch64GPReg::PR,
         // Don't use link register: AArch64GPReg::LR,
-        // Don't use zero register: AArch64GPReg::ZR,
+        // Don't use zero register/stack pointer: AArch64GPReg::ZRSP,
 
         // Use callee saved regs last.
         AArch64GPReg::X19,
@@ -120,7 +121,7 @@ impl CallConv<AArch64GPReg> for AArch64Call {
     }
 
     fn setup_stack<'a>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         leaf_function: bool,
         saved_regs: &[AArch64GPReg],
         requested_stack_size: i32,
@@ -144,24 +145,27 @@ impl CallConv<AArch64GPReg> for AArch64Call {
             requested_stack_size.checked_add(8 * saved_regs.len() as i32 + offset as i32)
         {
             if aligned_stack_size > 0 {
-                unimplemented!("Load and store not yet implemented");
-            /*
-            //sub_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
+                // TODO deal with sizes over imm12.
+                sub_reg64_reg64_imm12(
+                    buf,
+                    AArch64GPReg::ZRSP,
+                    AArch64GPReg::ZRSP,
+                    aligned_stack_size as u16,
+                );
 
-            // All the following stores could be optimized by using `STP` to store pairs.
-            let mut offset = aligned_stack_size;
-            if !leaf_function {
-                offset -= 8;
-                //store lr
-                offset -= 8;
-                //store fp
-            }
-            for reg in saved_regs {
-                offset -= 8;
-                //store reg
-            }
-            Ok(aligned_stack_size)
-            */
+                // All the following stores could be optimized by using `STP` to store pairs.
+                let mut offset = aligned_stack_size;
+                if !leaf_function {
+                    offset -= 8;
+                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GPReg::LR);
+                    offset -= 8;
+                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GPReg::FP);
+                }
+                for reg in saved_regs {
+                    offset -= 8;
+                    AArch64Assembler::mov_stack32_reg64(buf, offset, *reg);
+                }
+                Ok(aligned_stack_size)
             } else {
                 Ok(0)
             }
@@ -170,28 +174,31 @@ impl CallConv<AArch64GPReg> for AArch64Call {
         }
     }
     fn cleanup_stack<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _leaf_function: bool,
-        _saved_regs: &[AArch64GPReg],
+        buf: &mut Vec<'a, u8>,
+        leaf_function: bool,
+        saved_regs: &[AArch64GPReg],
         aligned_stack_size: i32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
-            unimplemented!("Load and store not yet implemented");
-            /*
             // All the following stores could be optimized by using `STP` to store pairs.
             let mut offset = aligned_stack_size;
             if !leaf_function {
                 offset -= 8;
-                //load lr
+                AArch64Assembler::mov_reg64_stack32(buf, AArch64GPReg::LR, offset);
                 offset -= 8;
-                //load fp
+                AArch64Assembler::mov_reg64_stack32(buf, AArch64GPReg::FP, offset);
             }
             for reg in saved_regs {
                 offset -= 8;
-                //load reg
+                AArch64Assembler::mov_reg64_stack32(buf, *reg, offset);
             }
-            //add_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
-            */
+            // TODO deal with sizes over imm12.
+            add_reg64_reg64_imm12(
+                buf,
+                AArch64GPReg::ZRSP,
+                AArch64GPReg::ZRSP,
+                aligned_stack_size as u16,
+            );
         }
         Ok(())
     }
@@ -199,12 +206,12 @@ impl CallConv<AArch64GPReg> for AArch64Call {
 
 impl Assembler<AArch64GPReg> for AArch64Assembler {
     fn add_reg64_reg64_reg64<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _dst: AArch64GPReg,
-        _src1: AArch64GPReg,
-        _src2: AArch64GPReg,
+        buf: &mut Vec<'a, u8>,
+        dst: AArch64GPReg,
+        src1: AArch64GPReg,
+        src2: AArch64GPReg,
     ) {
-        unimplemented!("add_reg64_reg64_reg64 is not yet implement for AArch64");
+        add_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, imm: i64) {
@@ -228,13 +235,28 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
         mov_reg64_reg64(buf, dst, src);
     }
 
-    fn mov_reg64_stack32<'a>(_buf: &mut Vec<'a, u8>, _dst: AArch64GPReg, _offset: i32) {
-        unimplemented!("mov_reg64_stack32 is not yet implement for AArch64");
+    fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, offset: i32) {
+        if offset < 0 {
+            unimplemented!("negative stack offsets are not yet implement for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_reg64_imm12(buf, dst, AArch64GPReg::ZRSP, (offset as u16) >> 3);
+        } else {
+            unimplemented!("stack offsets over 32k are not yet implement for AArch64");
+        }
     }
 
-    fn mov_stack32_reg64<'a>(_buf: &mut Vec<'a, u8>, _offset: i32, _src: AArch64GPReg) {
-        unimplemented!("mov_stack32_reg64 is not yet implement for AArch64");
+    fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: AArch64GPReg) {
+        if offset < 0 {
+            unimplemented!("negative stack offsets are not yet implement for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            str_reg64_imm12(buf, src, AArch64GPReg::ZRSP, (offset as u16) >> 3);
+        } else {
+            unimplemented!("stack offsets over 32k are not yet implement for AArch64");
+        }
     }
+
     fn abs_reg64_reg64<'a>(_buf: &mut Vec<'a, u8>, _dst: AArch64GPReg, _src: AArch64GPReg) {
         unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
     }
@@ -254,7 +276,7 @@ enum AArch64Instruction {
     _SVE,
     DPImm(DPImmGroup),
     Branch(BranchGroup),
-    _LdStr,
+    LdStr(LdStrGroup),
     DPReg(DPRegGroup),
     _DPFloat,
 }
@@ -272,6 +294,16 @@ enum BranchGroup {
 
 #[derive(Debug)]
 enum DPRegGroup {
+    AddSubShifted {
+        sf: bool,
+        subtract: bool,
+        set_flags: bool,
+        shift: u8,
+        reg_m: AArch64GPReg,
+        imm6: u8,
+        reg_n: AArch64GPReg,
+        reg_d: AArch64GPReg,
+    },
     Logical {
         sf: bool,
         op: DPRegLogicalOp,
@@ -285,12 +317,33 @@ enum DPRegGroup {
 
 #[derive(Debug)]
 enum DPImmGroup {
+    AddSubImm {
+        sf: bool,
+        subtract: bool,
+        set_flags: bool,
+        shift: bool,
+        imm12: u16,
+        reg_n: AArch64GPReg,
+        reg_d: AArch64GPReg,
+    },
     MoveWide {
         sf: bool,
         opc: u8,
         hw: u8,
         imm16: u16,
         reg_d: AArch64GPReg,
+    },
+}
+
+#[derive(Debug)]
+enum LdStrGroup {
+    UnsignedImm {
+        size: u8,
+        v: bool,
+        opc: u8,
+        imm12: u16,
+        reg_n: AArch64GPReg,
+        reg_t: AArch64GPReg,
     },
 }
 
@@ -344,11 +397,30 @@ fn build_instruction(inst: AArch64Instruction) -> [u8; 4] {
                     imm16,
                     reg_d,
                 } => {
-                    out |= 0b101 << 23;
                     out |= (sf as u32) << 31;
                     out |= (opc as u32) << 29;
+                    out |= 0b101 << 23;
                     out |= (hw as u32) << 21;
                     out |= (imm16 as u32) << 5;
+                    out |= reg_d as u32;
+                }
+                DPImmGroup::AddSubImm {
+                    sf,
+                    subtract,
+                    set_flags,
+                    shift,
+                    imm12,
+                    reg_n,
+                    reg_d,
+                } => {
+                    debug_assert!(imm12 <= 0xFFF);
+                    out |= (sf as u32) << 31;
+                    out |= (subtract as u32) << 30;
+                    out |= (set_flags as u32) << 29;
+                    out |= 0b010 << 23;
+                    out |= (shift as u32) << 22;
+                    out |= (imm12 as u32) << 10;
+                    out |= (reg_n as u32) << 5;
                     out |= reg_d as u32;
                 }
             }
@@ -386,6 +458,52 @@ fn build_instruction(inst: AArch64Instruction) -> [u8; 4] {
                     out |= (reg_n as u32) << 5;
                     out |= reg_d as u32;
                 }
+                DPRegGroup::AddSubShifted {
+                    sf,
+                    subtract,
+                    set_flags,
+                    shift,
+                    reg_m,
+                    imm6,
+                    reg_n,
+                    reg_d,
+                } => {
+                    debug_assert!(shift <= 0b11);
+                    debug_assert!(imm6 <= 0b111111);
+                    out |= (sf as u32) << 31;
+                    out |= (subtract as u32) << 30;
+                    out |= (set_flags as u32) << 29;
+                    out |= 0b1 << 24;
+                    out |= (shift as u32) << 22;
+                    out |= (reg_m as u32) << 16;
+                    out |= (imm6 as u32) << 10;
+                    out |= (reg_n as u32) << 5;
+                    out |= reg_d as u32;
+                }
+            }
+        }
+        AArch64Instruction::LdStr(ldstr) => {
+            out |= 0b1 << 27;
+            match ldstr {
+                LdStrGroup::UnsignedImm {
+                    size,
+                    v,
+                    opc,
+                    imm12,
+                    reg_n,
+                    reg_t,
+                } => {
+                    debug_assert!(size <= 0b11);
+                    debug_assert!(imm12 <= 0xFFF);
+                    out |= (size as u32) << 30;
+                    out |= 0b11 << 28;
+                    out |= (v as u32) << 26;
+                    out |= 0b1 << 24;
+                    out |= (opc as u32) << 22;
+                    out |= (imm12 as u32) << 10;
+                    out |= (reg_n as u32) << 5;
+                    out |= reg_t as u32;
+                }
             }
         }
         x => unimplemented!("The instruction, {:?}, has not be implemented yet", x),
@@ -399,6 +517,66 @@ fn build_instruction(inst: AArch64Instruction) -> [u8; 4] {
 // Unit tests are added at the bottom of the file to ensure correct asm generation.
 // Please keep these in alphanumeric order.
 
+/// `ADD Xd, Xn, imm12` -> Add Xn and imm12 and place the result into Xd.
+#[inline(always)]
+fn add_reg64_reg64_imm12<'a>(
+    buf: &mut Vec<'a, u8>,
+    dst: AArch64GPReg,
+    src: AArch64GPReg,
+    imm12: u16,
+) {
+    buf.extend(&build_instruction(AArch64Instruction::DPImm(
+        DPImmGroup::AddSubImm {
+            sf: true,
+            subtract: false,
+            set_flags: false,
+            shift: false,
+            imm12,
+            reg_n: src,
+            reg_d: dst,
+        },
+    )));
+}
+
+/// `ADD Xd, Xm, Xn` -> Add Xm and Xn and place the result into Xd.
+#[inline(always)]
+fn add_reg64_reg64_reg64<'a>(
+    buf: &mut Vec<'a, u8>,
+    dst: AArch64GPReg,
+    src1: AArch64GPReg,
+    src2: AArch64GPReg,
+) {
+    buf.extend(&build_instruction(AArch64Instruction::DPReg(
+        DPRegGroup::AddSubShifted {
+            sf: true,
+            subtract: false,
+            set_flags: false,
+            shift: 0,
+            reg_m: src1,
+            imm6: 0,
+            reg_n: src2,
+            reg_d: dst,
+        },
+    )));
+}
+
+/// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
+/// Note: imm12 is the offest divided by 8.
+#[inline(always)]
+fn ldr_reg64_imm12<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, base: AArch64GPReg, imm12: u16) {
+    debug_assert!(imm12 <= 0xFFF);
+    buf.extend(&build_instruction(AArch64Instruction::LdStr(
+        LdStrGroup::UnsignedImm {
+            size: 0b11,
+            v: false,
+            opc: 0b01,
+            imm12,
+            reg_n: base,
+            reg_t: dst,
+        },
+    )));
+}
+
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
 fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, src: AArch64GPReg) {
@@ -410,7 +588,7 @@ fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, src: AArch64GPR
             shift: 0,
             reg_m: src,
             imm6: 0,
-            reg_n: AArch64GPReg::ZR,
+            reg_n: AArch64GPReg::ZRSP,
             reg_d: dst,
         },
     )));
@@ -448,6 +626,44 @@ fn movz_reg64_imm16<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, imm16: u16, hw
     )));
 }
 
+/// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
+/// Note: imm12 is the offest divided by 8.
+#[inline(always)]
+fn str_reg64_imm12<'a>(buf: &mut Vec<'a, u8>, src: AArch64GPReg, base: AArch64GPReg, imm12: u16) {
+    debug_assert!(imm12 <= 0xFFF);
+    buf.extend(&build_instruction(AArch64Instruction::LdStr(
+        LdStrGroup::UnsignedImm {
+            size: 0b11,
+            v: false,
+            opc: 0b00,
+            imm12,
+            reg_n: base,
+            reg_t: src,
+        },
+    )));
+}
+
+/// `SUB Xd, Xn, imm12` -> Subtract Xn and imm12 and place the result into Xd.
+#[inline(always)]
+fn sub_reg64_reg64_imm12<'a>(
+    buf: &mut Vec<'a, u8>,
+    dst: AArch64GPReg,
+    src: AArch64GPReg,
+    imm12: u16,
+) {
+    buf.extend(&build_instruction(AArch64Instruction::DPImm(
+        DPImmGroup::AddSubImm {
+            sf: true,
+            subtract: true,
+            set_flags: false,
+            shift: false,
+            imm12,
+            reg_n: src,
+            reg_d: dst,
+        },
+    )));
+}
+
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64<'a>(buf: &mut Vec<'a, u8>, xn: AArch64GPReg) {
@@ -471,6 +687,35 @@ mod tests {
     //const TEST_I64: i64 = 0x12345678_9ABCDEF0;
 
     #[test]
+    fn test_add_reg64_reg64_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        add_reg64_reg64_reg64(
+            &mut buf,
+            AArch64GPReg::X10,
+            AArch64GPReg::ZRSP,
+            AArch64GPReg::X21,
+        );
+        assert_eq!(&buf, &[0xAA, 0x02, 0x1F, 0x8B]);
+    }
+
+    #[test]
+    fn test_add_reg64_reg64_imm12() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        add_reg64_reg64_imm12(&mut buf, AArch64GPReg::X10, AArch64GPReg::X21, 0x123);
+        assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0x91]);
+    }
+
+    #[test]
+    fn test_ldr_reg64_imm12() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        ldr_reg64_imm12(&mut buf, AArch64GPReg::X21, AArch64GPReg::ZRSP, 0x123);
+        assert_eq!(&buf, &[0xF5, 0x8F, 0x44, 0xF9]);
+    }
+
+    #[test]
     fn test_mov_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
@@ -492,6 +737,22 @@ mod tests {
         let mut buf = bumpalo::vec![in &arena];
         movz_reg64_imm16(&mut buf, AArch64GPReg::X21, TEST_U16, 3);
         assert_eq!(&buf, &[0x95, 0x46, 0xE2, 0xD2]);
+    }
+
+    #[test]
+    fn test_str_reg64_imm12() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        str_reg64_imm12(&mut buf, AArch64GPReg::X21, AArch64GPReg::ZRSP, 0x123);
+        assert_eq!(&buf, &[0xF5, 0x8F, 0x04, 0xF9]);
+    }
+
+    #[test]
+    fn test_sub_reg64_reg64_imm12() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        sub_reg64_reg64_imm12(&mut buf, AArch64GPReg::X10, AArch64GPReg::X21, 0x123);
+        assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0xD1]);
     }
 
     #[test]
