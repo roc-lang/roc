@@ -143,13 +143,14 @@ fn zig_str_to_struct<'a, 'ctx, 'env>(
 
     let ret_type = BasicTypeEnum::StructType(collection(env.context, env.ptr_bytes));
 
-    let foo = builder.build_alloca(zig_str_type, "zig_result");
+    // a roundabout way of casting (LLVM does not accept a standard bitcast)
+    let allocation = builder.build_alloca(zig_str_type, "zig_result");
 
-    builder.build_store(foo, zig_str);
+    builder.build_store(allocation, zig_str);
 
     let ptr3 = builder
         .build_bitcast(
-            foo,
+            allocation,
             env.context.i128_type().ptr_type(AddressSpace::Generic),
             "cast",
         )

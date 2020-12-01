@@ -1319,6 +1319,7 @@ pub fn list_keep_if_help<'a, 'ctx, 'env>(
 }
 
 /// List.map : List before, (before -> after) -> List after
+#[allow(clippy::too_many_arguments)]
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
