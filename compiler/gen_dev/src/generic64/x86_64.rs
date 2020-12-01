@@ -79,6 +79,7 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
         )
     }
 
+    #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
@@ -88,6 +89,7 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
         x86_64_generic_setup_stack(buf, leaf_function, saved_regs, requested_stack_size)
     }
 
+    #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
@@ -148,6 +150,7 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
         )
     }
 
+    #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
@@ -157,6 +160,7 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
         x86_64_generic_setup_stack(buf, leaf_function, saved_regs, requested_stack_size)
     }
 
+    #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
@@ -231,6 +235,7 @@ fn x86_64_generic_cleanup_stack<'a>(
 impl Assembler<X86_64GPReg> for X86_64Assembler {
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
+    #[inline(always)]
     fn add_reg64_reg64_reg64<'a>(
         buf: &mut Vec<'a, u8>,
         dst: X86_64GPReg,
@@ -246,23 +251,29 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
             add_reg64_reg64(buf, dst, src2);
         }
     }
+    #[inline(always)]
     fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i64) {
         mov_reg64_imm64(buf, dst, imm);
     }
+    #[inline(always)]
     fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
         mov_reg64_reg64(buf, dst, src);
     }
+    #[inline(always)]
     fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, offset: i32) {
         mov_reg64_stack32(buf, dst, offset);
     }
+    #[inline(always)]
     fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: X86_64GPReg) {
         mov_stack32_reg64(buf, offset, src);
     }
+    #[inline(always)]
     fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
         mov_reg64_reg64(buf, dst, src);
         neg_reg64(buf, dst);
         cmovl_reg64_reg64(buf, dst, src);
     }
+    #[inline(always)]
     fn ret<'a>(buf: &mut Vec<'a, u8>) {
         ret(buf);
     }

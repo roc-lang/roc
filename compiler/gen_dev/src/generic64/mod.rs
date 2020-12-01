@@ -17,6 +17,7 @@ pub trait CallConv<GPReg: GPRegTrait> {
     const SHADOW_SPACE_SIZE: u8;
 
     fn callee_saved(reg: &GPReg) -> bool;
+    #[inline(always)]
     fn caller_saved_regs(reg: &GPReg) -> bool {
         !Self::callee_saved(reg)
     }

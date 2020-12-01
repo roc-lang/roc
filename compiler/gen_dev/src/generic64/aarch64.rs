@@ -104,6 +104,7 @@ impl CallConv<AArch64GPReg> for AArch64Call {
 
     const SHADOW_SPACE_SIZE: u8 = 0;
 
+    #[inline(always)]
     fn callee_saved(reg: &AArch64GPReg) -> bool {
         matches!(
             reg,
@@ -120,6 +121,7 @@ impl CallConv<AArch64GPReg> for AArch64Call {
         )
     }
 
+    #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
@@ -173,6 +175,8 @@ impl CallConv<AArch64GPReg> for AArch64Call {
             Err("Ran out of stack space".to_string())
         }
     }
+
+    #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
@@ -205,6 +209,7 @@ impl CallConv<AArch64GPReg> for AArch64Call {
 }
 
 impl Assembler<AArch64GPReg> for AArch64Assembler {
+    #[inline(always)]
     fn add_reg64_reg64_reg64<'a>(
         buf: &mut Vec<'a, u8>,
         dst: AArch64GPReg,
@@ -214,6 +219,7 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
         add_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
+    #[inline(always)]
     fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, imm: i64) {
         let mut remaining = imm as u64;
         movz_reg64_imm16(buf, dst, remaining as u16, 0);
@@ -231,10 +237,12 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
         }
     }
 
+    #[inline(always)]
     fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, src: AArch64GPReg) {
         mov_reg64_reg64(buf, dst, src);
     }
 
+    #[inline(always)]
     fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: AArch64GPReg, offset: i32) {
         if offset < 0 {
             unimplemented!("negative stack offsets are not yet implement for AArch64");
@@ -246,6 +254,7 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
         }
     }
 
+    #[inline(always)]
     fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: AArch64GPReg) {
         if offset < 0 {
             unimplemented!("negative stack offsets are not yet implement for AArch64");
@@ -257,10 +266,12 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
         }
     }
 
+    #[inline(always)]
     fn abs_reg64_reg64<'a>(_buf: &mut Vec<'a, u8>, _dst: AArch64GPReg, _src: AArch64GPReg) {
         unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
     }
 
+    #[inline(always)]
     fn ret<'a>(buf: &mut Vec<'a, u8>) {
         ret_reg64(buf, AArch64GPReg::LR)
     }
