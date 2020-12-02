@@ -629,9 +629,9 @@ pub fn strConcat(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: Ro
 
 fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.is_empty()) {
-        return cloneNonemptyStr(T, result_in_place, arg2);
+        return cloneStr(T, result_in_place, arg2);
     } else if (arg2.is_empty()) {
-        return cloneNonemptyStr(T, result_in_place, arg1);
+        return cloneStr(T, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();
 
@@ -698,7 +698,7 @@ const InPlace = packed enum(u8) {
     Clone,
 };
 
-fn cloneNonemptyStr(comptime T: type, in_place: InPlace, str: RocStr) RocStr {
+fn cloneStr(comptime T: type, in_place: InPlace, str: RocStr) RocStr {
     if (str.is_small_str() or str.is_empty()) {
         // just return the bytes
         return str;
