@@ -189,6 +189,11 @@ fn jit_to_ast_help<'a>(
             Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
                 todo!("print recursive tag unions in the REPL")
             }
+            Content::Alias(_, _, actual) => {
+                let content = env.subs.get_without_compacting(*actual).content;
+
+                jit_to_ast_help(env, lib, main_fn_name, layout, &content)
+            }
             other => unreachable!("Weird content for Union layout: {:?}", other),
         },
         Layout::RecursiveUnion(_) | Layout::RecursivePointer => {
