@@ -565,7 +565,7 @@ mod gen_list {
                 pi : F64
                 pi = 3.14
 
-                single : List Float
+                single : List F64
                 single =
                     [ 0 ]
 

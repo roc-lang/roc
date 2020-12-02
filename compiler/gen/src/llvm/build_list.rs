@@ -2050,8 +2050,6 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let len_type = env.ptr_int();
     let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
     let bytes_per_element = len_type.const_int(elem_bytes, false);
-
-    // dbg!(bytes_per_element, length);
     let number_of_data_bytes = builder.build_int_mul(bytes_per_element, length, "data_length");
 
     let rc1 = match inplace {
