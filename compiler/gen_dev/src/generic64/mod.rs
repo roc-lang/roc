@@ -1,49 +1,61 @@
 use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
-use roc_collections::all::{ImSet, MutMap, MutSet};
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{Literal, Stmt};
 use std::marker::PhantomData;
 use target_lexicon::Triple;
 
+pub mod aarch64;
 pub mod x86_64;
 
-pub trait CallConv<GPReg> {
-    fn gp_param_regs() -> &'static [GPReg];
-    fn gp_return_regs() -> &'static [GPReg];
-    fn gp_default_free_regs() -> &'static [GPReg];
+pub trait CallConv<GPReg: GPRegTrait> {
+    const GP_PARAM_REGS: &'static [GPReg];
+    const GP_RETURN_REGS: &'static [GPReg];
+    const GP_DEFAULT_FREE_REGS: &'static [GPReg];
 
-    // A linear scan of an array may be faster than a set technically.
-    // That being said, fastest would likely be a trait based on calling convention/register.
-    fn caller_saved_regs() -> ImSet<GPReg>;
-    fn callee_saved_regs() -> ImSet<GPReg>;
+    const SHADOW_SPACE_SIZE: u8;
 
-    fn stack_pointer() -> GPReg;
-    fn frame_pointer() -> GPReg;
+    fn callee_saved(reg: &GPReg) -> bool;
+    #[inline(always)]
+    fn caller_saved_regs(reg: &GPReg) -> bool {
+        !Self::callee_saved(reg)
+    }
 
-    fn shadow_space_size() -> u8;
-    // It may be worth ignoring the red zone and keeping things simpler.
-    fn red_zone_size() -> u8;
+    fn setup_stack<'a>(
+        buf: &mut Vec<'a, u8>,
+        leaf_function: bool,
+        saved_regs: &[GPReg],
+        requested_stack_size: i32,
+    ) -> Result<i32, String>;
+    fn cleanup_stack<'a>(
+        buf: &mut Vec<'a, u8>,
+        leaf_function: bool,
+        saved_regs: &[GPReg],
+        aligned_stack_size: i32,
+    ) -> Result<(), String>;
 }
 
-pub trait Assembler<GPReg> {
-    fn add_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn add_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn cmovl_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn mov_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn mov_register64bit_immediate64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i64);
-    fn mov_register64bit_register64bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
-    fn mov_register64bit_stackoffset32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32);
-    fn mov_stackoffset32bit_register64bit<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg);
-    fn neg_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
+/// Assembler contains calls to the backend assembly generator.
+/// These calls do not necessarily map directly to a single assembly instruction.
+/// They are higher level in cases where an instruction would not be common and shared between multiple architectures.
+/// Thus, some backends will need to use mulitiple instructions to preform a single one of this calls.
+/// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
+/// dst should always come before sources.
+pub trait Assembler<GPReg: GPRegTrait> {
+    fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
+    fn add_reg64_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src1: GPReg, imm32: i32);
+    fn add_reg64_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
+    fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i64);
+    fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
+    fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32);
+    fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg);
+    fn sub_reg64_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src1: GPReg, imm32: i32);
     fn ret<'a>(buf: &mut Vec<'a, u8>);
-    fn sub_register64bit_immediate32bit<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i32);
-    fn pop_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
-    fn push_register64bit<'a>(buf: &mut Vec<'a, u8>, reg: GPReg);
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum SymbolStorage<GPReg> {
+enum SymbolStorage<GPReg: GPRegTrait> {
     // These may need layout, but I am not sure.
     // I think whenever a symbol would be used, we specify layout anyways.
     GPRegeg(GPReg),
@@ -69,7 +81,7 @@ pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallCo
     literal_map: MutMap<Symbol, Literal<'a>>,
 
     // This should probably be smarter than a vec.
-    // There are certain registers we should always use first. With pushing and poping, this could get mixed.
+    // There are certain registers we should always use first. With pushing and popping, this could get mixed.
     gp_free_regs: Vec<'a, GPReg>,
 
     // The last major thing we need is a way to decide what reg to free when all of them are full.
@@ -109,7 +121,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     }
 
     fn reset(&mut self) {
-        self.stack_size = -(CC::red_zone_size() as i32);
+        self.stack_size = 0;
         self.leaf_function = true;
         self.last_seen_map.clear();
         self.free_map.clear();
@@ -119,13 +131,12 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         self.gp_free_regs.clear();
         self.gp_used_regs.clear();
         self.gp_free_regs
-            .extend_from_slice(CC::gp_default_free_regs());
+            .extend_from_slice(CC::GP_DEFAULT_FREE_REGS);
     }
 
     fn set_not_leaf_function(&mut self) {
         self.leaf_function = false;
-        // If this is not a leaf function, it can't use the shadow space.
-        self.stack_size = CC::shadow_space_size() as i32 - CC::red_zone_size() as i32;
+        self.stack_size = CC::SHADOW_SPACE_SIZE as i32;
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
@@ -147,38 +158,17 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
         let mut out = bumpalo::vec![in self.env.arena];
 
-        if !self.leaf_function {
-            // I believe that this will have to move away from push and to mov to be generic across backends.
-            ASM::push_register64bit(&mut out, CC::frame_pointer());
-            ASM::mov_register64bit_register64bit(
-                &mut out,
-                CC::frame_pointer(),
-                CC::stack_pointer(),
-            );
-        }
-        // Save data in all callee saved regs.
-        let mut pop_order = bumpalo::vec![in self.env.arena];
-        for reg in &self.used_callee_saved_regs {
-            ASM::push_register64bit(&mut out, *reg);
-            pop_order.push(*reg);
-        }
-        if self.stack_size > 0 {
-            ASM::sub_register64bit_immediate32bit(&mut out, CC::stack_pointer(), self.stack_size);
-        }
+        // Setup stack.
+        let mut used_regs = bumpalo::vec![in self.env.arena];
+        used_regs.extend(&self.used_callee_saved_regs);
+        let aligned_stack_size =
+            CC::setup_stack(&mut out, self.leaf_function, &used_regs, self.stack_size)?;
 
         // Add function body.
         out.extend(&self.buf);
 
-        if self.stack_size > 0 {
-            ASM::add_register64bit_immediate32bit(&mut out, CC::stack_pointer(), self.stack_size);
-        }
-        // Restore data in callee saved regs.
-        while let Some(reg) = pop_order.pop() {
-            ASM::pop_register64bit(&mut out, reg);
-        }
-        if !self.leaf_function {
-            ASM::pop_register64bit(&mut out, CC::frame_pointer());
-        }
+        // Cleanup stack.
+        CC::cleanup_stack(&mut out, self.leaf_function, &used_regs, aligned_stack_size)?;
         ASM::ret(&mut out);
 
         Ok((out.into_bump_slice(), &[]))
@@ -187,9 +177,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
         let dst_reg = self.claim_gp_reg(dst)?;
         let src_reg = self.load_to_reg(src)?;
-        ASM::mov_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
-        ASM::neg_register64bit(&mut self.buf, dst_reg);
-        ASM::cmovl_register64bit_register64bit(&mut self.buf, dst_reg, src_reg);
+        ASM::abs_reg64_reg64(&mut self.buf, dst_reg, src_reg);
         Ok(())
     }
 
@@ -201,9 +189,8 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     ) -> Result<(), String> {
         let dst_reg = self.claim_gp_reg(dst)?;
         let src1_reg = self.load_to_reg(src1)?;
-        ASM::mov_register64bit_register64bit(&mut self.buf, dst_reg, src1_reg);
         let src2_reg = self.load_to_reg(src2)?;
-        ASM::add_register64bit_register64bit(&mut self.buf, dst_reg, src2_reg);
+        ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
         Ok(())
     }
 
@@ -212,7 +199,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
             Literal::Int(x) => {
                 let reg = self.claim_gp_reg(sym)?;
                 let val = *x;
-                ASM::mov_register64bit_immediate64bit(&mut self.buf, reg, val);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, val);
                 Ok(())
             }
             x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
@@ -234,11 +221,11 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.get(sym);
         match val {
-            Some(SymbolStorage::GPRegeg(reg)) if *reg == CC::gp_return_regs()[0] => Ok(()),
+            Some(SymbolStorage::GPRegeg(reg)) if *reg == CC::GP_RETURN_REGS[0] => Ok(()),
             Some(SymbolStorage::GPRegeg(reg)) => {
                 // If it fits in a general purpose register, just copy it over to.
                 // Technically this can be optimized to produce shorter instructions if less than 64bits.
-                ASM::mov_register64bit_register64bit(&mut self.buf, CC::gp_return_regs()[0], *reg);
+                ASM::mov_reg64_reg64(&mut self.buf, CC::GP_RETURN_REGS[0], *reg);
                 Ok(())
             }
             Some(x) => Err(format!(
@@ -258,7 +245,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
     fn claim_gp_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
         let reg = if !self.gp_free_regs.is_empty() {
             let free_reg = self.gp_free_regs.pop().unwrap();
-            if CC::callee_saved_regs().contains(&free_reg) {
+            if CC::callee_saved(&free_reg) {
                 self.used_callee_saved_regs.insert(free_reg);
             }
             Ok(free_reg)
@@ -291,7 +278,7 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
                 let reg = self.claim_gp_reg(sym)?;
                 self.symbols_map
                     .insert(*sym, SymbolStorage::StackAndGPRegeg(reg, offset));
-                ASM::mov_register64bit_stackoffset32bit(&mut self.buf, reg, offset as i32);
+                ASM::mov_reg64_stack32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
             None => Err(format!("Unknown symbol: {}", sym)),
@@ -302,19 +289,9 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
         let val = self.symbols_map.remove(sym);
         match val {
             Some(SymbolStorage::GPRegeg(reg)) => {
-                let offset = self.stack_size;
-                self.stack_size += 8;
-                if let Some(size) = self.stack_size.checked_add(8) {
-                    self.stack_size = size;
-                } else {
-                    return Err(format!(
-                        "Ran out of stack space while saving symbol: {}",
-                        sym
-                    ));
-                }
-                ASM::mov_stackoffset32bit_register64bit(&mut self.buf, offset as i32, reg);
-                self.symbols_map
-                    .insert(*sym, SymbolStorage::Stack(offset as i32));
+                let offset = self.increase_stack_size(8)?;
+                ASM::mov_stack32_reg64(&mut self.buf, offset as i32, reg);
+                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
                 Ok(())
             }
             Some(SymbolStorage::StackAndGPRegeg(_, offset)) => {
@@ -326,6 +303,18 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
                 Ok(())
             }
             None => Err(format!("Unknown symbol: {}", sym)),
+        }
+    }
+
+    /// increase_stack_size increase the current stack size and returns the offset of the stack.
+    fn increase_stack_size(&mut self, amount: i32) -> Result<i32, String> {
+        debug_assert!(amount > 0);
+        let offset = self.stack_size;
+        if let Some(new_size) = self.stack_size.checked_add(amount) {
+            self.stack_size = new_size;
+            Ok(offset)
+        } else {
+            Err("Ran out of stack space".to_string())
         }
     }
 }
