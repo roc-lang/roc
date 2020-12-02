@@ -41,7 +41,7 @@ pub fn arch_str(target: &Triple) -> &'static str {
 
             "x86-64"
         }
-        Architecture::Aarch64(_) => {
+        Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => {
             Target::initialize_aarch64(&InitializationConfig::default());
             "aarch64"
         }
