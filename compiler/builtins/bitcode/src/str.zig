@@ -27,6 +27,8 @@ const RocStr = extern struct {
             var ret_small_str = RocStr.empty();
             const target_ptr = @ptrToInt(&ret_small_str);
             var index: u8 = 0;
+
+            // TODO isn't there a way to bulk-zero data in Zig?
             // Zero out the data, just to be safe
             while (index < rocStrSize) {
                 var offset_ptr = @intToPtr(*u8, target_ptr + index);
@@ -34,6 +36,7 @@ const RocStr = extern struct {
                 index += 1;
             }
 
+            // TODO rewrite this into a for loop
             index = 0;
             while (index < length) {
                 var offset_ptr = @intToPtr(*u8, target_ptr + index);
