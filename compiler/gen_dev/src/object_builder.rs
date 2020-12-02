@@ -1,4 +1,4 @@
-use crate::generic64::{x86_64, Backend64Bit};
+use crate::generic64::{aarch64, x86_64, Backend64Bit};
 use crate::{Backend, Env, Relocation, INLINED_SYMBOLS};
 use bumpalo::collections::Vec;
 use object::write;
@@ -22,7 +22,7 @@ pub fn build_module<'a>(
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, Layout<'a>), Proc<'a>>,
 ) -> Result<Object, String> {
-    let (mut output, mut backend) = match target {
+    match target {
         Triple {
             architecture: TargetArch::X86_64,
             binary_format: TargetBF::Elf,
@@ -33,15 +33,42 @@ pub fn build_module<'a>(
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
             > = Backend::new(env, target)?;
-            Ok((
-                Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little),
+            build_object(
+                env,
+                procedures,
                 backend,
-            ))
+                Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little),
+            )
+        }
+        Triple {
+            architecture: TargetArch::Aarch64(_),
+            binary_format: TargetBF::Elf,
+            ..
+        } => {
+            let backend: Backend64Bit<
+                aarch64::AArch64GPReg,
+                aarch64::AArch64Assembler,
+                aarch64::AArch64Call,
+            > = Backend::new(env, target)?;
+            build_object(
+                env,
+                procedures,
+                backend,
+                Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
+            )
         }
         x => Err(format! {
         "the target, {:?}, is not yet implemented",
         x}),
-    }?;
+    }
+}
+
+fn build_object<'a, B: Backend<'a>>(
+    env: &'a Env,
+    procedures: MutMap<(symbol::Symbol, Layout<'a>), Proc<'a>>,
+    mut backend: B,
+    mut output: Object,
+) -> Result<Object, String> {
     let text = output.section_id(StandardSection::Text);
     let data_section = output.section_id(StandardSection::Data);
     let comment = output.add_section(vec![], b"comment".to_vec(), SectionKind::OtherString);

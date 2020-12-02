@@ -54,3 +54,8 @@ maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
+
+[features]
+target-arm = []
+target-aarch64 = []
+target-webassembly = []

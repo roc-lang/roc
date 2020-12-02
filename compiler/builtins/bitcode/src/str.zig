@@ -122,6 +122,10 @@ const RocStr = extern struct {
         return if (self.is_small_str()) small_len else big_len;
     }
 
+    pub fn is_empty(self: RocStr) bool {
+        return self.len() == 0;
+    }
+
     // Given a pointer to some bytes, write the first (len) bytes of this
     // RocStr's contents into it.
     //
@@ -585,4 +589,146 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     const prefix_ptr: [*]u8 = &str;
 
     expect(startsWith(str_ptr, str_len, prefix_ptr, prefix_len));
+}
+
+// Str.concat
+
+test "RocStr.concat: small concat small" {
+    const str1_len = 3;
+    var str1: [str1_len]u8 = "foo".*;
+    const str1_ptr: [*]u8 = &str1;
+    var roc_str1 = RocStr.init(str1_ptr, str1_len);
+
+    const str2_len = 3;
+    var str2: [str2_len]u8 = "abc".*;
+    const str2_ptr: [*]u8 = &str2;
+    var roc_str2 = RocStr.init(str2_ptr, str2_len);
+
+    const str3_len = 6;
+    var str3: [str3_len]u8 = "fooabc".*;
+    const str3_ptr: [*]u8 = &str3;
+    var roc_str3 = RocStr.init(str3_ptr, str3_len);
+
+    const result = strConcat(8, InPlace.Clone, roc_str1, roc_str2);
+
+    expect(roc_str3.eq(result));
+
+    roc_str1.drop();
+    roc_str2.drop();
+    roc_str3.drop();
+    result.drop();
+}
+
+pub fn strConcat(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
+    return switch (ptr_size) {
+        4 => strConcatHelp(i32, result_in_place, arg1, arg2),
+        8 => strConcatHelp(i64, result_in_place, arg1, arg2),
+        else => unreachable,
+    };
+}
+
+fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
+    if (arg1.is_empty()) {
+        return cloneNonemptyStr(T, result_in_place, arg2);
+    } else if (arg2.is_empty()) {
+        return cloneNonemptyStr(T, result_in_place, arg1);
+    } else {
+        const combined_length = arg1.len() + arg2.len();
+
+        const small_str_bytes = 2 * @sizeOf(T);
+        const result_is_big = combined_length >= small_str_bytes;
+
+        if (result_is_big) {
+            var result = allocate_str(T, result_in_place, combined_length);
+
+            {
+                const old_if_small = &@bitCast([16]u8, arg1);
+                const old_if_big = @ptrCast([*]u8, arg1.str_bytes);
+                const old_bytes = if (arg1.is_small_str()) old_if_small else old_if_big;
+
+                const new_bytes: [*]u8 = @ptrCast([*]u8, result.str_bytes);
+
+                @memcpy(new_bytes, old_bytes, arg1.len());
+            }
+
+            {
+                const old_if_small = &@bitCast([16]u8, arg2);
+                const old_if_big = @ptrCast([*]u8, arg2.str_bytes);
+                const old_bytes = if (arg2.is_small_str()) old_if_small else old_if_big;
+
+                const new_bytes = @ptrCast([*]u8, result.str_bytes) + arg1.len();
+
+                @memcpy(new_bytes, old_bytes, arg2.len());
+            }
+
+            return result;
+        } else {
+            var result = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+            // if the result is small, then for sure arg1 and arg2 are also small
+
+            {
+                var old_bytes: [*]u8 = @ptrCast([*]u8, &@bitCast([16]u8, arg1));
+                var new_bytes: [*]u8 = @ptrCast([*]u8, &result);
+
+                @memcpy(new_bytes, old_bytes, arg1.len());
+            }
+
+            {
+                var old_bytes: [*]u8 = @ptrCast([*]u8, &@bitCast([16]u8, arg2));
+                var new_bytes = @ptrCast([*]u8, &result) + arg1.len();
+
+                @memcpy(new_bytes, old_bytes, arg2.len());
+            }
+
+            const mask: u8 = 0b1000_0000;
+            const final_byte = @truncate(u8, combined_length) | mask;
+
+            result[small_str_bytes - 1] = final_byte;
+
+            return @bitCast(RocStr, result);
+        }
+
+        return result;
+    }
+}
+
+const InPlace = packed enum(u8) {
+    InPlace,
+    Clone,
+};
+
+fn cloneNonemptyStr(comptime T: type, in_place: InPlace, str: RocStr) RocStr {
+    if (str.is_small_str() or str.is_empty()) {
+        // just return the bytes
+        return str;
+    } else {
+        var new_str = allocate_str(T, in_place, str.str_len);
+
+        var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
+        var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
+
+        @memcpy(new_bytes, old_bytes, str.str_len);
+
+        return new_str;
+    }
+}
+
+fn allocate_str(comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
+    const length = @sizeOf(T) + number_of_chars;
+    var new_bytes: [*]T = @ptrCast([*]T, @alignCast(@alignOf(T), malloc(length)));
+
+    if (in_place == InPlace.InPlace) {
+        new_bytes[0] = @intCast(T, number_of_chars);
+    } else {
+        new_bytes[0] = std.math.minInt(T);
+    }
+
+    var first_element = @ptrCast([*]align(@alignOf(T)) u8, new_bytes);
+    first_element += 8;
+
+    return RocStr{
+        .str_bytes = first_element,
+        .str_len = number_of_chars,
+    };
 }
