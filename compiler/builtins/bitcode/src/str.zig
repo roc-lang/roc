@@ -610,7 +610,7 @@ test "RocStr.concat: small concat small" {
     const str3_ptr: [*]u8 = &str3;
     var roc_str3 = RocStr.init(str3_ptr, str3_len);
 
-    const result = strConcat(8, roc_str1, roc_str2);
+    const result = strConcat(8, InPlace.Clone, roc_str1, roc_str2);
 
     expect(roc_str3.eq(result));
 
