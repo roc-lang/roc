@@ -558,6 +558,26 @@ mod gen_list {
     }
 
     #[test]
+    fn list_map_closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                pi : F64
+                pi = 3.14
+
+                single : List F64
+                single =
+                    [ 0 ]
+
+                List.map single (\x -> x + pi)
+                "#
+            ),
+            RocList::from_slice(&[3.14]),
+            RocList<f64>
+        );
+    }
+
+    #[test]
     fn list_join_empty_list() {
         assert_evals_to!("List.join []", RocList::from_slice(&[]), RocList<i64>);
     }

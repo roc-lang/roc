@@ -1370,6 +1370,60 @@ pub fn list_map<'a, 'ctx, 'env>(
 
             if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
         }
+        (BasicValueEnum::StructValue(ptr_and_data), Layout::Closure(_, _, ret_elem_layout)) => {
+            let non_empty_fn = |elem_layout: &Layout<'a>,
+                                len: IntValue<'ctx>,
+                                list_wrapper: StructValue<'ctx>| {
+                let ctx = env.context;
+                let builder = env.builder;
+
+                let func_ptr = builder
+                    .build_extract_value(ptr_and_data, 0, "function_ptr")
+                    .unwrap()
+                    .into_pointer_value();
+
+                let closure_data = builder
+                    .build_extract_value(ptr_and_data, 1, "closure_data")
+                    .unwrap();
+
+                let ret_list_ptr = allocate_list(env, inplace, ret_elem_layout, len);
+
+                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
+
+                let list_loop = |index, before_elem| {
+                    let call_site_value = builder.build_call(
+                        func_ptr,
+                        env.arena.alloc([before_elem, closure_data]),
+                        "map_func",
+                    );
+
+                    // set the calling convention explicitly for this call
+                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                    let after_elem = call_site_value
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
+                    // The pointer to the element in the mapped-over list
+                    let after_elem_ptr = unsafe {
+                        builder.build_in_bounds_gep(ret_list_ptr, &[index], "load_index_after_list")
+                    };
+
+                    // Mutate the new array in-place to change the element.
+                    builder.build_store(after_elem_ptr, after_elem);
+                };
+
+                incrementing_elem_loop(builder, ctx, parent, list_ptr, len, "#index", list_loop);
+
+                store_list(env, ret_list_ptr, len)
+            };
+
+            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
+        }
         _ => {
             unreachable!(
                 "Invalid function basic value enum or layout for List.map : {:?}",
