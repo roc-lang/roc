@@ -92,6 +92,8 @@ Now with nix installed you just need to run one command:
 
 > This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
 
+> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
+
 You should be in a shell with everything needed to build already installed. Next run:
 
 `cargo run repl`
