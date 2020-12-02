@@ -43,12 +43,14 @@ pub trait CallConv<GPReg: GPRegTrait> {
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
 pub trait Assembler<GPReg: GPRegTrait> {
+    fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
+    fn add_reg64_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src1: GPReg, imm32: i32);
     fn add_reg64_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
     fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, imm: i64);
     fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
     fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, offset: i32);
     fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: GPReg);
-    fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src: GPReg);
+    fn sub_reg64_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: GPReg, src1: GPReg, imm32: i32);
     fn ret<'a>(buf: &mut Vec<'a, u8>);
 }
 

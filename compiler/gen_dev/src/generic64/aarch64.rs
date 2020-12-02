@@ -147,12 +147,11 @@ impl CallConv<AArch64GPReg> for AArch64Call {
             requested_stack_size.checked_add(8 * saved_regs.len() as i32 + offset as i32)
         {
             if aligned_stack_size > 0 {
-                // TODO deal with sizes over imm12.
-                sub_reg64_reg64_imm12(
+                AArch64Assembler::sub_reg64_reg64_imm32(
                     buf,
                     AArch64GPReg::ZRSP,
                     AArch64GPReg::ZRSP,
-                    aligned_stack_size as u16,
+                    aligned_stack_size,
                 );
 
                 // All the following stores could be optimized by using `STP` to store pairs.
@@ -196,12 +195,11 @@ impl CallConv<AArch64GPReg> for AArch64Call {
                 offset -= 8;
                 AArch64Assembler::mov_reg64_stack32(buf, *reg, offset);
             }
-            // TODO deal with sizes over imm12.
-            add_reg64_reg64_imm12(
+            AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
                 AArch64GPReg::ZRSP,
                 AArch64GPReg::ZRSP,
-                aligned_stack_size as u16,
+                aligned_stack_size,
             );
         }
         Ok(())
@@ -209,6 +207,29 @@ impl CallConv<AArch64GPReg> for AArch64Call {
 }
 
 impl Assembler<AArch64GPReg> for AArch64Assembler {
+    #[inline(always)]
+    fn abs_reg64_reg64<'a>(_buf: &mut Vec<'a, u8>, _dst: AArch64GPReg, _src: AArch64GPReg) {
+        unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
+    }
+
+    #[inline(always)]
+    fn add_reg64_reg64_imm32<'a>(
+        buf: &mut Vec<'a, u8>,
+        dst: AArch64GPReg,
+        src: AArch64GPReg,
+        imm32: i32,
+    ) {
+        if imm32 < 0 {
+            unimplemented!("immediate addition with values less than 0 are not yet implemented");
+        } else if imm32 < 0xFFF {
+            add_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
+        } else {
+            unimplemented!(
+                "immediate additions with values greater than 12bits are not yet implemented"
+            );
+        }
+    }
+
     #[inline(always)]
     fn add_reg64_reg64_reg64<'a>(
         buf: &mut Vec<'a, u8>,
@@ -267,8 +288,23 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn abs_reg64_reg64<'a>(_buf: &mut Vec<'a, u8>, _dst: AArch64GPReg, _src: AArch64GPReg) {
-        unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
+    fn sub_reg64_reg64_imm32<'a>(
+        buf: &mut Vec<'a, u8>,
+        dst: AArch64GPReg,
+        src: AArch64GPReg,
+        imm32: i32,
+    ) {
+        if imm32 < 0 {
+            unimplemented!(
+                "immediate subtractions with values less than 0 are not yet implemented"
+            );
+        } else if imm32 < 0xFFF {
+            sub_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
+        } else {
+            unimplemented!(
+                "immediate subtractions with values greater than 12bits are not yet implemented"
+            );
+        }
     }
 
     #[inline(always)]
@@ -276,6 +312,8 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
         ret_reg64(buf, AArch64GPReg::LR)
     }
 }
+
+impl AArch64Assembler {}
 
 /// AArch64Instruction, maps all instructions to an enum.
 /// Decoding the function should be cheap because we will always inline.

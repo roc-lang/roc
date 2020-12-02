@@ -179,11 +179,11 @@ fn x86_64_generic_setup_stack<'a>(
     requested_stack_size: i32,
 ) -> Result<i32, String> {
     if !leaf_function {
-        push_reg64(buf, X86_64GPReg::RBP);
+        X86_64Assembler::push_reg64(buf, X86_64GPReg::RBP);
         X86_64Assembler::mov_reg64_reg64(buf, X86_64GPReg::RBP, X86_64GPReg::RSP);
     }
     for reg in saved_regs {
-        push_reg64(buf, *reg);
+        X86_64Assembler::push_reg64(buf, *reg);
     }
 
     // full size is upcast to i64 to make sure we don't overflow here.
@@ -200,8 +200,12 @@ fn x86_64_generic_setup_stack<'a>(
     };
     if let Some(aligned_stack_size) = requested_stack_size.checked_add(offset as i32) {
         if aligned_stack_size > 0 {
-            // TODO: move this call to one using X86_64Assembler.
-            sub_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
+            X86_64Assembler::sub_reg64_reg64_imm32(
+                buf,
+                X86_64GPReg::RSP,
+                X86_64GPReg::RSP,
+                aligned_stack_size,
+            );
             Ok(aligned_stack_size)
         } else {
             Ok(0)
@@ -219,15 +223,19 @@ fn x86_64_generic_cleanup_stack<'a>(
     aligned_stack_size: i32,
 ) -> Result<(), String> {
     if aligned_stack_size > 0 {
-        // TODO: move this call to one using X86_64Assembler.
-        add_reg64_imm32(buf, X86_64GPReg::RSP, aligned_stack_size);
+        X86_64Assembler::add_reg64_reg64_imm32(
+            buf,
+            X86_64GPReg::RSP,
+            X86_64GPReg::RSP,
+            aligned_stack_size,
+        );
     }
     for reg in saved_regs.iter().rev() {
-        pop_reg64(buf, *reg);
+        X86_64Assembler::pop_reg64(buf, *reg);
     }
     if !leaf_function {
         X86_64Assembler::mov_reg64_reg64(buf, X86_64GPReg::RSP, X86_64GPReg::RBP);
-        pop_reg64(buf, X86_64GPReg::RBP);
+        X86_64Assembler::pop_reg64(buf, X86_64GPReg::RBP);
     }
     Ok(())
 }
@@ -235,6 +243,26 @@ fn x86_64_generic_cleanup_stack<'a>(
 impl Assembler<X86_64GPReg> for X86_64Assembler {
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
+    #[inline(always)]
+    fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+        mov_reg64_reg64(buf, dst, src);
+        neg_reg64(buf, dst);
+        cmovl_reg64_reg64(buf, dst, src);
+    }
+    #[inline(always)]
+    fn add_reg64_reg64_imm32<'a>(
+        buf: &mut Vec<'a, u8>,
+        dst: X86_64GPReg,
+        src1: X86_64GPReg,
+        imm32: i32,
+    ) {
+        if dst == src1 {
+            add_reg64_imm32(buf, dst, imm32);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            add_reg64_imm32(buf, dst, imm32);
+        }
+    }
     #[inline(always)]
     fn add_reg64_reg64_reg64<'a>(
         buf: &mut Vec<'a, u8>,
@@ -268,10 +296,18 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
         mov_stack32_reg64(buf, offset, src);
     }
     #[inline(always)]
-    fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
-        mov_reg64_reg64(buf, dst, src);
-        neg_reg64(buf, dst);
-        cmovl_reg64_reg64(buf, dst, src);
+    fn sub_reg64_reg64_imm32<'a>(
+        buf: &mut Vec<'a, u8>,
+        dst: X86_64GPReg,
+        src1: X86_64GPReg,
+        imm32: i32,
+    ) {
+        if dst == src1 {
+            sub_reg64_imm32(buf, dst, imm32);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            sub_reg64_imm32(buf, dst, imm32);
+        }
     }
     #[inline(always)]
     fn ret<'a>(buf: &mut Vec<'a, u8>) {
@@ -279,6 +315,17 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     }
 }
 
+impl X86_64Assembler {
+    #[inline(always)]
+    fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+        pop_reg64(buf, reg);
+    }
+
+    #[inline(always)]
+    fn push_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+        push_reg64(buf, reg);
+    }
+}
 const REX: u8 = 0x40;
 const REX_W: u8 = REX + 0x8;
 
