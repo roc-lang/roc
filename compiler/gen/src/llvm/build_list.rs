@@ -3,7 +3,7 @@ use crate::llvm::build::{
 };
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
-use crate::llvm::refcounting::decrement_refcount_layout;
+use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
@@ -1370,6 +1370,7 @@ pub fn list_map<'a, 'ctx, 'env>(
 
                 let result = store_list(env, ret_list_ptr, len);
 
+                // decrement the input list (the function is a function pointer, and is never refcounted)
                 decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
 
                 result
@@ -1426,7 +1427,13 @@ pub fn list_map<'a, 'ctx, 'env>(
 
                 incrementing_elem_loop(builder, ctx, parent, list_ptr, len, "#index", list_loop);
 
-                store_list(env, ret_list_ptr, len)
+                let result = store_list(env, ret_list_ptr, len);
+
+                // decrement the input list and input closure
+                decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
+                decrement_refcount_layout(env, parent, layout_ids, func, func_layout);
+
+                result
             };
 
             if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
