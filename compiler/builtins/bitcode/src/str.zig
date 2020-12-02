@@ -27,6 +27,8 @@ const RocStr = extern struct {
             var ret_small_str = RocStr.empty();
             const target_ptr = @ptrToInt(&ret_small_str);
             var index: u8 = 0;
+
+            // TODO isn't there a way to bulk-zero data in Zig?
             // Zero out the data, just to be safe
             while (index < rocStrSize) {
                 var offset_ptr = @intToPtr(*u8, target_ptr + index);
@@ -34,6 +36,7 @@ const RocStr = extern struct {
                 index += 1;
             }
 
+            // TODO rewrite this into a for loop
             index = 0;
             while (index < length) {
                 var offset_ptr = @intToPtr(*u8, target_ptr + index);
@@ -87,8 +90,8 @@ const RocStr = extern struct {
         const other_bytes_nonnull: [*]const u8 = other_bytes_ptr orelse unreachable;
         const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
         const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self_len < @sizeOf(RocStr)) self_u8_ptr else self_bytes_nonnull;
-        const other_bytes: [*]const u8 = if (other_len < @sizeOf(RocStr)) other_u8_ptr else other_bytes_nonnull;
+        const self_bytes: [*]const u8 = if (self.is_small_str()) self_u8_ptr else self_bytes_nonnull;
+        const other_bytes: [*]const u8 = if (other.is_small_str()) other_u8_ptr else other_bytes_nonnull;
 
         var index: usize = 0;
 
@@ -123,14 +126,13 @@ const RocStr = extern struct {
         return self.len() == 0;
     }
 
-    // Given a pointer to some memory of length (self.len() + 1) bytes,
-    // write this RocStr's contents into it as a nul-terminated C string.
+    // Given a pointer to some bytes, write the first (len) bytes of this
+    // RocStr's contents into it.
     //
-    // This is useful so that (for example) we can write into an `alloca`
-    // if the C string only needs to live long enough to be passed as an
-    // argument to a C function - like the file path argument to `fopen`.
-    pub fn write_cstr(self: RocStr, dest: [*]u8) void {
-        const len: usize = self.len();
+    // One use for this function is writing into an `alloca` for a C string that
+    // only needs to live long enough to be passed as an argument to
+    // a C function - like the file path argument to `fopen`.
+    pub fn memcpy(self: RocStr, dest: [*]u8, len: usize) void {
         const small_src = @ptrCast(*u8, self);
         const big_src = self.str_bytes_ptr;
 
@@ -139,12 +141,9 @@ const RocStr = extern struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        const src: [*]u8 = if (len < @sizeOf(RocStr)) small_src else big_src;
+        const src: [*]u8 = if (self.is_small_str()) small_src else big_src;
 
         @memcpy(dest, src, len);
-
-        // C strings must end in 0.
-        dest[len + 1] = 0;
     }
 
     test "RocStr.eq: equal" {

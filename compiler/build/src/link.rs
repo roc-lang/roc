@@ -42,26 +42,40 @@ pub fn link(
 pub fn rebuild_host(host_input_path: &Path) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
+    let zig_host_src = host_input_path.with_file_name("host.zig");
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
     let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
     let host_dest = host_input_path.with_file_name("host.o");
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
-    // Compile host.c
-    let output = Command::new("clang")
-        .env_clear()
-        .env("PATH", &env_path)
-        .args(&[
-            "-c",
-            c_host_src.to_str().unwrap(),
-            "-o",
-            c_host_dest.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
 
-    validate_output("host.c", "clang", output);
+    if zig_host_src.exists() {
+        // Compile host.zig
+        let output = Command::new("zig")
+            .env_clear()
+            .env("PATH", &env_path)
+            .args(&["build-obj", zig_host_src.to_str().unwrap()])
+            .output()
+            .unwrap();
+
+        validate_output("host.zig", "zig", output);
+    } else {
+        // Compile host.c
+        let output = Command::new("clang")
+            .env_clear()
+            .env("PATH", &env_path)
+            .args(&[
+                "-c",
+                c_host_src.to_str().unwrap(),
+                "-o",
+                c_host_dest.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        validate_output("host.c", "clang", output);
+    }
 
     if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
@@ -132,15 +146,15 @@ pub fn rebuild_host(host_input_path: &Path) {
             .unwrap();
 
         validate_output("rust_host.o", "rm", output);
-    } else {
-        // Clean up rust_host.o
+    } else if c_host_dest.exists() {
+        // Clean up c_host.o
         let output = Command::new("mv")
             .env_clear()
             .args(&[c_host_dest, host_dest])
             .output()
             .unwrap();
 
-        validate_output("rust_host.o", "mv", output);
+        validate_output("c_host.o", "mv", output);
     }
 }
 
