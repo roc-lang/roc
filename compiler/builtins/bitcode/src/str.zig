@@ -90,8 +90,8 @@ const RocStr = extern struct {
         const other_bytes_nonnull: [*]const u8 = other_bytes_ptr orelse unreachable;
         const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
         const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self_len < @sizeOf(RocStr)) self_u8_ptr else self_bytes_nonnull;
-        const other_bytes: [*]const u8 = if (other_len < @sizeOf(RocStr)) other_u8_ptr else other_bytes_nonnull;
+        const self_bytes: [*]const u8 = if (self.is_small_str()) self_u8_ptr else self_bytes_nonnull;
+        const other_bytes: [*]const u8 = if (other.is_small_str()) other_u8_ptr else other_bytes_nonnull;
 
         var index: usize = 0;
 
