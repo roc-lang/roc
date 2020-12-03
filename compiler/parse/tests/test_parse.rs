@@ -2665,6 +2665,41 @@ mod test_parse {
     }
 
     #[test]
+    fn repro_keyword_bug() {
+        // Reproducing this bug requires a bizarre set of things to all be true:
+        //
+        // * Must be parsing a *module* def (nested expr defs don't repro this)
+        // * That top-level module def conatins a def inside it
+        // * That inner def is defining a function
+        // * The name of the inner def begins with a keyword (`if`, `then`, `else`, `when`, `is`)
+        //
+        // If all of these are true, then lookups on that def get skipped over by the parser.
+        // If any one of the above is false, then everything works.
+
+        let arena = Bump::new();
+        let src = indoc!(
+            r#"
+                foo = \list ->
+                    isTest = \_ -> 5
+                    List.map list isTest
+            "#
+        );
+        let actual = module_defs()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        // It should occur twice in the debug output - once for the pattern,
+        // and then again for the lookup.
+        let occurrences = format!("{:?}", actual)
+            .split("isTest")
+            .collect::<std::vec::Vec<_>>()
+            .len()
+            - 1;
+
+        assert_eq!(occurrences, 2);
+    }
+
+    #[test]
     fn standalone_module_defs() {
         use roc_parse::ast::Def::*;
 
