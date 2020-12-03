@@ -28,6 +28,9 @@ pub fn str_split<'a, 'ctx, 'env>(
     let str_ptr = ptr_from_symbol(scope, str_symbol);
     let delimiter_ptr = ptr_from_symbol(scope, delimiter_symbol);
 
+    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let delim_i128 = str_symbol_to_i128(env, scope, delimiter_symbol);
+
     let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
 
     load_str(
@@ -44,12 +47,7 @@ pub fn str_split<'a, 'ctx, 'env>(
                 |delimiter_bytes_ptr, delimiter_len, _delimiter_smallness| {
                     let segment_count = call_bitcode_fn(
                         env,
-                        &[
-                            BasicValueEnum::PointerValue(str_bytes_ptr),
-                            BasicValueEnum::IntValue(str_len),
-                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
-                            BasicValueEnum::IntValue(delimiter_len),
-                        ],
+                        &[str_i128.into(), delim_i128.into()],
                         &bitcode::STR_COUNT_SEGMENTS,
                     )
                     .into_int_value();
@@ -73,10 +71,8 @@ pub fn str_split<'a, 'ctx, 'env>(
                         &[
                             ret_list_ptr_zig_rocstr,
                             BasicValueEnum::IntValue(segment_count),
-                            BasicValueEnum::PointerValue(str_bytes_ptr),
-                            BasicValueEnum::IntValue(str_len),
-                            BasicValueEnum::PointerValue(delimiter_bytes_ptr),
-                            BasicValueEnum::IntValue(delimiter_len),
+                            str_i128.into(),
+                            delim_i128.into(),
                         ],
                         &bitcode::STR_STR_SPLIT_IN_PLACE,
                     );

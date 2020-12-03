@@ -202,7 +202,22 @@ const RocStr = extern struct {
 
 // Str.split
 
-pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, str_bytes: [*]const u8, str_len: usize, delimiter_bytes_ptrs: [*]const u8, delimiter_len: usize) callconv(.C) void {
+pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, string: RocStr, delimiter: RocStr) callconv(.C) void {
+    const str_len = string.len();
+    const delimiter_len = delimiter.len();
+
+    const str_if_small = &@bitCast([16]u8, string);
+    const str_if_big = @ptrCast([*]u8, string.str_bytes);
+    const str_bytes = if (string.is_small_str() or string.is_empty()) str_if_small else str_if_big;
+
+    const delim_if_small = &@bitCast([16]u8, delimiter);
+    const delim_if_big = @ptrCast([*]u8, delimiter.str_bytes);
+    const delim_bytes = if (delimiter.is_small_str() or delimiter.is_empty()) delim_if_small else delim_if_big;
+
+    return strSplitInPlaceHelp(array, array_len, str_bytes, str_len, delim_bytes, delimiter_len);
+}
+
+fn strSplitInPlaceHelp(array: [*]RocStr, array_len: usize, str_bytes: [*]const u8, str_len: usize, delimiter_bytes_ptrs: [*]const u8, delimiter_len: usize) callconv(.C) void {
     var ret_array_index: usize = 0;
     var sliceStart_index: usize = 0;
     var str_index: usize = 0;
@@ -391,7 +406,22 @@ test "strSplitInPlace: three pieces" {
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
-pub fn countSegments(str_bytes: [*]u8, str_len: usize, delimiter_bytes_ptrs: [*]u8, delimiter_len: usize) callconv(.C) usize {
+pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
+    const str_len = string.len();
+    const delimiter_len = delimiter.len();
+
+    const str_if_small = &@bitCast([16]u8, string);
+    const str_if_big = @ptrCast([*]u8, string.str_bytes);
+    const str_bytes = if (string.is_small_str() or string.is_empty()) str_if_small else str_if_big;
+
+    const delim_if_small = &@bitCast([16]u8, delimiter);
+    const delim_if_big = @ptrCast([*]u8, delimiter.str_bytes);
+    const delim_bytes = if (delimiter.is_small_str() or delimiter.is_empty()) delim_if_small else delim_if_big;
+
+    return countSegmentsHelp(str_bytes, str_len, delim_bytes, delimiter_len);
+}
+
+fn countSegmentsHelp(str_bytes: [*]u8, str_len: usize, delimiter_bytes_ptrs: [*]u8, delimiter_len: usize) usize {
     var count: usize = 1;
 
     if (str_len > delimiter_len) {
@@ -589,6 +619,20 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     const prefix_ptr: [*]u8 = &str;
 
     expect(startsWith(str_ptr, str_len, prefix_ptr, prefix_len));
+}
+
+// Str.split
+
+pub fn strSplit(ptr_size: u32, result_in_place: InPlace, string: RocStr, pattern: RocStr) callconv(.C) [*]RocStr {
+    return switch (ptr_size) {
+        // 4 => strSplitHelp(i32, result_in_place, arg1, arg2),
+        8 => strSplitHelp(i64, result_in_place, arg1, arg2),
+        else => unreachable,
+    };
+}
+
+fn strSplitHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) [*]RocStr {
+    return [_]u8{};
 }
 
 // Str.concat
