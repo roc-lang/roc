@@ -19,6 +19,7 @@ pub fn build(b: *Builder) void {
     // Tests
     var main_tests = b.addTest(main_path);
     main_tests.setBuildMode(mode);
+    main_tests.linkSystemLibrary("c");
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&main_tests.step);
 

@@ -1,5 +1,6 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const unicode = std.unicode;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -13,20 +14,16 @@ const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
 
-    pub fn empty() RocStr {
-        return RocStr{
-            .str_len = 0,
-            .str_bytes = null,
-        };
-    }
-
     // This takes ownership of the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
-    pub fn init(allocator: *Allocator, bytes: [*]const u8, length: usize) RocStr {
+    pub fn init(allocator: *Allocator, bytes_ptr: [*]const u8, length: usize) RocStr {
         const rocStrSize = @sizeOf(RocStr);
 
         if (length < rocStrSize) {
-            var ret_small_str = RocStr.empty();
+            var ret_small_str = RocStr{
+                .str_len = 0,
+                .str_bytes = null,
+            };
             const target_ptr = @ptrToInt(&ret_small_str);
             var index: u8 = 0;
 
@@ -42,7 +39,7 @@ const RocStr = extern struct {
             index = 0;
             while (index < length) {
                 var offset_ptr = @intToPtr(*u8, target_ptr + index);
-                offset_ptr.* = bytes[index];
+                offset_ptr.* = bytes_ptr[index];
                 index += 1;
             }
 
@@ -52,9 +49,8 @@ const RocStr = extern struct {
 
             return ret_small_str;
         } else {
-            var new_bytes: []u8 = allocator.alloc(u8, length) catch unreachable;
+            var new_bytes: []u8 = mem.dupe(allocator, u8, bytes_ptr[0..length]) catch unreachable;
             var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
-            @memcpy(new_bytes_ptr, bytes, length);
             return RocStr{
                 .str_bytes = new_bytes_ptr,
                 .str_len = length,
@@ -65,10 +61,8 @@ const RocStr = extern struct {
     pub fn drop(self: RocStr, allocator: *Allocator) void {
         if (!self.isSmallStr()) {
             const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
-            const align_of_slice = @alignOf(*[]u8);
-            const slice_ptr: *[]u8 = @ptrCast(*[]u8, @alignCast(align_of_slice, str_bytes_ptr));
-            const slice_bytes: []u8 = slice_ptr.*;
-            allocator.free(slice_bytes);
+            const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
+            allocator.free(str_bytes);
         }
     }
 
@@ -205,15 +199,7 @@ const RocStr = extern struct {
 
 // Str.split
 
-pub fn strSplitInPlace(
-    allocator: *Allocator,
-    array: [*]RocStr,
-    array_len: usize,
-    str_bytes: [*]const u8,
-    str_len: usize,
-    delimiter_bytes_ptrs: [*]const u8,
-    delimiter_len: usize
-) void {
+pub fn strSplitInPlace(allocator: *Allocator, array: [*]RocStr, array_len: usize, str_bytes: [*]const u8, str_len: usize, delimiter_bytes_ptrs: [*]const u8, delimiter_len: usize) void {
     var ret_array_index: usize = 0;
     var sliceStart_index: usize = 0;
     var str_index: usize = 0;
@@ -253,41 +239,17 @@ pub fn strSplitInPlace(
 }
 
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
-pub fn strSplitInPlaceC(
-    array: [*]RocStr,
-    array_len: usize,
-    str_bytes: [*]const u8,
-    str_len: usize,
-    delimiter_bytes_ptrs: [*]const u8,
-    delimiter_len: usize
-) callconv(.C) void {
-    strSplitInPlace(
-        std.heap.c_allocator,
-        array,
-        array_len,
-        str_bytes,
-        str_len,
-        delimiter_bytes_ptrs,
-        delimiter_len
-    );
+pub fn strSplitInPlaceC(array: [*]RocStr, array_len: usize, str_bytes: [*]const u8, str_len: usize, delimiter_bytes_ptrs: [*]const u8, delimiter_len: usize) callconv(.C) void {
+    strSplitInPlace(std.heap.c_allocator, array, array_len, str_bytes, str_len, delimiter_bytes_ptrs, delimiter_len);
 }
 
 test "strSplitInPlace: no delimiter" {
     // Str.split "abc" "!" == [ "abc" ]
-
     const array_len: usize = 1;
     var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(
-        testing.allocator,
-        array_ptr,
-        array_len,
-        "abc",
-        3,
-        "!",
-        1
-    );
+    strSplitInPlace(testing.allocator, array_ptr, array_len, "abc", 3, "!", 1);
 
     var expected = RocStr.init(testing.allocator, "abc", 3);
 
@@ -304,15 +266,7 @@ test "strSplitInPlace: empty end" {
     var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(
-        testing.allocator,
-        array_ptr,
-        array_len,
-        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----",
-        50,
-        "---- ---- ---- ---- ----",
-        24
-        );
+    strSplitInPlace(testing.allocator, array_ptr, array_len, "1---- ---- ---- ---- ----2---- ---- ---- ---- ----", 50, "---- ---- ---- ---- ----", 24);
 
     var expected = [2]RocStr{
         RocStr.init(testing.allocator, "1", 1),
@@ -342,10 +296,9 @@ test "strSplitInPlace: delimiter on sides" {
     const expected_str_ptr: [*]const u8 = "ghi";
     var expected_roc_str = RocStr.init(testing.allocator, expected_str_ptr, expected_str_len);
 
-    // TODO: fix empty str tests
-    // expect(array[0].eq(empty_roc_str));
+    expect(array[0].str_bytes == null);
     expect(array[1].eq(expected_roc_str));
-    // expect(array[2].eq(empty_roc_str));
+    expect(array[2].str_bytes == null);
 
     for (array) |roc_str| {
         roc_str.drop(testing.allocator);
@@ -368,16 +321,14 @@ test "strSplitInPlace: three pieces" {
     strSplitInPlace(testing.allocator, array_ptr, array_len, str_ptr, str_len, delimiter_ptr, delimiter_len);
 
     var expected_array = [array_len]RocStr{
-        RocStr{.str_bytes = "a", .str_len = 1},
-        RocStr{.str_bytes = "b", .str_len = 1},
-        RocStr{.str_bytes = "c", .str_len = 1},
+        RocStr.init(testing.allocator, "a", 1),
+        RocStr.init(testing.allocator, "b", 1),
+        RocStr.init(testing.allocator, "c", 1),
     };
 
-    // TODO: fix those tests
-    // expectEqual(expected_array.len, array.len);
-    // expect(array[0].eq(expected_array[0]));
-    // expect(array[1].eq(expected_array[1]));
-    // expect(array[2].eq(expected_array[2]));
+    expect(array[0].eq(expected_array[0]));
+    expect(array[1].eq(expected_array[1]));
+    expect(array[2].eq(expected_array[2]));
 
     for (expected_array) |roc_str| {
         roc_str.drop(testing.allocator);
