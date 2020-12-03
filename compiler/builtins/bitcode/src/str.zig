@@ -205,7 +205,15 @@ const RocStr = extern struct {
 
 // Str.split
 
-pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, str_bytes: [*]const u8, str_len: usize, delimiter_bytes_ptrs: [*]const u8, delimiter_len: usize) callconv(.C) void {
+pub fn strSplitInPlace(
+    allocator: *Allocator,
+    array: [*]RocStr,
+    array_len: usize,
+    str_bytes: [*]const u8,
+    str_len: usize,
+    delimiter_bytes_ptrs: [*]const u8,
+    delimiter_len: usize
+) void {
     var ret_array_index: usize = 0;
     var sliceStart_index: usize = 0;
     var str_index: usize = 0;
@@ -231,7 +239,7 @@ pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, str_bytes: [*]const u
             if (matches_delimiter) {
                 const segment_len: usize = str_index - sliceStart_index;
 
-                array[ret_array_index] = RocStr.init(testing.allocator, str_bytes + sliceStart_index, segment_len);
+                array[ret_array_index] = RocStr.init(allocator, str_bytes + sliceStart_index, segment_len);
                 sliceStart_index = str_index + delimiter_len;
                 ret_array_index += 1;
                 str_index += delimiter_len;
@@ -241,146 +249,128 @@ pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, str_bytes: [*]const u
         }
     }
 
-    array[ret_array_index] = RocStr.init(testing.allocator, str_bytes + sliceStart_index, str_len - sliceStart_index);
+    array[ret_array_index] = RocStr.init(allocator, str_bytes + sliceStart_index, str_len - sliceStart_index);
+}
+
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
+pub fn strSplitInPlaceC(
+    array: [*]RocStr,
+    array_len: usize,
+    str_bytes: [*]const u8,
+    str_len: usize,
+    delimiter_bytes_ptrs: [*]const u8,
+    delimiter_len: usize
+) callconv(.C) void {
+    strSplitInPlace(
+        std.heap.c_allocator,
+        array,
+        array_len,
+        str_bytes,
+        str_len,
+        delimiter_bytes_ptrs,
+        delimiter_len
+    );
 }
 
 test "strSplitInPlace: no delimiter" {
     // Str.split "abc" "!" == [ "abc" ]
-    var str: [3]u8 = "abc".*;
-    const str_ptr: [*]const u8 = &str;
 
-    var delimiter: [1]u8 = "!".*;
-    const delimiter_ptr: [*]const u8 = &delimiter;
-
-    var array: [1]RocStr = undefined;
+    const array_len: usize = 1;
+    var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(array_ptr, 1, str_ptr, 3, delimiter_ptr, 1);
+    strSplitInPlace(
+        testing.allocator,
+        array_ptr,
+        array_len,
+        "abc",
+        3,
+        "!",
+        1
+    );
 
-    var expected = [1]RocStr{
-        RocStr.init(testing.allocator, str_ptr, 3),
-    };
+    var expected = RocStr.init(testing.allocator, "abc", 3);
 
-    expectEqual(array.len, expected.len);
-    // TODO: fix those tests
-    //expect(array[0].eq(expected[0]));
+    expect(array[0].eq(expected));
 
     for (array) |roc_str| {
         roc_str.drop(testing.allocator);
     }
+    expected.drop(testing.allocator);
+}
 
+test "strSplitInPlace: empty end" {
+    const array_len: usize = 2;
+    var array: [array_len]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitInPlace(
+        testing.allocator,
+        array_ptr,
+        array_len,
+        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----",
+        50,
+        "---- ---- ---- ---- ----",
+        24
+        );
+
+    var expected = [2]RocStr{
+        RocStr.init(testing.allocator, "1", 1),
+        RocStr.init(testing.allocator, "2", 1),
+    };
+
+    expect(array[0].eq(expected[0]));
+    expect(array[1].eq(expected[1]));
+
+    for (array) |roc_str| {
+        roc_str.drop(testing.allocator);
+    }
     for (expected) |roc_str| {
         roc_str.drop(testing.allocator);
     }
 }
 
-test "strSplitInPlace: empty end" {
-    const str_len: usize = 50;
-    var str: [str_len]u8 = "1---- ---- ---- ---- ----2---- ---- ---- ---- ----".*;
-    const str_ptr: [*]u8 = &str;
-
-    const delimiter_len = 24;
-    const delimiter: [delimiter_len:0]u8 = "---- ---- ---- ---- ----".*;
-    const delimiter_ptr: [*]const u8 = &delimiter;
-
-    const array_len: usize = 3;
-    var array: [array_len]RocStr = [_]RocStr{
-        undefined,
-        undefined,
-        undefined,
-    };
-    const array_ptr: [*]RocStr = &array;
-
-    strSplitInPlace(array_ptr, array_len, str_ptr, str_len, delimiter_ptr, delimiter_len);
-
-    const first_expected_str_len: usize = 1;
-    var first_expected_str: [first_expected_str_len]u8 = "1".*;
-    const first_expected_str_ptr: [*]u8 = &first_expected_str;
-    var firstExpectedRocStr = RocStr.init(testing.allocator, first_expected_str_ptr, first_expected_str_len);
-
-    const second_expected_str_len: usize = 1;
-    var second_expected_str: [second_expected_str_len]u8 = "2".*;
-    const second_expected_str_ptr: [*]u8 = &second_expected_str;
-    var secondExpectedRocStr = RocStr.init(testing.allocator, second_expected_str_ptr, second_expected_str_len);
-
-    // TODO: fix those tests
-    // expectEqual(array.len, 3);
-    // expectEqual(array[0].str_len, 1);
-    // expect(array[0].eq(firstExpectedRocStr));
-    // expect(array[1].eq(secondExpectedRocStr));
-    // expectEqual(array[2].str_len, 0);
-}
-
 test "strSplitInPlace: delimiter on sides" {
     // Str.split "tttghittt" "ttt" == [ "", "ghi", "" ]
-    const str_len: usize = 9;
-    var str: [str_len]u8 = "tttghittt".*;
-    const str_ptr: [*]u8 = &str;
-
-    const delimiter_len = 3;
-    var delimiter: [delimiter_len]u8 = "ttt".*;
-    const delimiter_ptr: [*]u8 = &delimiter;
-
     const array_len: usize = 3;
-    var array: [array_len]RocStr = [_]RocStr{
-        undefined,
-        undefined,
-        undefined,
-    };
+    var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(array_ptr, array_len, str_ptr, str_len, delimiter_ptr, delimiter_len);
+    strSplitInPlace(testing.allocator, array_ptr, array_len, "tttghittt", 9, "ttt", 3);
 
     const expected_str_len: usize = 3;
-    var expected_str: [expected_str_len]u8 = "ghi".*;
-    const expected_str_ptr: [*]const u8 = &expected_str;
-    var expectedRocStr = RocStr.init(testing.allocator, expected_str_ptr, expected_str_len);
+    const expected_str_ptr: [*]const u8 = "ghi";
+    var expected_roc_str = RocStr.init(testing.allocator, expected_str_ptr, expected_str_len);
 
-    // TODO: fix those tests
-    // expectEqual(array.len, 3);
-    // expectEqual(array[0].str_len, 0);
-    // expect(array[1].eq(expectedRocStr));
-    // expectEqual(array[2].str_len, 0);
+    // TODO: fix empty str tests
+    // expect(array[0].eq(empty_roc_str));
+    expect(array[1].eq(expected_roc_str));
+    // expect(array[2].eq(empty_roc_str));
+
+    for (array) |roc_str| {
+        roc_str.drop(testing.allocator);
+    }
+    expected_roc_str.drop(testing.allocator);
 }
 
 test "strSplitInPlace: three pieces" {
     // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
     const str_len: usize = 5;
-    var str: [str_len]u8 = "a!b!c".*;
-    const str_ptr: [*]u8 = &str;
+    var str_ptr: [*]const u8 = "a!b!c";
 
     const delimiter_len = 1;
-    var delimiter: [delimiter_len]u8 = "!".*;
-    const delimiter_ptr: [*]u8 = &delimiter;
+    var delimiter_ptr: [*]const u8 = "!";
 
     const array_len: usize = 3;
     var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(array_ptr, array_len, str_ptr, str_len, delimiter_ptr, delimiter_len);
-
-    var a: [1]u8 = "a".*;
-    const a_ptr: [*]u8 = &a;
-
-    var b: [1]u8 = "b".*;
-    const b_ptr: [*]u8 = &b;
-
-    var c: [1]u8 = "c".*;
-    const c_ptr: [*]u8 = &c;
+    strSplitInPlace(testing.allocator, array_ptr, array_len, str_ptr, str_len, delimiter_ptr, delimiter_len);
 
     var expected_array = [array_len]RocStr{
-        RocStr{
-            .str_bytes = a_ptr,
-            .str_len = 1,
-        },
-        RocStr{
-            .str_bytes = b_ptr,
-            .str_len = 1,
-        },
-        RocStr{
-            .str_bytes = c_ptr,
-            .str_len = 1,
-        },
+        RocStr{.str_bytes = "a", .str_len = 1},
+        RocStr{.str_bytes = "b", .str_len = 1},
+        RocStr{.str_bytes = "c", .str_len = 1},
     };
 
     // TODO: fix those tests
@@ -388,13 +378,17 @@ test "strSplitInPlace: three pieces" {
     // expect(array[0].eq(expected_array[0]));
     // expect(array[1].eq(expected_array[1]));
     // expect(array[2].eq(expected_array[2]));
+
+    for (expected_array) |roc_str| {
+        roc_str.drop(testing.allocator);
+    }
 }
 
 // This is used for `Str.split : Str, Str -> Array Str
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
-pub fn countSegments(str_bytes: [*]u8, str_len: usize, delimiter_bytes_ptrs: [*]u8, delimiter_len: usize) callconv(.C) usize {
+pub fn countSegments(str_bytes: [*]const u8, str_len: usize, delimiter_bytes_ptrs: [*]const u8, delimiter_len: usize) callconv(.C) usize {
     var count: usize = 1;
 
     if (str_len > delimiter_len) {
@@ -433,12 +427,10 @@ test "countSegments: long delimiter" {
     // Str.split "str" "delimiter" == [ "str" ]
     // 1 segment
     const str_len: usize = 3;
-    var str: [str_len]u8 = "str".*;
-    const str_ptr: [*]u8 = &str;
+    var str_ptr: [*]const u8 = "str";
 
     const delimiter_len = 9;
-    var delimiter: [delimiter_len]u8 = "delimiter".*;
-    const delimiter_ptr: [*]u8 = &delimiter;
+    var delimiter_ptr: [*]const u8 = "delimiter";
 
     const segments_count = countSegments(str_ptr, str_len, delimiter_ptr, delimiter_len);
 

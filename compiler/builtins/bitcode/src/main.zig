@@ -15,7 +15,7 @@ comptime {
 // Str Module
 const str = @import("str.zig");
 comptime {
-    exportStrFn(str.strSplitInPlace, "str_split_in_place");
+    exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.startsWith, "starts_with");
