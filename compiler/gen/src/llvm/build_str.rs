@@ -10,6 +10,8 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
+use super::build::load_symbol;
+
 pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
 /// Str.split : Str, Str -> List Str
@@ -211,4 +213,17 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
         &[str_i128.into()],
         &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
     )
+}
+
+/// Str.countGraphemes : Str -> Int
+pub fn str_from_int<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    int_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let int = load_symbol(env, scope, &int_symbol);
+
+    let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
+
+    zig_str_to_struct(env, zig_result).into()
 }

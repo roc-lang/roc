@@ -22,6 +22,7 @@ comptime {
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcat, "concat");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
+    exportStrFn(str.strFromInt, "from_int");
 }
 
 // Export helpers - Must be run inside a comptime

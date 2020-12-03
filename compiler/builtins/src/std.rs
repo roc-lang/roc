@@ -429,6 +429,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![str_type()], Box::new(int_type())),
     );
 
+    // fromInt : Int -> Str
+    add_type(
+        Symbol::STR_FROM_INT,
+        top_level_function(vec![int_type()], Box::new(str_type())),
+    );
+
     // List module
 
     // get : List elem, Int -> Result elem [ OutOfBounds ]*

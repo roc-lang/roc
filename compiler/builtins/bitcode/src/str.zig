@@ -50,9 +50,23 @@ const RocStr = extern struct {
 
             return ret_small_str;
         } else {
-            var new_bytes: [*]u8 = @ptrCast([*]u8, malloc(length));
+            var result = allocate_str(u64, InPlace.Clone, length);
 
-            @memcpy(new_bytes, bytes, length);
+            @memcpy(@ptrCast([*]u8, result.str_bytes), bytes, length);
+
+            return result;
+        }
+    }
+
+    // This takes ownership of the pointed-to bytes if they won't fit in a
+    // small string, and returns a (pointer, len) tuple which points to them.
+    pub fn withCapacity(length: usize) RocStr {
+        const rocStrSize = @sizeOf(RocStr);
+
+        if (length < rocStrSize) {
+            return RocStr.empty();
+        } else {
+            var new_bytes: [*]u8 = @ptrCast([*]u8, malloc(length));
 
             return RocStr{
                 .str_bytes = new_bytes,
@@ -208,6 +222,28 @@ const RocStr = extern struct {
 
 pub fn strNumberOfBytes(string: RocStr) callconv(.C) u64 {
     return string.len();
+}
+
+// Str.fromInt
+
+pub fn strFromInt(int: i64) callconv(.C) RocStr {
+    // prepare for having multiple integer types in the future
+    return strFromIntHelp(i64, int);
+}
+
+fn strFromIntHelp(comptime T: type, int: T) RocStr {
+    // determine maximum size for this T
+    comptime const size = comptime blk: {
+        // the string representation of the minimum i128 value uses at most 40 characters
+        var buf: [40]u8 = undefined;
+        var result = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
+        break :blk result.len;
+    };
+
+    var buf: [size]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
+
+    return RocStr.init(&buf, result.len);
 }
 
 // Str.split
