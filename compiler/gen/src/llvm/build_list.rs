@@ -1319,6 +1319,85 @@ pub fn list_keep_if_help<'a, 'ctx, 'env>(
 }
 
 /// List.map : List before, (before -> after) -> List after
+macro_rules! list_map_help {
+    ($env:expr, $layout_ids:expr, $inplace:expr, $parent:expr, $func:expr, $func_layout:expr, $list:expr, $list_layout:expr, $function_ptr:expr, $function_return_layout: expr, $closure_info:expr) => {{
+        let layout_ids = $layout_ids;
+        let inplace = $inplace;
+        let parent = $parent;
+        let func = $func;
+        let func_layout = $func_layout;
+        let list = $list;
+        let list_layout = $list_layout;
+        let function_ptr = $function_ptr;
+        let function_return_layout = $function_return_layout;
+        let closure_info : Option<(&Layout, BasicValueEnum)> = $closure_info;
+
+
+        let non_empty_fn = |elem_layout: &Layout<'a>,
+                            len: IntValue<'ctx>,
+                            list_wrapper: StructValue<'ctx>| {
+            let ctx = $env.context;
+            let builder = $env.builder;
+
+            let ret_list_ptr = allocate_list($env, inplace, function_return_layout, len);
+
+            let elem_type = basic_type_from_layout($env.arena, ctx, elem_layout, $env.ptr_bytes);
+            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+            let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
+
+            let list_loop = |index, before_elem| {
+                increment_refcount_layout($env, parent, layout_ids, before_elem, elem_layout);
+
+                let arguments = match closure_info {
+                    Some((closure_data_layout, closure_data)) => {
+                        increment_refcount_layout( $env, parent, layout_ids, closure_data, closure_data_layout);
+
+                        bumpalo::vec![in $env.arena; before_elem, closure_data]
+                    }
+                    None => bumpalo::vec![in $env.arena; before_elem],
+                };
+
+
+                let call_site_value = builder.build_call(function_ptr, &arguments, "map_func");
+
+                // set the calling convention explicitly for this call
+                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                let after_elem = call_site_value
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
+                // The pointer to the element in the mapped-over list
+                let after_elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(ret_list_ptr, &[index], "load_index_after_list")
+                };
+
+                // Mutate the new array in-place to change the element.
+                builder.build_store(after_elem_ptr, after_elem);
+            };
+
+            incrementing_elem_loop(builder, ctx, parent, list_ptr, len, "#index", list_loop);
+
+            let result = store_list($env, ret_list_ptr, len);
+
+            // decrement the input list and function (if it's a closure)
+            decrement_refcount_layout($env, parent, layout_ids, list, list_layout);
+            decrement_refcount_layout($env, parent, layout_ids, func, func_layout);
+
+            if let Some((closure_data_layout, closure_data))  = closure_info  {
+                decrement_refcount_layout( $env, parent, layout_ids, closure_data, closure_data_layout);
+            }
+
+            result
+        };
+
+        if_list_is_not_empty($env, parent, non_empty_fn, list, list_layout, "List.map")
+    }};
+}
+
+/// List.map : List before, (before -> after) -> List after
 #[allow(clippy::too_many_arguments)]
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1332,111 +1411,50 @@ pub fn list_map<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     match (func, func_layout) {
         (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, ret_elem_layout)) => {
-            let non_empty_fn = |elem_layout: &Layout<'a>,
-                                len: IntValue<'ctx>,
-                                list_wrapper: StructValue<'ctx>| {
-                let ctx = env.context;
-                let builder = env.builder;
-
-                let ret_list_ptr = allocate_list(env, inplace, ret_elem_layout, len);
-
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
-
-                let list_loop = |index, before_elem| {
-                    let call_site_value =
-                        builder.build_call(func_ptr, env.arena.alloc([before_elem]), "map_func");
-
-                    // set the calling convention explicitly for this call
-                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                    let after_elem = call_site_value
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-                    // The pointer to the element in the mapped-over list
-                    let after_elem_ptr = unsafe {
-                        builder.build_in_bounds_gep(ret_list_ptr, &[index], "load_index_after_list")
-                    };
-
-                    // Mutate the new array in-place to change the element.
-                    builder.build_store(after_elem_ptr, after_elem);
-                };
-
-                incrementing_elem_loop(builder, ctx, parent, list_ptr, len, "#index", list_loop);
-
-                let result = store_list(env, ret_list_ptr, len);
-
-                // decrement the input list (the function is a function pointer, and is never refcounted)
-                decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
-
-                result
-            };
-
-            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
+            list_map_help!(
+                env,
+                layout_ids,
+                inplace,
+                parent,
+                func,
+                func_layout,
+                list,
+                list_layout,
+                func_ptr,
+                ret_elem_layout,
+                None
+            )
         }
-        (BasicValueEnum::StructValue(ptr_and_data), Layout::Closure(_, _, ret_elem_layout)) => {
-            let non_empty_fn = |elem_layout: &Layout<'a>,
-                                len: IntValue<'ctx>,
-                                list_wrapper: StructValue<'ctx>| {
-                let ctx = env.context;
-                let builder = env.builder;
+        (
+            BasicValueEnum::StructValue(ptr_and_data),
+            Layout::Closure(_, closure_layout, ret_elem_layout),
+        ) => {
+            let builder = env.builder;
 
-                let func_ptr = builder
-                    .build_extract_value(ptr_and_data, 0, "function_ptr")
-                    .unwrap()
-                    .into_pointer_value();
+            let func_ptr = builder
+                .build_extract_value(ptr_and_data, 0, "function_ptr")
+                .unwrap()
+                .into_pointer_value();
 
-                let closure_data = builder
-                    .build_extract_value(ptr_and_data, 1, "closure_data")
-                    .unwrap();
+            let closure_data = builder
+                .build_extract_value(ptr_and_data, 1, "closure_data")
+                .unwrap();
 
-                let ret_list_ptr = allocate_list(env, inplace, ret_elem_layout, len);
+            let closure_data_layout = closure_layout.as_block_of_memory_layout();
 
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
-
-                let list_loop = |index, before_elem| {
-                    let call_site_value = builder.build_call(
-                        func_ptr,
-                        env.arena.alloc([before_elem, closure_data]),
-                        "map_func",
-                    );
-
-                    // set the calling convention explicitly for this call
-                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                    let after_elem = call_site_value
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-                    // The pointer to the element in the mapped-over list
-                    let after_elem_ptr = unsafe {
-                        builder.build_in_bounds_gep(ret_list_ptr, &[index], "load_index_after_list")
-                    };
-
-                    // Mutate the new array in-place to change the element.
-                    builder.build_store(after_elem_ptr, after_elem);
-                };
-
-                incrementing_elem_loop(builder, ctx, parent, list_ptr, len, "#index", list_loop);
-
-                let result = store_list(env, ret_list_ptr, len);
-
-                // decrement the input list and input closure
-                decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
-                decrement_refcount_layout(env, parent, layout_ids, func, func_layout);
-
-                result
-            };
-
-            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
+            list_map_help!(
+                env,
+                layout_ids,
+                inplace,
+                parent,
+                func,
+                func_layout,
+                list,
+                list_layout,
+                func_ptr,
+                ret_elem_layout,
+                Some((&closure_data_layout, closure_data))
+            )
         }
         _ => {
             unreachable!(
