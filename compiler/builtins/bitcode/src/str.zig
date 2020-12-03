@@ -126,6 +126,12 @@ const RocStr = extern struct {
         return self.len() == 0;
     }
 
+    pub fn as_u8_ptr(self: RocStr) [*]u8 {
+        const if_small = &@bitCast([16]u8, self);
+        const if_big = @ptrCast([*]u8, self.str_bytes);
+        return if (self.is_small_str() or self.is_empty()) if_small else if_big;
+    }
+
     // Given a pointer to some bytes, write the first (len) bytes of this
     // RocStr's contents into it.
     //
@@ -203,24 +209,15 @@ const RocStr = extern struct {
 // Str.split
 
 pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, string: RocStr, delimiter: RocStr) callconv(.C) void {
-    const str_len = string.len();
-    const delimiter_len = delimiter.len();
-
-    const str_if_small = &@bitCast([16]u8, string);
-    const str_if_big = @ptrCast([*]u8, string.str_bytes);
-    const str_bytes = if (string.is_small_str() or string.is_empty()) str_if_small else str_if_big;
-
-    const delim_if_small = &@bitCast([16]u8, delimiter);
-    const delim_if_big = @ptrCast([*]u8, delimiter.str_bytes);
-    const delim_bytes = if (delimiter.is_small_str() or delimiter.is_empty()) delim_if_small else delim_if_big;
-
-    return strSplitInPlaceHelp(array, array_len, str_bytes, str_len, delim_bytes, delimiter_len);
-}
-
-fn strSplitInPlaceHelp(array: [*]RocStr, array_len: usize, str_bytes: [*]const u8, str_len: usize, delimiter_bytes_ptrs: [*]const u8, delimiter_len: usize) callconv(.C) void {
     var ret_array_index: usize = 0;
     var sliceStart_index: usize = 0;
     var str_index: usize = 0;
+
+    const str_bytes = string.as_u8_ptr();
+    const str_len = string.len();
+
+    const delimiter_bytes_ptrs = delimiter.as_u8_ptr();
+    const delimiter_len = delimiter.len();
 
     if (str_len > delimiter_len) {
         const end_index: usize = str_len - delimiter_len + 1;
@@ -407,21 +404,12 @@ test "strSplitInPlace: three pieces" {
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
 pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
+    const str_bytes = string.as_u8_ptr();
     const str_len = string.len();
+
+    const delimiter_bytes_ptrs = delimiter.as_u8_ptr();
     const delimiter_len = delimiter.len();
 
-    const str_if_small = &@bitCast([16]u8, string);
-    const str_if_big = @ptrCast([*]u8, string.str_bytes);
-    const str_bytes = if (string.is_small_str() or string.is_empty()) str_if_small else str_if_big;
-
-    const delim_if_small = &@bitCast([16]u8, delimiter);
-    const delim_if_big = @ptrCast([*]u8, delimiter.str_bytes);
-    const delim_bytes = if (delimiter.is_small_str() or delimiter.is_empty()) delim_if_small else delim_if_big;
-
-    return countSegmentsHelp(str_bytes, str_len, delim_bytes, delimiter_len);
-}
-
-fn countSegmentsHelp(str_bytes: [*]u8, str_len: usize, delimiter_bytes_ptrs: [*]u8, delimiter_len: usize) usize {
     var count: usize = 1;
 
     if (str_len > delimiter_len) {

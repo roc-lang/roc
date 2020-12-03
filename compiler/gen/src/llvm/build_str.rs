@@ -17,71 +17,48 @@ pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 pub fn str_split<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
+    _parent: FunctionValue<'ctx>,
     inplace: InPlace,
     str_symbol: Symbol,
     delimiter_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
-
-    let str_ptr = ptr_from_symbol(scope, str_symbol);
-    let delimiter_ptr = ptr_from_symbol(scope, delimiter_symbol);
 
     let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
     let delim_i128 = str_symbol_to_i128(env, scope, delimiter_symbol);
 
-    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
-
-    load_str(
+    let segment_count = call_bitcode_fn(
         env,
-        parent,
-        *str_ptr,
-        str_wrapper_type,
-        |str_bytes_ptr, str_len, _str_smallness| {
-            load_str(
-                env,
-                parent,
-                *delimiter_ptr,
-                str_wrapper_type,
-                |delimiter_bytes_ptr, delimiter_len, _delimiter_smallness| {
-                    let segment_count = call_bitcode_fn(
-                        env,
-                        &[str_i128.into(), delim_i128.into()],
-                        &bitcode::STR_COUNT_SEGMENTS,
-                    )
-                    .into_int_value();
-
-                    // a pointer to the elements
-                    let ret_list_ptr =
-                        allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
-
-                    // get the RocStr type defined by zig
-                    let roc_str_type = env.module.get_struct_type("str.RocStr").unwrap();
-
-                    // convert `*mut { *mut u8, i64 }` to `*mut RocStr`
-                    let ret_list_ptr_zig_rocstr = builder.build_bitcast(
-                        ret_list_ptr,
-                        roc_str_type.ptr_type(AddressSpace::Generic),
-                        "convert_to_zig_rocstr",
-                    );
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[
-                            ret_list_ptr_zig_rocstr,
-                            BasicValueEnum::IntValue(segment_count),
-                            str_i128.into(),
-                            delim_i128.into(),
-                        ],
-                        &bitcode::STR_STR_SPLIT_IN_PLACE,
-                    );
-
-                    store_list(env, ret_list_ptr, segment_count)
-                },
-            )
-        },
+        &[str_i128.into(), delim_i128.into()],
+        &bitcode::STR_COUNT_SEGMENTS,
     )
+    .into_int_value();
+
+    // a pointer to the elements
+    let ret_list_ptr = allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
+
+    // get the RocStr type defined by zig
+    let roc_str_type = env.module.get_struct_type("str.RocStr").unwrap();
+
+    // convert `*mut { *mut u8, i64 }` to `*mut RocStr`
+    let ret_list_ptr_zig_rocstr = builder.build_bitcast(
+        ret_list_ptr,
+        roc_str_type.ptr_type(AddressSpace::Generic),
+        "convert_to_zig_rocstr",
+    );
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            ret_list_ptr_zig_rocstr,
+            BasicValueEnum::IntValue(segment_count),
+            str_i128.into(),
+            delim_i128.into(),
+        ],
+        &bitcode::STR_STR_SPLIT_IN_PLACE,
+    );
+
+    store_list(env, ret_list_ptr, segment_count)
 }
 
 /*
