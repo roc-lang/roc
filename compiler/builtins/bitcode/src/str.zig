@@ -206,6 +206,12 @@ const RocStr = extern struct {
     }
 };
 
+// Str.len
+
+pub fn strLen(string: RocStr) callconv(.C) u64 {
+    return string.len();
+}
+
 // Str.split
 
 pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, string: RocStr, delimiter: RocStr) callconv(.C) void {

@@ -2448,8 +2448,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.isEmpty : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let wrapper_ptr = ptr_from_symbol(scope, args[0]);
-            let len = str_len(env, parent, *wrapper_ptr);
+            let len = str_len(env, scope, args[0]);
             let is_zero = env.builder.build_int_compare(
                 IntPredicate::EQ,
                 len,

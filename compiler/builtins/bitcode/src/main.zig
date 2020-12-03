@@ -20,6 +20,7 @@ comptime {
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.strConcat, "concat");
+    exportStrFn(str.strLen, "len");
 }
 
 // Export helpers - Must be run inside a comptime

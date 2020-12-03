@@ -174,137 +174,19 @@ pub fn str_concat<'a, 'ctx, 'env>(
     zig_str_to_struct(env, zig_result).into()
 }
 
-/// Obtain the string's length, cast from i8 to usize
-fn str_len_from_final_byte<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    final_byte: IntValue<'ctx>,
-) -> IntValue<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-    let bitmask = ctx.i8_type().const_int(0b0111_1111, false);
-    let len_i8 = builder.build_and(final_byte, bitmask, "small_str_length");
-
-    builder.build_int_cast(len_i8, env.ptr_int(), "len_as_usize")
-}
-
-/// Used by LowLevel::StrIsEmpty
 pub fn str_len<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    wrapper_ptr: PointerValue<'ctx>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
 ) -> IntValue<'ctx> {
-    let builder = env.builder;
+    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
 
-    let if_small = |final_byte| {
-        let len = str_len_from_final_byte(env, final_byte);
+    // the builtin will always return an u64
+    let length = call_bitcode_fn(env, &[str_i128.into()], &bitcode::STR_LEN).into_int_value();
 
-        BasicValueEnum::IntValue(len)
-    };
-
-    let if_big = |_| {
-        let len = big_str_len(
-            builder,
-            builder
-                .build_load(wrapper_ptr, "big_str")
-                .into_struct_value(),
-        );
-
-        BasicValueEnum::IntValue(len)
-    };
-
-    if_small_str(
-        env,
-        parent,
-        wrapper_ptr,
-        if_small,
-        if_big,
-        BasicTypeEnum::IntType(env.ptr_int()),
-    )
-    .into_int_value()
-}
-
-fn cast_str_wrapper_to_array<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    wrapper_ptr: PointerValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let array_ptr_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
+    // cast to the appropriate usize of the current build
     env.builder
-        .build_bitcast(wrapper_ptr, array_ptr_type, "str_as_array_ptr")
-        .into_pointer_value()
-}
-
-fn if_small_str<'a, 'ctx, 'env, IfSmallFn, IfBigFn>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    wrapper_ptr: PointerValue<'ctx>,
-    mut if_small: IfSmallFn,
-    mut if_big: IfBigFn,
-    ret_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx>
-where
-    IfSmallFn: FnMut(IntValue<'ctx>) -> BasicValueEnum<'ctx>,
-    IfBigFn: FnMut(StructValue<'ctx>) -> BasicValueEnum<'ctx>,
-{
-    let builder = env.builder;
-    let ctx = env.context;
-    let byte_array_ptr = cast_str_wrapper_to_array(env, wrapper_ptr);
-    let final_byte_ptr = unsafe {
-        builder.build_in_bounds_gep(
-            byte_array_ptr,
-            &[ctx
-                .i8_type()
-                .const_int(env.small_str_bytes() as u64 - 1, false)],
-            "final_byte_ptr",
-        )
-    };
-
-    let final_byte = builder
-        .build_load(final_byte_ptr, "load_final_byte")
-        .into_int_value();
-
-    let bitmask = ctx.i8_type().const_int(0b1000_0000, false);
-
-    let is_small_i8 = builder.build_int_compare(
-        IntPredicate::NE,
-        ctx.i8_type().const_zero(),
-        builder.build_and(final_byte, bitmask, "is_small"),
-        "is_small_comparison",
-    );
-
-    let is_small = builder.build_int_cast(is_small_i8, ctx.bool_type(), "is_small_as_bool");
-
-    build_basic_phi2(
-        env,
-        parent,
-        is_small,
-        || if_small(final_byte),
-        || {
-            if_big(
-                builder
-                    .build_load(wrapper_ptr, "load_wrapper_struct")
-                    .into_struct_value(),
-            )
-        },
-        ret_type,
-    )
-}
-
-fn big_str_len<'ctx>(builder: &Builder<'ctx>, wrapper_struct: StructValue<'ctx>) -> IntValue<'ctx> {
-    builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "big_str_len")
-        .unwrap()
-        .into_int_value()
-}
-
-#[allow(dead_code)]
-fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
-    env.builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        env.ptr_int().const_zero(),
-        "str_len_is_nonzero",
-    )
+        .build_int_cast(length, env.ptr_int(), "len_as_usize")
 }
 
 /// Str.startsWith : Str, Str -> Bool
