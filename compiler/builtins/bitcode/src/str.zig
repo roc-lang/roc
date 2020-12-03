@@ -582,18 +582,53 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     expect(startsWith(str, prefix));
 }
 
-// Str.split
+// Str.endsWith
 
-pub fn strSplit(ptr_size: u32, result_in_place: InPlace, string: RocStr, pattern: RocStr) callconv(.C) [*]RocStr {
-    return switch (ptr_size) {
-        // 4 => strSplitHelp(i32, result_in_place, arg1, arg2),
-        8 => strSplitHelp(i64, result_in_place, arg1, arg2),
-        else => unreachable,
-    };
+pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
+    const bytes_len = string.len();
+    const bytes_ptr = string.as_u8_ptr();
+
+    const suffix_len = suffix.len();
+    const suffix_ptr = suffix.as_u8_ptr();
+
+    if (suffix_len > bytes_len) {
+        return false;
+    }
+
+    const offset: usize = bytes_len - suffix_len;
+    var i: usize = 0;
+    while (i < suffix_len) {
+        if (bytes_ptr[i + offset] != suffix_ptr[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
 }
 
-fn strSplitHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) [*]RocStr {
-    return [_]u8{};
+test "endsWith: foo ends with oo" {
+    const foo = RocStr.init("foo", 3);
+    const oo = RocStr.init("oo", 2);
+    expect(endsWith(foo, oo));
+}
+
+test "endsWith: 123456789123456789 ends with 123456789123456789" {
+    const str = RocStr.init("123456789123456789", 18);
+    expect(endsWith(str, str));
+}
+
+test "endsWith: 12345678912345678910 ends with 345678912345678910" {
+    const str = RocStr.init("12345678912345678910", 20);
+    const suffix = RocStr.init("345678912345678910", 18);
+
+    expect(endsWith(str, suffix));
+}
+
+test "endsWith: hello world ends with world" {
+    const str = RocStr.init("hello world", 11);
+    const suffix = RocStr.init("world", 5);
+
+    expect(endsWith(str, suffix));
 }
 
 // Str.concat

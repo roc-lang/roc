@@ -434,6 +434,13 @@ mod gen_str {
     }
 
     #[test]
+    fn str_ends_with() {
+        assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
+        assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
+        assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
+    }
+
+    #[test]
     fn str_count_graphemes_small_str() {
         assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
     }

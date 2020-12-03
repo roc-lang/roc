@@ -28,4 +28,5 @@ pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_STR_SPLIT_IN_PLACE: &str = "roc_builtins.str.str_split_in_place";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
+pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_LEN: &str = "roc_builtins.str.len";

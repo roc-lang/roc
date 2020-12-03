@@ -1,12 +1,11 @@
 use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope,
 };
-use crate::llvm::build_list::{allocate_list, build_basic_phi2, store_list};
+use crate::llvm::build_list::{allocate_list, store_list};
 use crate::llvm::convert::collection;
-use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
-use inkwell::{AddressSpace, IntPredicate};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
+use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
@@ -205,6 +204,25 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
         env,
         &[str_i128.into(), prefix_i128.into()],
         &bitcode::STR_STARTS_WITH,
+    )
+}
+
+/// Str.endsWith : Str, Str -> Bool
+pub fn str_ends_with<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _inplace: InPlace,
+    scope: &Scope<'a, 'ctx>,
+    _parent: FunctionValue<'ctx>,
+    str_symbol: Symbol,
+    prefix_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let prefix_i128 = str_symbol_to_i128(env, scope, prefix_symbol);
+
+    call_bitcode_fn(
+        env,
+        &[str_i128.into(), prefix_i128.into()],
+        &bitcode::STR_ENDS_WITH,
     )
 }
 
