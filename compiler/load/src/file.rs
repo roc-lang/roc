@@ -21,7 +21,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
-    ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, TypedIdent,
+    ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
@@ -2039,57 +2039,76 @@ fn parse_header<'a>(
                 module_timing,
             );
 
-            let opt_base_package = header.packages.iter().find(|loc_package_entry| {
-                let Located { value, .. } = loc_package_entry;
+            match header.to.value {
+                To::ExistingPackage(existing_package) => {
+                    let opt_base_package = header.packages.iter().find(|loc_package_entry| {
+                        let Located { value, .. } = loc_package_entry;
 
-                match value {
-                    PackageEntry::Entry { shorthand, .. } => shorthand == &"base",
-                    _ => false,
-                }
-            });
+                        match value {
+                            PackageEntry::Entry { shorthand, .. } => shorthand == &existing_package,
+                            _ => false,
+                        }
+                    });
 
-            match opt_base_package {
-                Some(Located {
-                    value:
-                        PackageEntry::Entry {
-                            package_or_path:
-                                Located {
-                                    value: package_or_path,
+                    match opt_base_package {
+                        Some(Located {
+                            value:
+                                PackageEntry::Entry {
+                                    package_or_path:
+                                        Located {
+                                            value: package_or_path,
+                                            ..
+                                        },
                                     ..
                                 },
                             ..
-                        },
-                    ..
-                }) => {
-                    match package_or_path {
-                        PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
-                            // check whether we can find a Pkg-Config.roc file
-                            let mut pkg_config_roc = pkg_config_dir.clone();
-                            pkg_config_roc.push(package);
-                            pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
-                            pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
+                        }) => {
+                            match package_or_path {
+                                PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
+                                    // check whether we can find a Pkg-Config.roc file
+                                    let mut pkg_config_roc = pkg_config_dir.clone();
+                                    pkg_config_roc.push(package);
+                                    pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
+                                    pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
 
-                            if pkg_config_roc.as_path().exists() {
-                                let load_pkg_config_msg = load_pkg_config(
-                                    arena,
-                                    &pkg_config_dir,
-                                    module_ids,
-                                    ident_ids_by_module,
-                                    mode,
-                                )?;
+                                    if pkg_config_roc.as_path().exists() {
+                                        let load_pkg_config_msg = load_pkg_config(
+                                            arena,
+                                            &pkg_config_dir,
+                                            module_ids,
+                                            ident_ids_by_module,
+                                            mode,
+                                        )?;
 
-                                Ok((
-                                    module_id,
-                                    Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
-                                ))
-                            } else {
-                                Ok((module_id, app_module_header_msg))
+                                        Ok((
+                                            module_id,
+                                            Msg::Many(vec![
+                                                app_module_header_msg,
+                                                load_pkg_config_msg,
+                                            ]),
+                                        ))
+                                    } else {
+                                        Ok((module_id, app_module_header_msg))
+                                    }
+                                }
+                                _ => unreachable!(),
                             }
                         }
-                        _ => panic!("TODO not yet implement none path platform imports"),
+                        _ => panic!("could not find base"),
                     }
                 }
-                _ => panic!("could not find base"),
+                To::NewPackage(package_or_path) => match package_or_path {
+                    PackageOrPath::Package(_, _) => panic!("TODO implement packages"),
+                    PackageOrPath::Path(StrLiteral::PlainLine(_package)) => {
+                        panic!("TODO implement plain line package path")
+                    }
+                    PackageOrPath::Path(StrLiteral::Block(_)) => {
+                        panic!("TODO implement block package path")
+                    }
+                    PackageOrPath::Path(StrLiteral::Line(_)) => {
+                        panic!("TODO implement line package path")
+                    }
+                },
             }
         }
         Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(

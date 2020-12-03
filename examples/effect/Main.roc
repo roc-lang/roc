@@ -1,5 +1,5 @@
 app "effect-example"
-    packages { base: "./platform" }
+    packages { base: "./thing/platform-dir" }
     imports [ base.Task.{ Task, after } ]
     provides [ main ] to base
 
