@@ -206,7 +206,7 @@ const RocStr = extern struct {
 
 // Str.numberOfBytes
 
-pub fn strLen(string: RocStr) callconv(.C) u64 {
+pub fn strNumberOfBytes(string: RocStr) callconv(.C) u64 {
     return string.len();
 }
 
