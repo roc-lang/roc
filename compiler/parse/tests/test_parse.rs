@@ -1581,10 +1581,10 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::Body(
-            arena.alloc(Located::new(0, 0, 2, 6, Identifier("iffy"))),
-            arena.alloc(Located::new(0, 0, 7, 8, Num("5"))),
+            arena.alloc(Located::new(0, 0, 0, 4, Identifier("iffy"))),
+            arena.alloc(Located::new(0, 0, 5, 6, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(0, 0, 2, 8, def));
+        let loc_def = &*arena.alloc(Located::new(0, 0, 0, 6, def));
         let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(2, 2, 0, 2, ret);
