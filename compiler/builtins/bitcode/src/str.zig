@@ -6,10 +6,6 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 
-<<<<<<< HEAD
-extern fn malloc(size: usize) ?*u8;
-extern fn free([*]u8) void;
-
 const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
@@ -87,8 +83,8 @@ const RocStr = extern struct {
         const other_bytes_nonnull: [*]const u8 = other_bytes_ptr orelse unreachable;
         const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
         const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self.is_small_str()) self_u8_ptr else self_bytes_nonnull;
-        const other_bytes: [*]const u8 = if (other.is_small_str()) other_u8_ptr else other_bytes_nonnull;
+        const self_bytes: [*]const u8 = if (self.isSmallStr()) self_u8_ptr else self_bytes_nonnull;
+        const other_bytes: [*]const u8 = if (other.isSmallStr()) other_u8_ptr else other_bytes_nonnull;
 
         var index: usize = 0;
 
@@ -543,41 +539,45 @@ test "RocStr.concat: small concat small" {
     const str1_len = 3;
     var str1: [str1_len]u8 = "foo".*;
     const str1_ptr: [*]u8 = &str1;
-    var roc_str1 = RocStr.init(str1_ptr, str1_len);
+    var roc_str1 = RocStr.init(testing.allocator, str1_ptr, str1_len);
 
     const str2_len = 3;
     var str2: [str2_len]u8 = "abc".*;
     const str2_ptr: [*]u8 = &str2;
-    var roc_str2 = RocStr.init(str2_ptr, str2_len);
+    var roc_str2 = RocStr.init(testing.allocator, str2_ptr, str2_len);
 
     const str3_len = 6;
     var str3: [str3_len]u8 = "fooabc".*;
     const str3_ptr: [*]u8 = &str3;
-    var roc_str3 = RocStr.init(str3_ptr, str3_len);
+    var roc_str3 = RocStr.init(testing.allocator, str3_ptr, str3_len);
 
-    const result = strConcat(8, InPlace.Clone, roc_str1, roc_str2);
+    const result = strConcat(testing.allocator, 8, InPlace.Clone, roc_str1, roc_str2);
 
     expect(roc_str3.eq(result));
 
-    roc_str1.drop();
-    roc_str2.drop();
-    roc_str3.drop();
-    result.drop();
+    roc_str1.drop(testing.allocator);
+    roc_str2.drop(testing.allocator);
+    roc_str3.drop(testing.allocator);
+    result.drop(testing.allocator);
 }
 
-pub fn strConcat(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
+pub fn strConcatC(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
+    strConcat(std.heap.c_allocator, ptr_size, result_in_place, arg1, arg2);
+}
+
+pub fn strConcat(allocator: *Allocator, ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
     return switch (ptr_size) {
-        4 => strConcatHelp(i32, result_in_place, arg1, arg2),
-        8 => strConcatHelp(i64, result_in_place, arg1, arg2),
+        4 => strConcatHelp(i32, allocator, result_in_place, arg1, arg2),
+        8 => strConcatHelp(i64, allocator, result_in_place, arg1, arg2),
         else => unreachable,
     };
 }
 
-fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
+fn strConcatHelp(comptime T: type, allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.is_empty()) {
-        return cloneNonemptyStr(T, result_in_place, arg2);
+        return cloneNonemptyStr(T, allocator, result_in_place, arg2);
     } else if (arg2.is_empty()) {
-        return cloneNonemptyStr(T, result_in_place, arg1);
+        return cloneNonemptyStr(T, allocator, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();
 
@@ -585,12 +585,12 @@ fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2:
         const result_is_big = combined_length >= small_str_bytes;
 
         if (result_is_big) {
-            var result = allocate_str(T, result_in_place, combined_length);
+            var result = allocate_str(T, allocator, result_in_place, combined_length);
 
             {
                 const old_if_small = &@bitCast([16]u8, arg1);
                 const old_if_big = @ptrCast([*]u8, arg1.str_bytes);
-                const old_bytes = if (arg1.is_small_str()) old_if_small else old_if_big;
+                const old_bytes = if (arg1.isSmallStr()) old_if_small else old_if_big;
 
                 const new_bytes: [*]u8 = @ptrCast([*]u8, result.str_bytes);
 
@@ -600,7 +600,7 @@ fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2:
             {
                 const old_if_small = &@bitCast([16]u8, arg2);
                 const old_if_big = @ptrCast([*]u8, arg2.str_bytes);
-                const old_bytes = if (arg2.is_small_str()) old_if_small else old_if_big;
+                const old_bytes = if (arg2.isSmallStr()) old_if_small else old_if_big;
 
                 const new_bytes = @ptrCast([*]u8, result.str_bytes) + arg1.len();
 
@@ -644,12 +644,12 @@ const InPlace = packed enum(u8) {
     Clone,
 };
 
-fn cloneNonemptyStr(comptime T: type, in_place: InPlace, str: RocStr) RocStr {
-    if (str.is_small_str() or str.is_empty()) {
+fn cloneNonemptyStr(comptime T: type, allocator: *Allocator, in_place: InPlace, str: RocStr) RocStr {
+    if (str.isSmallStr() or str.is_empty()) {
         // just return the bytes
         return str;
     } else {
-        var new_str = allocate_str(T, in_place, str.str_len);
+        var new_str = allocate_str(T, allocator, in_place, str.str_len);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
         var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
@@ -660,9 +660,11 @@ fn cloneNonemptyStr(comptime T: type, in_place: InPlace, str: RocStr) RocStr {
     }
 }
 
-fn allocate_str(comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
+fn allocate_str(comptime T: type, allocator: *Allocator, in_place: InPlace, number_of_chars: u64) RocStr {
     const length = @sizeOf(T) + number_of_chars;
-    var new_bytes: [*]T = @ptrCast([*]T, @alignCast(@alignOf(T), malloc(length)));
+
+    var new_bytes: []T = allocator.alloc(T, length) catch unreachable;
+    var new_bytes_ptr: [*]T = @ptrCast([*]T, &new_bytes);
 
     if (in_place == InPlace.InPlace) {
         new_bytes[0] = @intCast(T, number_of_chars);
