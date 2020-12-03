@@ -815,6 +815,71 @@ mod test_parse {
     }
 
     #[test]
+    fn var_when() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "whenever",
+        };
+        let actual = parse_expr_with(&arena, "whenever");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_is() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "isnt",
+        };
+        let actual = parse_expr_with(&arena, "isnt");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_if() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "iffy",
+        };
+        let actual = parse_expr_with(&arena, "iffy");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_then() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "thenever",
+        };
+        let actual = parse_expr_with(&arena, "thenever");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_else() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "elsewhere",
+        };
+        let actual = parse_expr_with(&arena, "elsewhere");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn parenthetical_var() {
         let arena = Bump::new();
         let expected = ParensAround(arena.alloc(Var {
@@ -1505,6 +1570,32 @@ mod test_parse {
                 x=5
 
                 42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn if_def() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(0, 0, 2, 6, Identifier("iffy"))),
+            arena.alloc(Located::new(0, 0, 7, 8, Num("5"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(0, 0, 2, 8, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(2, 2, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                    iffy=5
+
+                    42
                 "#
             ),
             expected,
