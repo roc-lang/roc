@@ -576,7 +576,13 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
 
 // Str.startsWith
 
-pub fn startsWith(bytes_ptr: [*]u8, bytes_len: usize, prefix_ptr: [*]u8, prefix_len: usize) callconv(.C) bool {
+pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
+    const bytes_len = string.len();
+    const bytes_ptr = string.as_u8_ptr();
+
+    const prefix_len = prefix.len();
+    const prefix_ptr = prefix.as_u8_ptr();
+
     if (prefix_len > bytes_len) {
         return false;
     }

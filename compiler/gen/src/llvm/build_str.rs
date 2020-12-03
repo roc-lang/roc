@@ -1,7 +1,7 @@
 use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope,
 };
-use crate::llvm::build_list::{allocate_list, build_basic_phi2, load_list_ptr, store_list};
+use crate::llvm::build_list::{allocate_list, build_basic_phi2, store_list};
 use crate::llvm::convert::collection;
 use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
@@ -223,49 +223,6 @@ pub fn str_len<'a, 'ctx, 'env>(
     .into_int_value()
 }
 
-fn load_str<'a, 'ctx, 'env, Callback>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    wrapper_ptr: PointerValue<'ctx>,
-    ret_type: BasicTypeEnum<'ctx>,
-    cb: Callback,
-) -> BasicValueEnum<'ctx>
-where
-    Callback: Fn(PointerValue<'ctx>, IntValue<'ctx>, Smallness) -> BasicValueEnum<'ctx>,
-{
-    let builder = env.builder;
-
-    let if_small = |final_byte| {
-        cb(
-            cast_str_wrapper_to_array(env, wrapper_ptr),
-            str_len_from_final_byte(env, final_byte),
-            Smallness::Small,
-        )
-    };
-
-    let if_big = |wrapper_struct| {
-        let list_ptr = load_list_ptr(
-            builder,
-            wrapper_struct,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
-        );
-
-        cb(
-            list_ptr,
-            big_str_len(builder, wrapper_struct),
-            Smallness::Big,
-        )
-    };
-
-    if_small_str(env, parent, wrapper_ptr, if_small, if_big, ret_type)
-}
-
-#[derive(Debug, Copy, Clone)]
-enum Smallness {
-    Small,
-    Big,
-}
-
 fn cast_str_wrapper_to_array<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     wrapper_ptr: PointerValue<'ctx>,
@@ -355,42 +312,17 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     _inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
+    _parent: FunctionValue<'ctx>,
     str_symbol: Symbol,
     prefix_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
+    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let prefix_i128 = str_symbol_to_i128(env, scope, prefix_symbol);
 
-    let str_ptr = ptr_from_symbol(scope, str_symbol);
-    let prefix_ptr = ptr_from_symbol(scope, prefix_symbol);
-
-    let ret_type = BasicTypeEnum::IntType(ctx.bool_type());
-
-    load_str(
+    call_bitcode_fn(
         env,
-        parent,
-        *str_ptr,
-        ret_type,
-        |str_bytes_ptr, str_len, _str_smallness| {
-            load_str(
-                env,
-                parent,
-                *prefix_ptr,
-                ret_type,
-                |prefix_bytes_ptr, prefix_len, _prefix_smallness| {
-                    call_bitcode_fn(
-                        env,
-                        &[
-                            BasicValueEnum::PointerValue(str_bytes_ptr),
-                            BasicValueEnum::IntValue(str_len),
-                            BasicValueEnum::PointerValue(prefix_bytes_ptr),
-                            BasicValueEnum::IntValue(prefix_len),
-                        ],
-                        &bitcode::STR_STARTS_WITH,
-                    )
-                },
-            )
-        },
+        &[str_i128.into(), prefix_i128.into()],
+        &bitcode::STR_STARTS_WITH,
     )
 }
 
