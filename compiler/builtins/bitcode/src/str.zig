@@ -10,7 +10,7 @@ const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
 
-    // This takes ownership of the pointed-to bytes if they won't fit in a
+    // This clones the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn init(allocator: *Allocator, bytes_ptr: [*]const u8, length: usize) RocStr {
         const rocStrSize = @sizeOf(RocStr);
