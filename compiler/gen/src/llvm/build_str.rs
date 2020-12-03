@@ -398,28 +398,14 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
 pub fn str_count_graphemes<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
+    _parent: FunctionValue<'ctx>,
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
+    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
 
-    let sym_str_ptr = ptr_from_symbol(scope, str_symbol);
-    let ret_type = BasicTypeEnum::IntType(ctx.i64_type());
-
-    load_str(
+    call_bitcode_fn(
         env,
-        parent,
-        *sym_str_ptr,
-        ret_type,
-        |str_ptr, str_len, _str_smallness| {
-            call_bitcode_fn(
-                env,
-                &[
-                    BasicValueEnum::PointerValue(str_ptr),
-                    BasicValueEnum::IntValue(str_len),
-                ],
-                &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
-            )
-        },
+        &[str_i128.into()],
+        &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
     )
 }

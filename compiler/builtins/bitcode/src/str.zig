@@ -495,7 +495,10 @@ test "countSegments: delimiter interspered" {
 // Str.countGraphemeClusters
 const grapheme = @import("helpers/grapheme.zig");
 
-pub fn countGraphemeClusters(bytes_ptr: [*]u8, bytes_len: usize) callconv(.C) usize {
+pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
+    const bytes_len = string.len();
+    const bytes_ptr = string.as_u8_ptr();
+
     var bytes = bytes_ptr[0..bytes_len];
     var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
 
