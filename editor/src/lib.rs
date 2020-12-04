@@ -22,7 +22,7 @@ use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 use winit::event_loop::ControlFlow;
 
 pub mod ast;
-mod file;
+pub mod file;
 mod rect;
 pub mod text_state;
 mod vertex;
