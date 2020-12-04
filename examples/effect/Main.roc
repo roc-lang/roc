@@ -4,7 +4,7 @@ app "effect-example" imports [ Effect ] provides [ main ] to "./platform"
 main : Effect.Effect {} as Fx
 main =
     when if 1 == 1 then True 3 else False 3.14 is
-        True 3 -> Effect.putLine "Yay"
+        True n -> Effect.putLine (Str.fromInt n)
         _ -> Effect.putLine "Yay"
 
 # main : Effect.Effect {} as Fx

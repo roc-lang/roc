@@ -54,7 +54,9 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_SPLIT => str_split,
         Symbol::STR_IS_EMPTY => str_is_empty,
         Symbol::STR_STARTS_WITH => str_starts_with,
+        Symbol::STR_ENDS_WITH => str_ends_with,
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
+        Symbol::STR_FROM_INT => str_from_int,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -989,6 +991,26 @@ fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// Str.endsWith : Str, Str -> Bool
+fn str_ends_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrEndsWith,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        bool_var,
+    )
+}
+
 /// Str.countGraphemes : Str -> Int
 fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
@@ -1006,6 +1028,26 @@ fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         int_var,
+    )
+}
+
+/// Str.fromInt : Int -> Str
+fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrFromInt,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        str_var,
     )
 }
 
