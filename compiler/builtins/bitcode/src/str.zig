@@ -307,7 +307,6 @@ inline fn strSplitInPlace(allocator: *Allocator, array: [*]RocStr, string: RocSt
     array[ret_array_index] = RocStr.init(allocator, str_bytes + slice_start_index, str_len - slice_start_index);
 }
 
-
 test "strSplitInPlace: no delimiter" {
     // Str.split "abc" "!" == [ "abc" ]
     const str_arr = "abc";
@@ -911,4 +910,3 @@ test "RocStr.concat: small concat small" {
 
     expect(roc_str3.eq(result));
 }
-
