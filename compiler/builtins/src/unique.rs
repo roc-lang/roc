@@ -1108,6 +1108,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![str_type(star1)], int_type(star2))
     });
 
+    // fromInt : Attr * Int -> Attr * Str
+    add_type(Symbol::STR_FROM_INT, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![int_type(star1)], str_type(star2))
+    });
+
     // Result module
 
     // map : Attr * (Result (Attr a e))

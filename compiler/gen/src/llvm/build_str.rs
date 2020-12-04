@@ -4,11 +4,13 @@ use crate::llvm::build::{
 use crate::llvm::build_list::{allocate_list, store_list};
 use crate::llvm::convert::collection;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
+use inkwell::values::{BasicValueEnum, IntValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
+
+use super::build::load_symbol;
 
 pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
@@ -16,7 +18,6 @@ pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 pub fn str_split<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
-    _parent: FunctionValue<'ctx>,
     inplace: InPlace,
     str_symbol: Symbol,
     delimiter_symbol: Symbol,
@@ -121,7 +122,6 @@ pub fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
-    _parent: FunctionValue<'ctx>,
     str1_symbol: Symbol,
     str2_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
@@ -150,7 +150,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
     zig_str_to_struct(env, zig_result).into()
 }
 
-pub fn str_len<'a, 'ctx, 'env>(
+pub fn str_number_of_bytes<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     str_symbol: Symbol,
@@ -158,7 +158,8 @@ pub fn str_len<'a, 'ctx, 'env>(
     let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
 
     // the builtin will always return an u64
-    let length = call_bitcode_fn(env, &[str_i128.into()], &bitcode::STR_LEN).into_int_value();
+    let length =
+        call_bitcode_fn(env, &[str_i128.into()], &bitcode::STR_NUMBER_OF_BYTES).into_int_value();
 
     // cast to the appropriate usize of the current build
     env.builder
@@ -168,9 +169,7 @@ pub fn str_len<'a, 'ctx, 'env>(
 /// Str.startsWith : Str, Str -> Bool
 pub fn str_starts_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
-    _parent: FunctionValue<'ctx>,
     str_symbol: Symbol,
     prefix_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
@@ -187,9 +186,7 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
 /// Str.endsWith : Str, Str -> Bool
 pub fn str_ends_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
-    _parent: FunctionValue<'ctx>,
     str_symbol: Symbol,
     prefix_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
@@ -207,7 +204,6 @@ pub fn str_ends_with<'a, 'ctx, 'env>(
 pub fn str_count_graphemes<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
-    _parent: FunctionValue<'ctx>,
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
@@ -217,4 +213,17 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
         &[str_i128.into()],
         &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
     )
+}
+
+/// Str.fromInt : Int -> Str
+pub fn str_from_int<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    int_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let int = load_symbol(env, scope, &int_symbol);
+
+    let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
+
+    zig_str_to_struct(env, zig_result).into()
 }
