@@ -10,7 +10,7 @@ mod test_file {
     use std::path::Path;
 
     #[test]
-    fn read_storage() {
+    fn read_and_fmt_simple_roc_module() {
         let simple_module_path = Path::new("./tests/modules/Simple.roc");
 
         let arena = Bump::new();
