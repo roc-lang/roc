@@ -13,15 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_num {
-    /*
-    use inkwell::passes::PassManager;
-    use inkwell::types::BasicType;
-    use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::layout::Layout;
-    use roc_types::subs::Subs;
-    */
+    use roc_std::RocOrder;
 
     #[test]
     fn f64_sqrt() {
@@ -68,7 +60,7 @@ mod gen_num {
             indoc!(
                 r#"
                     limitedNegate = \num ->
-                        x = 
+                        x =
                             if num == 1 then
                                 -1
                             else if num == -1 then
@@ -482,7 +474,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
@@ -500,7 +492,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 10 is
                         x if x == 10 -> 42
                         _ -> 0
@@ -557,7 +549,7 @@ mod gen_num {
             indoc!(
                 r#"
                     always42 : Num.Num Num.Integer -> Num.Num Num.Integer
-                    always42 = \num -> 42
+                    always42 = \_ -> 42
 
                     always42 5
                 "#
@@ -584,86 +576,16 @@ mod gen_num {
 
     #[test]
     fn int_compare() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 0 1 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            0,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 1 1 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            1,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 1 0 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            2,
-            i64
-        );
+        assert_evals_to!("Num.compare 0 1", RocOrder::Lt, RocOrder);
+        assert_evals_to!("Num.compare 1 1", RocOrder::Eq, RocOrder);
+        assert_evals_to!("Num.compare 1 0", RocOrder::Gt, RocOrder);
     }
 
     #[test]
     fn float_compare() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 0 3.14 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            0,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 3.14 3.14 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            1,
-            i64
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Num.compare 3.14 0 is
-                    LT -> 0
-                    EQ -> 1
-                    GT -> 2
-                "#
-            ),
-            2,
-            i64
-        );
+        assert_evals_to!("Num.compare 0.01 3.14", RocOrder::Lt, RocOrder);
+        assert_evals_to!("Num.compare 3.14 3.14", RocOrder::Eq, RocOrder);
+        assert_evals_to!("Num.compare 3.14 0.01", RocOrder::Gt, RocOrder);
     }
 
     #[test]
@@ -691,19 +613,19 @@ mod gen_num {
         assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
     }
 
-    #[test]
-    #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
-    fn int_overflow() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                9_223_372_036_854_775_807 + 1
-                "#
-            ),
-            0,
-            i64
-        );
-    }
+    // #[test]
+    // #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+    // fn int_overflow() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //             9_223_372_036_854_775_807 + 1
+    //             "#
+    //         ),
+    //         0,
+    //         i64
+    //     );
+    // }
 
     #[test]
     fn int_add_checked() {
@@ -750,7 +672,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when Num.addChecked 1.0 0.0 is 
+                when Num.addChecked 1.0 0.0 is
                     Ok v -> v
                     Err Overflow -> -1.0
                 "#
@@ -775,17 +697,43 @@ mod gen_num {
         );
     }
 
+    //     #[test]
+    //     #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+    //     fn float_overflow() {
+    //         assert_evals_to!(
+    //             indoc!(
+    //                 r#"
+    //                 1.7976931348623157e308 + 1.7976931348623157e308
+    //                 "#
+    //             ),
+    //             0.0,
+    //             f64
+    //         );
+    //     }
+
     #[test]
-    #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
-    fn float_overflow() {
+    fn num_max_int() {
         assert_evals_to!(
             indoc!(
                 r#"
-                1.7976931348623157e308 + 1.7976931348623157e308
+                Num.maxInt
                 "#
             ),
-            0.0,
-            f64
+            i64::MAX,
+            i64
+        );
+    }
+
+    #[test]
+    fn num_min_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.minInt
+                "#
+            ),
+            i64::MIN,
+            i64
         );
     }
 }

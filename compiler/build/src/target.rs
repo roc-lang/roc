@@ -15,6 +15,11 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "x86_64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "aarch64-unknown-linux-gnu",
+        Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
@@ -35,6 +40,10 @@ pub fn arch_str(target: &Triple) -> &'static str {
             Target::initialize_x86(&InitializationConfig::default());
 
             "x86-64"
+        }
+        Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => {
+            Target::initialize_aarch64(&InitializationConfig::default());
+            "aarch64"
         }
         Architecture::Arm(_) if cfg!(feature = "target-arm") => {
             // NOTE: why not enable arm and wasm by default?
@@ -67,8 +76,8 @@ pub fn target_machine(
 
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),
-        arch,
-        "+avx2", // TODO this string was used uncritically from an example, and should be reexamined
+        "generic",
+        "", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
         opt,
         reloc,
         model,

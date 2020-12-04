@@ -1,10 +1,11 @@
-use crate::boolean_algebra;
-use crate::subs::{FlatType, Subs, VarId, Variable};
+use crate::boolean_algebra::{self, Bool};
+use crate::subs::{FlatType, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
-use roc_collections::all::MutSet;
+use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use std::hash::{Hash, Hasher};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -25,8 +26,136 @@ impl<T> Solved<T> {
     }
 }
 
+/// A custom hash instance, that treats flex vars specially, so that
+///
+/// `Foo 100 200 100` hashes to the same as `Foo 300 100 300`
+///
+/// i.e., we can rename the flex variables, so long as it happens consistently.
+/// this is important so we don't generate the same PartialProc twice.
+impl Hash for SolvedType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_solved_type_help(self, &mut Vec::new(), state);
+    }
+}
+
+impl PartialEq for SolvedType {
+    fn eq(&self, other: &Self) -> bool {
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut state = DefaultHasher::new();
+        hash_solved_type_help(self, &mut Vec::new(), &mut state);
+        let hash1 = state.finish();
+
+        let mut state = DefaultHasher::new();
+        hash_solved_type_help(other, &mut Vec::new(), &mut state);
+        let hash2 = state.finish();
+
+        hash1 == hash2
+    }
+}
+
+fn hash_solved_type_help<H: Hasher>(
+    solved_type: &SolvedType,
+    flex_vars: &mut Vec<VarId>,
+    state: &mut H,
+) {
+    use SolvedType::*;
+
+    match solved_type {
+        Flex(var_id) => {
+            var_id_hash_help(*var_id, flex_vars, state);
+        }
+        Wildcard => "wildcard".hash(state),
+        EmptyRecord => "empty_record".hash(state),
+        EmptyTagUnion => "empty_tag_union".hash(state),
+        Error => "error".hash(state),
+        Func(arguments, closure, result) => {
+            for x in arguments {
+                hash_solved_type_help(x, flex_vars, state);
+            }
+
+            hash_solved_type_help(closure, flex_vars, state);
+            hash_solved_type_help(result, flex_vars, state);
+        }
+        Apply(name, arguments) => {
+            name.hash(state);
+            for x in arguments {
+                hash_solved_type_help(x, flex_vars, state);
+            }
+        }
+        Rigid(name) => name.hash(state),
+        Erroneous(problem) => problem.hash(state),
+        Boolean(solved_bool) => solved_bool.hash(state),
+
+        Record { fields, ext } => {
+            for (name, x) in fields {
+                name.hash(state);
+                "record_field".hash(state);
+                hash_solved_type_help(x.as_inner(), flex_vars, state);
+            }
+            hash_solved_type_help(ext, flex_vars, state);
+        }
+
+        TagUnion(tags, ext) => {
+            for (name, arguments) in tags {
+                name.hash(state);
+                for x in arguments {
+                    hash_solved_type_help(x, flex_vars, state);
+                }
+            }
+            hash_solved_type_help(ext, flex_vars, state);
+        }
+
+        RecursiveTagUnion(rec, tags, ext) => {
+            var_id_hash_help(*rec, flex_vars, state);
+            for (name, arguments) in tags {
+                name.hash(state);
+                for x in arguments {
+                    hash_solved_type_help(x, flex_vars, state);
+                }
+            }
+            hash_solved_type_help(ext, flex_vars, state);
+        }
+
+        Alias(name, arguments, actual) => {
+            name.hash(state);
+            for (name, x) in arguments {
+                name.hash(state);
+                hash_solved_type_help(x, flex_vars, state);
+            }
+            hash_solved_type_help(actual, flex_vars, state);
+        }
+
+        HostExposedAlias {
+            name,
+            arguments,
+            actual,
+            actual_var,
+        } => {
+            name.hash(state);
+            for (name, x) in arguments {
+                name.hash(state);
+                hash_solved_type_help(x, flex_vars, state);
+            }
+            hash_solved_type_help(actual, flex_vars, state);
+            var_id_hash_help(*actual_var, flex_vars, state);
+        }
+    }
+}
+
+fn var_id_hash_help<H: Hasher>(var_id: VarId, flex_vars: &mut Vec<VarId>, state: &mut H) {
+    let opt_index = flex_vars.iter().position(|x| *x == var_id);
+    match opt_index {
+        Some(index) => index.hash(state),
+        None => {
+            flex_vars.len().hash(state);
+            flex_vars.push(var_id);
+        }
+    }
+}
+
 /// This is a fully solved type, with no Variables remaining in it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
@@ -53,6 +182,13 @@ pub enum SolvedType {
     /// A type alias
     Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
 
+    HostExposedAlias {
+        name: Symbol,
+        arguments: Vec<(Lowercase, SolvedType)>,
+        actual_var: VarId,
+        actual: Box<SolvedType>,
+    },
+
     /// a boolean algebra Bool
     Boolean(SolvedBool),
 
@@ -68,8 +204,6 @@ pub enum SolvedBool {
 
 impl SolvedBool {
     pub fn from_bool(boolean: &boolean_algebra::Bool, subs: &Subs) -> Self {
-        use boolean_algebra::Bool;
-
         match boolean {
             Bool::Shared => SolvedBool::SolvedShared,
             Bool::Container(cvar, mvars) => {
@@ -196,6 +330,26 @@ impl SolvedType {
 
                 SolvedType::Alias(*symbol, solved_args, Box::new(solved_type))
             }
+            HostExposedAlias {
+                name,
+                arguments,
+                actual_var,
+                actual,
+            } => {
+                let solved_type = Self::from_type(solved_subs, actual);
+                let mut solved_args = Vec::with_capacity(arguments.len());
+
+                for (name, var) in arguments {
+                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
+                }
+
+                SolvedType::HostExposedAlias {
+                    name: *name,
+                    arguments: solved_args,
+                    actual_var: VarId::from_var(*actual_var, solved_subs.inner()),
+                    actual: Box::new(solved_type),
+                }
+            }
             Boolean(val) => SolvedType::Boolean(SolvedBool::from_bool(&val, solved_subs.inner())),
             Variable(var) => Self::from_var(solved_subs.inner(), *var),
         }
@@ -217,6 +371,7 @@ impl SolvedType {
 
         match subs.get_without_compacting(var).content {
             FlexVar(_) => SolvedType::Flex(VarId::from_var(var, subs)),
+            RecursionVar { .. } => todo!(),
             RigidVar(name) => SolvedType::Rigid(name),
             Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
             Alias(symbol, args, actual_var) => {
@@ -354,5 +509,176 @@ impl RecursionVars {
         let var = subs.get_root_key_without_compacting(var);
 
         self.0.insert(var);
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FreeVars {
+    pub named_vars: ImMap<Lowercase, Variable>,
+    pub unnamed_vars: ImMap<VarId, Variable>,
+    pub wildcards: Vec<Variable>,
+}
+
+pub fn to_type(
+    solved_type: &SolvedType,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Type {
+    use SolvedType::*;
+
+    match solved_type {
+        Func(args, closure, ret) => {
+            let mut new_args = Vec::with_capacity(args.len());
+
+            for arg in args {
+                new_args.push(to_type(&arg, free_vars, var_store));
+            }
+
+            let new_ret = to_type(&ret, free_vars, var_store);
+            let new_closure = to_type(&closure, free_vars, var_store);
+
+            Type::Function(new_args, Box::new(new_closure), Box::new(new_ret))
+        }
+        Apply(symbol, args) => {
+            let mut new_args = Vec::with_capacity(args.len());
+
+            for arg in args {
+                new_args.push(to_type(&arg, free_vars, var_store));
+            }
+
+            Type::Apply(*symbol, new_args)
+        }
+        Rigid(lowercase) => {
+            if let Some(var) = free_vars.named_vars.get(&lowercase) {
+                Type::Variable(*var)
+            } else {
+                let var = var_store.fresh();
+                free_vars.named_vars.insert(lowercase.clone(), var);
+                Type::Variable(var)
+            }
+        }
+        Flex(var_id) => Type::Variable(var_id_to_flex_var(*var_id, free_vars, var_store)),
+        Wildcard => {
+            let var = var_store.fresh();
+            free_vars.wildcards.push(var);
+            Type::Variable(var)
+        }
+        Record { fields, ext } => {
+            use RecordField::*;
+
+            let mut new_fields = SendMap::default();
+
+            for (label, field) in fields {
+                let field_val = match field {
+                    Required(typ) => Required(to_type(&typ, free_vars, var_store)),
+                    Optional(typ) => Optional(to_type(&typ, free_vars, var_store)),
+                    Demanded(typ) => Demanded(to_type(&typ, free_vars, var_store)),
+                };
+
+                new_fields.insert(label.clone(), field_val);
+            }
+
+            Type::Record(new_fields, Box::new(to_type(ext, free_vars, var_store)))
+        }
+        EmptyRecord => Type::EmptyRec,
+        EmptyTagUnion => Type::EmptyTagUnion,
+        TagUnion(tags, ext) => {
+            let mut new_tags = Vec::with_capacity(tags.len());
+
+            for (tag_name, args) in tags {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for arg in args.iter() {
+                    new_args.push(to_type(arg, free_vars, var_store));
+                }
+
+                new_tags.push((tag_name.clone(), new_args));
+            }
+
+            Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
+        }
+        RecursiveTagUnion(rec_var_id, tags, ext) => {
+            let mut new_tags = Vec::with_capacity(tags.len());
+
+            for (tag_name, args) in tags {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for arg in args.iter() {
+                    new_args.push(to_type(arg, free_vars, var_store));
+                }
+
+                new_tags.push((tag_name.clone(), new_args));
+            }
+
+            let rec_var = free_vars
+                .unnamed_vars
+                .get(rec_var_id)
+                .expect("rec var not in unnamed vars");
+
+            Type::RecursiveTagUnion(
+                *rec_var,
+                new_tags,
+                Box::new(to_type(ext, free_vars, var_store)),
+            )
+        }
+        Boolean(SolvedBool::SolvedShared) => Type::Boolean(Bool::Shared),
+        Boolean(SolvedBool::SolvedContainer(solved_cvar, solved_mvars)) => {
+            let cvar = var_id_to_flex_var(*solved_cvar, free_vars, var_store);
+
+            let mvars = solved_mvars
+                .iter()
+                .map(|var_id| var_id_to_flex_var(*var_id, free_vars, var_store));
+
+            Type::Boolean(Bool::container(cvar, mvars))
+        }
+        Alias(symbol, solved_type_variables, solved_actual) => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+
+            for (lowercase, solved_arg) in solved_type_variables {
+                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            }
+
+            let actual = to_type(solved_actual, free_vars, var_store);
+
+            Type::Alias(*symbol, type_variables, Box::new(actual))
+        }
+        HostExposedAlias {
+            name,
+            arguments: solved_type_variables,
+            actual_var,
+            actual: solved_actual,
+        } => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+
+            for (lowercase, solved_arg) in solved_type_variables {
+                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            }
+
+            let actual = to_type(solved_actual, free_vars, var_store);
+
+            Type::HostExposedAlias {
+                name: *name,
+                arguments: type_variables,
+                actual_var: var_id_to_flex_var(*actual_var, free_vars, var_store),
+                actual: Box::new(actual),
+            }
+        }
+        Error => Type::Erroneous(Problem::SolvedTypeError),
+        Erroneous(problem) => Type::Erroneous(problem.clone()),
+    }
+}
+
+fn var_id_to_flex_var(
+    var_id: VarId,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Variable {
+    if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
+        *var
+    } else {
+        let var = var_store.fresh();
+        free_vars.unnamed_vars.insert(var_id, var);
+
+        var
     }
 }

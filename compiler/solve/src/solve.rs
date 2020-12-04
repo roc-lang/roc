@@ -117,6 +117,12 @@ impl Pools {
             .split_last()
             .unwrap_or_else(|| panic!("Attempted to split_last() on non-empy Pools"))
     }
+
+    pub fn extend_to(&mut self, n: usize) {
+        for _ in self.len()..n {
+            self.0.push(Vec::new());
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -233,6 +239,34 @@ fn solve(
                     introduce(subs, rank, pools, &vars);
 
                     problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+            }
+        }
+        Store(source, target, _filename, _linenr) => {
+            // a special version of Eq that is used to store types in the AST.
+            // IT DOES NOT REPORT ERRORS!
+            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+            let target = *target;
+
+            match unify(subs, actual, target) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, _actual_type, _expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
+
+                    state
+                }
+                BadType(vars, _problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // ERROR NOT REPORTED
 
                     state
                 }
@@ -445,148 +479,149 @@ fn solve(
                         subs.set_rank(var, next_rank);
                     }
 
-                    let work_in_next_pools = |next_pools: &mut Pools| {
-                        let pool: &mut Vec<Variable> = next_pools.get_mut(next_rank);
+                    // determine the next pool
+                    let next_pools;
+                    if next_rank.into_usize() < pools.len() {
+                        next_pools = pools
+                    } else {
+                        // we should be off by one at this point
+                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
+                        pools.extend_to(next_rank.into_usize());
+                        next_pools = pools;
+                    }
 
-                        // Replace the contents of this pool with rigid_vars and flex_vars
-                        pool.clear();
-                        pool.reserve(rigid_vars.len() + flex_vars.len());
-                        pool.extend(rigid_vars.iter());
-                        pool.extend(flex_vars.iter());
+                    let pool: &mut Vec<Variable> = next_pools.get_mut(next_rank);
 
-                        let mut new_env = env.clone();
+                    // Replace the contents of this pool with rigid_vars and flex_vars
+                    pool.clear();
+                    pool.reserve(rigid_vars.len() + flex_vars.len());
+                    pool.extend(rigid_vars.iter());
+                    pool.extend(flex_vars.iter());
 
-                        // Add a variable for each def to local_def_vars.
-                        let mut local_def_vars = ImMap::default();
+                    // run solver in next pool
 
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let def_type = loc_type.value.clone();
+                    // Add a variable for each def to local_def_vars.
+                    let mut local_def_vars = ImMap::default();
 
-                            let var =
-                                type_to_var(subs, next_rank, next_pools, cached_aliases, &def_type);
+                    for (symbol, loc_type) in let_con.def_types.iter() {
+                        let def_type = &loc_type.value;
 
-                            local_def_vars.insert(
-                                *symbol,
-                                Located {
-                                    value: var,
-                                    region: loc_type.region,
-                                },
-                            );
-                        }
+                        let var =
+                            type_to_var(subs, next_rank, next_pools, cached_aliases, def_type);
 
-                        // run solver in next pool
-
-                        // Solve the assignments' constraints first.
-                        let new_state = solve(
-                            &new_env,
-                            state,
-                            next_rank,
-                            next_pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &let_con.defs_constraint,
-                        );
-                        let young_mark = new_state.mark;
-                        let visit_mark = young_mark.next();
-                        let final_mark = visit_mark.next();
-
-                        debug_assert_eq!(
-                            {
-                                let offenders = next_pools
-                                    .get(next_rank)
-                                    .iter()
-                                    .filter(|var| {
-                                        let current = subs.get_without_compacting(
-                                            roc_types::subs::Variable::clone(var),
-                                        );
-
-                                        current.rank.into_usize() > next_rank.into_usize()
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let result = offenders.len();
-
-                                if result > 0 {
-                                    dbg!(
-                                        &subs,
-                                        &offenders,
-                                        &let_con.def_types,
-                                        &let_con.def_aliases
-                                    );
-                                }
-
-                                result
+                        local_def_vars.insert(
+                            *symbol,
+                            Located {
+                                value: var,
+                                region: loc_type.region,
                             },
-                            0
                         );
+                    }
 
-                        // pop pool
-                        generalize(subs, young_mark, visit_mark, next_rank, next_pools);
+                    // Solve the assignments' constraints first.
+                    let State {
+                        env: saved_env,
+                        mark,
+                    } = solve(
+                        &env,
+                        state,
+                        next_rank,
+                        next_pools,
+                        problems,
+                        cached_aliases,
+                        subs,
+                        &let_con.defs_constraint,
+                    );
 
-                        next_pools.get_mut(next_rank).clear();
+                    let young_mark = mark;
+                    let visit_mark = young_mark.next();
+                    let final_mark = visit_mark.next();
 
-                        // check that things went well
-                        debug_assert!({
-                            // NOTE the `subs.redundant` check is added for the uniqueness
-                            // inference, and does not come from elm. It's unclear whether this is
-                            // a bug with uniqueness inference (something is redundant that
-                            // shouldn't be) or that it just never came up in elm.
-                            let failing: Vec<_> = rigid_vars
+                    debug_assert_eq!(
+                        {
+                            let offenders = next_pools
+                                .get(next_rank)
                                 .iter()
-                                .filter(|&var| {
-                                    !subs.redundant(*var)
-                                        && subs.get_without_compacting(*var).rank != Rank::NONE
+                                .filter(|var| {
+                                    let current = subs.get_without_compacting(
+                                        roc_types::subs::Variable::clone(var),
+                                    );
+
+                                    current.rank.into_usize() > next_rank.into_usize()
                                 })
-                                .collect();
+                                .collect::<Vec<_>>();
 
-                            if !failing.is_empty() {
-                                println!("Rigids {:?}", &rigid_vars);
-                                println!("Failing {:?}", failing);
+                            let result = offenders.len();
+
+                            if result > 0 {
+                                dbg!(&subs, &offenders, &let_con.def_types);
                             }
 
-                            failing.is_empty()
-                        });
+                            result
+                        },
+                        0
+                    );
 
-                        for (symbol, loc_var) in local_def_vars.iter() {
-                            if !new_env.vars_by_symbol.contains_key(&symbol) {
-                                new_env.vars_by_symbol.insert(*symbol, loc_var.value);
-                            }
+                    // pop pool
+                    generalize(subs, young_mark, visit_mark, next_rank, next_pools);
+
+                    next_pools.get_mut(next_rank).clear();
+
+                    // check that things went well
+                    debug_assert!({
+                        // NOTE the `subs.redundant` check is added for the uniqueness
+                        // inference, and does not come from elm. It's unclear whether this is
+                        // a bug with uniqueness inference (something is redundant that
+                        // shouldn't be) or that it just never came up in elm.
+                        let failing: Vec<_> = rigid_vars
+                            .iter()
+                            .filter(|&var| {
+                                !subs.redundant(*var)
+                                    && subs.get_without_compacting(*var).rank != Rank::NONE
+                            })
+                            .collect();
+
+                        if !failing.is_empty() {
+                            println!("Rigids {:?}", &rigid_vars);
+                            println!("Failing {:?}", failing);
                         }
 
-                        // Note that this vars_by_symbol is the one returned by the
-                        // previous call to solve()
-                        let temp_state = State {
-                            env: new_state.env,
-                            mark: final_mark,
-                        };
+                        failing.is_empty()
+                    });
 
-                        // Now solve the body, using the new vars_by_symbol which includes
-                        // the assignments' name-to-variable mappings.
-                        let new_state = solve(
-                            &new_env,
-                            temp_state,
-                            rank,
-                            next_pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &ret_con,
-                        );
-
-                        for (symbol, loc_var) in local_def_vars {
-                            check_for_infinite_type(subs, problems, symbol, loc_var);
+                    let mut new_env = env.clone();
+                    for (symbol, loc_var) in local_def_vars.iter() {
+                        // when there are duplicates, keep the one from `env`
+                        if !new_env.vars_by_symbol.contains_key(&symbol) {
+                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                         }
+                    }
 
-                        new_state
+                    // Note that this vars_by_symbol is the one returned by the
+                    // previous call to solve()
+                    let temp_state = State {
+                        env: saved_env,
+                        mark: final_mark,
                     };
 
-                    if next_rank.into_usize() < pools.len() {
-                        work_in_next_pools(pools)
-                    } else {
-                        // TODO shouldn't this grow the pool, it does in the elm source
-                        work_in_next_pools(&mut pools.clone())
+                    // Now solve the body, using the new vars_by_symbol which includes
+                    // the assignments' name-to-variable mappings.
+                    let new_state = solve(
+                        &new_env,
+                        temp_state,
+                        rank,
+                        next_pools,
+                        problems,
+                        cached_aliases,
+                        subs,
+                        &ret_con,
+                    );
+
+                    for (symbol, loc_var) in local_def_vars {
+                        check_for_infinite_type(subs, problems, symbol, loc_var);
                     }
+
+                    new_state
                 }
             }
         }
@@ -743,7 +778,17 @@ fn type_to_variable(
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, new_ext_var));
 
-            register(subs, rank, pools, content)
+            let tag_union_var = register(subs, rank, pools, content);
+
+            subs.set_content(
+                *rec_var,
+                Content::RecursionVar {
+                    opt_name: None,
+                    structure: tag_union_var,
+                },
+            );
+
+            tag_union_var
         }
         Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
@@ -793,6 +838,45 @@ fn type_to_variable(
 
             result
         }
+        HostExposedAlias {
+            name: symbol,
+            arguments: args,
+            actual: alias_type,
+            actual_var,
+            ..
+        } => {
+            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut new_aliases = ImMap::default();
+
+            for (arg, arg_type) in args {
+                let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
+
+                arg_vars.push((arg.clone(), arg_var));
+                new_aliases.insert(arg.clone(), arg_var);
+            }
+
+            let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
+
+            // unify the actual_var with the result var
+            // this can be used to access the type of the actual_var
+            // to determine its layout later
+            // subs.set_content(*actual_var, descriptor.content);
+
+            //subs.set(*actual_var, descriptor.clone());
+            let content = Content::Alias(*symbol, arg_vars, alias_var);
+
+            let result = register(subs, rank, pools, content);
+
+            // We only want to unify the actual_var with the alias once
+            // if it's already redirected (and therefore, redundant)
+            // don't do it again
+            if !subs.redundant(*actual_var) {
+                let descriptor = subs.get(result);
+                subs.union(result, *actual_var, descriptor);
+            }
+
+            result
+        }
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem.clone()));
 
@@ -824,6 +908,13 @@ fn check_for_infinite_type(
                 if !is_uniq_infer {
                     let rec_var = subs.fresh_unnamed_flex_var();
                     subs.set_rank(rec_var, description.rank);
+                    subs.set_content(
+                        rec_var,
+                        Content::RecursionVar {
+                            opt_name: None,
+                            structure: recursive,
+                        },
+                    );
 
                     let mut new_tags = MutMap::default();
 
@@ -867,6 +958,7 @@ fn check_for_infinite_type(
                                 uniq_var,
                                 tag_union_var,
                                 ext_var,
+                                description.rank,
                                 &tags,
                             );
                         }
@@ -887,6 +979,7 @@ fn check_for_infinite_type(
                             uniq_var,
                             tag_union_var,
                             ext_var,
+                            description.rank,
                             &tags,
                         );
                     }
@@ -931,6 +1024,7 @@ fn correct_recursive_attr(
     uniq_var: Variable,
     tag_union_var: Variable,
     ext_var: Variable,
+    recursion_var_rank: Rank,
     tags: &MutMap<TagName, Vec<Variable>>,
 ) {
     let rec_var = subs.fresh_unnamed_flex_var();
@@ -938,6 +1032,15 @@ fn correct_recursive_attr(
 
     let content = content_attr(uniq_var, rec_var);
     subs.set_content(attr_var, content);
+
+    subs.set_rank(rec_var, recursion_var_rank);
+    subs.set_content(
+        rec_var,
+        Content::RecursionVar {
+            opt_name: None,
+            structure: recursive,
+        },
+    );
 
     let mut new_tags = MutMap::default();
 
@@ -1061,29 +1164,47 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let mut desc = subs.get(var);
-    let mark = desc.mark;
+    let desc = subs.get(var);
 
-    if mark == young_mark {
-        desc.mark = visit_mark;
-
-        let content = desc.content.clone();
-        let mut marked_desc = desc.clone();
+    if desc.mark == young_mark {
+        let Descriptor {
+            content,
+            rank,
+            mark: _,
+            copy,
+        } = desc;
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
-        subs.set(var, desc);
+        subs.set(
+            var,
+            Descriptor {
+                content: content.clone(),
+                rank,
+                mark: visit_mark,
+                copy,
+            },
+        );
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
-        marked_desc.rank = max_rank;
+        let max_rank =
+            adjust_rank_content(subs, young_mark, visit_mark, group_rank, content.clone());
 
-        debug_assert_eq!(marked_desc.mark, visit_mark);
-
-        subs.set(var, marked_desc);
+        subs.set(
+            var,
+            Descriptor {
+                content,
+                rank: max_rank,
+                mark: visit_mark,
+                copy,
+            },
+        );
 
         max_rank
-    } else if mark == visit_mark {
+    } else if desc.mark == visit_mark {
+        // nothing changes
         desc.rank
     } else {
+        let mut desc = desc;
+
         let min_rank = group_rank.min(desc.rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
@@ -1108,6 +1229,8 @@ fn adjust_rank_content(
 
     match content {
         FlexVar(_) | RigidVar(_) | Error => group_rank,
+
+        RecursionVar { .. } => group_rank,
 
         Structure(flat_type) => {
             match flat_type {
@@ -1396,6 +1519,23 @@ fn instantiate_rigids_help(
 
         FlexVar(_) | Error => copy,
 
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = instantiate_rigids_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
+
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
 
@@ -1570,6 +1710,23 @@ fn deep_copy_var_help(
         }
 
         FlexVar(_) | Error => copy,
+
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = deep_copy_var_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));

@@ -11,11 +11,8 @@ extern crate quickcheck_macros;
 extern crate roc_module;
 extern crate roc_parse;
 
-mod helpers;
-
 #[cfg(test)]
 mod test_parse {
-    use crate::helpers::parse_with;
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use roc_module::operator::BinOp::*;
@@ -24,28 +21,31 @@ mod test_parse {
     use roc_parse::ast::CommentOrNewline::*;
     use roc_parse::ast::Expr::{self, *};
     use roc_parse::ast::Pattern::{self, *};
-    use roc_parse::ast::StrLiteral::*;
+    use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
-        self, Attempting, Def, EscapedChar, InterfaceHeader, Spaceable, Tag, TypeAnnotation,
-        WhenBranch,
+        self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
     };
-    use roc_parse::header::ModuleName;
-    use roc_parse::module::{interface_header, module_defs};
+    use roc_parse::header::{
+        AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+        PackageName, PackageOrPath, PlatformHeader, To,
+    };
+    use roc_parse::module::{app_header, interface_header, module_defs, platform_header};
     use roc_parse::parser::{Fail, FailReason, Parser, State};
+    use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
     use std::{f64, i64};
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let arena = Bump::new();
-        let actual = parse_with(&arena, input.trim());
+        let actual = parse_expr_with(&arena, input.trim());
 
         assert_eq!(Ok(expected_expr), actual);
     }
 
     fn assert_parsing_fails<'a>(input: &'a str, reason: FailReason, attempting: Attempting) {
         let arena = Bump::new();
-        let actual = parse_with(&arena, input);
+        let actual = parse_expr_with(&arena, input);
         let expected_fail = Fail { reason, attempting };
 
         assert_eq!(Err(expected_fail), actual);
@@ -53,9 +53,9 @@ mod test_parse {
 
     fn assert_segments<E: Fn(&Bump) -> Vec<'_, ast::StrSegment<'_>>>(input: &str, to_expected: E) {
         let arena = Bump::new();
-        let actual = parse_with(&arena, arena.alloc(input));
-        let expected_slice = to_expected(&arena).into_bump_slice();
-        let expected_expr = Expr::Str(Line(expected_slice));
+        let actual = parse_expr_with(&arena, arena.alloc(input));
+        let expected_slice = to_expected(&arena);
+        let expected_expr = Expr::Str(Line(&expected_slice));
 
         assert_eq!(Ok(expected_expr), actual);
     }
@@ -77,9 +77,9 @@ mod test_parse {
             ("\\t", EscapedChar::Tab),
             ("\\\"", EscapedChar::Quote),
         ] {
-            let actual = parse_with(&arena, arena.alloc(to_input(string)));
-            let expected_slice = to_expected(*escaped, &arena).into_bump_slice();
-            let expected_expr = Expr::Str(Line(expected_slice));
+            let actual = parse_expr_with(&arena, arena.alloc(to_input(string)));
+            let expected_slice = to_expected(*escaped, &arena);
+            let expected_expr = Expr::Str(Line(&expected_slice));
 
             assert_eq!(Ok(expected_expr), actual);
         }
@@ -296,7 +296,7 @@ mod test_parse {
 
     #[test]
     fn first_line_too_long() {
-        let max_line_length = std::u16::MAX as usize;
+        let max_line_length = u16::MAX as usize;
 
         // the string literal "ZZZZZZZZZ" but with way more Zs
         let too_long_str_body: String = (1..max_line_length)
@@ -420,10 +420,11 @@ mod test_parse {
     fn empty_record() {
         let arena = Bump::new();
         let expected = Record {
-            fields: Vec::new_in(&arena),
+            fields: &[],
             update: None,
+            final_comments: &[],
         };
-        let actual = parse_with(&arena, "{}");
+        let actual = parse_expr_with(&arena, "{}");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -441,9 +442,9 @@ mod test_parse {
             &[],
             arena.alloc(Located::new(0, 0, 25, 26, Num("0"))),
         );
-        let fields = bumpalo::vec![in &arena;
+        let fields = &[
             Located::new(0, 0, 16, 20, label1),
-            Located::new(0, 0, 22, 26, label2)
+            Located::new(0, 0, 22, 26, label2),
         ];
         let var = Var {
             module_name: "Foo.Bar",
@@ -453,9 +454,10 @@ mod test_parse {
         let expected = Record {
             update: Some(&*arena.alloc(update_target)),
             fields,
+            final_comments: &[],
         };
 
-        let actual = parse_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
+        let actual = parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
         assert_eq!(Ok(expected), actual);
     }
 
@@ -470,7 +472,7 @@ mod test_parse {
             Located::new(0, 0, 2, 3, Num("2")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "1+2");
+        let actual = parse_expr_with(&arena, "1+2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -484,7 +486,7 @@ mod test_parse {
             Located::new(0, 0, 2, 3, Num("2")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "1-2");
+        let actual = parse_expr_with(&arena, "1-2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -498,7 +500,7 @@ mod test_parse {
             Located::new(0, 0, 7, 8, Num("2")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "1  +   2");
+        let actual = parse_expr_with(&arena, "1  +   2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -512,7 +514,7 @@ mod test_parse {
             Located::new(0, 0, 7, 8, Num("2")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "1  -   2");
+        let actual = parse_expr_with(&arena, "1  -   2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -535,7 +537,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Num("2")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "x + 2");
+        let actual = parse_expr_with(&arena, "x + 2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -557,7 +559,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Num("2")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "x - 2");
+        let actual = parse_expr_with(&arena, "x - 2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -565,17 +567,14 @@ mod test_parse {
     #[test]
     fn newline_before_add() {
         let arena = Bump::new();
-        let spaced_int = Expr::SpaceAfter(
-            arena.alloc(Num("3")),
-            bumpalo::vec![in &arena; Newline].into_bump_slice(),
-        );
+        let spaced_int = Expr::SpaceAfter(arena.alloc(Num("3")), &[Newline]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Num("4")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "3  \n+ 4");
+        let actual = parse_expr_with(&arena, "3  \n+ 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -583,17 +582,14 @@ mod test_parse {
     #[test]
     fn newline_before_sub() {
         let arena = Bump::new();
-        let spaced_int = Expr::SpaceAfter(
-            arena.alloc(Num("3")),
-            bumpalo::vec![in &arena; Newline].into_bump_slice(),
-        );
+        let spaced_int = Expr::SpaceAfter(arena.alloc(Num("3")), &[Newline]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Minus),
             Located::new(1, 1, 2, 3, Num("4")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "3  \n- 4");
+        let actual = parse_expr_with(&arena, "3  \n- 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -601,16 +597,14 @@ mod test_parse {
     #[test]
     fn newline_after_mul() {
         let arena = Bump::new();
-        let spaced_int = arena
-            .alloc(Num("4"))
-            .before(bumpalo::vec![in &arena; Newline].into_bump_slice());
+        let spaced_int = arena.alloc(Num("4")).before(&[Newline]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Num("3")),
             Located::new(0, 0, 3, 4, Star),
             Located::new(1, 1, 2, 3, spaced_int),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "3  *\n  4");
+        let actual = parse_expr_with(&arena, "3  *\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -618,16 +612,14 @@ mod test_parse {
     #[test]
     fn newline_after_sub() {
         let arena = Bump::new();
-        let spaced_int = arena
-            .alloc(Num("4"))
-            .before(bumpalo::vec![in &arena; Newline].into_bump_slice());
+        let spaced_int = arena.alloc(Num("4")).before(&[Newline]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Num("3")),
             Located::new(0, 0, 3, 4, Minus),
             Located::new(1, 1, 2, 3, spaced_int),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "3  -\n  4");
+        let actual = parse_expr_with(&arena, "3  -\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -635,16 +627,14 @@ mod test_parse {
     #[test]
     fn comment_with_non_ascii() {
         let arena = Bump::new();
-        let spaced_int = arena
-            .alloc(Num("3"))
-            .after(bumpalo::vec![in &arena; LineComment(" 2 × 2")].into_bump_slice());
+        let spaced_int = arena.alloc(Num("3")).after(&[LineComment(" 2 × 2")]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Num("4")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "3  # 2 × 2\n+ 4");
+        let actual = parse_expr_with(&arena, "3  # 2 × 2\n+ 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -652,16 +642,14 @@ mod test_parse {
     #[test]
     fn comment_before_op() {
         let arena = Bump::new();
-        let spaced_int = arena
-            .alloc(Num("3"))
-            .after(bumpalo::vec![in &arena; LineComment(" test!")].into_bump_slice());
+        let spaced_int = arena.alloc(Num("3")).after(&[LineComment(" test!")]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Num("4")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "3  # test!\n+ 4");
+        let actual = parse_expr_with(&arena, "3  # test!\n+ 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -669,16 +657,14 @@ mod test_parse {
     #[test]
     fn comment_after_op() {
         let arena = Bump::new();
-        let spaced_int = arena
-            .alloc(Num("92"))
-            .before(bumpalo::vec![in &arena; LineComment(" test!")].into_bump_slice());
+        let spaced_int = arena.alloc(Num("92")).before(&[LineComment(" test!")]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 2, Num("12")),
             Located::new(0, 0, 4, 5, Star),
             Located::new(1, 1, 1, 3, spaced_int),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "12  * # test!\n 92");
+        let actual = parse_expr_with(&arena, "12  * # test!\n 92");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -686,19 +672,15 @@ mod test_parse {
     #[test]
     fn ops_with_newlines() {
         let arena = Bump::new();
-        let spaced_int1 = arena
-            .alloc(Num("3"))
-            .after(bumpalo::vec![in &arena; Newline].into_bump_slice());
-        let spaced_int2 = arena
-            .alloc(Num("4"))
-            .before(bumpalo::vec![in &arena; Newline, Newline].into_bump_slice());
+        let spaced_int1 = arena.alloc(Num("3")).after(&[Newline]);
+        let spaced_int2 = arena.alloc(Num("4")).before(&[Newline, Newline]);
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int1),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(3, 3, 2, 3, spaced_int2),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "3  \n+ \n\n  4");
+        let actual = parse_expr_with(&arena, "3  \n+ \n\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -722,7 +704,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, var2),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "x- y");
+        let actual = parse_expr_with(&arena, "x- y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -736,7 +718,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Num("5")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "-12-5");
+        let actual = parse_expr_with(&arena, "-12-5");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -750,7 +732,7 @@ mod test_parse {
             Located::new(0, 0, 3, 5, Num("11")),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "10*11");
+        let actual = parse_expr_with(&arena, "10*11");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -769,7 +751,7 @@ mod test_parse {
             Located::new(0, 0, 3, 9, BinOp(inner)),
         ));
         let expected = BinOp(outer);
-        let actual = parse_with(&arena, "31*42+534");
+        let actual = parse_expr_with(&arena, "31*42+534");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -791,7 +773,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, var2),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "x==y");
+        let actual = parse_expr_with(&arena, "x==y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -813,7 +795,7 @@ mod test_parse {
             Located::new(0, 0, 5, 6, var2),
         ));
         let expected = BinOp(tuple);
-        let actual = parse_with(&arena, "x == y");
+        let actual = parse_expr_with(&arena, "x == y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -827,7 +809,72 @@ mod test_parse {
             module_name: "",
             ident: "whee",
         };
-        let actual = parse_with(&arena, "whee");
+        let actual = parse_expr_with(&arena, "whee");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_when() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "whenever",
+        };
+        let actual = parse_expr_with(&arena, "whenever");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_is() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "isnt",
+        };
+        let actual = parse_expr_with(&arena, "isnt");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_if() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "iffy",
+        };
+        let actual = parse_expr_with(&arena, "iffy");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_then() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "thenever",
+        };
+        let actual = parse_expr_with(&arena, "thenever");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_else() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "elsewhere",
+        };
+        let actual = parse_expr_with(&arena, "elsewhere");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -839,7 +886,7 @@ mod test_parse {
             module_name: "",
             ident: "whee",
         }));
-        let actual = parse_with(&arena, "(whee)");
+        let actual = parse_expr_with(&arena, "(whee)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -851,7 +898,7 @@ mod test_parse {
             module_name: "One.Two",
             ident: "whee",
         };
-        let actual = parse_with(&arena, "One.Two.whee");
+        let actual = parse_expr_with(&arena, "One.Two.whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -862,7 +909,7 @@ mod test_parse {
     fn basic_global_tag() {
         let arena = Bump::new();
         let expected = Expr::GlobalTag("Whee");
-        let actual = parse_with(&arena, "Whee");
+        let actual = parse_expr_with(&arena, "Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -871,7 +918,7 @@ mod test_parse {
     fn basic_private_tag() {
         let arena = Bump::new();
         let expected = Expr::PrivateTag("@Whee");
-        let actual = parse_with(&arena, "@Whee");
+        let actual = parse_expr_with(&arena, "@Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -881,13 +928,13 @@ mod test_parse {
         let arena = Bump::new();
         let arg1 = arena.alloc(Located::new(0, 0, 6, 8, Num("12")));
         let arg2 = arena.alloc(Located::new(0, 0, 9, 11, Num("34")));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let expected = Expr::Apply(
             arena.alloc(Located::new(0, 0, 0, 5, Expr::PrivateTag("@Whee"))),
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "@Whee 12 34");
+        let actual = parse_expr_with(&arena, "@Whee 12 34");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -897,13 +944,13 @@ mod test_parse {
         let arena = Bump::new();
         let arg1 = arena.alloc(Located::new(0, 0, 5, 7, Num("12")));
         let arg2 = arena.alloc(Located::new(0, 0, 8, 10, Num("34")));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let expected = Expr::Apply(
             arena.alloc(Located::new(0, 0, 0, 4, Expr::GlobalTag("Whee"))),
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "Whee 12 34");
+        let actual = parse_expr_with(&arena, "Whee 12 34");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -915,13 +962,13 @@ mod test_parse {
         let int2 = ParensAround(arena.alloc(Num("34")));
         let arg1 = arena.alloc(Located::new(0, 0, 6, 8, int1));
         let arg2 = arena.alloc(Located::new(0, 0, 11, 13, int2));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let expected = Expr::Apply(
             arena.alloc(Located::new(0, 0, 0, 4, Expr::GlobalTag("Whee"))),
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "Whee (12) (34)");
+        let actual = parse_expr_with(&arena, "Whee (12) (34)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -930,7 +977,7 @@ mod test_parse {
     fn qualified_global_tag() {
         let arena = Bump::new();
         let expected = Expr::MalformedIdent("One.Two.Whee");
-        let actual = parse_with(&arena, "One.Two.Whee");
+        let actual = parse_expr_with(&arena, "One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -940,7 +987,7 @@ mod test_parse {
     // fn qualified_private_tag() {
     //     let arena = Bump::new();
     //     let expected = Expr::MalformedIdent("One.Two.@Whee");
-    //     let actual = parse_with(&arena, "One.Two.@Whee");
+    //     let actual = parse_expr_with(&arena, "One.Two.@Whee");
 
     //     assert_eq!(Ok(expected), actual);
     // }
@@ -949,12 +996,9 @@ mod test_parse {
     fn tag_pattern() {
         let arena = Bump::new();
         let pattern = Located::new(0, 0, 1, 6, Pattern::GlobalTag("Thing"));
-        let patterns = bumpalo::vec![in &arena; pattern];
-        let expected = Closure(
-            arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 10, 12, Num("42"))),
-        );
-        let actual = parse_with(&arena, "\\Thing -> 42");
+        let patterns = &[pattern];
+        let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 10, 12, Num("42"))));
+        let actual = parse_expr_with(&arena, "\\Thing -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -963,7 +1007,7 @@ mod test_parse {
     fn private_qualified_tag() {
         let arena = Bump::new();
         let expected = Expr::MalformedIdent("@One.Two.Whee");
-        let actual = parse_with(&arena, "@One.Two.Whee");
+        let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -973,9 +1017,9 @@ mod test_parse {
     #[test]
     fn empty_list() {
         let arena = Bump::new();
-        let elems = Vec::new_in(&arena);
+        let elems = &[];
         let expected = List(elems);
-        let actual = parse_with(&arena, "[]");
+        let actual = parse_expr_with(&arena, "[]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -984,9 +1028,9 @@ mod test_parse {
     fn spaces_inside_empty_list() {
         // This is a regression test!
         let arena = Bump::new();
-        let elems = Vec::new_in(&arena);
+        let elems = &[];
         let expected = List(elems);
-        let actual = parse_with(&arena, "[  ]");
+        let actual = parse_expr_with(&arena, "[  ]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -994,9 +1038,9 @@ mod test_parse {
     #[test]
     fn packed_singleton_list() {
         let arena = Bump::new();
-        let elems = bumpalo::vec![in &arena; &*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
+        let elems = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
         let expected = List(elems);
-        let actual = parse_with(&arena, "[1]");
+        let actual = parse_expr_with(&arena, "[1]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1004,9 +1048,9 @@ mod test_parse {
     #[test]
     fn spaced_singleton_list() {
         let arena = Bump::new();
-        let elems = bumpalo::vec![in &arena; &*arena.alloc(Located::new(0, 0, 2, 3, Num("1")))];
+        let elems = &[&*arena.alloc(Located::new(0, 0, 2, 3, Num("1")))];
         let expected = List(elems);
-        let actual = parse_with(&arena, "[ 1 ]");
+        let actual = parse_expr_with(&arena, "[ 1 ]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1021,7 +1065,7 @@ mod test_parse {
             ident: "rec",
         };
         let expected = Access(arena.alloc(var), "field");
-        let actual = parse_with(&arena, "rec.field");
+        let actual = parse_expr_with(&arena, "rec.field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1034,7 +1078,7 @@ mod test_parse {
             ident: "rec",
         }));
         let expected = Access(arena.alloc(paren_var), "field");
-        let actual = parse_with(&arena, "(rec).field");
+        let actual = parse_expr_with(&arena, "(rec).field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1047,7 +1091,7 @@ mod test_parse {
             ident: "rec",
         }));
         let expected = Access(arena.alloc(paren_var), "field");
-        let actual = parse_with(&arena, "(One.Two.rec).field");
+        let actual = parse_expr_with(&arena, "(One.Two.rec).field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1063,7 +1107,7 @@ mod test_parse {
             arena.alloc(Access(arena.alloc(Access(arena.alloc(var), "abc")), "def")),
             "ghi",
         );
-        let actual = parse_with(&arena, "rec.abc.def.ghi");
+        let actual = parse_expr_with(&arena, "rec.abc.def.ghi");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1079,7 +1123,7 @@ mod test_parse {
             arena.alloc(Access(arena.alloc(Access(arena.alloc(var), "abc")), "def")),
             "ghi",
         );
-        let actual = parse_with(&arena, "One.Two.rec.abc.def.ghi");
+        let actual = parse_expr_with(&arena, "One.Two.rec.abc.def.ghi");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1090,7 +1134,7 @@ mod test_parse {
     fn basic_apply() {
         let arena = Bump::new();
         let arg = arena.alloc(Located::new(0, 0, 5, 6, Num("1")));
-        let args = bumpalo::vec![in &arena; &*arg];
+        let args = &[&*arg];
         let expr = Var {
             module_name: "",
             ident: "whee",
@@ -1100,7 +1144,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "whee 1");
+        let actual = parse_expr_with(&arena, "whee 1");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1110,7 +1154,7 @@ mod test_parse {
         let arena = Bump::new();
         let arg1 = arena.alloc(Located::new(0, 0, 6, 8, Num("12")));
         let arg2 = arena.alloc(Located::new(0, 0, 10, 12, Num("34")));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let expected = Expr::Apply(
             arena.alloc(Located::new(
                 0,
@@ -1125,7 +1169,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "whee  12  34");
+        let actual = parse_expr_with(&arena, "whee  12  34");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1163,7 +1207,7 @@ mod test_parse {
                 ident: "d",
             },
         ));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2, &*arg3];
+        let args = &[&*arg1, &*arg2, &*arg3];
         let expected = Expr::Apply(
             arena.alloc(Located::new(
                 0,
@@ -1178,7 +1222,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "a b c d");
+        let actual = parse_expr_with(&arena, "a b c d");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1187,7 +1231,7 @@ mod test_parse {
     fn parenthetical_apply() {
         let arena = Bump::new();
         let arg = arena.alloc(Located::new(0, 0, 7, 8, Num("1")));
-        let args = bumpalo::vec![in &arena; &*arg];
+        let args = &[&*arg];
         let parens_var = Expr::ParensAround(arena.alloc(Var {
             module_name: "",
             ident: "whee",
@@ -1197,7 +1241,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "(whee) 1");
+        let actual = parse_expr_with(&arena, "(whee) 1");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1214,7 +1258,7 @@ mod test_parse {
         };
         let loc_arg1_expr = Located::new(0, 0, 1, 4, arg1_expr);
         let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
-        let actual = parse_with(&arena, "-foo");
+        let actual = parse_expr_with(&arena, "-foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1229,7 +1273,7 @@ mod test_parse {
         };
         let loc_arg1_expr = Located::new(0, 0, 1, 5, arg1_expr);
         let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
-        let actual = parse_with(&arena, "!blah");
+        let actual = parse_expr_with(&arena, "!blah");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1249,7 +1293,7 @@ mod test_parse {
                 ident: "foo",
             },
         ));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let apply_expr = Expr::Apply(
             arena.alloc(Located::new(
                 0,
@@ -1265,7 +1309,7 @@ mod test_parse {
             CalledVia::Space,
         );
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
-        let actual = parse_with(&arena, "-whee  12 foo");
+        let actual = parse_expr_with(&arena, "-whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1285,7 +1329,7 @@ mod test_parse {
                 ident: "foo",
             },
         ));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let apply_expr = Expr::Apply(
             arena.alloc(Located::new(
                 0,
@@ -1301,7 +1345,7 @@ mod test_parse {
             CalledVia::Space,
         );
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
-        let actual = parse_with(&arena, "!whee  12 foo");
+        let actual = parse_expr_with(&arena, "!whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1321,7 +1365,7 @@ mod test_parse {
                 ident: "foo",
             },
         ));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let apply_expr = Expr::ParensAround(arena.alloc(Expr::Apply(
             arena.alloc(Located::new(
                 0,
@@ -1337,7 +1381,7 @@ mod test_parse {
             CalledVia::Space,
         )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
-        let actual = parse_with(&arena, "-(whee  12 foo)");
+        let actual = parse_expr_with(&arena, "-(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1357,7 +1401,7 @@ mod test_parse {
                 ident: "foo",
             },
         ));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let apply_expr = Expr::ParensAround(arena.alloc(Expr::Apply(
             arena.alloc(Located::new(
                 0,
@@ -1373,7 +1417,7 @@ mod test_parse {
             CalledVia::Space,
         )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
-        let actual = parse_with(&arena, "!(whee  12 foo)");
+        let actual = parse_expr_with(&arena, "!(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1390,7 +1434,7 @@ mod test_parse {
         let loc_arg1_expr = Located::new(0, 0, 10, 13, var1);
         let arg_op = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
         let arg2 = arena.alloc(Located::new(0, 0, 9, 13, arg_op));
-        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let args = &[&*arg1, &*arg2];
         let var2 = Var {
             module_name: "",
             ident: "whee",
@@ -1400,7 +1444,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_with(&arena, "whee  12 -foo");
+        let actual = parse_expr_with(&arena, "whee  12 -foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1417,7 +1461,7 @@ mod test_parse {
         let access = Access(arena.alloc(var), "field");
         let loc_access = Located::new(0, 0, 1, 11, access);
         let expected = UnaryOp(arena.alloc(loc_access), loc_op);
-        let actual = parse_with(&arena, "-rec1.field");
+        let actual = parse_expr_with(&arena, "-rec1.field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1428,12 +1472,9 @@ mod test_parse {
     fn single_arg_closure() {
         let arena = Bump::new();
         let pattern = Located::new(0, 0, 1, 2, Identifier("a"));
-        let patterns = bumpalo::vec![in &arena; pattern];
-        let expected = Closure(
-            arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 6, 8, Num("42"))),
-        );
-        let actual = parse_with(&arena, "\\a -> 42");
+        let patterns = &[pattern];
+        let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 6, 8, Num("42"))));
+        let actual = parse_expr_with(&arena, "\\a -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1441,13 +1482,10 @@ mod test_parse {
     #[test]
     fn single_underscore_closure() {
         let arena = Bump::new();
-        let pattern = Located::new(0, 0, 1, 2, Underscore);
-        let patterns = bumpalo::vec![in &arena; pattern];
-        let expected = Closure(
-            arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 6, 8, Num("42"))),
-        );
-        let actual = parse_with(&arena, "\\_ -> 42");
+        let pattern = Located::new(0, 0, 1, 2, Underscore(&""));
+        let patterns = &[pattern];
+        let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 6, 8, Num("42"))));
+        let actual = parse_expr_with(&arena, "\\_ -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1458,7 +1496,7 @@ mod test_parse {
         // underscore in an argument name, it would parse as three arguments
         // (and would ignore the underscore as if it had been blank space).
         let arena = Bump::new();
-        let actual = parse_with(&arena, "\\the_answer -> 42");
+        let actual = parse_expr_with(&arena, "\\the_answer -> 42");
 
         assert_eq!(Ok(MalformedClosure), actual);
     }
@@ -1468,12 +1506,9 @@ mod test_parse {
         let arena = Bump::new();
         let arg1 = Located::new(0, 0, 1, 2, Identifier("a"));
         let arg2 = Located::new(0, 0, 4, 5, Identifier("b"));
-        let patterns = bumpalo::vec![in &arena; arg1, arg2];
-        let expected = Closure(
-            arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 9, 11, Num("42"))),
-        );
-        let actual = parse_with(&arena, "\\a, b -> 42");
+        let patterns = &[arg1, arg2];
+        let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 9, 11, Num("42"))));
+        let actual = parse_expr_with(&arena, "\\a, b -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1489,7 +1524,7 @@ mod test_parse {
             arena.alloc(patterns),
             arena.alloc(Located::new(0, 0, 12, 14, Num("42"))),
         );
-        let actual = parse_with(&arena, "\\a, b, c -> 42");
+        let actual = parse_expr_with(&arena, "\\a, b, c -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1497,14 +1532,14 @@ mod test_parse {
     #[test]
     fn closure_with_underscores() {
         let arena = Bump::new();
-        let underscore1 = Located::new(0, 0, 1, 2, Underscore);
-        let underscore2 = Located::new(0, 0, 4, 5, Underscore);
+        let underscore1 = Located::new(0, 0, 1, 2, Underscore(&""));
+        let underscore2 = Located::new(0, 0, 4, 9, Underscore(&"name"));
         let patterns = bumpalo::vec![in &arena; underscore1, underscore2];
         let expected = Closure(
             arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 9, 11, Num("42"))),
+            arena.alloc(Located::new(0, 0, 13, 15, Num("42"))),
         );
-        let actual = parse_with(&arena, "\\_, _ -> 42");
+        let actual = parse_expr_with(&arena, "\\_, _name -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1519,8 +1554,8 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 2, 3, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
-        let defs = bumpalo::vec![in &arena; loc_def];
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 3, def));
+        let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
         let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
@@ -1542,6 +1577,32 @@ mod test_parse {
     }
 
     #[test]
+    fn if_def() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(0, 0, 0, 4, Identifier("iffy"))),
+            arena.alloc(Located::new(0, 0, 5, 6, Num("5"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(0, 0, 0, 6, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(2, 2, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                    iffy=5
+
+                    42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
     fn one_spaced_def() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
@@ -1549,8 +1610,8 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
-        let defs = bumpalo::vec![in &arena; loc_def];
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 5, def));
+        let defs = &[loc_def];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
         let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
@@ -1580,7 +1641,7 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Num("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 1, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 5, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
@@ -1589,7 +1650,7 @@ mod test_parse {
             newline.into_bump_slice(),
         );
         let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 5, def2));
-        let defs = bumpalo::vec![in &arena; loc_def1, loc_def2];
+        let defs = &[loc_def1, loc_def2];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(4, 4, 0, 2, ret);
         let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
@@ -1621,31 +1682,25 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            arena.alloc(Located::new(
-                1,
-                1,
-                1,
-                8,
-                RecordDestructure(fields.into_bump_slice()),
-            )),
+            arena.alloc(Located::new(1, 1, 1, 8, RecordDestructure(&fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Num("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 8, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 12, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
                 arena.alloc(Located::new(2, 2, 4, 5, Num("6"))),
             )),
-            newline.into_bump_slice(),
+            &newline,
         );
         let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 5, def2));
-        let defs = bumpalo::vec![in &arena; loc_def1, loc_def2 ];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let defs = &[loc_def1, loc_def2];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), &newlines);
         let loc_ret = Located::new(4, 4, 0, 2, ret);
         let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(defs, arena.alloc(loc_ret))),
-            reset_indentation.into_bump_slice(),
+            &reset_indentation,
         );
 
         assert_parses_to(
@@ -1661,41 +1716,41 @@ mod test_parse {
         );
     }
 
-    #[test]
-    fn type_signature_def() {
-        let arena = Bump::new();
-        let newline = bumpalo::vec![in &arena; Newline];
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let applied_ann = TypeAnnotation::Apply("", "Int", &[]);
-        let signature = Def::Annotation(
-            Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(0, 0, 6, 9, applied_ann),
-        );
-        let def = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-            arena.alloc(Located::new(1, 1, 6, 7, Num("4"))),
-        );
-        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 7, spaced_def));
+    // #[test]
+    // fn type_signature_def() {
+    //     let arena = Bump::new();
+    //     let newline = bumpalo::vec![in &arena; Newline];
+    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
+    //     let applied_ann = TypeAnnotation::Apply("", "Int", &[]);
+    //     let signature = Def::Annotation(
+    //         Located::new(0, 0, 0, 3, Identifier("foo")),
+    //         Located::new(0, 0, 6, 9, applied_ann),
+    //     );
+    //     let def = Def::Body(
+    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+    //         arena.alloc(Located::new(1, 1, 6, 7, Num("4"))),
+    //     );
+    //     let spaced_def = Def::SpaceBefore(arena.alloc(def), &newline);
+    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 7, spaced_def));
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let expected = Defs(defs, arena.alloc(loc_ret));
+    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+    //     let defs = &[loc_ann, loc_def];
+    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), &newlines);
+    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
+    //     let expected = Defs(defs, arena.alloc(loc_ret));
 
-        assert_parses_to(
-            indoc!(
-                r#"
-                foo : Int
-                foo = 4
+    //     assert_parses_to(
+    //         indoc!(
+    //             r#"
+    //             foo : Int
+    //             foo = 4
 
-                42
-                "#
-            ),
-            expected,
-        );
-    }
+    //             42
+    //             "#
+    //         ),
+    //         expected,
+    //     );
+    // }
 
     #[test]
     fn parse_as_ann() {
@@ -1718,8 +1773,8 @@ mod test_parse {
             Located::new(0, 0, 6, 33, as_ann),
         );
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann];
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 33, signature));
+        let defs = &[loc_ann];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(2, 2, 0, 2, ret);
         let expected = Defs(defs, arena.alloc(loc_ret));
@@ -1754,8 +1809,8 @@ mod test_parse {
             ann: Located::new(0, 0, 11, 26, applied_alias),
         };
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 4, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann];
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 26, signature));
+        let defs = &[loc_ann];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(2, 2, 0, 2, ret);
         let expected = Defs(defs, arena.alloc(loc_ret));
@@ -1773,275 +1828,352 @@ mod test_parse {
     }
 
     #[test]
-    fn type_signature_function_def() {
-        use TypeAnnotation;
-        let arena = Bump::new();
-        let newline = bumpalo::vec![in &arena; Newline];
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
-
-        let int_type = TypeAnnotation::Apply("", "Int", &[]);
-        let float_type = TypeAnnotation::Apply("", "Float", &[]);
-        let bool_type = TypeAnnotation::Apply("", "Bool", &[]);
-
-        let arguments = bumpalo::vec![in &arena;
-            Located::new(0, 0, 6, 9, int_type),
-            Located::new(0, 0, 11, 16, float_type)
-        ];
-        let return_type = Located::new(0, 0, 20, 24, bool_type);
-        let fn_ann = TypeAnnotation::Function(&arguments, &return_type);
-        let signature = Def::Annotation(
-            Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(0, 0, 20, 24, fn_ann),
-        );
-
-        let args = bumpalo::vec![in &arena;
-        Located::new(1,1,7,8, Identifier("x")),
-        Located::new(1,1,10,11, Underscore)
-        ];
-        let body = Located::new(1, 1, 15, 17, Num("42"));
-
-        let closure = Expr::Closure(&args, &body);
-
-        let def = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-            arena.alloc(Located::new(1, 1, 6, 17, closure)),
-        );
-        let spaced = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 17, spaced));
-
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let expected = Defs(defs, arena.alloc(loc_ret));
-
+    fn multiline_type_signature() {
         assert_parses_to(
-            indoc!(
-                r#"
-                foo : Int, Float -> Bool
-                foo = \x, _ -> 42
-
-                42
-                "#
+            "f :\n    {}\n\n42",
+            Defs(
+                &[&Located::new(
+                    0,
+                    1,
+                    0,
+                    6,
+                    Def::Annotation(
+                        Located::new(0, 0, 0, 1, Pattern::Identifier("f")),
+                        Located::new(
+                            1,
+                            1,
+                            4,
+                            6,
+                            TypeAnnotation::SpaceBefore(
+                                &TypeAnnotation::Record {
+                                    fields: &[],
+                                    ext: None,
+                                    final_comments: &[],
+                                },
+                                &[Newline],
+                            ),
+                        ),
+                    ),
+                )],
+                &Located::new(
+                    3,
+                    3,
+                    0,
+                    2,
+                    Expr::SpaceBefore(&Expr::Num("42"), &[Newline, Newline]),
+                ),
             ),
-            expected,
         );
     }
 
     #[test]
-    fn ann_private_open_union() {
-        let arena = Bump::new();
-        let newline = bumpalo::vec![in &arena; Newline];
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let tag1 = Tag::Private {
-            name: Located::new(0, 0, 8, 13, "@True"),
-            args: &[],
-        };
-        let tag2arg1 = Located::new(0, 0, 24, 27, TypeAnnotation::Apply("", "Two", &[]));
-        let tag2arg2 = Located::new(0, 0, 28, 34, TypeAnnotation::Apply("", "Things", &[]));
-        let tag2args = bumpalo::vec![in &arena; tag2arg1, tag2arg2];
-        let tag2 = Tag::Private {
-            name: Located::new(0, 0, 15, 23, "@Perhaps"),
-            args: tag2args.into_bump_slice(),
-        };
-        let tags = bumpalo::vec![in &arena;
-            Located::new(0, 0, 8, 13, tag1),
-            Located::new(0, 0, 15, 34, tag2)
-        ];
-        let loc_wildcard = Located::new(0, 0, 36, 37, TypeAnnotation::Wildcard);
-        let applied_ann = TypeAnnotation::TagUnion {
-            tags: tags.into_bump_slice(),
-            ext: Some(arena.alloc(loc_wildcard)),
-        };
-        let signature = Def::Annotation(
-            Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(0, 0, 6, 37, applied_ann),
-        );
-        let def = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-            arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
-        );
-        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
-
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let expected = Defs(defs, arena.alloc(loc_ret));
-
+    fn multiline_type_signature_with_comment() {
         assert_parses_to(
-            indoc!(
-                r#"
-                foo : [ @True, @Perhaps Two Things ]*
-                foo = True
-
-                42
-                "#
+            "f :# comment\n    {}\n\n42",
+            Defs(
+                &[&Located::new(
+                    0,
+                    1,
+                    0,
+                    6,
+                    Def::Annotation(
+                        Located::new(0, 0, 0, 1, Pattern::Identifier("f")),
+                        Located::new(
+                            1,
+                            1,
+                            4,
+                            6,
+                            TypeAnnotation::SpaceBefore(
+                                &TypeAnnotation::Record {
+                                    fields: &[],
+                                    ext: None,
+                                    final_comments: &[],
+                                },
+                                &[LineComment(" comment")],
+                            ),
+                        ),
+                    ),
+                )],
+                &Located::new(
+                    3,
+                    3,
+                    0,
+                    2,
+                    Expr::SpaceBefore(&Expr::Num("42"), &[Newline, Newline]),
+                ),
             ),
-            expected,
         );
     }
+    // #[test]
+    // fn type_signature_function_def() {
+    //     use TypeAnnotation;
+    //     let arena = Bump::new();
+    //     let newline = bumpalo::vec![in &arena; Newline];
+    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
 
-    #[test]
-    fn ann_private_closed_union() {
-        let arena = Bump::new();
-        let newline = bumpalo::vec![in &arena; Newline];
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let tag1 = Tag::Private {
-            name: Located::new(0, 0, 8, 13, "@True"),
-            args: &[],
-        };
-        let tag2arg = Located::new(0, 0, 24, 29, TypeAnnotation::Apply("", "Thing", &[]));
-        let tag2args = bumpalo::vec![in &arena; tag2arg];
-        let tag2 = Tag::Private {
-            name: Located::new(0, 0, 15, 23, "@Perhaps"),
-            args: tag2args.into_bump_slice(),
-        };
-        let tags = bumpalo::vec![in &arena;
-            Located::new(0, 0, 8, 13, tag1),
-            Located::new(0, 0, 15, 29, tag2)
-        ];
-        let applied_ann = TypeAnnotation::TagUnion {
-            tags: tags.into_bump_slice(),
-            ext: None,
-        };
-        let signature = Def::Annotation(
-            Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(0, 0, 6, 31, applied_ann),
-        );
-        let def = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-            arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
-        );
-        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+    //     let int_type = TypeAnnotation::Apply("", "Int", &[]);
+    //     let float_type = TypeAnnotation::Apply("", "Float", &[]);
+    //     let bool_type = TypeAnnotation::Apply("", "Bool", &[]);
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let expected = Defs(defs, arena.alloc(loc_ret));
+    //     let arguments = bumpalo::vec![in &arena;
+    //         Located::new(0, 0, 6, 9, int_type),
+    //         Located::new(0, 0, 11, 16, float_type)
+    //     ];
+    //     let return_type = Located::new(0, 0, 20, 24, bool_type);
+    //     let fn_ann = TypeAnnotation::Function(&arguments, &return_type);
+    //     let signature = Def::Annotation(
+    //         Located::new(0, 0, 0, 3, Identifier("foo")),
+    //         Located::new(0, 0, 20, 24, fn_ann),
+    //     );
 
-        assert_parses_to(
-            indoc!(
-                r#"
-                foo : [ @True, @Perhaps Thing ]
-                foo = True
+    //     let args = bumpalo::vec![in &arena;
+    //     Located::new(1,1,7,8, Identifier("x")),
+    //     Located::new(1,1,10,11, Underscore)
+    //     ];
+    //     let body = Located::new(1, 1, 15, 17, Num("42"));
 
-                42
-                "#
-            ),
-            expected,
-        );
-    }
+    //     let closure = Expr::Closure(&args, &body);
 
-    #[test]
-    fn ann_global_open_union() {
-        let arena = Bump::new();
-        let newline = bumpalo::vec![in &arena; Newline];
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let tag1 = Tag::Global {
-            name: Located::new(0, 0, 8, 12, "True"),
-            args: &[],
-        };
-        let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
-        let tag2args = bumpalo::vec![in &arena; tag2arg];
-        let tag2 = Tag::Global {
-            name: Located::new(0, 0, 14, 21, "Perhaps"),
-            args: tag2args.into_bump_slice(),
-        };
-        let tags = bumpalo::vec![in &arena;
-            Located::new(0, 0, 8, 12, tag1),
-            Located::new(0, 0, 14, 27, tag2)
-        ];
-        let loc_wildcard = Located::new(0, 0, 29, 30, TypeAnnotation::Wildcard);
-        let applied_ann = TypeAnnotation::TagUnion {
-            tags: tags.into_bump_slice(),
-            ext: Some(arena.alloc(loc_wildcard)),
-        };
-        let signature = Def::Annotation(
-            Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(0, 0, 6, 30, applied_ann),
-        );
-        let def = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-            arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
-        );
-        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+    //     let def = Def::Body(
+    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+    //         arena.alloc(Located::new(1, 1, 6, 17, closure)),
+    //     );
+    //     let spaced = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 17, spaced));
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let expected = Defs(defs, arena.alloc(loc_ret));
+    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+    //     let defs = &[loc_ann, loc_def];
+    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
+    //     let expected = Defs(defs, arena.alloc(loc_ret));
 
-        assert_parses_to(
-            indoc!(
-                r#"
-                foo : [ True, Perhaps Thing ]*
-                foo = True
+    //     assert_parses_to(
+    //         indoc!(
+    //             r#"
+    //             foo : Int, Float -> Bool
+    //             foo = \x, _ -> 42
 
-                42
-                "#
-            ),
-            expected,
-        );
-    }
+    //             42
+    //             "#
+    //         ),
+    //         expected,
+    //     );
+    // }
 
-    #[test]
-    fn ann_global_closed_union() {
-        let arena = Bump::new();
-        let newline = bumpalo::vec![in &arena; Newline];
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let tag1 = Tag::Global {
-            name: Located::new(0, 0, 8, 12, "True"),
-            args: &[],
-        };
-        let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
-        let tag2args = bumpalo::vec![in &arena; tag2arg];
-        let tag2 = Tag::Global {
-            name: Located::new(0, 0, 14, 21, "Perhaps"),
-            args: tag2args.into_bump_slice(),
-        };
-        let tags = bumpalo::vec![in &arena;
-            Located::new(0, 0, 8, 12, tag1),
-            Located::new(0, 0, 14, 27, tag2)
-        ];
-        let applied_ann = TypeAnnotation::TagUnion {
-            tags: tags.into_bump_slice(),
-            ext: None,
-        };
-        let signature = Def::Annotation(
-            Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(0, 0, 6, 29, applied_ann),
-        );
-        let def = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-            arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
-        );
-        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+    // #[test]
+    // fn ann_private_open_union() {
+    //     let arena = Bump::new();
+    //     let newline = bumpalo::vec![in &arena; Newline];
+    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
+    //     let tag1 = Tag::Private {
+    //         name: Located::new(0, 0, 8, 13, "@True"),
+    //         args: &[],
+    //     };
+    //     let tag2arg1 = Located::new(0, 0, 24, 27, TypeAnnotation::Apply("", "Two", &[]));
+    //     let tag2arg2 = Located::new(0, 0, 28, 34, TypeAnnotation::Apply("", "Things", &[]));
+    //     let tag2args = bumpalo::vec![in &arena; tag2arg1, tag2arg2];
+    //     let tag2 = Tag::Private {
+    //         name: Located::new(0, 0, 15, 23, "@Perhaps"),
+    //         args: tag2args.into_bump_slice(),
+    //     };
+    //     let tags = bumpalo::vec![in &arena;
+    //         Located::new(0, 0, 8, 13, tag1),
+    //         Located::new(0, 0, 15, 34, tag2)
+    //     ];
+    //     let loc_wildcard = Located::new(0, 0, 36, 37, TypeAnnotation::Wildcard);
+    //     let applied_ann = TypeAnnotation::TagUnion {
+    //         tags: tags.into_bump_slice(),
+    //         ext: Some(arena.alloc(loc_wildcard)),
+    //     };
+    //     let signature = Def::Annotation(
+    //         Located::new(0, 0, 0, 3, Identifier("foo")),
+    //         Located::new(0, 0, 6, 37, applied_ann),
+    //     );
+    //     let def = Def::Body(
+    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //     );
+    //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
 
-        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let expected = Defs(defs, arena.alloc(loc_ret));
+    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+    //     let defs = &[loc_ann, loc_def];
+    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
+    //     let expected = Defs(defs, arena.alloc(loc_ret));
 
-        assert_parses_to(
-            indoc!(
-                r#"
-                foo : [ True, Perhaps Thing ]
-                foo = True
+    //     assert_parses_to(
+    //         indoc!(
+    //             r#"
+    //             foo : [ @True, @Perhaps Two Things ]*
+    //             foo = True
 
-                42
-                "#
-            ),
-            expected,
-        );
-    }
+    //             42
+    //             "#
+    //         ),
+    //         expected,
+    //     );
+    // }
+
+    // #[test]
+    // fn ann_private_closed_union() {
+    //     let arena = Bump::new();
+    //     let newline = bumpalo::vec![in &arena; Newline];
+    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
+    //     let tag1 = Tag::Private {
+    //         name: Located::new(0, 0, 8, 13, "@True"),
+    //         args: &[],
+    //     };
+    //     let tag2arg = Located::new(0, 0, 24, 29, TypeAnnotation::Apply("", "Thing", &[]));
+    //     let tag2args = bumpalo::vec![in &arena; tag2arg];
+    //     let tag2 = Tag::Private {
+    //         name: Located::new(0, 0, 15, 23, "@Perhaps"),
+    //         args: tag2args.into_bump_slice(),
+    //     };
+    //     let tags = bumpalo::vec![in &arena;
+    //         Located::new(0, 0, 8, 13, tag1),
+    //         Located::new(0, 0, 15, 29, tag2)
+    //     ];
+    //     let applied_ann = TypeAnnotation::TagUnion {
+    //         tags: tags.into_bump_slice(),
+    //         ext: None,
+    //     };
+    //     let signature = Def::Annotation(
+    //         Located::new(0, 0, 0, 3, Identifier("foo")),
+    //         Located::new(0, 0, 6, 31, applied_ann),
+    //     );
+    //     let def = Def::Body(
+    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //     );
+    //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+
+    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+    //     let defs = &[loc_ann, loc_def];
+    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
+    //     let expected = Defs(defs, arena.alloc(loc_ret));
+
+    //     assert_parses_to(
+    //         indoc!(
+    //             r#"
+    //             foo : [ @True, @Perhaps Thing ]
+    //             foo = True
+
+    //             42
+    //             "#
+    //         ),
+    //         expected,
+    //     );
+    // }
+
+    // #[test]
+    // fn ann_global_open_union() {
+    //     let arena = Bump::new();
+    //     let newline = bumpalo::vec![in &arena; Newline];
+    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
+    //     let tag1 = Tag::Global {
+    //         name: Located::new(0, 0, 8, 12, "True"),
+    //         args: &[],
+    //     };
+    //     let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
+    //     let tag2args = bumpalo::vec![in &arena; tag2arg];
+    //     let tag2 = Tag::Global {
+    //         name: Located::new(0, 0, 14, 21, "Perhaps"),
+    //         args: tag2args.into_bump_slice(),
+    //     };
+    //     let tags = bumpalo::vec![in &arena;
+    //         Located::new(0, 0, 8, 12, tag1),
+    //         Located::new(0, 0, 14, 27, tag2)
+    //     ];
+    //     let loc_wildcard = Located::new(0, 0, 29, 30, TypeAnnotation::Wildcard);
+    //     let applied_ann = TypeAnnotation::TagUnion {
+    //         tags: tags.into_bump_slice(),
+    //         ext: Some(arena.alloc(loc_wildcard)),
+    //     };
+    //     let signature = Def::Annotation(
+    //         Located::new(0, 0, 0, 3, Identifier("foo")),
+    //         Located::new(0, 0, 6, 30, applied_ann),
+    //     );
+    //     let def = Def::Body(
+    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //     );
+    //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+
+    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+    //     let defs = &[loc_ann, loc_def];
+    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
+    //     let expected = Defs(defs, arena.alloc(loc_ret));
+
+    //     assert_parses_to(
+    //         indoc!(
+    //             r#"
+    //             foo : [ True, Perhaps Thing ]*
+    //             foo = True
+
+    //             42
+    //             "#
+    //         ),
+    //         expected,
+    //     );
+    // }
+
+    // #[test]
+    // fn ann_global_closed_union() {
+    //     let arena = Bump::new();
+    //     let newline = bumpalo::vec![in &arena; Newline];
+    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
+    //     let tag1 = Tag::Global {
+    //         name: Located::new(0, 0, 8, 12, "True"),
+    //         args: &[],
+    //     };
+    //     let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
+    //     let tag2args = bumpalo::vec![in &arena; tag2arg];
+    //     let tag2 = Tag::Global {
+    //         name: Located::new(0, 0, 14, 21, "Perhaps"),
+    //         args: tag2args.into_bump_slice(),
+    //     };
+    //     let tags = bumpalo::vec![in &arena;
+    //         Located::new(0, 0, 8, 12, tag1),
+    //         Located::new(0, 0, 14, 27, tag2)
+    //     ];
+    //     let applied_ann = TypeAnnotation::TagUnion {
+    //         tags: tags.into_bump_slice(),
+    //         ext: None,
+    //     };
+    //     let signature = Def::Annotation(
+    //         Located::new(0, 0, 0, 3, Identifier("foo")),
+    //         Located::new(0, 0, 6, 29, applied_ann),
+    //     );
+    //     let def = Def::Body(
+    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //     );
+    //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+
+    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+    //     let defs = &[loc_ann, loc_def];
+    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
+    //     let expected = Defs(defs, arena.alloc(loc_ret));
+
+    //     assert_parses_to(
+    //         indoc!(
+    //             r#"
+    //             foo : [ True, Perhaps Thing ]
+    //             foo = True
+
+    //             42
+    //             "#
+    //         ),
+    //         expected,
+    //     );
+    // }
 
     // WHEN
 
@@ -2057,31 +2189,28 @@ mod test_parse {
         let expr1 = Num("1");
         let loc_expr1 = Located::new(1, 1, 7, 8, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern1],
+            patterns: arena.alloc([loc_pattern1]),
             value: loc_expr1,
             guard: None,
         });
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2 = Pattern::SpaceBefore(
-            arena.alloc(StrLiteral(PlainLine("mise"))),
-            newlines.into_bump_slice(),
-        );
+        let newlines = &[Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(StrLiteral(PlainLine("mise"))), newlines);
         let loc_pattern2 = Located::new(2, 2, 1, 7, pattern2);
         let expr2 = Num("2");
         let loc_expr2 = Located::new(2, 2, 11, 12, expr2);
         let branch2 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern2 ],
+            patterns: arena.alloc([loc_pattern2]),
             value: loc_expr2,
             guard: None,
         });
-        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let branches = &[branch1, branch2];
         let var = Var {
             module_name: "",
             ident: "x",
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_with(
+        let actual = parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2098,36 +2227,34 @@ mod test_parse {
     #[test]
     fn when_with_numbers() {
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern1 =
-            Pattern::SpaceBefore(arena.alloc(NumLiteral("1")), newlines.into_bump_slice());
+        let newlines = &[Newline];
+        let pattern1 = Pattern::SpaceBefore(arena.alloc(NumLiteral("1")), newlines);
         let loc_pattern1 = Located::new(1, 1, 1, 2, pattern1);
         let expr1 = Num("2");
         let loc_expr1 = Located::new(1, 1, 6, 7, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern1],
+            patterns: arena.alloc([loc_pattern1]),
             value: loc_expr1,
             guard: None,
         });
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2 =
-            Pattern::SpaceBefore(arena.alloc(NumLiteral("3")), newlines.into_bump_slice());
+        let newlines = &[Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(NumLiteral("3")), newlines);
         let loc_pattern2 = Located::new(2, 2, 1, 2, pattern2);
         let expr2 = Num("4");
         let loc_expr2 = Located::new(2, 2, 6, 7, expr2);
         let branch2 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern2],
+            patterns: arena.alloc([loc_pattern2]),
             value: loc_expr2,
             guard: None,
         });
-        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let branches = &[branch1, branch2];
         let var = Var {
             module_name: "",
             ident: "x",
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_with(
+        let actual = parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2144,42 +2271,39 @@ mod test_parse {
     #[test]
     fn when_with_records() {
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let identifiers1 = bumpalo::vec![in &arena; Located::new(1, 1, 3, 4, Identifier("y")) ];
-        let pattern1 = Pattern::SpaceBefore(
-            arena.alloc(RecordDestructure(identifiers1.into_bump_slice())),
-            newlines.into_bump_slice(),
-        );
+        let newlines = &[Newline];
+        let identifiers1 = &[Located::new(1, 1, 3, 4, Identifier("y"))];
+        let pattern1 = Pattern::SpaceBefore(arena.alloc(RecordDestructure(identifiers1)), newlines);
         let loc_pattern1 = Located::new(1, 1, 1, 6, pattern1);
         let expr1 = Num("2");
         let loc_expr1 = Located::new(1, 1, 10, 11, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern1 ],
+            patterns: arena.alloc([loc_pattern1]),
             value: loc_expr1,
             guard: None,
         });
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let identifiers2 = bumpalo::vec![in &arena; Located::new(2, 2, 3, 4, Identifier("z")), Located::new(2, 2, 6, 7, Identifier("w"))  ];
-        let pattern2 = Pattern::SpaceBefore(
-            arena.alloc(RecordDestructure(identifiers2.into_bump_slice())),
-            newlines.into_bump_slice(),
-        );
+        let newlines = &[Newline];
+        let identifiers2 = &[
+            Located::new(2, 2, 3, 4, Identifier("z")),
+            Located::new(2, 2, 6, 7, Identifier("w")),
+        ];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(RecordDestructure(identifiers2)), newlines);
         let loc_pattern2 = Located::new(2, 2, 1, 9, pattern2);
         let expr2 = Num("4");
         let loc_expr2 = Located::new(2, 2, 13, 14, expr2);
         let branch2 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern2 ],
+            patterns: arena.alloc([loc_pattern2]),
             value: loc_expr2,
             guard: None,
         });
-        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let branches = &[branch1, branch2];
         let var = Var {
             module_name: "",
             ident: "x",
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_with(
+        let actual = parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2196,48 +2320,40 @@ mod test_parse {
     #[test]
     fn when_with_alternative_patterns() {
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern1 = Pattern::SpaceBefore(
-            arena.alloc(StrLiteral(PlainLine("blah"))),
-            newlines.into_bump_slice(),
-        );
+        let newlines = &[Newline];
+        let pattern1 = Pattern::SpaceBefore(arena.alloc(StrLiteral(PlainLine("blah"))), newlines);
         let pattern1_alt = StrLiteral(PlainLine("blop"));
         let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
         let loc_pattern1_alt = Located::new(1, 1, 10, 16, pattern1_alt);
         let expr1 = Num("1");
         let loc_expr1 = Located::new(1, 1, 20, 21, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern1, loc_pattern1_alt],
+            patterns: arena.alloc([loc_pattern1, loc_pattern1_alt]),
             value: loc_expr1,
             guard: None,
         });
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2 = Pattern::SpaceBefore(
-            arena.alloc(StrLiteral(PlainLine("foo"))),
-            newlines.into_bump_slice(),
-        );
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2_alt = Pattern::SpaceBefore(
-            arena.alloc(StrLiteral(PlainLine("bar"))),
-            newlines.into_bump_slice(),
-        );
+        let newlines = &[Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(StrLiteral(PlainLine("foo"))), newlines);
+        let newlines = &[Newline];
+        let pattern2_alt =
+            Pattern::SpaceBefore(arena.alloc(StrLiteral(PlainLine("bar"))), newlines);
         let loc_pattern2 = Located::new(2, 2, 1, 6, pattern2);
         let loc_pattern2_alt = Located::new(3, 3, 1, 6, pattern2_alt);
         let expr2 = Num("2");
         let loc_expr2 = Located::new(3, 3, 10, 11, expr2);
         let branch2 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern2, loc_pattern2_alt],
+            patterns: arena.alloc([loc_pattern2, loc_pattern2_alt]),
             value: loc_expr2,
             guard: None,
         });
-        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let branches = &[branch1, branch2];
         let var = Var {
             module_name: "",
             ident: "x",
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_with(
+        let actual = parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2255,7 +2371,243 @@ mod test_parse {
     // MODULE
 
     #[test]
-    fn empty_module() {
+    fn empty_app_header() {
+        let arena = Bump::new();
+        let packages = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let provides = Vec::new_in(&arena);
+        let module_name = StrLiteral::PlainLine("test-app");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 14, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(0, 0, 53, 57, To::ExistingPackage("blah")),
+            after_app_keyword: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "test-app" packages {} imports [] provides [] to blah
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn minimal_app_header() {
+        use PackageOrPath::Path;
+
+        let arena = Bump::new();
+        let packages = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let provides = Vec::new_in(&arena);
+        let module_name = StrLiteral::PlainLine("test-app");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 14, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(0, 0, 30, 38, To::NewPackage(Path(PlainLine("./blah")))),
+            after_app_keyword: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "test-app" provides [] to "./blah"
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn full_app_header() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let newlines = &[Newline];
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "base",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(1, 1, 21, 33, Path(PlainLine("./platform"))),
+        };
+        let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
+        let arena = Bump::new();
+        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
+        let loc_import = Located::new(2, 2, 14, 25, import);
+        let imports = bumpalo::vec![in &arena; loc_import];
+        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let module_name = StrLiteral::PlainLine("quicksort");
+        let expected = AppHeader {
+            name: Located::new(0, 0, 4, 15, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
+            after_app_keyword: &[],
+            before_packages: newlines,
+            after_packages: &[],
+            before_imports: newlines,
+            after_imports: &[],
+            before_provides: newlines,
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                app "quicksort"
+                    packages { base: "./platform" }
+                    imports [ foo.Bar.Baz ]
+                    provides [ quicksort ] to base
+            "#
+        );
+        let actual = app_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn empty_platform_header() {
+        let pkg_name = PackageName {
+            account: "rtfeldman",
+            pkg: "blah",
+        };
+        let arena = Bump::new();
+        let effects = Effects {
+            type_name: "Blah",
+            entries: Vec::new_in(&arena),
+            spaces_before_effects_keyword: &[],
+            spaces_after_effects_keyword: &[],
+            spaces_after_type_name: &[],
+        };
+        let expected = PlatformHeader {
+            name: Located::new(0, 0, 9, 23, pkg_name),
+            requires: Vec::new_in(&arena),
+            exposes: Vec::new_in(&arena),
+            packages: Vec::new_in(&arena),
+            imports: Vec::new_in(&arena),
+            provides: Vec::new_in(&arena),
+            effects,
+            after_platform_keyword: &[],
+            before_requires: &[],
+            after_requires: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_packages: &[],
+            after_packages: &[],
+            before_imports: &[],
+            after_imports: &[],
+            before_provides: &[],
+            after_provides: &[],
+        };
+
+        let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects Blah {}";
+        let actual = platform_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn nonempty_platform_header() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let newlines = &[Newline];
+        let pkg_name = PackageName {
+            account: "foo",
+            pkg: "barbaz",
+        };
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "foo",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(3, 3, 20, 27, Path(PlainLine("./foo"))),
+        };
+        let loc_pkg_entry = Located::new(3, 3, 15, 27, pkg_entry);
+        let arena = Bump::new();
+        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let imports = Vec::new_in(&arena);
+        let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let effects = Effects {
+            type_name: "Effect",
+            entries: Vec::new_in(&arena),
+            spaces_before_effects_keyword: newlines,
+            spaces_after_effects_keyword: &[],
+            spaces_after_type_name: &[],
+        };
+        let expected = PlatformHeader {
+            name: Located::new(0, 0, 9, 19, pkg_name),
+            requires: Vec::new_in(&arena),
+            exposes: Vec::new_in(&arena),
+            packages,
+            imports,
+            provides,
+            effects,
+            after_platform_keyword: &[],
+            before_requires: newlines,
+            after_requires: &[],
+            before_exposes: newlines,
+            after_exposes: &[],
+            before_packages: newlines,
+            after_packages: &[],
+            before_imports: newlines,
+            after_imports: &[],
+            before_provides: newlines,
+            after_provides: &[],
+        };
+
+        let src = indoc!(
+            r#"
+                platform foo/barbaz
+                    requires {}
+                    exposes []
+                    packages { foo: "./foo" }
+                    imports []
+                    provides [ mainForHost ]
+                    effects Effect {}
+            "#
+        );
+        let actual = platform_header()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn empty_interface_header() {
         let arena = Bump::new();
         let exposes = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);
@@ -2313,13 +2665,48 @@ mod test_parse {
     }
 
     #[test]
+    fn repro_keyword_bug() {
+        // Reproducing this bug requires a bizarre set of things to all be true:
+        //
+        // * Must be parsing a *module* def (nested expr defs don't repro this)
+        // * That top-level module def conatins a def inside it
+        // * That inner def is defining a function
+        // * The name of the inner def begins with a keyword (`if`, `then`, `else`, `when`, `is`)
+        //
+        // If all of these are true, then lookups on that def get skipped over by the parser.
+        // If any one of the above is false, then everything works.
+
+        let arena = Bump::new();
+        let src = indoc!(
+            r#"
+                foo = \list ->
+                    isTest = \_ -> 5
+                    List.map list isTest
+            "#
+        );
+        let actual = module_defs()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        // It should occur twice in the debug output - once for the pattern,
+        // and then again for the lookup.
+        let occurrences = format!("{:?}", actual)
+            .split("isTest")
+            .collect::<std::vec::Vec<_>>()
+            .len()
+            - 1;
+
+        assert_eq!(occurrences, 2);
+    }
+
+    #[test]
     fn standalone_module_defs() {
         use roc_parse::ast::Def::*;
 
         let arena = Bump::new();
-        let newlines1 = bumpalo::vec![in &arena; Newline, Newline];
-        let newlines2 = bumpalo::vec![in &arena; Newline];
-        let newlines3 = bumpalo::vec![in &arena; Newline];
+        let newlines1 = &[Newline, Newline];
+        let newlines2 = &[Newline];
+        let newlines3 = &[Newline];
         let pattern1 = Identifier("foo");
         let pattern2 = Identifier("bar");
         let pattern3 = Identifier("baz");
@@ -2328,27 +2715,27 @@ mod test_parse {
                 arena.alloc(Located::new(0, 0, 0, 3, pattern1)),
                 arena.alloc(Located::new(0, 0, 6, 7, Num("1"))),
             )),
-            newlines1.into_bump_slice(),
+            newlines1,
         );
         let def2 = SpaceAfter(
             arena.alloc(Body(
                 arena.alloc(Located::new(2, 2, 0, 3, pattern2)),
                 arena.alloc(Located::new(2, 2, 6, 10, Str(PlainLine("hi")))),
             )),
-            newlines2.into_bump_slice(),
+            newlines2,
         );
         let def3 = SpaceAfter(
             arena.alloc(Body(
                 arena.alloc(Located::new(3, 3, 0, 3, pattern3)),
                 arena.alloc(Located::new(3, 3, 6, 13, Str(PlainLine("stuff")))),
             )),
-            newlines3.into_bump_slice(),
+            newlines3,
         );
 
         let expected = bumpalo::vec![in &arena;
             Located::new(0, 0, 0, 7, def1),
             Located::new(2, 2, 0, 10, def2),
-            Located::new(3, 3, 0, 13, def3)
+            Located::new(3, 3, 0, 13, def3),
         ];
         let src = indoc!(
             r#"
@@ -2369,15 +2756,15 @@ mod test_parse {
     fn newline_after_equals() {
         // Regression test for https://github.com/rtfeldman/roc/issues/51
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let newlines = &[Newline, Newline];
         let num = arena.alloc(Num("5"));
         let def = Def::Body(
             arena.alloc(Located::new(0, 0, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Expr::SpaceBefore(num, &[Newline]))),
         );
-        let loc_def = &*arena.alloc(Located::new(0, 0, 0, 1, def));
-        let defs = bumpalo::vec![in &arena; loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_def = &*arena.alloc(Located::new(0, 1, 0, 5, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
         let loc_ret = Located::new(3, 3, 0, 2, ret);
         let expected = Defs(defs, arena.alloc(loc_ret));
 
@@ -2399,24 +2786,26 @@ mod test_parse {
     #[test]
     fn basic_docs() {
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let newlines = &[Newline, Newline];
         let def = Def::Body(
-            arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
-            arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
+            arena.alloc(Located::new(6, 6, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(6, 6, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
-        let defs = bumpalo::vec![in &arena; loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(6, 6, 0, 2, ret);
-        let reset_indentation = bumpalo::vec![in &arena;
+        let loc_def = &*arena.alloc(Located::new(6, 6, 0, 5, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
+        let loc_ret = Located::new(8, 8, 0, 2, ret);
+        let reset_indentation = &[
             DocComment("first line of docs"),
             DocComment("    second line"),
             DocComment(" third line"),
-            DocComment("fourth line")
+            DocComment("fourth line"),
+            DocComment(""),
+            DocComment("sixth line after doc new line"),
         ];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(defs, arena.alloc(loc_ret))),
-            reset_indentation.into_bump_slice(),
+            reset_indentation,
         );
 
         assert_parses_to(
@@ -2426,6 +2815,8 @@ mod test_parse {
                     ##     second line
                     ##  third line
                     ## fourth line
+                    ##
+                    ## sixth line after doc new line
                     x = 5
 
                     42
@@ -2438,16 +2829,16 @@ mod test_parse {
     #[test]
     fn not_docs() {
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let newlines = &[Newline, Newline];
         let def = Def::Body(
             arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
-        let defs = bumpalo::vec![in &arena; loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 5, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
         let loc_ret = Located::new(6, 6, 0, 2, ret);
-        let reset_indentation = bumpalo::vec![in &arena;
+        let reset_indentation = &[
             LineComment("######"),
             LineComment("## not docs!"),
             LineComment("#still not docs"),
@@ -2455,7 +2846,7 @@ mod test_parse {
         ];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(defs, arena.alloc(loc_ret))),
-            reset_indentation.into_bump_slice(),
+            reset_indentation,
         );
 
         assert_parses_to(
@@ -2477,16 +2868,16 @@ mod test_parse {
     #[test]
     fn mixed_docs() {
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let newlines = &[Newline, Newline];
         let def = Def::Body(
             arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
         );
-        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
-        let defs = bumpalo::vec![in &arena; loc_def];
-        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 5, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines);
         let loc_ret = Located::new(6, 6, 0, 2, ret);
-        let reset_indentation = bumpalo::vec![in &arena;
+        let reset_indentation = &[
             LineComment("## not docs!"),
             DocComment("docs, but with a problem"),
             DocComment("(namely that this is a mix of docs and regular comments)"),
@@ -2494,7 +2885,7 @@ mod test_parse {
         ];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(defs, arena.alloc(loc_ret))),
-            reset_indentation.into_bump_slice(),
+            reset_indentation,
         );
 
         assert_parses_to(
@@ -2517,37 +2908,34 @@ mod test_parse {
     fn malformed_pattern_field_access() {
         // See https://github.com/rtfeldman/roc/issues/399
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern1 = Pattern::SpaceBefore(
-            arena.alloc(Pattern::Malformed("bar.and")),
-            newlines.into_bump_slice(),
-        );
+        let newlines = &[Newline];
+        let pattern1 = Pattern::SpaceBefore(arena.alloc(Pattern::Malformed("bar.and")), newlines);
         let loc_pattern1 = Located::new(1, 1, 4, 11, pattern1);
         let expr1 = Num("1");
         let loc_expr1 = Located::new(1, 1, 15, 16, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern1],
+            patterns: arena.alloc([loc_pattern1]),
             value: loc_expr1,
             guard: None,
         });
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore), newlines.into_bump_slice());
+        let newlines = &[Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore(&"")), newlines);
         let loc_pattern2 = Located::new(2, 2, 4, 5, pattern2);
         let expr2 = Num("4");
         let loc_expr2 = Located::new(2, 2, 9, 10, expr2);
         let branch2 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern2 ],
+            patterns: arena.alloc([loc_pattern2]),
             value: loc_expr2,
             guard: None,
         });
-        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let branches = &[branch1, branch2];
         let var = Var {
             module_name: "",
             ident: "x",
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_with(
+        let actual = parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2565,37 +2953,34 @@ mod test_parse {
     fn malformed_pattern_module_name() {
         // See https://github.com/rtfeldman/roc/issues/399
         let arena = Bump::new();
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern1 = Pattern::SpaceBefore(
-            arena.alloc(Pattern::Malformed("Foo.and")),
-            newlines.into_bump_slice(),
-        );
+        let newlines = &[Newline];
+        let pattern1 = Pattern::SpaceBefore(arena.alloc(Pattern::Malformed("Foo.and")), newlines);
         let loc_pattern1 = Located::new(1, 1, 4, 11, pattern1);
         let expr1 = Num("1");
         let loc_expr1 = Located::new(1, 1, 15, 16, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern1],
+            patterns: arena.alloc([loc_pattern1]),
             value: loc_expr1,
             guard: None,
         });
-        let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore), newlines.into_bump_slice());
+        let newlines = &[Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore(&"")), newlines);
         let loc_pattern2 = Located::new(2, 2, 4, 5, pattern2);
         let expr2 = Num("4");
         let loc_expr2 = Located::new(2, 2, 9, 10, expr2);
         let branch2 = &*arena.alloc(WhenBranch {
-            patterns: bumpalo::vec![in &arena;loc_pattern2 ],
+            patterns: arena.alloc([loc_pattern2]),
             value: loc_expr2,
             guard: None,
         });
-        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let branches = &[branch1, branch2];
         let var = Var {
             module_name: "",
             ident: "x",
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_with(
+        let actual = parse_expr_with(
             &arena,
             indoc!(
                 r#"

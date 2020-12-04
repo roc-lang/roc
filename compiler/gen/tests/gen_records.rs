@@ -254,11 +254,11 @@ mod gen_records {
                 r#"
                 v = {}
 
-                1
+                v
                 "#
             ),
-            1,
-            i64
+            (),
+            ()
         );
     }
     #[test]
@@ -405,7 +405,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     when r is
@@ -428,7 +428,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_when_use_default_nested() {
         assert_evals_to!(
             indoc!(
@@ -456,7 +455,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -472,7 +471,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_when_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
@@ -494,7 +492,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -514,7 +512,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -530,7 +528,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_let_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
@@ -568,7 +565,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 f = \{ x ? 10, y } -> x + y
 
@@ -582,7 +579,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_function_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
@@ -821,6 +817,75 @@ mod gen_records {
                 "#
             ),
             43,
+            i64
+        );
+    }
+
+    #[test]
+    fn booleans_in_record() {
+        assert_evals_to!(
+            indoc!("{ x: 1 == 1, y: 1 == 1 }"),
+            (true, true),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 != 1, y: 1 == 1 }"),
+            (false, true),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 == 1, y: 1 != 1 }"),
+            (true, false),
+            (bool, bool)
+        );
+        assert_evals_to!(
+            indoc!("{ x: 1 != 1, y: 1 != 1 }"),
+            (false, false),
+            (bool, bool)
+        );
+    }
+
+    #[test]
+    fn alignment_in_record() {
+        assert_evals_to!(
+            indoc!("{ c: 32, b: if True then Red else if True then Green else Blue, a: 1 == 1 }"),
+            (32i64, true, 2u8),
+            (i64, bool, u8)
+        );
+    }
+
+    #[test]
+    fn blue_and_present() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+                f { x: Blue, y: 7 }
+                "#
+            ),
+            7,
+            i64
+        );
+    }
+
+    #[test]
+    fn blue_and_absent() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+                f { x: Blue }
+                "#
+            ),
+            3,
             i64
         );
     }

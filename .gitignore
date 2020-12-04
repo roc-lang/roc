@@ -1,6 +1,11 @@
 target
+zig-cache
 .direnv
 *.rs.bk
 
 #valgrind
 vgcore.*
+
+#editors
+.idea/
+

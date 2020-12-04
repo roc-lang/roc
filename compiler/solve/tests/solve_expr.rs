@@ -75,12 +75,15 @@ mod solve_expr {
         let LoadedModule {
             module_id: home,
             mut can_problems,
-            type_problems,
+            mut type_problems,
             interns,
             mut solved,
             exposed_to_host,
             ..
         } = loaded;
+
+        let mut can_problems = can_problems.remove(&home).unwrap_or_default();
+        let type_problems = type_problems.remove(&home).unwrap_or_default();
 
         let mut subs = solved.inner_mut();
 
@@ -125,7 +128,8 @@ mod solve_expr {
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+        let mut buffer =
+            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
 
         for line in src.lines() {
             // indent the body!
@@ -165,7 +169,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Float");
+        infer_eq("0.5", "F64");
     }
 
     #[test]
@@ -189,6 +193,18 @@ mod solve_expr {
                 "#
             ),
             "Str",
+        );
+    }
+
+    #[test]
+    fn string_starts_with() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.startsWith
+                "#
+            ),
+            "Str, Str -> Bool",
         );
     }
 
@@ -746,7 +762,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -878,7 +894,7 @@ mod solve_expr {
     //             \l r -> l / r
     //         "#
     //         ),
-    //         "Float, Float -> Float",
+    //         "F64, F64 -> F64",
     //     );
     // }
 
@@ -890,7 +906,7 @@ mod solve_expr {
     //                 1 / 2
     //             "#
     //             ),
-    //             "Float",
+    //             "F64",
     //         );
     //     }
 
@@ -1010,7 +1026,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : F64 }");
     }
 
     #[test]
@@ -1369,7 +1385,7 @@ mod solve_expr {
             indoc!(
                 r#"
                    int : Num Integer
-                   int = 5.5
+                   int = 5
 
                    int
                 "#
@@ -1384,7 +1400,7 @@ mod solve_expr {
             indoc!(
                 r#"
                    int : Num.Num Num.Integer
-                   int = 5.5
+                   int = 5
 
                    int
                 "#
@@ -1398,12 +1414,12 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float
+                   float : F64
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1417,7 +1433,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1426,13 +1442,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Float
+                   float : Num.F64
                    float = 5.5
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1441,13 +1457,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float
+                   float : F64
                    float = 5.5
 
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1462,7 +1478,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1562,7 +1578,7 @@ mod solve_expr {
                    float
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -1597,7 +1613,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : Float }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
         );
     }
 
@@ -1775,7 +1791,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "Float",
+            "F64",
         );
     }
 
@@ -2039,16 +2055,17 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Peano : [ S Peano, Z ]
+                app "test" provides [ main ] to "./platform"
 
-                    map : Peano -> Peano
-                    map = \peano ->
-                            when peano is
-                                Z -> Z
-                                S rest ->
-                                    map rest |> S
+                Peano : [ S Peano, Z ]
 
+                map : Peano -> Peano
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest -> S (map rest)
 
+                main =
                     map
                 "#
             ),
@@ -2122,7 +2139,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -2178,9 +2195,9 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
-                map = 
+                map =
                     \peano ->
                         when peano is
                             Z -> Z
@@ -2286,7 +2303,8 @@ mod solve_expr {
     }
 
     #[test]
-    fn typecheck_mutually_recursive_tag_union() {
+    #[ignore]
+    fn typecheck_mutually_recursive_tag_union_2() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -2313,6 +2331,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore]
     fn typecheck_mutually_recursive_tag_union_listabc() {
         infer_eq_without_problem(
             indoc!(
@@ -2504,7 +2523,7 @@ mod solve_expr {
                 Num.toFloat
                 "#
             ),
-            "Num * -> Float",
+            "Num * -> F64",
         );
     }
 
@@ -2516,7 +2535,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "Float, Float -> Float",
+            "F64, F64 -> F64",
         );
     }
 
@@ -2528,7 +2547,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "Float -> Int",
+            "F64 -> Int",
         );
     }
 
@@ -2540,7 +2559,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "Float -> Int",
+            "F64 -> Int",
         );
     }
 
@@ -2564,7 +2583,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "Float -> Float",
+            "F64 -> F64",
         );
     }
 
@@ -2614,7 +2633,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 boom = \_ -> boom {}
 
@@ -2831,7 +2850,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : Float, z : Int }",
+            "{ x : Num a, y : F64, z : Int }",
         );
     }
 
@@ -2848,7 +2867,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : Float, z : c }, b : { blah : Str, x : Num a, y : Float, z : c } }",
+            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
         );
     }
 
@@ -2909,11 +2928,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_walk_right() {
+    fn list_walk_backwards() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.walkRight 
+                List.walkBackwards
                 "#
             ),
             "List a, (a, b -> b), b -> b",
@@ -2921,15 +2940,15 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_walk_right_example() {
+    fn list_walk_backwards_example() {
         infer_eq_without_problem(
             indoc!(
                 r#"
                 empty : List Int
-                empty = 
+                empty =
                     []
 
-                List.walkRight empty (\a, b -> a + b) 0
+                List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
             "Int",
@@ -2960,7 +2979,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
 
                 main : List x
@@ -2972,6 +2991,669 @@ mod solve_expr {
                 "#
             ),
             "List x",
+        );
+    }
+
+    #[test]
+    fn double_tag_application() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                main =
+                    if 1 == 1 then
+                        Foo (Bar) 1
+                    else
+                        Foo Bar 1
+                "#
+            ),
+            "[ Foo [ Bar ]* (Num *) ]*",
+        );
+
+        infer_eq_without_problem("Foo Bar 1", "[ Foo [ Bar ]* (Num *) ]*");
+    }
+
+    #[test]
+    fn double_tag_application_pattern_global() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Bar : [ Bar ]
+                Foo : [ Foo Bar Int, Empty ]
+
+                foo : Foo
+                foo = Foo Bar 1
+
+                main =
+                    when foo is
+                        Foo Bar 1 ->
+                            Foo Bar 2
+
+                        x ->
+                            x
+                "#
+            ),
+            "[ Empty, Foo [ Bar ] Int ]",
+        );
+    }
+
+    #[test]
+    fn double_tag_application_pattern_private() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Foo : [ @Foo [ @Bar ] Int, @Empty ]
+
+                foo : Foo
+                foo = @Foo @Bar 1
+
+                main =
+                    when foo is
+                        @Foo @Bar 1 ->
+                            @Foo @Bar 2
+
+                        x ->
+                            x
+                "#
+            ),
+            "[ @Empty, @Foo [ @Bar ] Int ]",
+        );
+    }
+
+    #[test]
+    fn recursive_functon_with_rigid() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                State a : { count : Int, x : a }
+
+                foo : State a -> Int
+                foo = \state ->
+                    if state.count == 0 then
+                        0
+                    else
+                        1 + foo { count: state.count - 1, x: state.x }
+
+                main : Int
+                main =
+                    foo { count: 3, x: {} }
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_empty() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                # The color of a node. Leaves are considered Black.
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                # Create an empty dictionary.
+                empty : Dict k v
+                empty =
+                    Empty
+
+                foo : Dict Int Int
+                foo = empty
+
+                main : Dict Int Int
+                main =
+                    foo
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_insert() {
+        // exposed an issue where pattern variables were not introduced
+        // at the correct level in the constraint
+        //
+        // see 22592eff805511fbe1da63849771ee5f367a6a16
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Dict k : [ Node k (Dict k), Empty ]
+
+                balance : Dict k -> Dict k
+                balance = \left ->
+                    when left is
+                      Node _ Empty -> Empty
+
+                      _ -> Empty
+
+                main : Dict {}
+                main =
+                    balance Empty
+                "#
+            ),
+            "Dict {}",
+        );
+    }
+
+    #[test]
+    fn rbtree_full_remove_min() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                moveRedLeft : Dict k v -> Dict k v
+                moveRedLeft = \dict ->
+                  when dict is
+                    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV ((Node Red rlK rlV rlL rlR) as rLeft) rRight) ->
+                    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+                    Node clr k v (Node _ lK lV lLeft lRight) (Node _ rK rV rLeft rRight) ->
+                        when rLeft is
+                            Node Red rlK rlV rlL rlR ->
+                              Node
+                                Red
+                                rlK
+                                rlV
+                                (Node Black k v (Node Red lK lV lLeft lRight) rlL)
+                                (Node Black rK rV rlR rRight)
+
+                            _ ->
+                              when clr is
+                                Black ->
+                                  Node
+                                    Black
+                                    k
+                                    v
+                                    (Node Red lK lV lLeft lRight)
+                                    (Node Red rK rV rLeft rRight)
+
+                                Red ->
+                                  Node
+                                    Black
+                                    k
+                                    v
+                                    (Node Red lK lV lLeft lRight)
+                                    (Node Red rK rV rLeft rRight)
+
+                    _ ->
+                      dict
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+
+                Key k : Num k
+
+                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelpEQGT = \targetKey, dict ->
+                  when dict is
+                    Node color key value left right ->
+                      if targetKey == key then
+                        when getMin right is
+                          Node _ minKey minValue _ _ ->
+                            balance color minKey minValue left (removeMin right)
+
+                          Empty ->
+                            Empty
+                      else
+                        balance color key value left (removeHelp targetKey right)
+
+                    Empty ->
+                      Empty
+
+                getMin : Dict k v -> Dict k v
+                getMin = \dict ->
+                  when dict is
+                    # Node _ _ _ ((Node _ _ _ _ _) as left) _ ->
+                    Node _ _ _ left _ ->
+                        when left is
+                            Node _ _ _ _ _ -> getMin left
+                            _ -> dict
+
+                    _ ->
+                      dict
+
+
+                moveRedRight : Dict k v -> Dict k v
+                moveRedRight = \dict ->
+                  when dict is
+                    Node clr k v (Node lClr lK lV (Node Red llK llV llLeft llRight) lRight) (Node rClr rK rV rLeft rRight) ->
+                      Node
+                        Red
+                        lK
+                        lV
+                        (Node Black llK llV llLeft llRight)
+                        (Node Black k v lRight (Node Red rK rV rLeft rRight))
+
+                    Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+                      when clr is
+                        Black ->
+                          Node
+                            Black
+                            k
+                            v
+                            (Node Red lK lV lLeft lRight)
+                            (Node Red rK rV rLeft rRight)
+
+                        Red ->
+                          Node
+                            Black
+                            k
+                            v
+                            (Node Red lK lV lLeft lRight)
+                            (Node Red rK rV rLeft rRight)
+
+                    _ ->
+                      dict
+
+
+                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+                removeHelpPrepEQGT = \_, dict, color, key, value, left, right ->
+                  when left is
+                    Node Red lK lV lLeft lRight ->
+                      Node
+                        color
+                        lK
+                        lV
+                        lLeft
+                        (Node Red key value lRight right)
+
+                    _ ->
+                      when right is
+                        Node Black _ _ (Node Black _ _ _ _) _ ->
+                          moveRedRight dict
+
+                        Node Black _ _ Empty _ ->
+                          moveRedRight dict
+
+                        _ ->
+                          dict
+
+
+                removeMin : Dict k v -> Dict k v
+                removeMin = \dict ->
+                  when dict is
+                    Node color key value left right ->
+                        when left is
+                            Node lColor _ _ lLeft _ ->
+                              when lColor is
+                                Black ->
+                                  when lLeft is
+                                    Node Red _ _ _ _ ->
+                                      Node color key value (removeMin left) right
+
+                                    _ ->
+                                      when moveRedLeft dict is # here 1
+                                        Node nColor nKey nValue nLeft nRight ->
+                                          balance nColor nKey nValue (removeMin nLeft) nRight
+
+                                        Empty ->
+                                          Empty
+
+                                _ ->
+                                  Node color key value (removeMin left) right
+
+                            _ ->
+                                Empty
+                    _ ->
+                      Empty
+
+                removeHelp : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelp = \targetKey, dict ->
+                  when dict is
+                    Empty ->
+                      Empty
+
+                    Node color key value left right ->
+                      if targetKey < key then
+                        when left is
+                          Node Black _ _ lLeft _ ->
+                            when lLeft is
+                              Node Red _ _ _ _ ->
+                                Node color key value (removeHelp targetKey left) right
+
+                              _ ->
+                                when moveRedLeft dict is # here 2
+                                  Node nColor nKey nValue nLeft nRight ->
+                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
+
+                                  Empty ->
+                                    Empty
+
+                          _ ->
+                            Node color key value (removeHelp targetKey left) right
+                      else
+                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+
+
+                main : Dict Int Int
+                main =
+                    removeHelp 1 Empty
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_remove_min_1() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                removeHelp : Num k, Dict (Num k) -> Dict (Num k)
+                removeHelp = \targetKey, dict ->
+                  when dict is
+                    Empty ->
+                      Empty
+
+                    Node key left right ->
+                      if targetKey < key then
+                        when left is
+                          Node _ lLeft _ ->
+                            when lLeft is
+                              Node _ _ _ ->
+                                Empty
+
+                              _ -> Empty
+
+                          _ ->
+                            Node key (removeHelp targetKey left) right
+                      else
+                        Empty
+
+
+                main : Dict Int
+                main =
+                    removeHelp 1 Empty
+                "#
+            ),
+            "Dict Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_foobar() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                removeHelp : Num k, Dict (Num k) v -> Dict (Num k) v
+                removeHelp = \targetKey, dict ->
+                  when dict is
+                    Empty ->
+                      Empty
+
+                    Node color key value left right ->
+                      if targetKey < key then
+                        when left is
+                          Node Black _ _ lLeft _ ->
+                            when lLeft is
+                              Node Red _ _ _ _ ->
+                                Node color key value (removeHelp targetKey left) right
+
+                              _ ->
+                                when moveRedLeft dict is # here 2
+                                  Node nColor nKey nValue nLeft nRight ->
+                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
+
+                                  Empty ->
+                                    Empty
+
+                          _ ->
+                            Node color key value (removeHelp targetKey left) right
+                      else
+                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+
+                Key k : Num k
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+
+                moveRedLeft : Dict k v -> Dict k v
+
+                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+
+                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelpEQGT = \targetKey, dict ->
+                  when dict is
+                    Node color key value left right ->
+                      if targetKey == key then
+                        when getMin right is
+                          Node _ minKey minValue _ _ ->
+                            balance color minKey minValue left (removeMin right)
+
+                          Empty ->
+                            Empty
+                      else
+                        balance color key value left (removeHelp targetKey right)
+
+                    Empty ->
+                      Empty
+
+                getMin : Dict k v -> Dict k v
+
+                removeMin : Dict k v -> Dict k v
+
+                main : Dict Int Int
+                main =
+                    removeHelp 1 Empty
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
+
+    #[test]
+    fn quicksort_partition_help() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ partitionHelp ] to "./platform"
+
+                swap : Int, Int, List a -> List a
+                swap = \i, j, list ->
+                    when Pair (List.get list i) (List.get list j) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+
+                        _ ->
+                            []
+
+                partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+                partitionHelp = \i, j, list, high, pivot ->
+                    if j < high then
+                        when List.get list j is
+                            Ok value ->
+                                if value <= pivot then
+                                    partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                else
+                                    partitionHelp i (j + 1) list high pivot
+
+                            Err _ ->
+                                Pair i list
+                    else
+                        Pair i list
+                "#
+            ),
+            "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
+        );
+    }
+
+    #[test]
+    fn rbtree_old_balance_simplified() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                    Node key left Empty
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            "Dict Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_balance_simplified() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                node = \x,y,z -> Node x y z
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                    node key left Empty
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            "Dict Int",
+        );
+    }
+
+    #[test]
+    fn rbtree_balance() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                NodeColor : [ Red, Black ]
+
+                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance = \color, key, value, left, right ->
+                  when right is
+                    Node Red rK rV rLeft rRight ->
+                      when left is
+                        Node Red lK lV lLeft lRight ->
+                          Node
+                            Red
+                            key
+                            value
+                            (Node Black lK lV lLeft lRight)
+                            (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                          Node color rK rV (Node Red key value left rLeft) rRight
+
+                    _ ->
+                      when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                          Node
+                            Red
+                            lK
+                            lV
+                            (Node Black llK llV llLeft llRight)
+                            (Node Black key value lRight right)
+
+                        _ ->
+                          Node color key value left right
+
+                main : Dict Int Int
+                main =
+                    balance Red 0 0 Empty Empty
+                "#
+            ),
+            "Dict Int Int",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn pattern_rigid_problem() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+
+                balance : k, Dict k -> Dict k
+                balance = \key, left ->
+                      when left is
+                        Node _ _ lRight ->
+                            Node key lRight Empty
+
+                        _ ->
+                            Empty
+
+
+                main : Dict Int
+                main =
+                    balance 0 Empty
+                "#
+            ),
+            "Dict Int",
         );
     }
 }

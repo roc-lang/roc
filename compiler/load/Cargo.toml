@@ -25,6 +25,7 @@ crossbeam = "0.7"
 num_cpus = "1"
 
 [dev-dependencies]
+tempfile = "3.1.0"
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"

@@ -2,10 +2,10 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
-use inkwell::OptimizationLevel;
-use roc_gen::layout_id::LayoutIds;
+use inkwell::values::FunctionValue;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
+use roc_mono::layout::LayoutIds;
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 
@@ -15,45 +15,74 @@ use target_lexicon::Triple;
 #[allow(clippy::cognitive_complexity)]
 pub fn gen_from_mono_module(
     arena: &Bump,
-    loaded: MonomorphizedModule,
-    filename: PathBuf,
+    mut loaded: MonomorphizedModule,
+    _file_path: PathBuf,
     target: Triple,
-    dest_filename: &Path,
+    app_o_file: &Path,
     opt_level: OptLevel,
+    emit_debug_info: bool,
 ) {
-    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{
+        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+    };
 
-    let src = loaded.src;
-    let home = loaded.module_id;
-    let src_lines: Vec<&str> = src.split('\n').collect();
-    let palette = DEFAULT_PALETTE;
+    for (home, (module_path, src)) in loaded.sources {
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let palette = DEFAULT_PALETTE;
 
-    // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
+        // Report parsing and canonicalization problems
+        let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
 
-    for problem in loaded.can_problems.into_iter() {
-        let report = can_problem(&alloc, filename.clone(), problem);
-        let mut buf = String::new();
+        let problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        for problem in problems.into_iter() {
+            let report = can_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+            report.render_color_terminal(&mut buf, &alloc, &palette);
 
-        println!("\n{}\n", buf);
-    }
+            println!("\n{}\n", buf);
+        }
 
-    for problem in loaded.type_problems.into_iter() {
-        let report = type_problem(&alloc, filename.clone(), problem);
-        let mut buf = String::new();
+        let problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = type_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+            report.render_color_terminal(&mut buf, &alloc, &palette);
 
-        println!("\n{}\n", buf);
+            println!("\n{}\n", buf);
+        }
+
+        let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            println!("\n{}\n", buf);
+        }
     }
 
     // Generate the binary
 
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(&context, "app"));
+
+    // strip Zig debug stuff
+    // module.strip_debug_info();
+
+    // mark our zig-defined builtins as internal
+    use inkwell::module::Linkage;
+    for function in FunctionIterator::from_module(module) {
+        let name = function.get_name().to_str().unwrap();
+        if name.starts_with("roc_builtins") {
+            function.set_linkage(Linkage::Internal);
+        }
+    }
+
     let builder = context.create_builder();
+    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -62,6 +91,8 @@ pub fn gen_from_mono_module(
     let env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
         context: &context,
         interns: loaded.interns,
         module,
@@ -99,6 +130,9 @@ pub fn gen_from_mono_module(
         // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
         build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
+        // call finalize() before any code generation/verification
+        env.dibuilder.finalize();
+
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
         } else {
@@ -110,6 +144,8 @@ pub fn gen_from_mono_module(
             );
         }
     }
+
+    env.dibuilder.finalize();
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -124,16 +160,103 @@ pub fn gen_from_mono_module(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    // Emit the .o file
+    // annotate the LLVM IR output with debug info
+    // so errors are reported with the line number of the LLVM source
+    if emit_debug_info {
+        module.strip_debug_info();
 
-    let opt = OptimizationLevel::Aggressive;
-    let reloc = RelocMode::Default;
-    let model = CodeModel::Default;
-    let target_machine = target::target_machine(&target, opt, reloc, model).unwrap();
+        let mut app_ll_file = std::path::PathBuf::from(app_o_file);
+        app_ll_file.set_extension("ll");
 
-    target_machine
-        .write_to_file(&env.module, FileType::Object, &dest_filename)
-        .expect("Writing .o file failed");
+        let mut app_ll_dbg_file = std::path::PathBuf::from(app_o_file);
+        app_ll_dbg_file.set_extension("dbg.ll");
 
-    println!("\nSuccess! 🎉\n\n\t➡ {}\n", dest_filename.display());
+        let mut app_bc_file = std::path::PathBuf::from(app_o_file);
+        app_bc_file.set_extension("bc");
+
+        use std::process::Command;
+
+        // write the ll code to a file, so we can modify it
+        module.print_to_file(&app_ll_file).unwrap();
+
+        // run the debugir https://github.com/vaivaswatha/debugir tool
+        match Command::new("debugir")
+            .env_clear()
+            .args(&[app_ll_file.to_str().unwrap()])
+            .output()
+        {
+            Ok(_) => {}
+            Err(error) => {
+                use std::io::ErrorKind;
+                match error.kind() {
+                    ErrorKind::NotFound => panic!(
+                        r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
+                    ),
+                    _ => panic!("{:?}", error),
+                }
+            }
+        }
+
+        // assemble the .ll into a .bc
+        let _ = Command::new("llvm-as-10")
+            .env_clear()
+            .args(&[
+                app_ll_dbg_file.to_str().unwrap(),
+                "-o",
+                app_bc_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        // write the .o file. Note that this builds the .o for the local machine,
+        // and ignores the `target_machine` entirely.
+        let _ = Command::new("llc-10")
+            .env_clear()
+            .args(&[
+                "-filetype=obj",
+                app_bc_file.to_str().unwrap(),
+                "-o",
+                app_o_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+    } else {
+        // Emit the .o file
+
+        let reloc = RelocMode::Default;
+        let model = CodeModel::Default;
+        let target_machine =
+            target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
+
+        target_machine
+            .write_to_file(&env.module, FileType::Object, &app_o_file)
+            .expect("Writing .o file failed");
+    }
+}
+
+pub struct FunctionIterator<'ctx> {
+    next: Option<FunctionValue<'ctx>>,
+}
+
+impl<'ctx> FunctionIterator<'ctx> {
+    pub fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
+        Self {
+            next: module.get_first_function(),
+        }
+    }
+}
+
+impl<'ctx> Iterator for FunctionIterator<'ctx> {
+    type Item = FunctionValue<'ctx>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next {
+            Some(function) => {
+                self.next = function.get_next_function();
+
+                Some(function)
+            }
+            None => None,
+        }
+    }
 }

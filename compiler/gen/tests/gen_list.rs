@@ -14,8 +14,7 @@ mod helpers;
 #[cfg(test)]
 mod gen_list {
     use crate::helpers::with_larger_debug_stack;
-    //use roc_std::roclist;
-    use roc_std::RocList;
+    use roc_std::{RocList, RocStr};
 
     #[test]
     fn roc_list_construction() {
@@ -238,11 +237,11 @@ mod gen_list {
     }
 
     #[test]
-    fn list_walk_right_empty_all_inline() {
+    fn list_walk_backwards_empty_all_inline() {
         assert_evals_to!(
             indoc!(
                 r#"
-                List.walkRight [0x1] (\a, b -> a + b) 0
+                List.walkBackwards [0x1] (\a, b -> a + b) 0
                 "#
             ),
             1,
@@ -256,12 +255,74 @@ mod gen_list {
                 empty =
                     []
 
-                List.walkRight empty (\a, b -> a + b) 0
+                List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
             0,
             i64
         );
+    }
+
+    #[test]
+    fn list_walk_backwards_with_str() {
+        assert_evals_to!(
+            r#"List.walkBackwards [ "x", "y", "z" ] Str.concat "<""#,
+            RocStr::from("xyz<"),
+            RocStr
+        );
+
+        assert_evals_to!(
+            r#"List.walkBackwards [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+            RocStr::from("ThirdSecondFirstFourth"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn list_walk_backwards_with_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Bit : [ Zero, One ]
+
+                byte : List Bit
+                byte = [ Zero, One, Zero, One, Zero, Zero, One, Zero ]
+
+                initialCounts = { zeroes: 0, ones: 0 }
+
+                acc = \b, r ->
+                    when b is
+                        Zero -> { r & zeroes: r.zeroes + 1 }
+                        One -> { r & ones: r.ones + 1 }
+
+                finalCounts = List.walkBackwards byte acc initialCounts
+
+                finalCounts.ones * 10 + finalCounts.zeroes
+                "#
+            ),
+            35,
+            i64
+        );
+    }
+
+    #[test]
+    fn list_walk_with_str() {
+        assert_evals_to!(
+            r#"List.walk [ "x", "y", "z" ] Str.concat "<""#,
+            RocStr::from("zyx<"),
+            RocStr
+        );
+
+        assert_evals_to!(
+            r#"List.walk [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+            RocStr::from("FirstSecondThirdFourth"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn list_walk_substraction() {
+        assert_evals_to!(r#"List.walk [ 1, 2 ] Num.sub 1"#, 2, i64);
     }
 
     #[test]
@@ -273,7 +334,7 @@ mod gen_list {
                 empty =
                     []
 
-                List.keepIf empty (\x -> True)
+                List.keepIf empty (\_ -> True)
                 "#
             ),
             RocList::from_slice(&[]),
@@ -305,7 +366,7 @@ mod gen_list {
             indoc!(
                 r#"
                 alwaysTrue : Int -> Bool
-                alwaysTrue = \i ->
+                alwaysTrue = \_ ->
                     True
 
                 oneThroughEight : List Int
@@ -326,7 +387,7 @@ mod gen_list {
             indoc!(
                 r#"
                 alwaysFalse : Int -> Bool
-                alwaysFalse = \i ->
+                alwaysFalse = \_ ->
                     False
 
                 List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
@@ -497,6 +558,26 @@ mod gen_list {
     }
 
     #[test]
+    fn list_map_closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                pi : F64
+                pi = 3.14
+
+                single : List F64
+                single =
+                    [ 0 ]
+
+                List.map single (\x -> x + pi)
+                "#
+            ),
+            RocList::from_slice(&[3.14]),
+            RocList<f64>
+        );
+    }
+
+    #[test]
     fn list_join_empty_list() {
         assert_evals_to!("List.join []", RocList::from_slice(&[]), RocList<i64>);
     }
@@ -558,7 +639,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    empty : List Float
+                    empty : List F64
                     empty =
                         []
 
@@ -1145,7 +1226,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                app Quicksort provides [ main ] imports []
+                app "quicksort" provides [ main ] to "./platform"
 
 
                 swap : Int, Int, List a -> List a
@@ -1561,5 +1642,21 @@ mod gen_list {
             RocList::from_slice(&[1, 2, 3]),
             RocList<i64>
         );
+    }
+
+    #[test]
+    fn list_contains() {
+        assert_evals_to!(indoc!("List.contains [1,2,3] 1"), true, bool);
+
+        assert_evals_to!(indoc!("List.contains [1,2,3] 4"), false, bool);
+
+        assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
+    }
+
+    #[test]
+    fn list_sum() {
+        assert_evals_to!("List.sum []", 0, i64);
+        assert_evals_to!("List.sum [ 1, 2, 3 ]", 6, i64);
+        assert_evals_to!("List.sum [ 1.1, 2.2, 3.3 ]", 6.6, f64);
     }
 }

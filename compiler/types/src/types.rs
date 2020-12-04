@@ -3,7 +3,7 @@ use crate::pretty_print::Parens;
 use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
 use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -143,6 +143,12 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
+    HostExposedAlias {
+        name: Symbol,
+        arguments: Vec<(Lowercase, Type)>,
+        actual_var: Variable,
+        actual: Box<Type>,
+    },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(Symbol, Vec<Type>),
@@ -198,6 +204,20 @@ impl fmt::Debug for Type {
                 write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
+                    write!(f, " {:?}", arg)?;
+                }
+
+                // Sometimes it's useful to see the expansion of the alias
+                // write!(f, "[ but actually {:?} ]", _actual)?;
+
+                Ok(())
+            }
+            Type::HostExposedAlias {
+                name, arguments, ..
+            } => {
+                write!(f, "HostExposedAlias {:?}", name)?;
+
+                for (_, arg) in arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -405,6 +425,16 @@ impl Type {
                 }
                 actual_type.substitute(substitutions);
             }
+            HostExposedAlias {
+                arguments,
+                actual: actual_type,
+                ..
+            } => {
+                for (_, value) in arguments.iter_mut() {
+                    value.substitute(substitutions);
+                }
+                actual_type.substitute(substitutions);
+            }
             Apply(_, args) => {
                 for arg in args {
                     arg.substitute(substitutions);
@@ -453,6 +483,12 @@ impl Type {
             Alias(_, _, actual_type) => {
                 actual_type.substitute_alias(rep_symbol, actual);
             }
+            HostExposedAlias {
+                actual: actual_type,
+                ..
+            } => {
+                actual_type.substitute_alias(rep_symbol, actual);
+            }
             Apply(symbol, _) if *symbol == rep_symbol => {
                 *self = actual.clone();
 
@@ -496,6 +532,9 @@ impl Type {
             Alias(alias_symbol, _, actual_type) => {
                 alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol)
             }
+            HostExposedAlias { name, actual, .. } => {
+                name == &rep_symbol || actual.contains_symbol(rep_symbol)
+            }
             Apply(symbol, _) if *symbol == rep_symbol => true,
             Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => false,
@@ -528,6 +567,7 @@ impl Type {
                         .any(|arg| arg.contains_variable(rep_variable))
             }
             Alias(_, _, actual_type) => actual_type.contains_variable(rep_variable),
+            HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
             EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => false,
         }
@@ -579,7 +619,12 @@ impl Type {
                 }
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
-            Alias(_, type_args, actual_type) => {
+            HostExposedAlias {
+                arguments: type_args,
+                actual: actual_type,
+                ..
+            }
+            | Alias(_, type_args, actual_type) => {
                 for arg in type_args {
                     arg.1
                         .instantiate_aliases(region, aliases, var_store, introduced);
@@ -761,6 +806,10 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             accum.insert(*alias_symbol);
             symbols_help(&actual_type, accum);
         }
+        HostExposedAlias { name, actual, .. } => {
+            accum.insert(*name);
+            symbols_help(&actual, accum);
+        }
         Apply(symbol, args) => {
             accum.insert(*symbol);
             args.iter().for_each(|arg| symbols_help(arg, accum));
@@ -826,6 +875,14 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         }
         Alias(_, args, actual) => {
             for (_, arg) in args {
+                variables_help(arg, accum);
+            }
+            variables_help(actual, accum);
+        }
+        HostExposedAlias {
+            arguments, actual, ..
+        } => {
+            for (_, arg) in arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -909,6 +966,10 @@ pub enum Reason {
         op: LowLevel,
         arg_index: Index,
     },
+    ForeignCallArg {
+        foreign_symbol: ForeignSymbol,
+        arg_index: Index,
+    },
     FloatLiteral,
     IntLiteral,
     NumLiteral,
@@ -935,6 +996,7 @@ pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>),
     LowLevelOpResult(LowLevel),
+    ForeignCall,
     TagApply {
         tag_name: TagName,
         args_count: usize,
@@ -945,7 +1007,7 @@ pub enum Category {
     StrInterpolation,
 
     // storing variables in the ast
-    Storage,
+    Storage(&'static str, u32),
 
     // control flow
     If,
@@ -984,6 +1046,10 @@ pub enum PatternCategory {
 pub struct Alias {
     pub region: Region,
     pub vars: Vec<Located<(Lowercase, Variable)>>,
+
+    /// hidden type variables, like the closure variable in `a -> b`
+    pub hidden_variables: MutSet<Variable>,
+
     pub uniqueness: Option<boolean_algebra::Bool>,
     pub typ: Type,
 }
@@ -1094,7 +1160,7 @@ fn write_error_type_help(
                     buf.push_str("Int");
                 }
                 Type(Symbol::NUM_FLOATINGPOINT, _) => {
-                    buf.push_str("Float");
+                    buf.push_str("F64");
                 }
                 other => {
                     let write_parens = parens == Parens::InTypeParam;
@@ -1212,7 +1278,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                     buf.push_str("Int");
                 }
                 Type(Symbol::NUM_FLOATINGPOINT, _) => {
-                    buf.push_str("Float");
+                    buf.push_str("F64");
                 }
                 other => {
                     let write_parens = parens == Parens::InTypeParam;

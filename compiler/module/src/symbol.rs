@@ -612,7 +612,7 @@ define_builtins! {
         2 NUM_INT: "Int" imported // the Int.Int type alias
         3 NUM_INTEGER: "Integer" imported // Int : Num Integer
         4 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
-        5 NUM_FLOAT: "Float" imported // the Float.Float type alias
+        5 NUM_F64: "F64" imported // the Num.F64 type alias
         6 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
         7 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         8 NUM_MAX_INT: "maxInt"
@@ -652,6 +652,8 @@ define_builtins! {
         42 NUM_ADD_WRAP: "addWrap"
         43 NUM_ADD_CHECKED: "addChecked"
         44 NUM_ATAN: "atan"
+        45 NUM_ACOS: "acos"
+        46 NUM_ASIN: "asin"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -668,6 +670,11 @@ define_builtins! {
         2 STR_IS_EMPTY: "isEmpty"
         3 STR_APPEND: "append"
         4 STR_CONCAT: "concat"
+        5 STR_SPLIT: "split"
+        6 STR_COUNT_GRAPHEMES: "countGraphemes"
+        7 STR_STARTS_WITH: "startsWith"
+        8 STR_ENDS_WITH: "endsWith"
+        9 STR_FROM_INT: "fromInt"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -678,16 +685,18 @@ define_builtins! {
         5 LIST_APPEND: "append"
         6 LIST_MAP: "map"
         7 LIST_LEN: "len"
-        8 LIST_FOLDL: "foldl"
-        9 LIST_WALK_RIGHT: "walkRight"
-        10 LIST_CONCAT: "concat"
-        11 LIST_FIRST: "first"
-        12 LIST_SINGLE: "single"
-        13 LIST_REPEAT: "repeat"
-        14 LIST_REVERSE: "reverse"
-        15 LIST_PREPEND: "prepend"
-        16 LIST_JOIN: "join"
-        17 LIST_KEEP_IF: "keepIf"
+        8 LIST_WALK_BACKWARDS: "walkBackwards"
+        9 LIST_CONCAT: "concat"
+        10 LIST_FIRST: "first"
+        11 LIST_SINGLE: "single"
+        12 LIST_REPEAT: "repeat"
+        13 LIST_REVERSE: "reverse"
+        14 LIST_PREPEND: "prepend"
+        15 LIST_JOIN: "join"
+        16 LIST_KEEP_IF: "keepIf"
+        17 LIST_CONTAINS: "contains"
+        18 LIST_SUM: "sum"
+        19 LIST_WALK: "walk"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -1,3 +1,4 @@
+use crate::builtins;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::env::Env;
 use crate::expr::Output;
@@ -42,18 +43,23 @@ pub struct ModuleOutput {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
-    loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
+    loc_defs: &'a [Located<ast::Def<'a>>],
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
+    aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     mut exposed_symbols: MutSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home);
+    let mut scope = Scope::new(home, var_store);
     let num_deps = dep_idents.len();
+
+    for (name, alias) in aliases.into_iter() {
+        scope.add_alias(name, alias.region, alias.vars, alias.typ);
+    }
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -65,9 +71,9 @@ pub fn canonicalize_module_defs<'a>(
     let mut desugared =
         bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
 
-    for loc_def in loc_defs {
+    for loc_def in loc_defs.iter() {
         desugared.push(&*arena.alloc(Located {
-            value: desugar_def(arena, arena.alloc(loc_def.value)),
+            value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         }));
     }
@@ -259,6 +265,15 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
+            // Add builtin defs (e.g. List.get) to the module's defs
+            let builtin_defs = builtins::builtin_defs(var_store);
+
+            for (symbol, def) in builtin_defs {
+                if references.contains(&symbol) {
+                    declarations.push(Declaration::Builtin(def));
+                }
+            }
+
             Ok(ModuleOutput {
                 aliases,
                 rigid_variables,
@@ -289,6 +304,13 @@ fn fix_values_captured_in_closure_defs(
     defs: &mut Vec<crate::def::Def>,
     no_capture_symbols: &mut MutSet<Symbol>,
 ) {
+    // recursive defs cannot capture each other
+    for def in defs.iter() {
+        no_capture_symbols.extend(crate::pattern::symbols_from_pattern(&def.loc_pattern.value));
+    }
+
+    // TODO mutually recursive functions should both capture the union of both their capture sets
+
     for def in defs.iter_mut() {
         fix_values_captured_in_closure_def(def, no_capture_symbols);
     }
@@ -343,12 +365,12 @@ fn fix_values_captured_in_closure_expr(
     use crate::expr::Expr::*;
 
     match expr {
-        LetNonRec(def, loc_expr, _, _) => {
+        LetNonRec(def, loc_expr, _) => {
             // LetNonRec(Box<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_def(def, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
-        LetRec(defs, loc_expr, _, _) => {
+        LetRec(defs, loc_expr, _) => {
             // LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_defs(defs, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
@@ -430,7 +452,7 @@ fn fix_values_captured_in_closure_expr(
                 fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
             }
         }
-        RunLowLevel { args, .. } => {
+        RunLowLevel { args, .. } | ForeignCall { args, .. } => {
             for (_, arg) in args.iter_mut() {
                 fix_values_captured_in_closure_expr(arg, no_capture_symbols);
             }

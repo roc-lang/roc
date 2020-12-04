@@ -1,4 +1,4 @@
-use crate::spaces::{fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline, INDENT};
+use crate::spaces::{fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
@@ -35,10 +35,6 @@ pub enum Parens {
 pub enum Newlines {
     Yes,
     No,
-}
-
-pub fn fmt_annotation<'a>(buf: &mut String<'a>, annotation: &'a TypeAnnotation<'a>, indent: u16) {
-    annotation.format(buf, indent);
 }
 
 pub trait Formattable<'a> {
@@ -84,6 +80,88 @@ where
     }
 }
 
+macro_rules! format_sequence {
+    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $final_comments:expr, $newline:expr, $t:ident) => {
+        let is_multiline =
+            $items.iter().any(|item| item.value.is_multiline()) || !$final_comments.is_empty();
+
+        if is_multiline {
+            let braces_indent = $indent + INDENT;
+            let item_indent = braces_indent + INDENT;
+            if ($newline == Newlines::Yes) {
+                newline($buf, braces_indent);
+            }
+            $buf.push($start);
+
+            for item in $items.iter() {
+                match item.value {
+                    $t::SpaceBefore(expr_below, spaces_above_expr) => {
+                        newline($buf, item_indent);
+                        fmt_comments_only(
+                            $buf,
+                            spaces_above_expr.iter(),
+                            NewlineAt::Bottom,
+                            item_indent,
+                        );
+
+                        match &expr_below {
+                            $t::SpaceAfter(expr_above, spaces_below_expr) => {
+                                expr_above.format($buf, item_indent);
+
+                                $buf.push(',');
+
+                                fmt_comments_only(
+                                    $buf,
+                                    spaces_below_expr.iter(),
+                                    NewlineAt::Top,
+                                    item_indent,
+                                );
+                            }
+                            _ => {
+                                expr_below.format($buf, item_indent);
+                                $buf.push(',');
+                            }
+                        }
+                    }
+
+                    $t::SpaceAfter(sub_expr, spaces) => {
+                        newline($buf, item_indent);
+                        sub_expr.format($buf, item_indent);
+                        $buf.push(',');
+                        fmt_comments_only($buf, spaces.iter(), NewlineAt::Top, item_indent);
+                    }
+
+                    _ => {
+                        newline($buf, item_indent);
+                        item.format($buf, item_indent);
+                        $buf.push(',');
+                    }
+                }
+            }
+            fmt_comments_only($buf, $final_comments.iter(), NewlineAt::Top, item_indent);
+            newline($buf, braces_indent);
+            $buf.push($end);
+        } else {
+            // is_multiline == false
+            // there is no comment to add
+            $buf.push($start);
+            let mut iter = $items.iter().peekable();
+            while let Some(item) = iter.next() {
+                $buf.push(' ');
+                item.format($buf, $indent);
+                if iter.peek().is_some() {
+                    $buf.push(',');
+                }
+            }
+
+            if !$items.is_empty() {
+                $buf.push(' ');
+            }
+            $buf.push($end);
+        }
+    };
+}
+
 impl<'a> Formattable<'a> for TypeAnnotation<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::TypeAnnotation::*;
@@ -105,7 +183,11 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
             As(lhs, _, rhs) => lhs.value.is_multiline() || rhs.value.is_multiline(),
 
-            Record { fields, ext } => {
+            Record {
+                fields,
+                ext,
+                final_comments: _,
+            } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
@@ -114,7 +196,11 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 fields.iter().any(|field| field.value.is_multiline())
             }
 
-            TagUnion { tags, ext } => {
+            TagUnion {
+                tags,
+                ext,
+                final_comments: _,
+            } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
@@ -197,16 +283,33 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             BoundVariable(v) => buf.push_str(v),
             Wildcard => buf.push('*'),
 
-            TagUnion { tags, ext } => {
-                tags.format(buf, indent);
+            TagUnion {
+                tags,
+                ext,
+                final_comments,
+            } => {
+                format_sequence!(buf, indent, '[', ']', tags, final_comments, newlines, Tag);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
                 }
             }
 
-            Record { fields, ext } => {
-                fields.format(buf, indent);
+            Record {
+                fields,
+                ext,
+                final_comments,
+            } => {
+                format_sequence!(
+                    buf,
+                    indent,
+                    '{',
+                    '}',
+                    fields,
+                    final_comments,
+                    newlines,
+                    AssignedField
+                );
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -220,8 +323,18 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 rhs.value.format(buf, indent);
             }
 
-            SpaceBefore(ann, _spaces) | SpaceAfter(ann, _spaces) => {
-                ann.format_with_options(buf, parens, newlines, indent)
+            SpaceBefore(ann, spaces) => {
+                newline(buf, indent + INDENT);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+                ann.format_with_options(buf, parens, Newlines::No, indent)
+            }
+            SpaceAfter(ann, spaces) => {
+                ann.format_with_options(buf, parens, newlines, indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+                // seems like this SpaceAfter is not constructible
+                // so this branch hasn't be tested. Please add some test if
+                // this branch is actually reached and remove this dbg_assert.
+                debug_assert!(false);
             }
 
             Malformed(raw) => buf.push_str(raw),
@@ -333,7 +446,7 @@ fn format_assigned_field_help<'a, T>(
             buf.push_str(name.value);
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
-            fmt_comments_only(buf, spaces.iter(), indent);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             format_assigned_field_help(
                 sub_field,
                 buf,
@@ -352,7 +465,7 @@ fn format_assigned_field_help<'a, T>(
                 separator_prefix,
                 is_multiline,
             );
-            fmt_comments_only(buf, spaces.iter(), indent);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
         Malformed(raw) => {
             buf.push_str(raw);
@@ -420,111 +533,4 @@ impl<'a> Formattable<'a> for Tag<'a> {
             Tag::Malformed(raw) => buf.push_str(raw),
         }
     }
-}
-
-macro_rules! implement_format_sequence {
-    ($start:expr, $end:expr, $t:ident) => {
-        fn format_with_options(
-            &self,
-            buf: &mut String<'a>,
-            _parens: Parens,
-            _newlines: Newlines,
-            indent: u16,
-        ) {
-            buf.push($start);
-
-            let mut iter = self.iter().peekable();
-
-            let is_multiline = self.is_multiline();
-
-            let item_indent = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            while let Some(item) = iter.next() {
-                if is_multiline {
-                    match &item.value {
-                        $t::SpaceBefore(expr_below, spaces_above_expr) => {
-                            newline(buf, item_indent);
-                            fmt_comments_only(buf, spaces_above_expr.iter(), item_indent);
-
-                            match &expr_below {
-                                $t::SpaceAfter(expr_above, spaces_below_expr) => {
-                                    expr_above.format(buf, item_indent);
-
-                                    if iter.peek().is_some() {
-                                        buf.push(',');
-                                    }
-
-                                    fmt_condition_spaces(
-                                        buf,
-                                        spaces_below_expr.iter(),
-                                        item_indent,
-                                    );
-                                }
-                                _ => {
-                                    expr_below.format(buf, item_indent);
-                                    if iter.peek().is_some() {
-                                        buf.push(',');
-                                    }
-                                }
-                            }
-                        }
-
-                        $t::SpaceAfter(sub_expr, spaces) => {
-                            newline(buf, item_indent);
-
-                            sub_expr.format(buf, item_indent);
-                            if iter.peek().is_some() {
-                                buf.push(',');
-                            }
-
-                            fmt_condition_spaces(buf, spaces.iter(), item_indent);
-                        }
-
-                        _ => {
-                            newline(buf, item_indent);
-                            item.format(buf, item_indent);
-                            if iter.peek().is_some() {
-                                buf.push(',');
-                            }
-                        }
-                    }
-                } else {
-                    buf.push(' ');
-                    item.format(buf, item_indent);
-                    if iter.peek().is_some() {
-                        buf.push(',');
-                    }
-                }
-            }
-
-            if is_multiline {
-                newline(buf, indent);
-            }
-
-            if !self.is_empty() && !is_multiline {
-                buf.push(' ');
-            }
-            buf.push($end);
-        }
-    };
-}
-
-impl<'a> Formattable<'a> for &'a [Located<Tag<'a>>] {
-    fn is_multiline(&self) -> bool {
-        self.iter().any(|t| t.value.is_multiline())
-    }
-
-    implement_format_sequence!('[', ']', Tag);
-}
-
-impl<'a> Formattable<'a> for &'a [Located<AssignedField<'a, TypeAnnotation<'a>>>] {
-    fn is_multiline(&self) -> bool {
-        self.iter().any(|f| f.value.is_multiline())
-    }
-
-    implement_format_sequence!('{', '}', AssignedField);
 }

@@ -21,7 +21,7 @@ mod can_inline {
 
     fn assert_inlines_to(input: &str, expected: Expr, var_store: &mut VarStore) {
         let arena = Bump::new();
-        let scope = &mut Scope::new(test_home());
+        let scope = &mut Scope::new(test_home(), var_store);
         let actual_out = can_expr_with(&arena, test_home(), input);
         let actual = inline_calls(var_store, scope, actual_out.loc_expr.value);
 

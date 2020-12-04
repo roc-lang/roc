@@ -1,21 +1,57 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, valgrind, libunwind, and libc++-dev
+## Installing LLVM, Python, Zig, valgrind, libunwind, and libc++-dev
 
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
-* a particular version of LLVM
+* Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
+* a particular version of Zig (see below)
+* a particular version of LLVM (see below)
 
 To run the test suite (via `cargo test`), you additionally need to install:
 
-* [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)]
+* [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
+Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
-Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.) macOS systems
-should already have `libunwind`, but other systems will need to install it
-(e.g. with `sudo apt-get install libunwind-dev`).
+For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it. 
+
+### libunwind & libc++-dev
+
+MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be donw with `sudo apt-get install libunwind-dev`).
+Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
+
+### Zig
+We use a specific version of Zig, a build off the the commit `0088efc4b`. The latest tagged version of Zig, 0.6.0, doesn't include the feature to emit LLVM ir, which is a core feature of how we use Zig. To download this specific version, you can:
+* use the following commands on Debian/Ubuntu (on other distros, steps should be essentially the same):
+  ```
+  cd /tmp
+  # download the files
+  wget https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
+  # uncompress:
+  xz -d zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
+  # untar:
+  tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar
+  # move the files into /opt:
+  sudo mkdir -p /opt/zig
+  sudo mv zig-linux-x86_64-0.6.0+0088efc4b/* /opt/zig/
+  ```
+  Then add `/opt/zig/` to your `PATH` (e.g. in `~/.bashrc`).
+  
+  Reload your `.bashrc` file: `source ~/.bashrc` and test that `zig` is
+  an available command.
+
+* [macOS](https://ziglang.org/builds/zig-macos-x86_64-0.6.0+0088efc4b.tar.xz)
+
+Alternatively, any recent master branch build should work. To install the latest master branch build you can use:
+* `brew install zig --HEAD` (on macos)
+* `snap install zig --classic --edge` (on ubunutu)
+
+Once 0.7.0 is released, we'll switch back to installing the tagged releases and this process will get easier.
+
+### LLVM
 
 To see which version of LLVM you need, take a look at `Cargo.toml`, in particular the `branch` section of the `inkwell` dependency. It should have something like `llvmX-Y` where X and Y are the major and minor revisions of LLVM you need.
 
@@ -46,7 +82,7 @@ If MacOS and using a version >= 10.15:
 
 You may prefer to setup up the volume manually by following nix documentation.
 
-> You my need to restart your terminal
+> You may need to restart your terminal
 
 ### Usage
 
@@ -56,11 +92,39 @@ Now with nix installed you just need to run one command:
 
 > This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
 
+> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
+
 You should be in a shell with everything needed to build already installed. Next run:
 
 `cargo run repl`
 
 You should be in a repl now. Have fun!
+
+### Editor
+
+When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
+
+```bash
+nix-shell
+git clone https://github.com/guibou/nixGL
+cd nixGL
+```
+
+If you have an Nvidia graphics card, run:
+```
+nix-env -f ./ -iA nixVulkanNvidia
+```
+If you have integrated Intel graphics, run:
+```
+nix-env -f ./ -iA nixVulkanIntel
+```
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other configurations.
+
+Now you should be able to run the editor:
+```bash
+cd roc
+nixVulkanNvidia cargo run edit `# replace Nvidia with the config you chose in the previous step`
+```
 
 ## Troubleshooting
 

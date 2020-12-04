@@ -1,6 +1,6 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
-use crate::spaces::{fmt_spaces, is_comment, newline, INDENT};
+use crate::spaces::{fmt_spaces, newline, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{Def, Expr, Pattern};
 
@@ -15,11 +15,12 @@ impl<'a> Formattable<'a> for Def<'a> {
                 loc_pattern.is_multiline() || loc_annotation.is_multiline()
             }
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
-
+            AnnotatedBody { .. } => true,
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
-                spaces.iter().any(|s| is_comment(s)) || sub_def.is_multiline()
+                spaces.iter().any(|s| s.is_comment()) || sub_def.is_multiline()
             }
             Nested(def) => def.is_multiline(),
+            NotYetImplemented(s) => todo!("{}", s),
         }
     }
 
@@ -35,8 +36,23 @@ impl<'a> Formattable<'a> for Def<'a> {
         match self {
             Annotation(loc_pattern, loc_annotation) => {
                 loc_pattern.format(buf, indent);
-                buf.push_str(" : ");
-                loc_annotation.format(buf, indent);
+                if loc_annotation.is_multiline() {
+                    buf.push_str(" :");
+                    loc_annotation.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::Yes,
+                        indent,
+                    );
+                } else {
+                    buf.push_str(" : ");
+                    loc_annotation.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::No,
+                        indent,
+                    );
+                }
             }
             Alias { name, vars, ann } => {
                 buf.push_str(name.value);
@@ -57,6 +73,24 @@ impl<'a> Formattable<'a> for Def<'a> {
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
             }
+            AnnotatedBody {
+                ann_pattern,
+                ann_type,
+                comment,
+                body_pattern,
+                body_expr,
+            } => {
+                ann_pattern.format(buf, indent);
+                buf.push_str(" : ");
+                ann_type.format(buf, indent);
+                if let Some(comment_str) = comment {
+                    buf.push_str(" # ");
+                    buf.push_str(comment_str.trim());
+                }
+                buf.push_str("\n");
+                fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
+            }
+
             SpaceBefore(sub_def, spaces) => {
                 fmt_spaces(buf, spaces.iter(), indent);
                 sub_def.format(buf, indent);
@@ -66,6 +100,7 @@ impl<'a> Formattable<'a> for Def<'a> {
                 fmt_spaces(buf, spaces.iter(), indent);
             }
             Nested(def) => def.format(buf, indent),
+            NotYetImplemented(s) => todo!("{}", s),
         }
     }
 }

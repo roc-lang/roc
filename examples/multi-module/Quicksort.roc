@@ -1,10 +1,8 @@
-app Quicksort 
-    provides [ quicksort ]
-    imports [ Utils.{swap} ]
+app "quicksort" imports [ Utils.{ swap } ] provides [ quicksort ] to "./platform"
 
 
 quicksort : List Int -> List Int
-quicksort = \originalList -> 
+quicksort = \originalList ->
     quicksortHelp : List (Num a), Int, Int -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
@@ -45,5 +43,5 @@ quicksort = \originalList ->
 
 
 
-    n = List.len originalList 
+    n = List.len originalList
     quicksortHelp originalList 0 (n - 1)

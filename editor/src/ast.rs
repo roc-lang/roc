@@ -1,8 +1,16 @@
+use crate::bucket::{BucketList, BucketStr, NodeId};
 use arraystring::{typenum::U14, ArrayString};
 use inlinable_string::string_ext::StringExt;
 use inlinable_string::InlinableString;
+use roc_can::def::Annotation;
+use roc_can::expr::{Field, Recursive};
+use roc_module::ident::Lowercase;
+use roc_module::low_level::LowLevel;
+use roc_module::operator::CalledVia;
+use roc_module::symbol::Symbol;
+use roc_problem::can::RuntimeError;
 use roc_types::subs::Variable;
-use std::fmt;
+use roc_types::types::Alias;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Problem {
@@ -11,30 +19,7 @@ pub enum Problem {
 
 pub type Res<T> = Result<T, Problem>;
 
-/// The index into a decl's array of nodes.
-/// This is a u32 index because no decl is allowed to hold more than 2^32 entries,
-/// and it saves space on 64-bit systems compared to a pointer.
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NodeId(u32);
-
-impl NodeId {
-    pub const NONE: NodeId = NodeId(std::u32::MAX);
-
-    pub fn as_index(self) -> usize {
-        self.0 as usize
-    }
-}
-
-impl fmt::Debug for NodeId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self == &NodeId::NONE {
-            write!(f, "none")
-        } else {
-            write!(f, "#{}", self.0)
-        }
-    }
-}
-
+/*
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UndoAction {
     UndoEdit {
@@ -155,7 +140,7 @@ impl Nodes {
 
         self.nodes.push(node);
 
-        if index < std::u32::MAX as usize {
+        if index < u32::MAX as usize {
             Ok(NodeId(index as u32))
         } else {
             // u32::MAX is reserved for NodeId::NONE, so if we hit that on a
@@ -234,6 +219,7 @@ pub enum NodeContent {
     // SelectionEnd { offset: u16, child: NodeId },
     Removed,
 }
+*/
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum IntStyle {
@@ -245,7 +231,7 @@ pub enum IntStyle {
 
 /// Experimental idea for an Expr that fits in 16B.
 /// It has a 1B discriminant and variants which hold payloads of at most 15B.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum Expr2 {
     /// A number literal (without a dot) containing no underscores
     Num {
@@ -395,7 +381,7 @@ pub enum Expr2 {
     RuntimeError(RuntimeError),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Def {
     pub pattern: NodeId<Pat2>, // 3B
     pub expr: NodeId<Expr2>,   // 3B
@@ -407,18 +393,18 @@ pub struct Def {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum Pat2 {
+pub enum Pat2 {
     Todo,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct UpdateVars {
+pub struct UpdateVars {
     record_var: Variable, // 4B
     ext_var: Variable,    // 4B
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct RecordVars {
+pub struct RecordVars {
     record_var: Variable, // 4B
     ext_var: Variable,    // 4B
     field_var: Variable,  // 4B
@@ -426,7 +412,7 @@ struct RecordVars {
 
 /// This is 15B, so it fits in a Node slot.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct AccessVars {
+pub struct AccessVars {
     record_var: Variable, // 4B
     ext_var: Variable,    // 4B
     field_var: Variable,  // 4B
@@ -434,14 +420,14 @@ struct AccessVars {
 
 /// This is 16B, so it fits in a Node slot.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct ClosureVars {
+pub struct ClosureVars {
     function_type: Variable,
     closure_type: Variable,
     closure_ext_var: Variable,
     return_type: Variable,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct WhenBranch {
     pub patterns: BucketList<Pat2>,   // 4B
     pub body: NodeId<Expr2>,          // 3B
@@ -458,7 +444,7 @@ pub struct PatternId {
 
 // Each bucket has metadata and slots.
 // The metadata determines things like which slots are free.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct ExprBucket {
     // We can store this as a u8 because whenever we create a bucket, we
     // always fill at least one slot. So there will never be 256 unused slots
@@ -595,16 +581,17 @@ pub enum Expr {
     // },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Pattern {
     Identifier { text: String, var: Variable },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Decl {
     Def(Def),
 }
 
+/*
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Def {
     Body { pattern: NodeId, expr: NodeId },
@@ -1024,3 +1011,4 @@ fn double_backspace_1_caret() {
 
     assert_eq!(altered_module, module);
 }
+*/

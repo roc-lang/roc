@@ -790,7 +790,8 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         | Str { .. }
         | EmptyRecord
         | Accessor { .. }
-        | RunLowLevel { .. } => {}
+        | RunLowLevel { .. }
+        | ForeignCall { .. } => {}
 
         Var(symbol) => usage.register_unique(*symbol),
 
@@ -843,14 +844,14 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 annotate_usage(&loc_elem.value, usage);
             }
         }
-        LetNonRec(def, loc_expr, _, _) => {
+        LetNonRec(def, loc_expr, _) => {
             annotate_usage(&def.loc_expr.value, usage);
             annotate_usage(&loc_expr.value, usage);
 
             // annotate defaults of optional record fields
             annotate_usage_pattern(&def.loc_pattern.value, usage)
         }
-        LetRec(defs, loc_expr, _, _) => {
+        LetRec(defs, loc_expr, _) => {
             // TODO test this with a practical example.
             if defs.len() == 1 {
                 // just like a letrec, but mark defined symbol as Shared

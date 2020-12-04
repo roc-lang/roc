@@ -777,6 +777,16 @@ fn to_expr_report<'b>(
                     op
                 );
             }
+            Reason::ForeignCallArg {
+                foreign_symbol,
+                arg_index,
+            } => {
+                panic!(
+                    "Compiler bug: argument #{} to foreign symbol {:?} was the wrong type!",
+                    arg_index.ordinal(),
+                    foreign_symbol
+                );
+            }
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
                 unreachable!("I don't think these can be reached")
             }
@@ -924,6 +934,10 @@ fn add_category<'b>(
             alloc.private_tag_name(*name),
             alloc.text(" private tag application has the type:"),
         ]),
+        TagApply {
+            tag_name: TagName::Closure(_name),
+            args_count: _,
+        } => unreachable!("closure tags are for internal use only"),
 
         Record => alloc.concat(vec![this_is, alloc.text(" a record of type:")]),
 
@@ -950,12 +964,15 @@ fn add_category<'b>(
                 op
             );
         }
+        ForeignCall => {
+            panic!("Compiler bug: invalid return type from foreign call",);
+        }
 
         Uniqueness => alloc.concat(vec![
             this_is,
             alloc.text(" an uniqueness attribute of type:"),
         ]),
-        Storage => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
+        Storage(_file, _line) => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
 
         DefaultValue(_) => alloc.concat(vec![this_is, alloc.text(" a default field of type:")]),
     }
@@ -1607,8 +1624,8 @@ fn to_diff<'b>(
                 _ => false,
             };
             let is_float = |t: &ErrorType| match t {
-                ErrorType::Type(Symbol::NUM_FLOAT, _) => true,
-                ErrorType::Alias(Symbol::NUM_FLOAT, _, _) => true,
+                ErrorType::Type(Symbol::NUM_F64, _) => true,
+                ErrorType::Alias(Symbol::NUM_F64, _, _) => true,
 
                 _ => false,
             };

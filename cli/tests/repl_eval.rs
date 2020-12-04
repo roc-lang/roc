@@ -64,12 +64,12 @@ mod repl_eval {
 
     #[test]
     fn literal_0point0() {
-        expect_success("0.0", "0 : Float");
+        expect_success("0.0", "0 : F64");
     }
 
     #[test]
     fn literal_4point2() {
-        expect_success("4.2", "4.2 : Float");
+        expect_success("4.2", "4.2 : F64");
     }
 
     #[test]
@@ -84,7 +84,86 @@ mod repl_eval {
 
     #[test]
     fn float_addition() {
-        expect_success("1.1 + 2", "3.1 : Float");
+        expect_success("1.1 + 2", "3.1 : F64");
+    }
+
+    #[test]
+    fn num_rem() {
+        expect_success("299 % 10", "Ok 9 : Result Int [ DivByZero ]*");
+    }
+
+    #[test]
+    fn bool_in_record() {
+        expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
+        expect_success(
+            "{ z: { y: { x: 1 == 1 } } }",
+            "{ z: { y: { x: True } } } : { z : { y : { x : Bool } } }",
+        );
+        expect_success("{ x: 1 != 1 }", "{ x: False } : { x : Bool }");
+        expect_success(
+            "{ x: 1 == 1, y: 1 != 1 }",
+            "{ x: True, y: False } : { x : Bool, y : Bool }",
+        );
+    }
+
+    #[test]
+    fn bool_basic_equality() {
+        expect_success("1 == 1", "True : Bool");
+        expect_success("1 != 1", "False : Bool");
+    }
+
+    #[test]
+    fn arbitrary_tag_unions() {
+        expect_success("if 1 == 1 then Red else Green", "Red : [ Green, Red ]*");
+        expect_success("if 1 != 1 then Red else Green", "Green : [ Green, Red ]*");
+    }
+
+    #[test]
+    fn tag_without_arguments() {
+        expect_success("True", "True : [ True ]*");
+        expect_success("False", "False : [ False ]*");
+    }
+
+    #[test]
+    fn byte_tag_union() {
+        expect_success(
+            "if 1 == 1 then Red else if 1 == 1 then Green else Blue",
+            "Red : [ Blue, Green, Red ]*",
+        );
+
+        expect_success(
+            "{ y: { x: if 1 == 1 then Red else if 1 == 1 then Green else Blue } }",
+            "{ y: { x: Red } } : { y : { x : [ Blue, Green, Red ]* } }",
+        );
+    }
+
+    #[test]
+    fn tag_in_record() {
+        expect_success(
+            "{ x: Foo 1 2 3, y : 4 }",
+            "{ x: Foo 1 2 3, y: 4 } : { x : [ Foo (Num *) (Num *) (Num *) ]*, y : Num * }",
+        );
+        expect_success(
+            "{ x: Foo 1 2 3 }",
+            "{ x: Foo 1 2 3 } : { x : [ Foo (Num *) (Num *) (Num *) ]* }",
+        );
+        expect_success("{ x: Unit }", "{ x: Unit } : { x : [ Unit ]* }");
+    }
+
+    #[test]
+    fn single_element_tag_union() {
+        expect_success("True 1", "True 1 : [ True (Num *) ]*");
+        expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) F64 ]*");
+    }
+
+    #[test]
+    fn tag_with_arguments() {
+        expect_success("True 1", "True 1 : [ True (Num *) ]*");
+
+        expect_success(
+            "if 1 == 1 then True 3 else False 3.14",
+            "True 3 : [ False F64, True (Num *) ]*",
+        )
     }
 
     #[test]
@@ -111,6 +190,11 @@ mod repl_eval {
     }
 
     #[test]
+    fn str_count_graphemes() {
+        expect_success("Str.countGraphemes \"å🤔\"", "2 : Int");
+    }
+
+    #[test]
     fn literal_empty_list() {
         expect_success("[]", "[] : List *");
     }
@@ -127,7 +211,7 @@ mod repl_eval {
 
     #[test]
     fn literal_float_list() {
-        expect_success("[ 1.1, 2.2, 3.3 ]", "[ 1.1, 2.2, 3.3 ] : List Float");
+        expect_success("[ 1.1, 2.2, 3.3 ]", "[ 1.1, 2.2, 3.3 ] : List F64");
     }
 
     #[test]
@@ -163,7 +247,7 @@ mod repl_eval {
     fn nested_float_list() {
         expect_success(
             r#"[ [ [ 4, 3, 2 ], [ 1, 0.0 ] ], [ [] ], [] ]"#,
-            r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List Float))"#,
+            r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List F64))"#,
         );
     }
 
@@ -171,8 +255,27 @@ mod repl_eval {
     fn list_concat() {
         expect_success(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
-            "[ 1.1, 2.2, 3.3, 4.4, 5.5 ] : List Float",
+            "[ 1.1, 2.2, 3.3, 4.4, 5.5 ] : List F64",
         );
+    }
+
+    #[test]
+    fn list_contains() {
+        expect_success("List.contains [] 0", "False : Bool");
+        expect_success("List.contains [ 1, 2, 3 ] 2", "True : Bool");
+        expect_success("List.contains [ 1, 2, 3 ] 4", "False : Bool");
+    }
+
+    #[test]
+    fn list_sum() {
+        expect_success("List.sum []", "0 : Num *");
+        expect_success("List.sum [ 1, 2, 3 ]", "6 : Num *");
+        expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : F64");
+    }
+
+    #[test]
+    fn empty_record() {
+        expect_success("{}", "{} : {}");
     }
 
     #[test]
@@ -186,7 +289,7 @@ mod repl_eval {
     fn basic_1_field_f64_record() {
         // Even though this gets unwrapped at runtime, the repl should still
         // report it as a record
-        expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Float }");
+        expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : F64 }");
     }
 
     #[test]
@@ -205,7 +308,7 @@ mod repl_eval {
         // report it as a record
         expect_success(
             "{ foo: { bar: { baz: 4.2 } } }",
-            "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Float } } }",
+            "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : F64 } } }",
         );
     }
 
@@ -217,32 +320,29 @@ mod repl_eval {
         );
     }
 
-    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
-    // #[test]
-    // fn basic_2_field_f64_record() {
-    //     expect_success(
-    //         "{ foo: 4.1, bar: 2.3 }",
-    //         "{ bar: 2.3, foo: 4.1 } : { bar : Float, foo : Float }",
-    //     );
-    // }
+    #[test]
+    fn basic_2_field_f64_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2.3 }",
+            "{ bar: 2.3, foo: 4.1 } : { bar : F64, foo : F64 }",
+        );
+    }
 
-    // #[test]
-    // fn basic_2_field_mixed_record() {
-    //     expect_success(
-    //         "{ foo: 4.1, bar: 2 }",
-    //         "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
-    //     );
-    // }
+    #[test]
+    fn basic_2_field_mixed_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2 }",
+            "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : F64 }",
+        );
+    }
 
-    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
-    //
-    // #[test]
-    // fn basic_3_field_record() {
-    //     expect_success(
-    //         "{ foo: 4.1, bar: 2, baz: 0x5 }",
-    //         "{ foo: 4.1, bar: 2, baz: 0x5 } : { foo : Float, bar : Num *, baz : Int }",
-    //     );
-    // }
+    #[test]
+    fn basic_3_field_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2, baz: 0x5 }",
+            "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int, foo : F64 }",
+        );
+    }
 
     #[test]
     fn list_of_1_field_records() {
@@ -255,7 +355,7 @@ mod repl_eval {
     fn list_of_2_field_records() {
         expect_success(
             "[ { foo: 4.1, bar: 2 } ]",
-            "[ { bar: 2, foo: 4.1 } ] : List { bar : Num *, foo : Float }",
+            "[ { bar: 2, foo: 4.1 } ] : List { bar : Num *, foo : F64 }",
         );
     }
 
@@ -287,7 +387,7 @@ mod repl_eval {
     fn list_of_3_field_records() {
         expect_success(
             "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
-            "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : Int, foo : Float }",
+            "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : Int, foo : F64 }",
         );
     }
 

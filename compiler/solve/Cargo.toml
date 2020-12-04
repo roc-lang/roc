@@ -25,7 +25,7 @@ roc_solve = { path = "../solve" }
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"
-tempfile = "3.0.1"
+tempfile = "3.1.0"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 bumpalo = { version = "3.2", features = ["collections"] }

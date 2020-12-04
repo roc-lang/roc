@@ -1,7 +1,6 @@
-use crate::header::{ModuleName, PackageName};
+use crate::header::{AppHeader, ImportsEntry, InterfaceHeader, PlatformHeader, TypedIdent};
 use crate::ident::Ident;
 use bumpalo::collections::String;
-use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Region};
@@ -14,104 +13,10 @@ pub enum Module<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct InterfaceHeader<'a> {
-    pub name: Loc<ModuleName<'a>>,
-    pub exposes: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-
-    // Potential comments and newlines - these will typically all be empty.
-    pub after_interface_keyword: &'a [CommentOrNewline<'a>],
-    pub before_exposes: &'a [CommentOrNewline<'a>],
-    pub after_exposes: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch<'a> {
-    pub patterns: Vec<'a, Loc<Pattern<'a>>>,
+    pub patterns: &'a [Loc<Pattern<'a>>],
     pub value: Loc<Expr<'a>>,
     pub guard: Option<Loc<Expr<'a>>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AppHeader<'a> {
-    pub name: Loc<ModuleName<'a>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-
-    // Potential comments and newlines - these will typically all be empty.
-    pub after_app_keyword: &'a [CommentOrNewline<'a>],
-    pub before_provides: &'a [CommentOrNewline<'a>],
-    pub after_provides: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PlatformHeader<'a> {
-    pub name: Loc<PackageName<'a>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub requires: Vec<'a, Loc<ExposesEntry<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-    pub effects: Vec<'a, Loc<EffectsEntry<'a>>>,
-
-    // Potential comments and newlines - these will typically all be empty.
-    pub after_platform_keyword: &'a [CommentOrNewline<'a>],
-    pub before_provides: &'a [CommentOrNewline<'a>],
-    pub after_provides: &'a [CommentOrNewline<'a>],
-    pub before_requires: &'a [CommentOrNewline<'a>],
-    pub after_requires: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-    pub before_effects: &'a [CommentOrNewline<'a>],
-    pub after_effects: &'a [CommentOrNewline<'a>],
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum EffectsEntry<'a> {
-    /// e.g.
-    ///
-    /// printLine : Str -> Effect {}
-    Effect {
-        ident: Loc<&'a str>,
-        ann: Loc<TypeAnnotation<'a>>,
-    },
-
-    // Spaces
-    SpaceBefore(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ExposesEntry<'a> {
-    /// e.g. `Task`
-    Ident(&'a str),
-
-    // Spaces
-    SpaceBefore(&'a ExposesEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a ExposesEntry<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ImportsEntry<'a> {
-    /// e.g. `Task` or `Task.{ Task, after }`
-    Module(ModuleName<'a>, Vec<'a, Loc<ExposesEntry<'a>>>),
-
-    // Spaces
-    SpaceBefore(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-impl<'a> ExposesEntry<'a> {
-    pub fn as_str(&'a self) -> &'a str {
-        use ExposesEntry::*;
-
-        match self {
-            Ident(string) => string,
-            SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => sub_entry.as_str(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,10 +93,12 @@ pub enum Expr<'a> {
     AccessorFunction(&'a str),
 
     // Collection Literals
-    List(Vec<'a, &'a Loc<Expr<'a>>>),
+    List(&'a [&'a Loc<Expr<'a>>]),
+
     Record {
         update: Option<&'a Loc<Expr<'a>>>,
-        fields: Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     // Lookups
@@ -205,14 +112,14 @@ pub enum Expr<'a> {
     PrivateTag(&'a str),
 
     // Pattern Matching
-    Closure(&'a Vec<'a, Loc<Pattern<'a>>>, &'a Loc<Expr<'a>>),
+    Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
-    Defs(Vec<'a, &'a Loc<Def<'a>>>, &'a Loc<Expr<'a>>),
+    Defs(&'a [&'a Loc<Def<'a>>], &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
-    Apply(&'a Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>, CalledVia),
+    Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
     BinOp(&'a (Loc<Expr<'a>>, Loc<BinOp>, Loc<Expr<'a>>)),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
@@ -226,7 +133,7 @@ pub enum Expr<'a> {
         /// Vec, because there may be many patterns, and the guard
         /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
-        Vec<'a, &'a WhenBranch<'a>>,
+        &'a [&'a WhenBranch<'a>],
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
@@ -269,6 +176,14 @@ pub enum Def<'a> {
     // No need to track that relationship in any data structure.
     Body(&'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
 
+    AnnotatedBody {
+        ann_pattern: &'a Loc<Pattern<'a>>,
+        ann_type: &'a Loc<TypeAnnotation<'a>>,
+        comment: Option<&'a str>,
+        body_pattern: &'a Loc<Pattern<'a>>,
+        body_expr: &'a Loc<Expr<'a>>,
+    },
+
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
@@ -277,6 +192,8 @@ pub enum Def<'a> {
     /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
     /// It lets us take a (&Def) and create a plain (Def) from it.
     Nested(&'a Def<'a>),
+
+    NotYetImplemented(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -302,6 +219,7 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// A tag union, e.g. `[
@@ -310,6 +228,7 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
         /// This is None if it's a closed tag union like `[ Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// The `*` type variable, e.g. in (List *)
@@ -365,11 +284,22 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
     DocComment(&'a str),
+}
+
+impl<'a> CommentOrNewline<'a> {
+    pub fn is_comment(&self) -> bool {
+        use CommentOrNewline::*;
+        match self {
+            Newline => false,
+            LineComment(_) => true,
+            DocComment(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -406,7 +336,7 @@ pub enum Pattern<'a> {
     },
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
-    Underscore,
+    Underscore(&'a str),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -523,7 +453,7 @@ impl<'a> Pattern<'a> {
             ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
             (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
-            (Underscore, Underscore) => true,
+            (Underscore(x), Underscore(y)) => x == y,
 
             // Space
             (SpaceBefore(x, _), SpaceBefore(y, _)) => x.equivalent(y),
@@ -600,15 +530,6 @@ impl<'a> Spaceable<'a> for TypeAnnotation<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for ExposesEntry<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ExposesEntry::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ExposesEntry::SpaceAfter(self, spaces)
-    }
-}
-
 impl<'a> Spaceable<'a> for ImportsEntry<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         ImportsEntry::SpaceBefore(self, spaces)
@@ -618,12 +539,12 @@ impl<'a> Spaceable<'a> for ImportsEntry<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for EffectsEntry<'a> {
+impl<'a> Spaceable<'a> for TypedIdent<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        EffectsEntry::SpaceBefore(self, spaces)
+        TypedIdent::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        EffectsEntry::SpaceAfter(self, spaces)
+        TypedIdent::SpaceAfter(self, spaces)
     }
 }
 
@@ -658,6 +579,7 @@ impl<'a> Spaceable<'a> for Def<'a> {
 /// "currently attempting to parse a list." This helps error messages!
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attempting {
+    LineComment,
     List,
     Keyword,
     StrLiteral,

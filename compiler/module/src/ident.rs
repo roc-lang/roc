@@ -23,6 +23,10 @@ pub struct Lowercase(InlinableString);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(InlinableString);
 
+/// A string representing a foreign (linked-in) symbol
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct ForeignSymbol(InlinableString);
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
     /// Global tags have no module, but tend to be short strings (since they're
@@ -37,6 +41,9 @@ pub enum TagName {
     /// Private tags are associated with a specific module, and as such use a
     /// Symbol just like all other module-specific identifiers.
     Private(Symbol),
+
+    /// Used to connect the closure size to the function it corresponds to
+    Closure(Symbol),
 }
 
 impl TagName {
@@ -44,6 +51,7 @@ impl TagName {
         match self {
             TagName::Global(uppercase) => uppercase.as_inline_str().clone(),
             TagName::Private(symbol) => symbol.fully_qualified(interns, home),
+            TagName::Closure(symbol) => symbol.fully_qualified(interns, home),
         }
     }
 }
@@ -51,6 +59,7 @@ impl TagName {
 impl ModuleName {
     // NOTE: After adding one of these, go to `impl ModuleId` and
     // add a corresponding ModuleId to there!
+    pub const APP: &'static str = ""; // app modules have no module name
     pub const BOOL: &'static str = "Bool";
     pub const STR: &'static str = "Str";
     pub const NUM: &'static str = "Num";
@@ -118,6 +127,28 @@ impl<'a> Into<&'a InlinableString> for &'a ModuleName {
 impl<'a> Into<Box<str>> for ModuleName {
     fn into(self) -> Box<str> {
         self.0.to_string().into()
+    }
+}
+
+impl ForeignSymbol {
+    pub fn as_str(&self) -> &str {
+        &*self.0
+    }
+
+    pub fn as_inline_str(&self) -> &InlinableString {
+        &self.0
+    }
+}
+
+impl<'a> From<&'a str> for ForeignSymbol {
+    fn from(string: &'a str) -> Self {
+        Self(string.into())
+    }
+}
+
+impl<'a> From<String> for ForeignSymbol {
+    fn from(string: String) -> Self {
+        Self(string.into())
     }
 }
 

@@ -1,4 +1,6 @@
 #[macro_use]
+extern crate indoc;
+#[macro_use]
 extern crate pretty_assertions;
 #[macro_use]
 extern crate maplit;
@@ -21,12 +23,94 @@ mod test_load {
     use roc_collections::all::MutMap;
     use roc_constrain::module::SubsByModule;
     use roc_load::file::LoadedModule;
+    use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
     use std::collections::HashMap;
 
     // HELPERS
+
+    fn multiple_modules(files: Vec<(&str, &str)>) -> LoadedModule {
+        multiple_modules_help(files).unwrap()
+    }
+
+    fn multiple_modules_help(mut files: Vec<(&str, &str)>) -> Result<LoadedModule, std::io::Error> {
+        use std::fs::File;
+        use std::io::Write;
+        use std::path::PathBuf;
+        use tempfile::tempdir;
+
+        let arena = Bump::new();
+        let arena = &arena;
+
+        let stdlib = roc_builtins::std::standard_stdlib();
+
+        let mut file_handles: Vec<_> = Vec::new();
+        let exposed_types = MutMap::default();
+        let loaded = {
+            // create a temporary directory
+            let dir = tempdir()?;
+
+            let app_module = files.pop().unwrap();
+            let interfaces = files;
+
+            debug_assert!(
+                app_module.1.starts_with("app"),
+                "The final module should be the application module"
+            );
+
+            for (name, source) in interfaces {
+                let mut filename = PathBuf::from(name);
+                filename.set_extension("roc");
+                let file_path = dir.path().join(filename.clone());
+                let mut file = File::create(file_path)?;
+                writeln!(file, "{}", source)?;
+                file_handles.push(file);
+            }
+
+            let result = {
+                let (name, source) = app_module;
+
+                let filename = PathBuf::from(name);
+                let file_path = dir.path().join(filename.clone());
+                let full_file_path = PathBuf::from(file_path.clone());
+                let mut file = File::create(file_path)?;
+                writeln!(file, "{}", source)?;
+                file_handles.push(file);
+
+                roc_load::file::load_and_typecheck(
+                    arena,
+                    full_file_path,
+                    stdlib,
+                    dir.path(),
+                    exposed_types,
+                )
+            };
+
+            dir.close()?;
+
+            result
+        };
+
+        let mut loaded_module = loaded.expect("failed to load module");
+
+        let home = loaded_module.module_id;
+
+        assert_eq!(
+            loaded_module.can_problems.remove(&home).unwrap_or_default(),
+            Vec::new()
+        );
+        assert_eq!(
+            loaded_module
+                .type_problems
+                .remove(&home)
+                .unwrap_or_default(),
+            Vec::new()
+        );
+
+        Ok(loaded_module)
+    }
 
     fn load_fixture(
         dir_name: &str,
@@ -43,10 +127,21 @@ mod test_load {
             src_dir.as_path(),
             subs_by_module,
         );
-        let loaded_module = loaded.expect("Test module failed to load");
+        let mut loaded_module = loaded.expect("Test module failed to load");
 
-        assert_eq!(loaded_module.can_problems, Vec::new());
-        assert_eq!(loaded_module.type_problems, Vec::new());
+        let home = loaded_module.module_id;
+
+        assert_eq!(
+            loaded_module.can_problems.remove(&home).unwrap_or_default(),
+            Vec::new()
+        );
+        assert_eq!(
+            loaded_module
+                .type_problems
+                .remove(&home)
+                .unwrap_or_default(),
+            Vec::new()
+        );
 
         let expected_name = loaded_module
             .interns
@@ -54,7 +149,10 @@ mod test_load {
             .get_name(loaded_module.module_id)
             .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(expected_name, &InlinableString::from(module_name));
+        // App module names are hardcoded and not based on anything user-specified
+        if expected_name != ModuleName::APP {
+            assert_eq!(expected_name, &InlinableString::from(module_name));
+        }
 
         loaded_module
     }
@@ -87,8 +185,17 @@ mod test_load {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
 
-        assert_eq!(loaded_module.can_problems, Vec::new());
-        assert_eq!(loaded_module.type_problems, Vec::new());
+        assert_eq!(
+            loaded_module.can_problems.remove(&home).unwrap_or_default(),
+            Vec::new()
+        );
+        assert_eq!(
+            loaded_module
+                .type_problems
+                .remove(&home)
+                .unwrap_or_default(),
+            Vec::new()
+        );
 
         for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
             match decl {
@@ -127,6 +234,49 @@ mod test_load {
     // TESTS
 
     #[test]
+    fn import_transitive_alias() {
+        // this had a bug where NodeColor was HostExposed, and it's `actual_var` conflicted
+        // with variables in the importee
+        let modules = vec![
+            (
+                "RBTree",
+                indoc!(
+                    r#"
+                        interface RBTree exposes [ Dict, empty ] imports []
+
+                        # The color of a node. Leaves are considered Black.
+                        NodeColor : [ Red, Black ]
+
+                        Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+
+                        # Create an empty dictionary.
+                        empty : Dict k v
+                        empty =
+                            Empty
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                        app "test-app" 
+                            packages { blah: "./blah" } 
+                            imports [ RBTree ] 
+                            provides [ main ] to blah
+
+                        empty : RBTree.Dict Int Int
+                        empty = RBTree.empty
+
+                        main = empty
+                    "#
+                ),
+            ),
+        ];
+        multiple_modules(modules);
+    }
+
+    #[test]
     fn interface_with_deps() {
         let subs_by_module = MutMap::default();
         let src_dir = fixtures_dir().join("interface_with_deps");
@@ -141,9 +291,19 @@ mod test_load {
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");
+        let home = loaded_module.module_id;
 
-        assert_eq!(loaded_module.can_problems, Vec::new());
-        assert_eq!(loaded_module.type_problems, Vec::new());
+        assert_eq!(
+            loaded_module.can_problems.remove(&home).unwrap_or_default(),
+            Vec::new()
+        );
+        assert_eq!(
+            loaded_module
+                .type_problems
+                .remove(&home)
+                .unwrap_or_default(),
+            Vec::new()
+        );
 
         let def_count: usize = loaded_module
             .declarations_by_id
@@ -197,14 +357,14 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "Float",
-                "divisionFn" => "Float, Float -> Result Float [ DivByZero ]*",
-                "divisionTest" => "Result Float [ DivByZero ]*",
+                "floatTest" => "F64",
+                "divisionFn" => "F64, F64 -> Result F64 [ DivByZero ]*",
+                "divisionTest" => "Result F64 [ DivByZero ]*",
                 "intTest" => "Int",
-                "x" => "Float",
+                "x" => "F64",
                 "constantNum" => "Num *",
-                "divDep1ByDep2" => "Result Float [ DivByZero ]*",
-                "fromDep2" => "Float",
+                "divDep1ByDep2" => "Result F64 [ DivByZero ]*",
+                "fromDep2" => "F64",
             },
         );
     }
@@ -262,12 +422,12 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "findPath" => "{ costFunction : position, position -> Float, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
+                "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
                 "initialModel" => "position -> Model position",
                 "reconstructPath" => "Map position position, position -> List position",
                 "updateCost" => "position, position, Model position -> Model position",
-                "cheapestOpen" => "(position -> Float), Model position -> Result position [ KeyNotFound ]*",
-                "astar" => "(position, position -> Float), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
+                "cheapestOpen" => "(position -> F64), Model position -> Result position [ KeyNotFound ]*",
+                "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
             },
         );
     }
@@ -294,7 +454,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "Float",
+                "blah2" => "F64",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",
@@ -316,7 +476,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "Float",
+                "blah2" => "F64",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",

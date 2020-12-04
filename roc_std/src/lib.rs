@@ -2,12 +2,22 @@
 #![no_std]
 use core::fmt;
 
+pub mod alloca;
+
 // A list of C functions that are being imported
 extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
 }
 
 const REFCOUNT_1: usize = isize::MIN as usize;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RocOrder {
+    Eq = 0,
+    Gt = 1,
+    Lt = 2,
+}
 
 //#[macro_export]
 //macro_rules! roclist {
@@ -382,6 +392,12 @@ impl RocStr {
     }
 }
 
+impl From<&str> for RocStr {
+    fn from(str: &str) -> Self {
+        Self::from_slice(str.as_bytes())
+    }
+}
+
 impl fmt::Debug for RocStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
@@ -417,6 +433,69 @@ impl Drop for RocStr {
                     }
                 }
             }
+        }
+    }
+}
+
+#[allow(non_camel_case_types)]
+type c_char = u8;
+
+#[repr(u64)]
+pub enum RocCallResult<T> {
+    Success(T),
+    Failure(*mut c_char),
+}
+
+impl<T: Sized> Into<Result<T, &'static str>> for RocCallResult<T> {
+    fn into(self) -> Result<T, &'static str> {
+        use RocCallResult::*;
+
+        match self {
+            Success(value) => Ok(value),
+            Failure(failure) => Err({
+                let msg = unsafe {
+                    let mut null_byte_index = 0;
+                    loop {
+                        if *failure.offset(null_byte_index) == 0 {
+                            break;
+                        }
+                        null_byte_index += 1;
+                    }
+
+                    let bytes = core::slice::from_raw_parts(failure, null_byte_index as usize);
+
+                    core::str::from_utf8_unchecked(bytes)
+                };
+
+                msg
+            }),
+        }
+    }
+}
+
+impl<'a, T: Sized + Copy> Into<Result<T, &'a str>> for &'a RocCallResult<T> {
+    fn into(self) -> Result<T, &'a str> {
+        use RocCallResult::*;
+
+        match self {
+            Success(value) => Ok(*value),
+            Failure(failure) => Err({
+                let msg = unsafe {
+                    let mut null_byte_index = 0;
+                    loop {
+                        if *failure.offset(null_byte_index) == 0 {
+                            break;
+                        }
+                        null_byte_index += 1;
+                    }
+
+                    let bytes = core::slice::from_raw_parts(*failure, null_byte_index as usize);
+
+                    core::str::from_utf8_unchecked(bytes)
+                };
+
+                msg
+            }),
         }
     }
 }

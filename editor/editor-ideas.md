@@ -27,14 +27,17 @@ These are potentially inspirational resources for the editor's design.
 * [Sketch-n-Sketch: Interactive SVG Programming with Direct Manipulation](https://youtu.be/YuGVC8VqXz0) by [Ravi Chugh](http://people.cs.uchicago.edu/~rchugh/)
 * [Xi](https://xi-editor.io/) modern text editor with concurrent editing (related to [Druid](https://github.com/linebender/druid))
 * [Self](https://selflanguage.org/) programming language
+* [Primitive](https://primitive.io/) code exploration in Virtual Reality
 
 ### Debugging
 
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
 * [Algorithm visualization for javascript](https://algorithm-visualizer.org)
+* [godbolt.org Compiler Explorer](https://godbolt.org/)
 
 ### Structured Editing
 
+* [Greenfoot](https://www.youtube.com/watch?v=uUVA7nTh0XY)
 * [Deuce](http://ravichugh.github.io/sketch-n-sketch/) (videos on the right) by [Ravi Chugh](http://people.cs.uchicago.edu/~rchugh/) and others
 * [Fructure: A Structured Editing Engine in Racket](https://youtu.be/CnbVCNIh1NA) by Andrew Blinn
 * [Hazel: A Live FP Environment with Typed Holes](https://youtu.be/UkDSL0U9ndQ) by [Cyrus Omar](https://web.eecs.umich.edu/~comar/)
@@ -59,6 +62,16 @@ These are potentially inspirational resources for the editor's design.
 * Excel and Google Sheets
     * Not sure, maybe something they do well that we (code editors) could learn from
 
+
+## Machine Learning Ideas
+
+* Ability to record all changes to abstract syntax tree with user permission.
+    * I think it is possible to create powerful automatic error resolution by having a dataset available of ast's with a specific error and the subsequent transformation that fixed the error.
+    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
+    * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
+    * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
+
+
 ## General Thoughts/Ideas
 
 Thoughts and ideas possibly taken from above inspirations or separate.
@@ -68,6 +81,16 @@ Thoughts and ideas possibly taken from above inspirations or separate.
     * Makes sense for unit tests, keeps the test close to the source
     * Doesn't necessarily make sense for integration or e2e testing
     * Maybe easier to manually trigger a test related to exactly what code you're writing
+* Ability to generate unit tests for a selected function in context menu
+    * A table should appear to enter input and expected output pairs quickly 
+* Ability to show import connection within project visually
+    * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
+* Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.
+* Ability to inline statements contained in called functions into the callee function for debugging.
+    * The value of expressions can be shown at the end of the line like in the [Inventing on Principle talk](https://youtu.be/8QiPFmIMxFc?t=1181)
+    * This would give a clear overview of the execution and should make it easy to pinpoint the line where the bug originates.
+    * That specific line can then be right clicked to go to the actual function.
+    * Having to jump around between different functions and files is unnecessary and makes it difficult to see the forest through the trees.
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation

@@ -15,10 +15,19 @@ use std::ptr::null;
 
 const BUCKET_BYTES: usize = 4096;
 
+#[derive(Debug)]
 pub struct NodeId<T: Sized> {
     pub bucket_id: BucketId<T>,
     pub slot: BucketSlot<T>,
 }
+
+impl<T> Clone for NodeId<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for NodeId<T> {}
 
 impl<T: Sized> NodeId<T> {
     fn next_slot(&self) -> Self {
@@ -29,10 +38,35 @@ impl<T: Sized> NodeId<T> {
     }
 }
 
+impl<T> PartialEq for NodeId<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.bucket_id == other.bucket_id && self.slot == other.slot
+    }
+}
+
+impl<T> Eq for NodeId<T> {}
+
+#[derive(Debug)]
 pub struct BucketId<T: Sized> {
     value: u16,
     _phantom: PhantomData<T>,
 }
+
+impl<T> Clone for BucketId<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for BucketId<T> {}
+
+impl<T> PartialEq for BucketId<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<T> Eq for BucketId<T> {}
 
 impl<T: Sized> BucketId<T> {
     fn from_u16(value: u16) -> Self {
@@ -43,10 +77,27 @@ impl<T: Sized> BucketId<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct BucketSlot<T: Sized> {
     value: u8,
     _phantom: PhantomData<T>,
 }
+
+impl<T> Clone for BucketSlot<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for BucketSlot<T> {}
+
+impl<T> PartialEq for BucketSlot<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<T> Eq for BucketSlot<T> {}
 
 impl<T: Sized> BucketSlot<T> {
     fn from_u8(value: u8) -> Self {
@@ -72,13 +123,14 @@ pub struct Buckets {
 impl Buckets {
     // fn find_space_for(&mut self, nodes: u8) -> Result<BucketId<T>, ()> {}
 
-    pub fn add<T: Sized>(&mut self, node: T) -> Result<BucketId<T>, ()> {
+    pub fn add<T: Sized>(&mut self) -> Result<BucketId<T>, ()> {
         let num_buckets = self.buckets.len();
 
         if num_buckets <= u16::MAX as usize {
             let bucket_id = BucketId::from_u16(num_buckets as u16);
+            let bucket = Bucket::default();
 
-            self.buckets.push(Bucket::default());
+            self.buckets.push(bucket);
 
             Ok(bucket_id)
         } else {
@@ -87,10 +139,12 @@ impl Buckets {
     }
 
     fn get_unchecked<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> &'a T {
-        self.buckets
-            .get(node_id.bucket_id.value as usize)
-            .unwrap()
-            .get_unchecked(node_id.slot.value)
+        unsafe {
+            self.buckets
+                .get(node_id.bucket_id.value as usize)
+                .unwrap()
+                .get_unchecked(node_id.slot.value)
+        }
     }
 
     pub fn get<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> Option<&'a T> {
@@ -169,13 +223,13 @@ impl Bucket {
         // This is designed to be used exclusively with 16-byte nodes!
         debug_assert_eq!(size_of::<T>(), 16);
 
-        let slot_ptr = self.first_slot.offset(slot as isize);
+        let slot_ptr = self.first_slot.offset(slot as isize) as *mut T;
 
         *slot_ptr = node;
     }
 
     unsafe fn get_unchecked<'a, T>(&'a self, slot: u8) -> &'a T {
-        &*self.first_slot.offset(slot as isize)
+        &*(self.first_slot.offset(slot as isize) as *const T)
     }
 
     // A slot is available iff its bytes are all zeroes
@@ -210,7 +264,6 @@ impl Default for Bucket {
         Bucket {
             next_unused_slot: 0,
             first_slot,
-            _phantom: PhantomData::default(),
         }
     }
 }
@@ -229,6 +282,9 @@ impl Drop for Bucket {
     }
 }
 
+#[derive(Debug)]
+pub struct BucketStr;
+
 /// A non-empty list inside a bucket. It takes 4B of memory.
 ///
 /// This is internally represented as an array of at most 255 nodes, which
@@ -243,12 +299,13 @@ impl Drop for Bucket {
 /// need an EmptyList or EmptyWhen, since although those use BucketList
 /// to store their branches, having zero branches is syntactically invalid.
 /// Same with Call and Closure, since all functions must have 1+ arguments.
+#[derive(Debug)]
 pub struct BucketList<T: Sized> {
     first_node_id: NodeId<T>,
     first_segment_len: u8,
 }
 
-impl<T: Sized> BucketList<T> {
+impl<'a, T: 'a + Sized> BucketList<T> {
     /// If given a first_segment_len of 0, that means this is a BucketList
     /// consisting of 256+ nodes. The first 255 are stored in the usual
     /// array, and then there's one more nodeent at the end which continues
@@ -261,7 +318,7 @@ impl<T: Sized> BucketList<T> {
         }
     }
 
-    pub fn into_iter<'a>(self, buckets: &'a Buckets) -> impl Iterator<Item = &'a T> {
+    pub fn into_iter(self, buckets: &'a Buckets) -> impl Iterator<Item = &'a T> {
         self.into_bucket_list_iter(buckets)
     }
 
@@ -269,7 +326,7 @@ impl<T: Sized> BucketList<T> {
     /// of BucketListIter. We don't want that struct to be public, but we
     /// actually do want to have this separate function for code reuse
     /// in the iterator's next() method.
-    fn into_bucket_list_iter<'a>(self, buckets: &'a Buckets) -> BucketListIter<'a, T> {
+    fn into_bucket_list_iter(&self, buckets: &'a Buckets) -> BucketListIter<'a, T> {
         let first_segment_len = self.first_segment_len;
         let continues_with_cons = first_segment_len == 0;
         let len_remaining = if continues_with_cons {
@@ -295,7 +352,10 @@ struct BucketListIter<'a, T: Sized> {
     buckets: &'a Buckets,
 }
 
-impl<'a, T: Sized> Iterator for BucketListIter<'a, T> {
+impl<'a, T: Sized> Iterator for BucketListIter<'a, T>
+where
+    T: 'a,
+{
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -303,9 +363,9 @@ impl<'a, T: Sized> Iterator for BucketListIter<'a, T> {
             0 => match self.continues_with_cons {
                 // We're done! This is by far the most common case, so we put
                 // it first to avoid branch mispredictions.
-                False => None,
+                false => None,
                 // We need to continue with a Cons cell.
-                True => {
+                true => {
                     // Since we have continues_with_cons set, the next slot
                     // will definitely be occupied with a BucketList struct.
                     let node = self.buckets.get_unchecked(self.node_id.next_slot());

@@ -1,18 +1,28 @@
+{ }:
+
 let
+  splitSystem = builtins.split "-" builtins.currentSystem;
+  currentArch = builtins.elemAt splitSystem 0;
+  currentOS = builtins.elemAt splitSystem 2;
+in with {
   # Look here for information about how pin version of nixpkgs
   #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
-  pinnedPkgs = import (builtins.fetchGit {
-    name = "nixpkgs-20.03";
+  pkgs = import (builtins.fetchGit {
+    name = "nixpkgs-2020-11-24";
     url = "https://github.com/nixos/nixpkgs/";
-    ref = "refs/heads/release-20.03";
+    ref = "refs/heads/nixpkgs-unstable";
+    rev = "6625284c397b44bc9518a5a1567c1b5aae455c08";
   }) { };
 
-  # This allows overriding pkgs by passing `--arg pkgs ...`
-in { pkgs ? pinnedPkgs }:
+  isMacOS = currentOS == "darwin";
+  isLinux = currentOS == "linux";
+  isAarch64 = currentArch == "aarch64";
+};
+
+with (pkgs);
 
 let
-  isMacOS = builtins.currentSystem == "x86_64-darwin";
-  darwin-frameworks =
+  darwin-inputs =
     if isMacOS then
       with pkgs.darwin.apple_sdk.frameworks; [
         AppKit
@@ -25,22 +35,72 @@ let
       ]
     else
       [ ];
-  llvm = pkgs.llvm_10;
-  lld = pkgs.lld_10; # this should match llvm's version
-  inputs =
-    [
-      pkgs.rustup
-      pkgs.cargo
-      llvm
-      # libraries for llvm
-      pkgs.libffi
-      pkgs.libxml2
-      pkgs.zlib
-      # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
-      lld
-    ];
-in pkgs.mkShell {
-  buildInputs = inputs ++ darwin-frameworks;
-  LLVM_SYS_100_PREFIX = "${llvm}";
-}
+
+  linux-inputs =
+    if isLinux then
+      [
+        vulkan-headers
+        vulkan-loader
+        vulkan-tools
+        vulkan-validation-layers
+        xorg.libX11
+        xorg.libXcursor
+        xorg.libXrandr
+        xorg.libXi
+      ]
+    else
+      [ ];
+
+  nixos-env =
+    if isLinux && builtins.pathExists /etc/nixos/configuration.nix then
+      { XDG_DATA_DIRS = "/run/opengl-driver/share:$XDG_DATA_DIRS";
+      }
+    else
+      { };
+
+  llvmPkgs = pkgs.llvmPackages_10;
+  zig = import ./nix/zig.nix { inherit pkgs isMacOS isAarch64; };
+  inputs = [
+    # build libraries
+    rustc
+    cargo
+    clippy
+    rustfmt
+    cmake
+    git
+    python3
+    llvmPkgs.llvm
+    llvmPkgs.clang
+    valgrind
+    pkg-config
+    zig
+    # llb deps
+    libffi
+    libxml2
+    zlib
+    llvmPkgs.libcxx
+    llvmPkgs.libcxxabi
+    libunwind
+    # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
+    llvmPkgs.lld
+    # dev tools
+    rust-analyzer
+    # (import ./nix/zls.nix { inherit pkgs zig; })
+    ccls
+  ];
+
+in mkShell (nixos-env // {
+  buildInputs = inputs ++ darwin-inputs ++ linux-inputs;
+
+  # Additional Env vars
+  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
+  APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
+    ([ pkg-config llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-inputs);
+  LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:$APPEND_LIBRARY_PATH";
+
+  # Aliases don't work cross shell, so we do this
+  shellHook = ''
+    export PATH="$PATH:$PWD/nix/bin"
+  '';
+})
 
