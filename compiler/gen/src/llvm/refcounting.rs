@@ -2,7 +2,7 @@ use crate::llvm::build::{
     cast_basic_basic, cast_struct_struct, create_entry_block_alloca, set_name, Env, Scope,
     FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
 };
-use crate::llvm::build_list::list_len;
+use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
@@ -367,7 +367,6 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
         List(memory_mode, element_layout) => {
             let wrapper_struct = value.into_struct_value();
             if element_layout.contains_refcounted() {
-                use crate::llvm::build_list::{incrementing_elem_loop, load_list};
                 use inkwell::types::BasicType;
 
                 let ptr_type =
@@ -451,7 +450,6 @@ fn increment_refcount_builtin<'a, 'ctx, 'env>(
         List(memory_mode, element_layout) => {
             let wrapper_struct = value.into_struct_value();
             if element_layout.contains_refcounted() {
-                use crate::llvm::build_list::{incrementing_elem_loop, load_list};
                 use inkwell::types::BasicType;
 
                 let ptr_type =

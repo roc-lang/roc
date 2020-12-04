@@ -460,7 +460,7 @@ impl<'a> Layout<'a> {
 
     pub fn is_refcounted(&self) -> bool {
         match self {
-            Layout::Builtin(Builtin::List(_, _)) => true,
+            Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => true,
             Layout::Builtin(Builtin::Str) => true,
             Layout::RecursiveUnion(_) => true,
             Layout::RecursivePointer => true,
@@ -477,12 +477,12 @@ impl<'a> Layout<'a> {
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
             PhantomEmptyStruct => false,
-            Struct(fields) => fields.iter().any(|f| f.is_refcounted()),
+            Struct(fields) => fields.iter().any(|f| f.contains_refcounted()),
             Union(fields) => fields
                 .iter()
                 .map(|ls| ls.iter())
                 .flatten()
-                .any(|f| f.is_refcounted()),
+                .any(|f| f.contains_refcounted()),
             RecursiveUnion(_) => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
             FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
