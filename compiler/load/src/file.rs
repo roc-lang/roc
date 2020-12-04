@@ -830,6 +830,7 @@ enum BuildTask<'a> {
     },
     LoadPkgConfig {
         module_ids: Arc<Mutex<ModuleIds>>,
+        package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
         mode: Mode,
     },
@@ -1859,6 +1860,7 @@ fn load_pkg_config<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     module_ids: Arc<Mutex<ModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
 ) -> Result<Msg<'a>, LoadingProblem> {
@@ -2034,7 +2036,7 @@ fn parse_header<'a>(
                 header.imports.into_bump_slice(),
                 parse_state,
                 module_ids.clone(),
-                package_module_ids,
+                package_module_ids.clone(),
                 ident_ids_by_module.clone(),
                 module_timing,
             );
@@ -2054,6 +2056,7 @@ fn parse_header<'a>(
                         Some(Located {
                             value:
                                 PackageEntry::Entry {
+                                    shorthand,
                                     package_or_path:
                                         Located {
                                             value: package_or_path,
@@ -2076,6 +2079,7 @@ fn parse_header<'a>(
                                             arena,
                                             &pkg_config_dir,
                                             module_ids,
+                                            package_module_ids,
                                             ident_ids_by_module,
                                             mode,
                                         )?;
@@ -2099,29 +2103,8 @@ fn parse_header<'a>(
                 }
                 To::NewPackage(package_or_path) => match package_or_path {
                     PackageOrPath::Package(_, _) => panic!("TODO implement packages"),
-                    PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
-                        // check whether we can find a Pkg-Config.roc file
-                        let mut pkg_config_roc = pkg_config_dir.clone();
-                        pkg_config_roc.push(package);
-                        pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
-                        pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
-
-                        if pkg_config_roc.as_path().exists() {
-                            let load_pkg_config_msg = load_pkg_config(
-                                arena,
-                                &pkg_config_dir,
-                                module_ids,
-                                ident_ids_by_module,
-                                mode,
-                            )?;
-
-                            Ok((
-                                module_id,
-                                Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
-                            ))
-                        } else {
-                            Ok((module_id, app_module_header_msg))
-                        }
+                    PackageOrPath::Path(StrLiteral::PlainLine(_package)) => {
+                        Ok((module_id, app_module_header_msg))
                     }
                     PackageOrPath::Path(StrLiteral::Block(_)) => {
                         panic!("TODO implement block package path")
@@ -3220,9 +3203,17 @@ fn run_task<'a>(
         .map(|(_, msg)| msg),
         LoadPkgConfig {
             module_ids,
+            package_module_ids,
             ident_ids_by_module,
             mode,
-        } => load_pkg_config(arena, src_dir, module_ids, ident_ids_by_module, mode),
+        } => load_pkg_config(
+            arena,
+            src_dir,
+            module_ids,
+            package_module_ids,
+            ident_ids_by_module,
+            mode,
+        ),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
