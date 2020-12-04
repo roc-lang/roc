@@ -77,7 +77,7 @@ const RocStr = extern struct {
     }
 
     pub fn deinit(self: RocStr, allocator: *Allocator) void {
-        if (!self.isSmallStr()) {
+        if (!self.isSmallStr() and !self.isEmpty()) {
             const strBytesPtr: [*]u8 = self.bytesPtr orelse unreachable;
 
             const strBytes: []u8 = strBytesPtr[0..self.bytesCount];
