@@ -2569,6 +2569,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_fmt",
  "roc_gen",
  "roc_load",
  "roc_module",
