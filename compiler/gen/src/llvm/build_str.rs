@@ -215,7 +215,7 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
     )
 }
 
-/// Str.countGraphemes : Str -> Int
+/// Str.fromInt : Int -> Str
 pub fn str_from_int<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
