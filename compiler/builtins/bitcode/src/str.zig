@@ -226,12 +226,12 @@ const RocStr = extern struct {
 };
 
 // Str.numberOfBytes
-
 pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
 // Str.fromInt
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
 pub fn strFromIntC(int: i64) callconv(.C) RocStr {
     return strFromInt(std.heap.c_allocator, int);
 }
@@ -257,6 +257,10 @@ fn strFromIntHelp(allocator: *Allocator, comptime T: type, int: T) RocStr {
 }
 
 // Str.split
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
+pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
+    strSplitInPlace(std.heap.c_allocator, array, string, delimiter);
+}
 
 inline fn strSplitInPlace(allocator: *Allocator, array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     var ret_array_index: usize = 0;
@@ -303,10 +307,6 @@ inline fn strSplitInPlace(allocator: *Allocator, array: [*]RocStr, string: RocSt
     array[ret_array_index] = RocStr.init(allocator, str_bytes + slice_start_index, str_len - slice_start_index);
 }
 
-// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
-pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
-    strSplitInPlace(std.heap.c_allocator, array, string, delimiter);
-}
 
 test "strSplitInPlace: no delimiter" {
     // Str.split "abc" "!" == [ "abc" ]
@@ -571,7 +571,6 @@ test "countSegments: delimiter interspered" {
 
 // Str.countGraphemeClusters
 const grapheme = @import("helpers/grapheme.zig");
-
 pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     if (string.isEmpty()) {
         return 0;
@@ -665,7 +664,6 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
 }
 
 // Str.startsWith
-
 pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
@@ -710,7 +708,6 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
 }
 
 // Str.endsWith
-
 pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
@@ -767,36 +764,7 @@ test "endsWith: hello world ends with world" {
 }
 
 // Str.concat
-
-test "RocStr.concat: small concat small" {
-    const str1_len = 3;
-    var str1: [str1_len]u8 = "foo".*;
-    const str1_ptr: [*]u8 = &str1;
-    var roc_str1 = RocStr.init(testing.allocator, str1_ptr, str1_len);
-
-    const str2_len = 3;
-    var str2: [str2_len]u8 = "abc".*;
-    const str2_ptr: [*]u8 = &str2;
-    var roc_str2 = RocStr.init(testing.allocator, str2_ptr, str2_len);
-
-    const str3_len = 6;
-    var str3: [str3_len]u8 = "fooabc".*;
-    const str3_ptr: [*]u8 = &str3;
-    var roc_str3 = RocStr.init(testing.allocator, str3_ptr, str3_len);
-
-    defer {
-        roc_str1.deinit(testing.allocator);
-        roc_str2.deinit(testing.allocator);
-        roc_str3.deinit(testing.allocator);
-    }
-
-    const result = strConcat(testing.allocator, 8, InPlace.Clone, roc_str1, roc_str2);
-
-    defer result.deinit(testing.allocator);
-
-    expect(roc_str3.eq(result));
-}
-
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
 pub fn strConcatC(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
     return strConcat(std.heap.c_allocator, ptr_size, result_in_place, arg1, arg2);
 }
@@ -914,3 +882,33 @@ fn allocateStr(allocator: *Allocator, comptime T: type, in_place: InPlace, numbe
         .str_len = number_of_chars,
     };
 }
+
+test "RocStr.concat: small concat small" {
+    const str1_len = 3;
+    var str1: [str1_len]u8 = "foo".*;
+    const str1_ptr: [*]u8 = &str1;
+    var roc_str1 = RocStr.init(testing.allocator, str1_ptr, str1_len);
+
+    const str2_len = 3;
+    var str2: [str2_len]u8 = "abc".*;
+    const str2_ptr: [*]u8 = &str2;
+    var roc_str2 = RocStr.init(testing.allocator, str2_ptr, str2_len);
+
+    const str3_len = 6;
+    var str3: [str3_len]u8 = "fooabc".*;
+    const str3_ptr: [*]u8 = &str3;
+    var roc_str3 = RocStr.init(testing.allocator, str3_ptr, str3_len);
+
+    defer {
+        roc_str1.deinit(testing.allocator);
+        roc_str2.deinit(testing.allocator);
+        roc_str3.deinit(testing.allocator);
+    }
+
+    const result = strConcat(testing.allocator, 8, InPlace.Clone, roc_str1, roc_str2);
+
+    defer result.deinit(testing.allocator);
+
+    expect(roc_str3.eq(result));
+}
+
