@@ -45,7 +45,6 @@ fn main() {
             "cargo:rerun-if-changed={}",
             path.to_str().expect("Failed to convert path to str")
         );
-        ()
     })
     .unwrap();
 }
