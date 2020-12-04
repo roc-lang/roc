@@ -60,29 +60,6 @@ pub fn str_split<'a, 'ctx, 'env>(
     store_list(env, ret_list_ptr, segment_count)
 }
 
-/*
-fn cast_to_zig_str(
-    env: &Env<'a, 'ctx, 'env>,
-    str_as_struct: StructValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    // get the RocStr type defined by zig
-    let roc_str_type = env.module.get_struct_type("str.RocStr").unwrap();
-
-    // convert `{ *mut u8, i64 }` to `RocStr`
-    builder.build_bitcast(str_as_struct, roc_str_type, "convert_to_zig_rocstr");
-}
-
-fn cast_from_zig_str(
-    env: &Env<'a, 'ctx, 'env>,
-    str_as_struct: StructValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let ret_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
-
-    // convert `RocStr` to `{ *mut u8, i64 }`
-    builder.build_bitcast(str_as_struct, ret_type, "convert_from_zig_rocstr");
-}
-*/
-
 fn str_symbol_to_i128<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
