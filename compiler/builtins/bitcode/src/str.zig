@@ -320,16 +320,21 @@ test "strSplitInPlace: no delimiter" {
         str,
     };
 
+    defer {
+        for (array) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        for (expected) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        str.deinit(testing.allocator);
+        delimiter.deinit(testing.allocator);
+    }
+
     expectEqual(array.len, expected.len);
     expect(array[0].eq(expected[0]));
-
-    for (array) |rocStr| {
-        rocStr.deinit(testing.allocator);
-    }
-
-    for (expected) |rocStr| {
-        rocStr.deinit(testing.allocator);
-    }
 }
 
 test "strSplitInPlace: empty end" {
@@ -354,6 +359,19 @@ test "strSplitInPlace: empty end" {
     var expected = [3]RocStr{
         one, two, RocStr.empty(),
     };
+
+    defer {
+        for (array) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        for (expected) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        str.deinit(testing.allocator);
+        delimiter.deinit(testing.allocator);
+    }
 
     expectEqual(array.len, expected.len);
     expect(array[0].eq(expected[0]));
@@ -383,6 +401,19 @@ test "strSplitInPlace: delimiter on sides" {
         RocStr.empty(), ghi, RocStr.empty(),
     };
 
+    defer {
+        for (array) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        for (expected) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        str.deinit(testing.allocator);
+        delimiter.deinit(testing.allocator);
+    }
+
     expectEqual(array.len, expected.len);
     expect(array[0].eq(expected[0]));
     expect(array[1].eq(expected[1]));
@@ -410,6 +441,19 @@ test "strSplitInPlace: three pieces" {
     var expectedArray = [arrayLen]RocStr{
         a, b, c,
     };
+
+    defer {
+        for (array) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        for (expectedArray) |rocStr| {
+            rocStr.deinit(testing.allocator);
+        }
+
+        str.deinit(testing.allocator);
+        delimiter.deinit(testing.allocator);
+    }
 
     expectEqual(expectedArray.len, array.len);
     expect(array[0].eq(expectedArray[0]));
@@ -471,9 +515,17 @@ test "countSegments: long delimiter" {
     const delimiterArr = "delimiter";
     const delimiter = RocStr.init(testing.allocator, delimiterArr, delimiterArr.len);
 
+    defer {
+        str.deinit(testing.allocator);
+        delimiter.deinit(testing.allocator);
+    }
+
     const segmentsCount = countSegments(str, delimiter);
 
     expectEqual(segmentsCount, 1);
+
+    str.deinit(testing.allocator);
+    delimiter.deinit(testing.allocator);
 }
 
 test "countSegments: delimiter at start" {
@@ -484,6 +536,11 @@ test "countSegments: delimiter at start" {
 
     const delimiterArr = "hello";
     const delimiter = RocStr.init(testing.allocator, delimiterArr, delimiterArr.len);
+
+    defer {
+        str.deinit(testing.allocator);
+        delimiter.deinit(testing.allocator);
+    }
 
     const segmentsCount = countSegments(str, delimiter);
 
@@ -498,6 +555,11 @@ test "countSegments: delimiter interspered" {
 
     const delimiterArr = "!";
     const delimiter = RocStr.init(testing.allocator, delimiterArr, delimiterArr.len);
+
+    defer {
+        str.deinit(testing.allocator);
+        delimiter.deinit(testing.allocator);
+    }
 
     const segmentsCount = countSegments(str, delimiter);
 
