@@ -797,8 +797,8 @@ test "RocStr.concat: small concat small" {
     expect(roc_str3.eq(result));
 }
 
-pub fn strConcatC(ptrSize: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
-    return strConcat(std.heap.c_allocator, ptrSize, result_in_place, arg1, arg2);
+pub fn strConcatC(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
+    return strConcat(std.heap.c_allocator, ptr_size, result_in_place, arg1, arg2);
 }
 
 inline fn strConcat(allocator: *Allocator, ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {

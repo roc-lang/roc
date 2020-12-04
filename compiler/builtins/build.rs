@@ -1,6 +1,8 @@
 use std::convert::AsRef;
 use std::env;
 use std::ffi::OsStr;
+use std::fs::{self};
+use std::io;
 use std::path::Path;
 use std::process::Command;
 use std::str;
@@ -11,65 +13,102 @@ fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
 
     // "." is relative to where "build.rs" is
-    let src_path = Path::new(".").join("bitcode").join("src");
-    let main_zig_path = src_path.join("main.zig");
+    let build_script_dir_path = Path::new(".");
 
-    let src_path_str = src_path.to_str().expect("Invalid src path");
-    println!("Building main.zig from: {}", src_path_str);
+    let bitcode_path = build_script_dir_path.join("bitcode");
 
-    let zig_cache_dir = Path::new(&out_dir).join("zig-cache");
-    let zig_cache_dir_str = zig_cache_dir.to_str().expect("Invalid zig cache dir");
-    println!("Setting zig cache to: {}", zig_cache_dir_str);
+    let src_path = bitcode_path.join("src");
 
-    let dest_ll_path = Path::new(&out_dir).join("builtins.ll");
-    let dest_ll = dest_ll_path.to_str().expect("Invalid dest ir path");
-    let emit_ir_arg = "-femit-llvm-ir=".to_owned() + dest_ll;
-    println!("Compiling zig llvm-ir to: {}", dest_ll);
+    let build_zig_path = bitcode_path.join("build.zig");
+    let build_zig = build_zig_path.to_str().expect("Invalid build path");
+
+    let dest_ir_path = build_script_dir_path.join("builtins.ll");
+    let dest_ir = dest_ir_path.to_str().expect("Invalid dest ir path");
+    println!("Compiling ir to: {}", dest_ir);
 
     run_command(
         "zig",
-        &[
-            "build-obj",
-            main_zig_path.to_str().unwrap(),
-            &emit_ir_arg,
-            "-fno-emit-bin",
-            "--strip",
-            "-O",
-            "ReleaseFast",
-            "--cache-dir",
-            zig_cache_dir_str,
-        ],
+        &["build", "ir", "-Drelease=true", "--build-file", build_zig],
     );
 
     let dest_bc_path = Path::new(&out_dir).join("builtins.bc");
     let dest_bc = dest_bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling bitcode to: {}", dest_bc);
 
-    run_command("llvm-as-10", &[dest_ll, "-o", dest_bc]);
+    run_command("llvm-as-10", &[dest_ir, "-o", dest_bc]);
 
-    // TODO: Recursivly search zig src dir to watch for each file
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", src_path_str);
     println!("cargo:rustc-env=BUILTINS_BC={}", dest_bc);
+    get_zig_files(src_path.as_path(), &|path| {
+        let path: &Path = path;
+        println!(
+            "cargo:rerun-if-changed={}",
+            path.to_str().expect("Failed to convert path to str")
+        );
+        ()
+    })
+    .unwrap();
 }
 
-fn run_command<S, I>(command: &str, args: I)
+fn run_command<S, I>(command_str: &str, args: I)
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output_result = Command::new(OsStr::new(&command)).args(args).output();
+    let output_result = Command::new(OsStr::new(&command_str)).args(args).output();
     match output_result {
         Ok(output) => match output.status.success() {
             true => (),
             false => {
                 let error_str = match str::from_utf8(&output.stderr) {
                     Ok(stderr) => stderr.to_string(),
-                    Err(_) => format!("Failed to run \"{}\"", command),
+                    Err(_) => format!("Failed to run \"{}\"", command_str),
                 };
-                panic!("{} failed: {}", command, error_str);
+                panic!("{} failed: {}", command_str, error_str);
             }
         },
-        Err(reason) => panic!("{} failed: {}", command, reason),
+        Err(reason) => panic!("{} failed: {}", command_str, reason),
     }
 }
+
+fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path_buf = entry.path();
+            if path_buf.is_dir() {
+                get_zig_files(&path_buf, cb).unwrap();
+            } else {
+                let path = path_buf.as_path();
+                let path_ext = path.extension().unwrap();
+                if path_ext == "zig" {
+                    cb(path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// fn get_zig_files(dir: &Path) -> io::Result<Vec<&Path>> {
+// let mut vec = Vec::new();
+// if dir.is_dir() {
+// for entry in fs::read_dir(dir)? {
+// let entry = entry?;
+// let path_buf = entry.path();
+// if path_buf.is_dir() {
+// match get_zig_files(&path_buf) {
+// Ok(sub_files) => vec = [vec, sub_files].concat(),
+// Err(_) => (),
+// };
+// } else {
+// let path = path_buf.as_path();
+// let path_ext = path.extension().unwrap();
+// if path_ext == "zig" {
+// vec.push(path.clone());
+// }
+// }
+// }
+// }
+// Ok(vec)
+// }
