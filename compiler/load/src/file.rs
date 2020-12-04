@@ -829,6 +829,7 @@ enum BuildTask<'a> {
         mode: Mode,
     },
     LoadPkgConfig {
+        shorthand: &'a str,
         module_ids: Arc<Mutex<ModuleIds>>,
         package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -1859,8 +1860,9 @@ fn finish<'a>(
 fn load_pkg_config<'a>(
     arena: &'a Bump,
     src_dir: &Path,
+    shorthand: &'a str,
     module_ids: Arc<Mutex<ModuleIds>>,
-    package_module_ids: Arc<Mutex<PackageModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
 ) -> Result<Msg<'a>, LoadingProblem> {
@@ -1906,7 +1908,9 @@ fn load_pkg_config<'a>(
                 }
                 Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
                     arena,
+                    shorthand,
                     module_ids,
+                    package_module_ids,
                     ident_ids_by_module,
                     mode,
                     header,
@@ -2078,6 +2082,7 @@ fn parse_header<'a>(
                                         let load_pkg_config_msg = load_pkg_config(
                                             arena,
                                             &pkg_config_dir,
+                                            shorthand,
                                             module_ids,
                                             package_module_ids,
                                             ident_ids_by_module,
@@ -2117,7 +2122,9 @@ fn parse_header<'a>(
         }
         Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
             arena,
+            &"",
             module_ids,
+            package_module_ids,
             ident_ids_by_module,
             mode,
             header,
@@ -2470,7 +2477,9 @@ fn run_solve<'a>(
 
 fn fabricate_effects_module<'a>(
     arena: &'a Bump,
+    shorthand: &'a str,
     module_ids: Arc<Mutex<ModuleIds>>,
+    package_module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
     header: PlatformHeader<'a>,
@@ -2495,6 +2504,17 @@ fn fabricate_effects_module<'a>(
 
         functions
     };
+
+    let mut package_module_ids = (*package_module_ids).lock();
+
+    for exposed in header.exposes {
+        match exposed.value {
+            ExposesEntry::Exposed(module_name) => {
+                package_module_ids.get_or_insert(&(shorthand, module_name.into()));
+            }
+            _ => {}
+        }
+    }
 
     let exposed_ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
@@ -3202,6 +3222,7 @@ fn run_task<'a>(
         )
         .map(|(_, msg)| msg),
         LoadPkgConfig {
+            shorthand,
             module_ids,
             package_module_ids,
             ident_ids_by_module,
@@ -3209,6 +3230,7 @@ fn run_task<'a>(
         } => load_pkg_config(
             arena,
             src_dir,
+            shorthand,
             module_ids,
             package_module_ids,
             ident_ids_by_module,
