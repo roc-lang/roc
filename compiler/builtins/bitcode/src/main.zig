@@ -26,14 +26,14 @@ comptime {
 }
 
 // Export helpers - Must be run inside a comptime
-fn exportBuiltinFn(comptime func: anytype, comptime funcName: []const u8) void {
-    @export(func, .{ .name = "roc_builtins." ++ funcName, .linkage = .Strong });
+fn exportBuiltinFn(comptime func: anytype, comptime func_name: []const u8) void {
+    @export(func, .{ .name = "roc_builtins." ++ func_name, .linkage = .Strong });
 }
-fn exportNumFn(comptime func: anytype, comptime funcName: []const u8) void {
-    exportBuiltinFn(func, "num." ++ funcName);
+fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "num." ++ func_name);
 }
-fn exportStrFn(comptime func: anytype, comptime funcName: []const u8) void {
-    exportBuiltinFn(func, "str." ++ funcName);
+fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "str." ++ func_name);
 }
 
 // Run all tests in imported modules
