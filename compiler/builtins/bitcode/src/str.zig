@@ -801,7 +801,7 @@ fn allocateStr(comptime T: type, inPlace: InPlace, numberOfChars: u64) RocStr {
     }
 
     var firstElement = @ptrCast([*]align(@alignOf(T)) u8, newBytes);
-    firstElement += 8;
+    firstElement += @sizeOf(usize);
 
     return RocStr{
         .bytesPtr = firstElement,
