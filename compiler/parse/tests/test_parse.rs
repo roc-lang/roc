@@ -815,6 +815,71 @@ mod test_parse {
     }
 
     #[test]
+    fn var_when() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "whenever",
+        };
+        let actual = parse_expr_with(&arena, "whenever");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_is() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "isnt",
+        };
+        let actual = parse_expr_with(&arena, "isnt");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_if() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "iffy",
+        };
+        let actual = parse_expr_with(&arena, "iffy");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_then() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "thenever",
+        };
+        let actual = parse_expr_with(&arena, "thenever");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn var_else() {
+        // Regression test for identifiers beginning with keywords (if/then/else/when/is)
+        let arena = Bump::new();
+        let expected = Var {
+            module_name: "",
+            ident: "elsewhere",
+        };
+        let actual = parse_expr_with(&arena, "elsewhere");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn parenthetical_var() {
         let arena = Bump::new();
         let expected = ParensAround(arena.alloc(Var {
@@ -1505,6 +1570,32 @@ mod test_parse {
                 x=5
 
                 42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn if_def() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(0, 0, 0, 4, Identifier("iffy"))),
+            arena.alloc(Located::new(0, 0, 5, 6, Num("5"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(0, 0, 0, 6, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(2, 2, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                    iffy=5
+
+                    42
                 "#
             ),
             expected,
@@ -2571,6 +2662,41 @@ mod test_parse {
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn repro_keyword_bug() {
+        // Reproducing this bug requires a bizarre set of things to all be true:
+        //
+        // * Must be parsing a *module* def (nested expr defs don't repro this)
+        // * That top-level module def conatins a def inside it
+        // * That inner def is defining a function
+        // * The name of the inner def begins with a keyword (`if`, `then`, `else`, `when`, `is`)
+        //
+        // If all of these are true, then lookups on that def get skipped over by the parser.
+        // If any one of the above is false, then everything works.
+
+        let arena = Bump::new();
+        let src = indoc!(
+            r#"
+                foo = \list ->
+                    isTest = \_ -> 5
+                    List.map list isTest
+            "#
+        );
+        let actual = module_defs()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        // It should occur twice in the debug output - once for the pattern,
+        // and then again for the lookup.
+        let occurrences = format!("{:?}", actual)
+            .split("isTest")
+            .collect::<std::vec::Vec<_>>()
+            .len()
+            - 1;
+
+        assert_eq!(occurrences, 2);
     }
 
     #[test]

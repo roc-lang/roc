@@ -38,7 +38,7 @@ pub fn build(b: *Builder) void {
     const ir_to_bitcode = b.addSystemCommand(&[_][]const u8{
         "llvm-as-10",
         ir_out_file,
-        bitcode_path_arg
+        bitcode_path_arg,
     });
 
     const bicode = b.step("bc", "Build LLVM ir and convert to bitcode");

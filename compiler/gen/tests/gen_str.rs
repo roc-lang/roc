@@ -434,6 +434,13 @@ mod gen_str {
     }
 
     #[test]
+    fn str_ends_with() {
+        assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
+        assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
+        assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
+    }
+
+    #[test]
     fn str_count_graphemes_small_str() {
         assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
     }
@@ -482,5 +489,30 @@ mod gen_str {
     #[test]
     fn str_starts_with_false_small_str() {
         assert_evals_to!(r#"Str.startsWith "1234" "23""#, false, bool);
+    }
+
+    #[test]
+    fn str_from_int() {
+        assert_evals_to!(
+            r#"Str.fromInt 1234"#,
+            roc_std::RocStr::from_slice("1234".as_bytes()),
+            roc_std::RocStr
+        );
+        assert_evals_to!(
+            r#"Str.fromInt 0"#,
+            roc_std::RocStr::from_slice("0".as_bytes()),
+            roc_std::RocStr
+        );
+        assert_evals_to!(
+            r#"Str.fromInt -1"#,
+            roc_std::RocStr::from_slice("-1".as_bytes()),
+            roc_std::RocStr
+        );
+
+        let max = format!("{}", i64::MAX);
+        assert_evals_to!(r#"Str.fromInt Num.maxInt"#, &max, &'static str);
+
+        let min = format!("{}", i64::MIN);
+        assert_evals_to!(r#"Str.fromInt Num.minInt"#, &min, &'static str);
     }
 }

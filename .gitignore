@@ -1,4 +1,5 @@
 target
+zig-cache
 .direnv
 *.rs.bk
 
@@ -7,3 +8,4 @@ vgcore.*
 
 #editors
 .idea/
+

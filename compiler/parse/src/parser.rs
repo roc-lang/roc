@@ -777,24 +777,25 @@ macro_rules! skip_first {
             use $crate::parser::Fail;
 
             let original_attempting = state.attempting;
+            let original_state = state.clone();
 
             match $p1.parse(arena, state) {
                 Ok((_, state)) => match $p2.parse(arena, state) {
                     Ok((out2, state)) => Ok((out2, state)),
-                    Err((fail, state)) => Err((
+                    Err((fail, _)) => Err((
                         Fail {
                             attempting: original_attempting,
                             ..fail
                         },
-                        state,
+                        original_state,
                     )),
                 },
-                Err((fail, state)) => Err((
+                Err((fail, _)) => Err((
                     Fail {
                         attempting: original_attempting,
                         ..fail
                     },
-                    state,
+                    original_state,
                 )),
             }
         }
@@ -810,24 +811,25 @@ macro_rules! skip_second {
             use $crate::parser::Fail;
 
             let original_attempting = state.attempting;
+            let original_state = state.clone();
 
             match $p1.parse(arena, state) {
                 Ok((out1, state)) => match $p2.parse(arena, state) {
                     Ok((_, state)) => Ok((out1, state)),
-                    Err((fail, state)) => Err((
+                    Err((fail, _)) => Err((
                         Fail {
                             attempting: original_attempting,
                             ..fail
                         },
-                        state,
+                        original_state,
                     )),
                 },
-                Err((fail, state)) => Err((
+                Err((fail, _)) => Err((
                     Fail {
                         attempting: original_attempting,
                         ..fail
                     },
-                    state,
+                    original_state,
                 )),
             }
         }

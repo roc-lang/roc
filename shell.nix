@@ -15,36 +15,48 @@ in with {
   }) { };
 
   isMacOS = currentOS == "darwin";
+  isLinux = currentOS == "linux";
   isAarch64 = currentArch == "aarch64";
 };
 
 with (pkgs);
 
 let
-  darwin-frameworks = if isMacOS then
-    with pkgs.darwin.apple_sdk.frameworks; [
-      AppKit
-      CoreFoundation
-      CoreServices
-      CoreVideo
-      Foundation
-      Metal
-      Security
-    ]
-  else
-    [ ];
+  darwin-inputs =
+    if isMacOS then
+      with pkgs.darwin.apple_sdk.frameworks; [
+        AppKit
+        CoreFoundation
+        CoreServices
+        CoreVideo
+        Foundation
+        Metal
+        Security
+      ]
+    else
+      [ ];
 
-  linux-only = if !isMacOS then [
-    vulkan-headers
-    vulkan-loader
-    vulkan-tools
-    vulkan-validation-layers
-    xorg.libX11
-    xorg.libXcursor
-    xorg.libXrandr
-    xorg.libXi
-  ] else
-    [ ];
+  linux-inputs =
+    if isLinux then
+      [
+        vulkan-headers
+        vulkan-loader
+        vulkan-tools
+        vulkan-validation-layers
+        xorg.libX11
+        xorg.libXcursor
+        xorg.libXrandr
+        xorg.libXi
+      ]
+    else
+      [ ];
+
+  nixos-env =
+    if isLinux && builtins.pathExists /etc/nixos/configuration.nix then
+      { XDG_DATA_DIRS = "/run/opengl-driver/share:$XDG_DATA_DIRS";
+      }
+    else
+      { };
 
   llvmPkgs = pkgs.llvmPackages_10;
   zig = import ./nix/zig.nix { inherit pkgs isMacOS isAarch64; };
@@ -77,17 +89,18 @@ let
     ccls
   ];
 
-in mkShell {
-  buildInputs = inputs ++ darwin-frameworks ++ linux-only;
-  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
+in mkShell (nixos-env // {
+  buildInputs = inputs ++ darwin-inputs ++ linux-inputs;
 
+  # Additional Env vars
+  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
   APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
-    ([ pkg-config llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-only);
+    ([ pkg-config llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-inputs);
+  LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:$APPEND_LIBRARY_PATH";
 
   # Aliases don't work cross shell, so we do this
   shellHook = ''
-    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$APPEND_LIBRARY_PATH"
     export PATH="$PATH:$PWD/nix/bin"
   '';
-}
+})
 

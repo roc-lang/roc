@@ -62,6 +62,16 @@ These are potentially inspirational resources for the editor's design.
 * Excel and Google Sheets
     * Not sure, maybe something they do well that we (code editors) could learn from
 
+
+## Machine Learning Ideas
+
+* Ability to record all changes to abstract syntax tree with user permission.
+    * I think it is possible to create powerful automatic error resolution by having a dataset available of ast's with a specific error and the subsequent transformation that fixed the error.
+    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
+    * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
+    * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
+
+
 ## General Thoughts/Ideas
 
 Thoughts and ideas possibly taken from above inspirations or separate.
@@ -76,6 +86,11 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 * Ability to show import connection within project visually
     * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
 * Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.
+* Ability to inline statements contained in called functions into the callee function for debugging.
+    * The value of expressions can be shown at the end of the line like in the [Inventing on Principle talk](https://youtu.be/8QiPFmIMxFc?t=1181)
+    * This would give a clear overview of the execution and should make it easy to pinpoint the line where the bug originates.
+    * That specific line can then be right clicked to go to the actual function.
+    * Having to jump around between different functions and files is unnecessary and makes it difficult to see the forest through the trees.
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation

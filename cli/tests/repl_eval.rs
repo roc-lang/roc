@@ -88,6 +88,11 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_rem() {
+        expect_success("299 % 10", "Ok 9 : Result Int [ DivByZero ]*");
+    }
+
+    #[test]
     fn bool_in_record() {
         expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
         expect_success(

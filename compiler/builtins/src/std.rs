@@ -417,10 +417,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![str_type(), str_type()], Box::new(bool_type())),
     );
 
+    // endsWith : Str, Str -> Bool
+    add_type(
+        Symbol::STR_ENDS_WITH,
+        top_level_function(vec![str_type(), str_type()], Box::new(bool_type())),
+    );
+
     // countGraphemes : Str -> Int
     add_type(
         Symbol::STR_COUNT_GRAPHEMES,
         top_level_function(vec![str_type()], Box::new(int_type())),
+    );
+
+    // fromInt : Int -> Str
+    add_type(
+        Symbol::STR_FROM_INT,
+        top_level_function(vec![int_type()], Box::new(str_type())),
     );
 
     // List module
