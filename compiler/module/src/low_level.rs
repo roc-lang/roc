@@ -6,6 +6,7 @@ pub enum LowLevel {
     StrConcat,
     StrIsEmpty,
     StrStartsWith,
+    StrEndsWith,
     StrSplit,
     StrCountGraphemes,
     ListLen,

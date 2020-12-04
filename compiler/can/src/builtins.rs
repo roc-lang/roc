@@ -54,6 +54,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_SPLIT => str_split,
         Symbol::STR_IS_EMPTY => str_is_empty,
         Symbol::STR_STARTS_WITH => str_starts_with,
+        Symbol::STR_ENDS_WITH => str_ends_with,
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
@@ -976,6 +977,26 @@ fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let body = RunLowLevel {
         op: LowLevel::StrStartsWith,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        bool_var,
+    )
+}
+
+/// Str.endsWith : Str, Str -> Bool
+fn str_ends_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrEndsWith,
         args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
         ret_var: bool_var,
     };
