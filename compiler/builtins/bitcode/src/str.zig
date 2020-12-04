@@ -50,7 +50,7 @@ const RocStr = extern struct {
 
             return ret_small_str;
         } else {
-            var result = allocate_str(u64, InPlace.Clone, length);
+            var result = allocateStr(u64, InPlace.Clone, length);
 
             @memcpy(@ptrCast([*]u8, result.str_bytes), bytes, length);
 
@@ -102,8 +102,8 @@ const RocStr = extern struct {
 
         const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
         const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self.is_small_str() or self.is_empty()) self_u8_ptr else self_bytes_ptr orelse unreachable;
-        const other_bytes: [*]const u8 = if (other.is_small_str() or other.is_empty()) other_u8_ptr else other_bytes_ptr orelse unreachable;
+        const self_bytes: [*]const u8 = if (self.isSmallStr() or self.isEmpty()) self_u8_ptr else self_bytes_ptr orelse unreachable;
+        const other_bytes: [*]const u8 = if (other.isSmallStr() or other.isEmpty()) other_u8_ptr else other_bytes_ptr orelse unreachable;
 
         var index: usize = 0;
 
@@ -120,7 +120,7 @@ const RocStr = extern struct {
         return true;
     }
 
-    pub fn is_small_str(self: RocStr) bool {
+    pub fn isSmallStr(self: RocStr) bool {
         return @bitCast(isize, self.str_len) < 0;
     }
 
@@ -132,17 +132,17 @@ const RocStr = extern struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        return if (self.is_small_str()) small_len else big_len;
+        return if (self.isSmallStr()) small_len else big_len;
     }
 
-    pub fn is_empty(self: RocStr) bool {
+    pub fn isEmpty(self: RocStr) bool {
         return self.len() == 0;
     }
 
-    pub fn as_u8_ptr(self: RocStr) [*]u8 {
+    pub fn asU8ptr(self: RocStr) [*]u8 {
         const if_small = &@bitCast([16]u8, self);
         const if_big = @ptrCast([*]u8, self.str_bytes);
-        return if (self.is_small_str() or self.is_empty()) if_small else if_big;
+        return if (self.isSmallStr() or self.isEmpty()) if_small else if_big;
     }
 
     // Given a pointer to some bytes, write the first (len) bytes of this
@@ -160,7 +160,7 @@ const RocStr = extern struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        const src: [*]u8 = if (self.is_small_str()) small_src else big_src;
+        const src: [*]u8 = if (self.isSmallStr()) small_src else big_src;
 
         @memcpy(dest, src, len);
     }
@@ -254,10 +254,10 @@ pub fn strSplitInPlace(array: [*]RocStr, array_len: usize, string: RocStr, delim
     var sliceStart_index: usize = 0;
     var str_index: usize = 0;
 
-    const str_bytes = string.as_u8_ptr();
+    const str_bytes = string.asU8ptr();
     const str_len = string.len();
 
-    const delimiter_bytes_ptrs = delimiter.as_u8_ptr();
+    const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
 
     if (str_len > delimiter_len) {
@@ -415,10 +415,10 @@ test "strSplitInPlace: three pieces" {
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
 pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
-    const str_bytes = string.as_u8_ptr();
+    const str_bytes = string.asU8ptr();
     const str_len = string.len();
 
-    const delimiter_bytes_ptrs = delimiter.as_u8_ptr();
+    const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
 
     var count: usize = 1;
@@ -501,12 +501,12 @@ test "countSegments: delimiter interspered" {
 const grapheme = @import("helpers/grapheme.zig");
 
 pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
-    if (string.is_empty()) {
+    if (string.isEmpty()) {
         return 0;
     }
 
     const bytes_len = string.len();
-    const bytes_ptr = string.as_u8_ptr();
+    const bytes_ptr = string.asU8ptr();
 
     var bytes = bytes_ptr[0..bytes_len];
     var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
@@ -535,7 +535,7 @@ pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     return count;
 }
 
-fn roc_str_from_literal(bytes_arr: *const []u8) RocStr {}
+fn rocStrFromLiteral(bytes_arr: *const []u8) RocStr {}
 
 test "countGraphemeClusters: empty string" {
     const count = countGraphemeClusters(RocStr.empty());
@@ -581,10 +581,10 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
 
 pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
-    const bytes_ptr = string.as_u8_ptr();
+    const bytes_ptr = string.asU8ptr();
 
     const prefix_len = prefix.len();
-    const prefix_ptr = prefix.as_u8_ptr();
+    const prefix_ptr = prefix.asU8ptr();
 
     if (prefix_len > bytes_len) {
         return false;
@@ -623,10 +623,10 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
 
 pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
-    const bytes_ptr = string.as_u8_ptr();
+    const bytes_ptr = string.asU8ptr();
 
     const suffix_len = suffix.len();
-    const suffix_ptr = suffix.as_u8_ptr();
+    const suffix_ptr = suffix.asU8ptr();
 
     if (suffix_len > bytes_len) {
         return false;
@@ -705,9 +705,9 @@ pub fn strConcat(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: Ro
 }
 
 fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
-    if (arg1.is_empty()) {
+    if (arg1.isEmpty()) {
         return cloneStr(T, result_in_place, arg2);
-    } else if (arg2.is_empty()) {
+    } else if (arg2.isEmpty()) {
         return cloneStr(T, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();
@@ -716,12 +716,12 @@ fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2:
         const result_is_big = combined_length >= small_str_bytes;
 
         if (result_is_big) {
-            var result = allocate_str(T, result_in_place, combined_length);
+            var result = allocateStr(T, result_in_place, combined_length);
 
             {
                 const old_if_small = &@bitCast([16]u8, arg1);
                 const old_if_big = @ptrCast([*]u8, arg1.str_bytes);
-                const old_bytes = if (arg1.is_small_str()) old_if_small else old_if_big;
+                const old_bytes = if (arg1.isSmallStr()) old_if_small else old_if_big;
 
                 const new_bytes: [*]u8 = @ptrCast([*]u8, result.str_bytes);
 
@@ -731,7 +731,7 @@ fn strConcatHelp(comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2:
             {
                 const old_if_small = &@bitCast([16]u8, arg2);
                 const old_if_big = @ptrCast([*]u8, arg2.str_bytes);
-                const old_bytes = if (arg2.is_small_str()) old_if_small else old_if_big;
+                const old_bytes = if (arg2.isSmallStr()) old_if_small else old_if_big;
 
                 const new_bytes = @ptrCast([*]u8, result.str_bytes) + arg1.len();
 
@@ -776,11 +776,11 @@ const InPlace = packed enum(u8) {
 };
 
 fn cloneStr(comptime T: type, in_place: InPlace, str: RocStr) RocStr {
-    if (str.is_small_str() or str.is_empty()) {
+    if (str.isSmallStr() or str.isEmpty()) {
         // just return the bytes
         return str;
     } else {
-        var new_str = allocate_str(T, in_place, str.str_len);
+        var new_str = allocateStr(T, in_place, str.str_len);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
         var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
@@ -791,7 +791,7 @@ fn cloneStr(comptime T: type, in_place: InPlace, str: RocStr) RocStr {
     }
 }
 
-fn allocate_str(comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
+fn allocateStr(comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
     const length = @sizeOf(T) + number_of_chars;
     var new_bytes: [*]T = @ptrCast([*]T, @alignCast(@alignOf(T), malloc(length)));
 
