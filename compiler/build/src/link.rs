@@ -55,7 +55,12 @@ pub fn rebuild_host(host_input_path: &Path) {
         let output = Command::new("zig")
             .env_clear()
             .env("PATH", &env_path)
-            .args(&["build-obj", zig_host_src.to_str().unwrap()])
+            .args(&[
+                "--library",
+                "c",
+                "build-obj",
+                zig_host_src.to_str().unwrap(),
+            ])
             .output()
             .unwrap();
 
