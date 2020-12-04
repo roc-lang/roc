@@ -1,4 +1,3 @@
-use crate::file::ReadError::DoesntHaveRocExtension;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_fmt::def::fmt_def;
@@ -30,7 +29,7 @@ pub enum ReadError {
 impl<'a> File<'a> {
     pub fn read(path: &'a Path, arena: &'a Bump) -> Result<File<'a>, ReadError> {
         if path.extension() != Some(OsStr::new("roc")) {
-            return Err(DoesntHaveRocExtension);
+            return Err(ReadError::DoesntHaveRocExtension);
         }
 
         let bytes = fs::read(path).map_err(ReadError::Read)?;
