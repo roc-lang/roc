@@ -11,7 +11,6 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
 use crate::rect::Rect;
@@ -21,10 +20,9 @@ use std::io;
 use std::path::Path;
 use wgpu::util::DeviceExt;
 use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
-use winit::event::{ElementState, ModifiersState, VirtualKeyCode, Event};
 use winit::event;
+use winit::event::{ElementState, Event, ModifiersState, VirtualKeyCode};
 use winit::event_loop::ControlFlow;
-
 
 pub mod ast;
 mod rect;
@@ -104,7 +102,8 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let inconsolata =
         ab_glyph::FontArc::try_from_slice(include_bytes!("../Inconsolata-Regular.ttf"))?;
 
-    let mut glyph_brush = GlyphBrushBuilder::using_font(inconsolata).build(&gpu_device, render_format);
+    let mut glyph_brush =
+        GlyphBrushBuilder::using_font(inconsolata).build(&gpu_device, render_format);
 
     let is_animating = true;
     let mut text_state = String::new();
@@ -168,9 +167,10 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
             Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested { .. } => {
                 // Get a command encoder for the current frame
-                let mut encoder = gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Redraw"),
-                });
+                let mut encoder =
+                    gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Redraw"),
+                    });
 
                 // Get the next frame
                 let frame = swap_chain
@@ -178,13 +178,20 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next swap chain texture")
                     .output;
 
-                let rect_buffers =
-                    create_rect_buffers(&gpu_device);
+                let rect_buffers = create_rect_buffers(&gpu_device);
 
                 // Clear frame
                 clear_frame(&mut encoder, &frame, &rect_pipeline, &rect_buffers);
 
-                draw_text(&gpu_device, &mut staging_belt, &mut encoder, &frame, &size, &text_state, &mut glyph_brush);
+                draw_text(
+                    &gpu_device,
+                    &mut staging_belt,
+                    &mut encoder,
+                    &frame,
+                    &size,
+                    &text_state,
+                    &mut glyph_brush,
+                );
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
@@ -209,7 +216,7 @@ fn make_rect_pipeline(gpu_device: &wgpu::Device) -> wgpu::RenderPipeline {
     let rect_vs_module =
         gpu_device.create_shader_module(wgpu::include_spirv!("shaders/rect.vert.spv"));
     let rect_fs_module =
-    gpu_device.create_shader_module(wgpu::include_spirv!("shaders/rect.frag.spv"));
+        gpu_device.create_shader_module(wgpu::include_spirv!("shaders/rect.frag.spv"));
 
     let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -246,7 +253,7 @@ fn make_rect_pipeline(gpu_device: &wgpu::Device) -> wgpu::RenderPipeline {
 struct RectBuffers {
     rect_index_buffers: Vec<u16>,
     vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer
+    index_buffer: wgpu::Buffer,
 }
 
 fn create_rect_buffers(gpu_device: &wgpu::Device) -> RectBuffers {
@@ -286,14 +293,18 @@ fn create_rect_buffers(gpu_device: &wgpu::Device) -> RectBuffers {
         usage: wgpu::BufferUsage::INDEX,
     });
 
-    RectBuffers {rect_index_buffers, vertex_buffer, index_buffer}
+    RectBuffers {
+        rect_index_buffers,
+        vertex_buffer,
+        index_buffer,
+    }
 }
 
 fn clear_frame(
     encoder: &mut wgpu::CommandEncoder,
     frame: &wgpu::SwapChainTexture,
     rect_pipeline: &wgpu::RenderPipeline,
-    rect_buffers: &RectBuffers
+    rect_buffers: &RectBuffers,
 ) {
     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
@@ -315,18 +326,16 @@ fn clear_frame(
     render_pass.set_pipeline(rect_pipeline);
 
     render_pass.set_vertex_buffer(
-        0,                       // The buffer slot to use for this vertex buffer.
+        0,                                    // The buffer slot to use for this vertex buffer.
         rect_buffers.vertex_buffer.slice(..), // Use the entire buffer.
     );
 
-    render_pass.set_index_buffer(
-        rect_buffers.index_buffer.slice(..)
-    );
+    render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
 
     render_pass.draw_indexed(
         0..((rect_buffers.rect_index_buffers).len() as u32), // Draw all of the vertices from our test data.
-        0,                                       // Base Vertex
-        0..1,                                    // Instances
+        0,                                                   // Base Vertex
+        0..1,                                                // Instances
     );
 }
 
@@ -337,7 +346,8 @@ fn draw_text(
     frame: &wgpu::SwapChainTexture,
     size: &winit::dpi::PhysicalSize<u32>,
     text_state: &str,
-    glyph_brush: &mut wgpu_glyph::GlyphBrush<()>) {
+    glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
+) {
     glyph_brush.queue(Section {
         screen_position: (30.0, 30.0),
         bounds: (size.width as f32, size.height as f32),
@@ -376,9 +386,7 @@ fn update_text_state(text_state: &mut String, received_char: &char) {
             // but in macOS we get '\u{7f}'.
             text_state.pop();
         }
-        '\u{e000}'..='\u{f8ff}'
-        | '\u{f0000}'..='\u{ffffd}'
-        | '\u{100000}'..='\u{10fffd}' => {
+        '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
             // These are private use characters; ignore them.
             // See http://www.unicode.org/faq/private_use.html
         }
