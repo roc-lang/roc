@@ -5,4 +5,5 @@ interface Simple
     imports []
 
 v : Str
+
 v = "Value!"
