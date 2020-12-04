@@ -27,6 +27,7 @@ pub fn build(b: *Builder) void {
     const obj_name = "builtins";
     const obj = b.addObject(obj_name, main_path);
     obj.setBuildMode(mode);
+    obj.linkSystemLibrary("c");
     obj.strip = true;
     obj.emit_llvm_ir = true;
     obj.emit_bin = false;
