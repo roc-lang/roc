@@ -65,7 +65,7 @@ const RocStr = extern struct {
         if (length < roc_str_size) {
             return RocStr.empty();
         } else {
-            var new_bytes: []u8 = mem.dupe(allocator, u8, bytes_ptr[0..length]) catch unreachable;
+            var new_bytes: []T = allocator.alloc(u8, length) catch unreachable;
 
             var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
 
