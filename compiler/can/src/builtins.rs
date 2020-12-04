@@ -1031,7 +1031,7 @@ fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.countGraphemes : Str -> Int
+/// Str.fromInt : Int -> Str
 fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let str_var = var_store.fresh();
