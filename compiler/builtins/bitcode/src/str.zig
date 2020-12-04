@@ -614,35 +614,50 @@ test "countGraphemeClusters: empty string" {
 test "countGraphemeClusters: ascii characters" {
     const bytesArr = "abcd";
     const bytesLen = bytesArr.len;
-    const count = countGraphemeClusters(RocStr.init(testing.allocator, bytesArr, bytesLen));
+    const str = RocStr.init(testing.allocator, bytesArr, bytesLen);
+    defer str.deinit(testing.allocator);
+
+    const count = countGraphemeClusters(str);
     expectEqual(count, 4);
 }
 
 test "countGraphemeClusters: utf8 characters" {
     const bytesArr = "ãxā";
     const bytesLen = bytesArr.len;
-    const count = countGraphemeClusters(RocStr.init(testing.allocator, bytesArr, bytesLen));
+    const str = RocStr.init(testing.allocator, bytesArr, bytesLen);
+    defer str.deinit(testing.allocator);
+
+    const count = countGraphemeClusters(str);
     expectEqual(count, 3);
 }
 
 test "countGraphemeClusters: emojis" {
     const bytesArr = "🤔🤔🤔";
     const bytesLen = bytesArr.len;
-    const count = countGraphemeClusters(RocStr.init(testing.allocator, bytesArr, bytesLen));
+    const str = RocStr.init(testing.allocator, bytesArr, bytesLen);
+    defer str.deinit(testing.allocator);
+
+    const count = countGraphemeClusters(str);
     expectEqual(count, 3);
 }
 
 test "countGraphemeClusters: emojis and ut8 characters" {
     const bytesArr = "🤔å🤔¥🤔ç";
     const bytesLen = bytesArr.len;
-    const count = countGraphemeClusters(RocStr.init(testing.allocator, bytesArr, bytesLen));
+    const str = RocStr.init(testing.allocator, bytesArr, bytesLen);
+    defer str.deinit(testing.allocator);
+
+    const count = countGraphemeClusters(str);
     expectEqual(count, 6);
 }
 
 test "countGraphemeClusters: emojis, ut8, and ascii characters" {
     const bytesArr = "6🤔å🤔e¥🤔çpp";
     const bytesLen = bytesArr.len;
-    const count = countGraphemeClusters(RocStr.init(testing.allocator, bytesArr, bytesLen));
+    const str = RocStr.init(testing.allocator, bytesArr, bytesLen);
+    defer str.deinit(testing.allocator);
+
+    const count = countGraphemeClusters(str);
     expectEqual(count, 10);
 }
 
@@ -678,12 +693,15 @@ test "startsWith: foo starts with fo" {
 
 test "startsWith: 123456789123456789 starts with 123456789123456789" {
     const str = RocStr.init(testing.allocator, "123456789123456789", 18);
+    defer str.deinit(testing.allocator);
     expect(startsWith(str, str));
 }
 
 test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     const str = RocStr.init(testing.allocator, "12345678912345678910", 20);
+    defer str.deinit(testing.allocator);
     const prefix = RocStr.init(testing.allocator, "123456789123456789", 18);
+    defer prefix.deinit(testing.allocator);
 
     expect(startsWith(str, prefix));
 }
@@ -715,17 +733,23 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
 test "endsWith: foo ends with oo" {
     const foo = RocStr.init(testing.allocator, "foo", 3);
     const oo = RocStr.init(testing.allocator, "oo", 2);
+    defer foo.deinit(testing.allocator);
+    defer oo.deinit(testing.allocator);
+
     expect(endsWith(foo, oo));
 }
 
 test "endsWith: 123456789123456789 ends with 123456789123456789" {
     const str = RocStr.init(testing.allocator, "123456789123456789", 18);
+    defer str.deinit(testing.allocator);
     expect(endsWith(str, str));
 }
 
 test "endsWith: 12345678912345678910 ends with 345678912345678910" {
     const str = RocStr.init(testing.allocator, "12345678912345678910", 20);
     const suffix = RocStr.init(testing.allocator, "345678912345678910", 18);
+    defer str.deinit(testing.allocator);
+    defer suffix.deinit(testing.allocator);
 
     expect(endsWith(str, suffix));
 }
@@ -733,6 +757,8 @@ test "endsWith: 12345678912345678910 ends with 345678912345678910" {
 test "endsWith: hello world ends with world" {
     const str = RocStr.init(testing.allocator, "hello world", 11);
     const suffix = RocStr.init(testing.allocator, "world", 5);
+    defer str.deinit(testing.allocator);
+    defer suffix.deinit(testing.allocator);
 
     expect(endsWith(str, suffix));
 }
