@@ -108,7 +108,8 @@ const RocStr = extern struct {
         var index: usize = 0;
 
         // TODO rewrite this into a for loop
-        while (index < self.len()) {
+        const length = self.len();
+        while (index < length) {
             if (self_bytes[index] != other_bytes[index]) {
                 return false;
             }
@@ -220,7 +221,7 @@ const RocStr = extern struct {
 
 // Str.numberOfBytes
 
-pub fn strNumberOfBytes(string: RocStr) callconv(.C) u64 {
+pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
