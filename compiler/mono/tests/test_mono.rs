@@ -1851,7 +1851,6 @@ mod test_mono {
                     let Test.2 = S Test.9 Test.8;
                     let Test.5 = 1i64;
                     let Test.6 = Index 0 Test.2;
-                    dec Test.2;
                     let Test.7 = lowlevel Eq Test.5 Test.6;
                     if Test.7 then
                         let Test.3 = 0i64;
@@ -1903,15 +1902,12 @@ mod test_mono {
                         let Test.10 = lowlevel Eq Test.8 Test.9;
                         if Test.10 then
                             let Test.4 = Index 1 Test.2;
-                            dec Test.2;
                             let Test.3 = 1i64;
                             ret Test.3;
                         else
-                            dec Test.2;
                             let Test.5 = 0i64;
                             ret Test.5;
                     else
-                        dec Test.2;
                         let Test.6 = 0i64;
                         ret Test.6;
                 "#
