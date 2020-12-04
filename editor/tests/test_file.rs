@@ -24,13 +24,16 @@ mod test_file {
                 r#"
                     interface Simple
                         exposes [ 
-                        v
+                        v, x
                          ]
                         imports []
     
                     v : Str
                     
-                    v = "Value!""#
+                    v = "Value!"
+
+                    x : Int
+                    x = 4"#
             )
         );
     }

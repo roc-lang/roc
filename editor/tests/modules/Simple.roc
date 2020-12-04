@@ -1,6 +1,6 @@
 interface Simple
     exposes [
-    v
+    v, x
      ]
     imports       []
 
@@ -14,4 +14,13 @@ interface Simple
 
 v :      Str
 
+
+
+
+
 v = "Value!"
+
+
+
+x : Int
+x = 4
