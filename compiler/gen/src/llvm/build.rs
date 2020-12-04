@@ -4,7 +4,8 @@ use crate::llvm::build_list::{
     list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_len, str_split, str_starts_with, CHAR_LAYOUT,
+    str_concat, str_count_graphemes, str_ends_with, str_from_int, str_number_of_bytes, str_split,
+    str_starts_with, CHAR_LAYOUT,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -604,7 +605,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, literal),
-        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
+        RunLowLevel(op, symbols) => {
+            run_low_level(env, layout_ids, scope, parent, layout, *op, symbols)
+        }
 
         ForeignCall {
             foreign_symbol,
@@ -1165,12 +1168,10 @@ fn list_literal<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let len_u64 = elems.len() as u64;
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
 
     let ptr = {
-        let bytes_len = elem_bytes * len_u64;
         let len_type = env.ptr_int();
-        let len = len_type.const_int(bytes_len, false);
+        let len = len_type.const_int(len_u64, false);
 
         allocate_list(env, inplace, elem_layout, len)
 
@@ -2383,6 +2384,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 }
 
 #[derive(Copy, Clone)]
+#[repr(u8)]
 pub enum InPlace {
     InPlace,
     Clone,
@@ -2409,6 +2411,7 @@ pub static COLD_CALL_CONV: u32 = 9;
 
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
@@ -2424,15 +2427,25 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            str_concat(env, inplace, scope, parent, args[0], args[1])
+            str_concat(env, inplace, scope, args[0], args[1])
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            let inplace = get_inplace_from_layout(layout);
+            str_starts_with(env, scope, args[0], args[1])
+        }
+        StrEndsWith => {
+            // Str.startsWith : Str, Str -> Bool
+            debug_assert_eq!(args.len(), 2);
 
-            str_starts_with(env, inplace, scope, parent, args[0], args[1])
+            str_ends_with(env, scope, args[0], args[1])
+        }
+        StrFromInt => {
+            // Str.fromInt : Int -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            str_from_int(env, scope, args[0])
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
@@ -2440,14 +2453,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            str_split(env, scope, parent, inplace, args[0], args[1])
+            str_split(env, scope, inplace, args[0], args[1])
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let wrapper_ptr = ptr_from_symbol(scope, args[0]);
-            let len = str_len(env, parent, *wrapper_ptr);
+            let len = str_number_of_bytes(env, scope, args[0]);
             let is_zero = env.builder.build_int_compare(
                 IntPredicate::EQ,
                 len,
@@ -2460,7 +2472,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.countGraphemes : Str -> Int
             debug_assert_eq!(args.len(), 1);
 
-            str_count_graphemes(env, scope, parent, args[0])
+            str_count_graphemes(env, scope, args[0])
         }
         ListLen => {
             // List.len : List * -> Int
@@ -2522,7 +2534,16 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_map(env, inplace, parent, func, func_layout, list, list_layout)
+            list_map(
+                env,
+                layout_ids,
+                inplace,
+                parent,
+                func,
+                func_layout,
+                list,
+                list_layout,
+            )
         }
         ListKeepIf => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem

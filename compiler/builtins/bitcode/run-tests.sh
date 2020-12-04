@@ -1,6 +1,9 @@
 #!/bin/bash
 
-set -eux
+set -euxo pipefail
 
 # Test every zig
-find src/*.zig -type f -exec zig test {} \;
+find src/*.zig -type f -print0 | xargs -n 1 -0 zig test --library c
+
+# fmt every zig
+find src/*.zig -type f -print0 | xargs -n 1 -0 zig fmt --check

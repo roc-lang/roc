@@ -917,9 +917,13 @@ fn parse_def_signature<'a>(
 
 fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
     skip_first!(
-        // If this is a reserved keyword ("if", "then", "case, "when"), then
-        // it is not a function argument!
-        not(reserved_keyword()),
+        // If this is a reserved keyword ("if", "then", "case, "when"),
+        // followed by a blank space, then it is not a function argument!
+        //
+        // (The space is necessary because otherwise we'll get a false
+        // positive on function arguments beginning with keywords,
+        // e.g. `ifBlah` or `isSomething` will register as `if`/`is` keywords)
+        not(and!(reserved_keyword(), space1(min_indent))),
         // Don't parse operators, because they have a higher precedence than function application.
         // If we encounter one, we're done parsing function args!
         move |arena, state| loc_parse_function_arg(min_indent, arena, state)
