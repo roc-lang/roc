@@ -75,7 +75,7 @@ const RocStr = extern struct {
         }
     }
 
-    pub fn drop(self: RocStr) void {
+    pub fn deinit(self: RocStr) void {
         if (!self.isSmallStr()) {
             const bytesPtr: [*]u8 = self.bytesPtr orelse unreachable;
 
@@ -178,8 +178,8 @@ const RocStr = extern struct {
         // TODO: fix those tests
         // expect(rocStr1.eq(rocStr2));
 
-        rocStr1.drop();
-        rocStr2.drop();
+        rocStr1.deinit();
+        rocStr2.deinit();
     }
 
     test "RocStr.eq: not equal different length" {
@@ -195,8 +195,8 @@ const RocStr = extern struct {
 
         expect(!rocStr1.eq(rocStr2));
 
-        rocStr1.drop();
-        rocStr2.drop();
+        rocStr1.deinit();
+        rocStr2.deinit();
     }
 
     test "RocStr.eq: not equal same length" {
@@ -213,8 +213,8 @@ const RocStr = extern struct {
         // TODO: fix those tests
         // expect(!rocStr1.eq(rocStr2));
 
-        rocStr1.drop();
-        rocStr2.drop();
+        rocStr1.deinit();
+        rocStr2.deinit();
     }
 };
 
@@ -314,11 +314,11 @@ test "strSplitInPlace: no delimiter" {
     expect(array[0].eq(expected[0]));
 
     for (array) |rocStr| {
-        rocStr.drop();
+        rocStr.deinit();
     }
 
     for (expected) |rocStr| {
-        rocStr.drop();
+        rocStr.deinit();
     }
 }
 
@@ -689,10 +689,10 @@ test "RocStr.concat: small concat small" {
 
     expect(rocStr3.eq(result));
 
-    rocStr1.drop();
-    rocStr2.drop();
-    rocStr3.drop();
-    result.drop();
+    rocStr1.deinit();
+    rocStr2.deinit();
+    rocStr3.deinit();
+    result.deinit();
 }
 
 pub fn strConcat(ptrSize: u32, resultInPlace: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
