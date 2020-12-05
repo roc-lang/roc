@@ -1,6 +1,5 @@
 use crate::bucket::{BucketList, BucketStr, NodeId};
 use arraystring::{typenum::U14, ArrayString};
-use inlinable_string::InlinableString;
 use roc_can::def::Annotation;
 use roc_can::expr::{Field, Recursive};
 use roc_module::ident::Lowercase;

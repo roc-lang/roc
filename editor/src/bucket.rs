@@ -100,6 +100,7 @@ impl<T> PartialEq for BucketSlot<T> {
 impl<T> Eq for BucketSlot<T> {}
 
 impl<T: Sized> BucketSlot<T> {
+    #[allow(dead_code)]
     fn from_u8(value: u8) -> Self {
         BucketSlot {
             value,
@@ -155,6 +156,7 @@ impl Buckets {
 }
 
 struct Bucket {
+    #[allow(dead_code)]
     next_unused_slot: u16,
     first_slot: *mut [u8; 16],
 }
@@ -162,6 +164,7 @@ struct Bucket {
 impl Bucket {
     /// If there's room left in the bucket, adds the item and returns
     /// the slot where it was put. If there was no room left, returns Err(()).
+    #[allow(dead_code)]
     pub fn add<T: Sized>(&mut self, node: T) -> Result<BucketSlot<T>, ()> {
         // It's only safe to store this as a *const T if T is 16 bytes.
         // This is designed to be used exclusively with 16-byte nodes!
@@ -183,6 +186,7 @@ impl Bucket {
 
     /// If the given slot is available, inserts the given node into it.
     /// Otherwise, returns the node that was in the already-occupied slot.
+    #[allow(dead_code)]
     pub fn insert<T: Sized>(&mut self, node: T, slot: BucketSlot<T>) -> Result<(), &T> {
         // It's only safe to use this if T is 16 bytes.
         // This is designed to be used exclusively with 16-byte nodes!
