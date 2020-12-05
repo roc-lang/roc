@@ -10,7 +10,7 @@
 /// This is important for performance.
 use libc::{c_void, calloc, free, mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use std::marker::PhantomData;
-use std::mem::{self, size_of};
+use std::mem::size_of;
 use std::ptr::null;
 
 const BUCKET_BYTES: usize = 4096;
@@ -212,10 +212,10 @@ impl Bucket {
 
         unsafe {
             let slot_ptr = self.first_slot.offset(slot.value as isize) as *const T;
-            let value = &*slot_ptr;
+            let value: &[u8; 16] = &*(slot_ptr as *const [u8; 16]);
 
-            if *mem::transmute::<&T, &[u8; 16]>(value) != [0; 16] {
-                Some(value)
+            if *value != [0; 16] {
+                Some(&*(value as *const [u8; 16] as *const T))
             } else {
                 None
             }
@@ -232,7 +232,7 @@ impl Bucket {
         *slot_ptr = node;
     }
 
-    unsafe fn get_unchecked<'a, T>(&'a self, slot: u8) -> &'a T {
+    unsafe fn get_unchecked<T>(&self, slot: u8) -> &T {
         &*(self.first_slot.offset(slot as isize) as *const T)
     }
 
@@ -323,14 +323,14 @@ impl<'a, T: 'a + Sized> BucketList<T> {
     }
 
     pub fn into_iter(self, buckets: &'a Buckets) -> impl Iterator<Item = &'a T> {
-        self.into_bucket_list_iter(buckets)
+        self.bucket_list_iter(buckets)
     }
 
     /// Private version of into_iter which exposes the implementation detail
     /// of BucketListIter. We don't want that struct to be public, but we
     /// actually do want to have this separate function for code reuse
     /// in the iterator's next() method.
-    fn into_bucket_list_iter(&self, buckets: &'a Buckets) -> BucketListIter<'a, T> {
+    fn bucket_list_iter(&self, buckets: &'a Buckets) -> BucketListIter<'a, T> {
         let first_segment_len = self.first_segment_len;
         let continues_with_cons = first_segment_len == 0;
         let len_remaining = if continues_with_cons {
@@ -373,11 +373,11 @@ where
                     // Since we have continues_with_cons set, the next slot
                     // will definitely be occupied with a BucketList struct.
                     let node = self.buckets.get_unchecked(self.node_id.next_slot());
-                    let next_list = unsafe { mem::transmute::<&T, &BucketList<T>>(node) };
+                    let next_list = unsafe { &*(node as *const T as *const BucketList<T>) };
 
                     // Replace the current iterator with an iterator into that
                     // list, and then continue with next() on that iterator.
-                    let next_iter = next_list.into_bucket_list_iter(self.buckets);
+                    let next_iter = next_list.bucket_list_iter(self.buckets);
 
                     self.node_id = next_iter.node_id;
                     self.len_remaining = next_iter.len_remaining;
