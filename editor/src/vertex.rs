@@ -1,12 +1,12 @@
 // Taken from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
-use cgmath::Vector2;
+use cgmath::{Vector2, Vector3};
 
 #[derive(Copy, Clone)]
 pub struct Vertex {
     #[allow(dead_code)]
     pub position: Vector2<f32>,
-    pub color: [f32; 3],
+    pub color: Vector3<f32>,
 }
 
 unsafe impl bytemuck::Pod for Vertex {}
@@ -26,7 +26,7 @@ impl Vertex {
             },
             // color
             wgpu::VertexAttributeDescriptor {
-                offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                 shader_location: 1,
                 format: wgpu::VertexFormat::Float3,
             },

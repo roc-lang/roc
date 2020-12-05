@@ -3,6 +3,7 @@
 use crate::rect::Rect;
 use crate::util::size_of_slice;
 use crate::vertex::Vertex;
+use cgmath::Vector3;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
 pub struct QuadBufferBuilder {
@@ -27,7 +28,7 @@ impl QuadBufferBuilder {
             coords.y - rect.height,
             coords.x + rect.width,
             coords.y,
-            rect.color,
+            rect.color.into(),
         )
     }
 
@@ -37,7 +38,7 @@ impl QuadBufferBuilder {
         min_y: f32,
         max_x: f32,
         max_y: f32,
-        color: [f32; 3],
+        color: Vector3<f32>,
     ) -> Self {
         self.vertex_data.extend(&[
             Vertex {
@@ -75,6 +76,71 @@ impl QuadBufferBuilder {
             StagingBuffer::new(device, &self.index_data),
             self.index_data.len() as u32,
         )
+    }
+}
+
+pub struct RectBuffers {
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_rects: u32,
+}
+
+pub fn create_rect_buffers(
+    gpu_device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+) -> RectBuffers {
+    // Test Rectangles
+    let test_rect_1 = Rect {
+        top_left_coords: (-0.2, 0.6).into(),
+        width: 0.1,
+        height: 0.5,
+        color: [0.0, 0.0, 1.0],
+    };
+    let test_rect_2 = Rect {
+        top_left_coords: (-0.5, 0.0).into(),
+        width: 0.5,
+        height: 0.5,
+        color: [0.0, 1.0, 0.0],
+    };
+    let test_rect_3 = Rect {
+        top_left_coords: (0.3, 0.3).into(),
+        width: 0.6,
+        height: 0.1,
+        color: [1.0, 0.0, 0.0],
+    };
+
+    let vertex_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: Vertex::SIZE * 4 * 3,
+        usage: wgpu::BufferUsage::VERTEX | wgpu::BufferUsage::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let u32_size = std::mem::size_of::<u32>() as wgpu::BufferAddress;
+
+    let index_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u32_size * 6 * 3,
+        usage: wgpu::BufferUsage::INDEX | wgpu::BufferUsage::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let num_rects = {
+        let (stg_vertex, stg_index, num_indices) = QuadBufferBuilder::new()
+            .push_rect(&test_rect_1)
+            .push_rect(&test_rect_2)
+            .push_rect(&test_rect_3)
+            .build(&gpu_device);
+
+        stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
+        stg_index.copy_to_buffer(encoder, &index_buffer);
+        num_indices
+    };
+
+    RectBuffers {
+        vertex_buffer,
+        index_buffer,
+        num_rects,
     }
 }
 
