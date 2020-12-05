@@ -13,12 +13,17 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr::null;
 
-const BUCKET_BYTES: usize = 4096;
+pub const BUCKET_BYTES: usize = 4096;
 
 #[derive(Debug)]
 pub struct NodeId<T: Sized> {
     pub bucket_id: BucketId<T>,
     pub slot: BucketSlot<T>,
+}
+
+#[test]
+fn size_of_node_id() {
+    assert_eq!(std::mem::size_of::<NodeId<()>>(), 3);
 }
 
 impl<T> Clone for NodeId<T> {
@@ -52,6 +57,11 @@ pub struct BucketId<T: Sized> {
     _phantom: PhantomData<T>,
 }
 
+#[test]
+fn size_of_bucket_id() {
+    assert_eq!(std::mem::size_of::<BucketId<()>>(), 2);
+}
+
 impl<T> Clone for BucketId<T> {
     fn clone(&self) -> Self {
         *self
@@ -78,9 +88,15 @@ impl<T: Sized> BucketId<T> {
 }
 
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct BucketSlot<T: Sized> {
     value: u8,
     _phantom: PhantomData<T>,
+}
+
+#[test]
+fn size_of_bucket_slot() {
+    assert_eq!(std::mem::size_of::<BucketSlot<()>>(), 1);
 }
 
 impl<T> Clone for BucketSlot<T> {
@@ -287,7 +303,15 @@ impl Drop for Bucket {
 }
 
 #[derive(Debug)]
-pub struct BucketStr;
+pub struct BucketStr {
+    first_node_id: NodeId<()>,
+    first_segment_len: u8,
+}
+
+#[test]
+fn size_of_bucket_str() {
+    assert_eq!(std::mem::size_of::<BucketList<()>>(), 4);
+}
 
 /// A non-empty list inside a bucket. It takes 4B of memory.
 ///
@@ -307,6 +331,11 @@ pub struct BucketStr;
 pub struct BucketList<T: Sized> {
     first_node_id: NodeId<T>,
     first_segment_len: u8,
+}
+
+#[test]
+fn size_of_bucket_list() {
+    assert_eq!(std::mem::size_of::<BucketList<()>>(), 4);
 }
 
 impl<'a, T: 'a + Sized> BucketList<T> {

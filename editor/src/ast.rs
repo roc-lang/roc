@@ -310,7 +310,10 @@ type ExprBucketSlots = [Expr2; 256];
 
 #[test]
 fn size_of_expr_bucket() {
-    assert_eq!(std::mem::size_of::<ExprBucketSlots>(), 4096);
+    assert_eq!(
+        std::mem::size_of::<ExprBucketSlots>(),
+        crate::bucket::BUCKET_BYTES
+    );
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
