@@ -39,6 +39,7 @@ let
   linux-inputs =
     if isLinux then
       [
+        valgrind
         vulkan-headers
         vulkan-loader
         vulkan-tools
@@ -71,7 +72,6 @@ let
     python3
     llvmPkgs.llvm
     llvmPkgs.clang
-    valgrind
     pkg-config
     zig
     # llb deps

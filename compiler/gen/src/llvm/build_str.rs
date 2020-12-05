@@ -49,12 +49,7 @@ pub fn str_split<'a, 'ctx, 'env>(
 
     call_void_bitcode_fn(
         env,
-        &[
-            ret_list_ptr_zig_rocstr,
-            BasicValueEnum::IntValue(segment_count),
-            str_i128.into(),
-            delim_i128.into(),
-        ],
+        &[ret_list_ptr_zig_rocstr, str_i128.into(), delim_i128.into()],
         &bitcode::STR_STR_SPLIT_IN_PLACE,
     );
 
