@@ -15,14 +15,14 @@ comptime {
 // Str Module
 const str = @import("str.zig");
 comptime {
-    exportStrFn(str.strSplitInPlace, "str_split_in_place");
+    exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.endsWith, "ends_with");
-    exportStrFn(str.strConcat, "concat");
+    exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
-    exportStrFn(str.strFromInt, "from_int");
+    exportStrFn(str.strFromIntC, "from_int");
 }
 
 // Export helpers - Must be run inside a comptime

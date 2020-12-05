@@ -1,11 +1,11 @@
 #version 450
+// Taken from https://github.com/sotrh/learn-wgpu
+// by Benjamin Hansen, licensed under the MIT license
 
-// The fragment shader's "in" values come from the "out" values of the vertex shader.
 layout(location=0) in vec3 color;
 
-// The actual color that is rendered to the screen based on the vertex.
-layout(location=0) out vec4 f_color;
+layout(location=0) out vec4 fColor;
 
 void main() {
-    f_color = vec4(color, 1.0);
+    fColor = vec4(color, 1.0);
 }
