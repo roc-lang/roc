@@ -9,6 +9,7 @@ pub enum LowLevel {
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,
+    StrFromInt,
     ListLen,
     ListGetUnsafe,
     ListSet,

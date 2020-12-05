@@ -4,8 +4,8 @@ use crate::llvm::build_list::{
     list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_len, str_split, str_starts_with,
-    CHAR_LAYOUT,
+    str_concat, str_count_graphemes, str_ends_with, str_from_int, str_number_of_bytes, str_split,
+    str_starts_with, CHAR_LAYOUT,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -2427,23 +2427,25 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            str_concat(env, inplace, scope, parent, args[0], args[1])
+            str_concat(env, inplace, scope, args[0], args[1])
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            let inplace = get_inplace_from_layout(layout);
-
-            str_starts_with(env, inplace, scope, parent, args[0], args[1])
+            str_starts_with(env, scope, args[0], args[1])
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            let inplace = get_inplace_from_layout(layout);
+            str_ends_with(env, scope, args[0], args[1])
+        }
+        StrFromInt => {
+            // Str.fromInt : Int -> Str
+            debug_assert_eq!(args.len(), 1);
 
-            str_ends_with(env, inplace, scope, parent, args[0], args[1])
+            str_from_int(env, scope, args[0])
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
@@ -2451,13 +2453,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            str_split(env, scope, parent, inplace, args[0], args[1])
+            str_split(env, scope, inplace, args[0], args[1])
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let len = str_len(env, scope, args[0]);
+            let len = str_number_of_bytes(env, scope, args[0]);
             let is_zero = env.builder.build_int_compare(
                 IntPredicate::EQ,
                 len,
@@ -2470,7 +2472,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.countGraphemes : Str -> Int
             debug_assert_eq!(args.len(), 1);
 
-            str_count_graphemes(env, scope, parent, args[0])
+            str_count_graphemes(env, scope, args[0])
         }
         ListLen => {
             // List.len : List * -> Int

@@ -4,7 +4,7 @@ const expectEqual = std.testing.expectEqual;
 
 // This whole module is a translation of grapheme breaks from
 // the https://github.com/JuliaStrings/utf8proc library.
-// Thanks so much to those developer!
+// Thanks so much to those developers!
 //
 // The only function this file exposes is `isGraphemeBreak`
 //

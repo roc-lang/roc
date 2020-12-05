@@ -21,18 +21,19 @@ comptime {
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcat, "concat");
-    exportStrFn(str.strLen, "len");
+    exportStrFn(str.strNumberOfBytes, "number_of_bytes");
+    exportStrFn(str.strFromInt, "from_int");
 }
 
 // Export helpers - Must be run inside a comptime
-fn exportBuiltinFn(comptime fn_target: anytype, comptime fn_name: []const u8) void {
-    @export(fn_target, .{ .name = "roc_builtins." ++ fn_name, .linkage = .Strong });
+fn exportBuiltinFn(comptime func: anytype, comptime func_name: []const u8) void {
+    @export(func, .{ .name = "roc_builtins." ++ func_name, .linkage = .Strong });
 }
-fn exportNumFn(comptime fn_target: anytype, comptime fn_name: []const u8) void {
-    exportBuiltinFn(fn_target, "num." ++ fn_name);
+fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "num." ++ func_name);
 }
-fn exportStrFn(comptime fn_target: anytype, comptime fn_name: []const u8) void {
-    exportBuiltinFn(fn_target, "str." ++ fn_name);
+fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "str." ++ func_name);
 }
 
 // Run all tests in imported modules
