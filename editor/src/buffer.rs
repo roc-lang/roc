@@ -37,7 +37,7 @@ impl QuadBufferBuilder {
         min_y: f32,
         max_x: f32,
         max_y: f32,
-        color: [f32; 3]
+        color: [f32; 3],
     ) -> Self {
         self.vertex_data.extend(&[
             Vertex {

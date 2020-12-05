@@ -1,6 +1,6 @@
 // Taken from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
-use cgmath::{Vector2};
+use cgmath::Vector2;
 
 #[derive(Copy, Clone)]
 pub struct Vertex {
