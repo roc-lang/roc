@@ -9,28 +9,16 @@
 /// Buckets also use the node value 0 (all 0 bits) to mark slots as unoccupied.
 /// This is important for performance.
 use libc::{c_void, calloc, free, mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-use std::fmt;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr::null;
 
 pub const BUCKET_BYTES: usize = 4096;
 
-#[repr(packed)]
+#[derive(Debug)]
 pub struct NodeId<T: Sized> {
     pub bucket_id: BucketId<T>,
     pub slot: BucketSlot<T>,
-}
-
-impl<T: fmt::Debug> fmt::Debug for NodeId<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        unsafe {
-            f.debug_struct("NodeId")
-                .field("bucket_id", &self.bucket_id)
-                .field("slot", &self.slot)
-                .finish()
-        }
-    }
 }
 
 #[test]
@@ -63,10 +51,16 @@ impl<T> PartialEq for NodeId<T> {
 
 impl<T> Eq for NodeId<T> {}
 
+/// Instead of being stored as a u16, BucketId is stored as two u8 values.
+///
+/// This is so that NodeId can have a BucketId and an additional u8 value
+/// while still having an alignment of 1. This is important because a lot
+/// relies on NodeId being 3 bytes instead of 4, and if BucketId were a u16
+/// instead of two u8s, then NodeId would need an extra padding byte.
 #[derive(Debug)]
-#[repr(transparent)]
 pub struct BucketId<T: Sized> {
-    value: u16,
+    high: u8,
+    low: u8,
     _phantom: PhantomData<T>,
 }
 
@@ -85,7 +79,7 @@ impl<T> Copy for BucketId<T> {}
 
 impl<T> PartialEq for BucketId<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
+        self.high == other.high && self.low == other.low
     }
 }
 
@@ -94,9 +88,14 @@ impl<T> Eq for BucketId<T> {}
 impl<T: Sized> BucketId<T> {
     fn from_u16(value: u16) -> Self {
         BucketId {
-            value,
+            high: (value >> 8) as u8,
+            low: value as u8,
             _phantom: PhantomData::default(),
         }
+    }
+
+    fn as_usize(self) -> usize {
+        ((self.high as usize) << 8) + (self.low as usize)
     }
 }
 
@@ -171,7 +170,7 @@ impl Buckets {
     fn get_unchecked<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> &'a T {
         unsafe {
             self.buckets
-                .get(node_id.bucket_id.value as usize)
+                .get(node_id.bucket_id.as_usize())
                 .unwrap()
                 .get_unchecked(node_id.slot.value)
         }
@@ -179,7 +178,7 @@ impl Buckets {
 
     pub fn get<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> Option<&'a T> {
         self.buckets
-            .get(node_id.bucket_id.value as usize)
+            .get(node_id.bucket_id.as_usize())
             .and_then(|bucket| bucket.get(node_id.slot))
     }
 }
