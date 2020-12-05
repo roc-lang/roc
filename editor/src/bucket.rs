@@ -52,6 +52,7 @@ impl<T> PartialEq for NodeId<T> {
 impl<T> Eq for NodeId<T> {}
 
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct BucketId<T: Sized> {
     value: u16,
     _phantom: PhantomData<T>,
