@@ -1,12 +1,12 @@
 // Taken from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
-use cgmath::{Vector2, Vector3};
+use cgmath::{Vector2};
 
 #[derive(Copy, Clone)]
 pub struct Vertex {
     #[allow(dead_code)]
     pub position: Vector2<f32>,
-    pub color: Vector3<f32>,
+    pub color: [f32; 3],
 }
 
 unsafe impl bytemuck::Pod for Vertex {}

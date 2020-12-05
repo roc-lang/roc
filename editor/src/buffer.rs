@@ -3,7 +3,6 @@
 use crate::rect::Rect;
 use crate::util::size_of_slice;
 use crate::vertex::Vertex;
-use cgmath::Vector3;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
 pub struct QuadBufferBuilder {
@@ -28,7 +27,7 @@ impl QuadBufferBuilder {
             coords.y - rect.height,
             coords.x + rect.width,
             coords.y,
-            rect.color.into(),
+            rect.color,
         )
     }
 
@@ -38,7 +37,7 @@ impl QuadBufferBuilder {
         min_y: f32,
         max_x: f32,
         max_y: f32,
-        color: Vector3<f32>,
+        color: [f32; 3]
     ) -> Self {
         self.vertex_data.extend(&[
             Vertex {
