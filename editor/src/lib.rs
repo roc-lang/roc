@@ -16,22 +16,22 @@
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-use crate::buffer::QuadBufferBuilder;
-use crate::rect::Rect;
+use crate::buffer::create_rect_buffers;
+use crate::text::{build_glyph_brush, Text};
 use crate::vertex::Vertex;
 use std::error::Error;
 use std::io;
 use std::path::Path;
-use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 use winit::event;
-use winit::event::{ElementState, Event, ModifiersState, VirtualKeyCode};
+use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
 
 pub mod ast;
 mod buffer;
 pub mod file;
+mod keyboard_input;
 mod rect;
-pub mod text_state;
+pub mod text;
 mod util;
 mod vertex;
 
@@ -104,12 +104,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
     let rect_pipeline = make_rect_pipeline(&gpu_device, &swap_chain_descr);
 
-    // Prepare glyph_brush
-    let inconsolata =
-        ab_glyph::FontArc::try_from_slice(include_bytes!("../Inconsolata-Regular.ttf"))?;
-
-    let mut glyph_brush =
-        GlyphBrushBuilder::using_font(inconsolata).build(&gpu_device, render_format);
+    let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
     let mut text_state = String::new();
@@ -161,7 +156,11 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 ..
             } => {
                 if let Some(virtual_keycode) = input.virtual_keycode {
-                    handle_keydown(input.state, virtual_keycode, keyboard_modifiers);
+                    keyboard_input::handle_keydown(
+                        input.state,
+                        virtual_keycode,
+                        keyboard_modifiers,
+                    );
                 }
             }
             Event::WindowEvent {
@@ -203,7 +202,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 drop(render_pass);
 
-                draw_text(
+                draw_all_text(
                     &gpu_device,
                     &mut staging_belt,
                     &mut encoder,
@@ -294,72 +293,7 @@ fn create_render_pipeline(
     })
 }
 
-struct RectBuffers {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_rects: u32,
-}
-
-fn create_rect_buffers(
-    gpu_device: &wgpu::Device,
-    encoder: &mut wgpu::CommandEncoder,
-) -> RectBuffers {
-    // Test Rectangles
-    let test_rect_1 = Rect {
-        top_left_coords: (-0.2, 0.6).into(),
-        width: 0.1,
-        height: 0.5,
-        color: [0.0, 0.0, 1.0],
-    };
-    let test_rect_2 = Rect {
-        top_left_coords: (-0.5, 0.0).into(),
-        width: 0.5,
-        height: 0.5,
-        color: [0.0, 1.0, 0.0],
-    };
-    let test_rect_3 = Rect {
-        top_left_coords: (0.3, 0.3).into(),
-        width: 0.6,
-        height: 0.1,
-        color: [0.0, 0.0, 1.0],
-    };
-
-    let vertex_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: Vertex::SIZE * 4 * 3,
-        usage: wgpu::BufferUsage::VERTEX | wgpu::BufferUsage::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    let u32_size = std::mem::size_of::<u32>() as wgpu::BufferAddress;
-
-    let index_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: u32_size * 6 * 3,
-        usage: wgpu::BufferUsage::INDEX | wgpu::BufferUsage::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    let num_rects = {
-        let (stg_vertex, stg_index, num_indices) = QuadBufferBuilder::new()
-            .push_rect(&test_rect_1)
-            .push_rect(&test_rect_2)
-            .push_rect(&test_rect_3)
-            .build(&gpu_device);
-
-        stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
-        stg_index.copy_to_buffer(encoder, &index_buffer);
-        num_indices
-    };
-
-    RectBuffers {
-        vertex_buffer,
-        index_buffer,
-        num_rects,
-    }
-}
-
-fn draw_text(
+fn draw_all_text(
     gpu_device: &wgpu::Device,
     staging_belt: &mut wgpu::util::StagingBelt,
     encoder: &mut wgpu::CommandEncoder,
@@ -368,25 +302,30 @@ fn draw_text(
     text_state: &str,
     glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
 ) {
-    glyph_brush.queue(Section {
-        screen_position: (30.0, 30.0),
-        bounds: (size.width as f32, size.height as f32),
-        text: vec![Text::new("Enter some text:")
-            .with_color([0.4666, 0.2, 1.0, 1.0])
-            .with_scale(40.0)],
-        ..Section::default()
-    });
+    let bounds = (size.width as f32, size.height as f32).into();
 
-    glyph_brush.queue(Section {
-        screen_position: (30.0, 90.0),
-        bounds: (size.width as f32, size.height as f32),
-        text: vec![Text::new(format!("{}|", text_state).as_str())
-            .with_color([1.0, 1.0, 1.0, 1.0])
-            .with_scale(40.0)],
-        ..Section::default()
-    });
+    let main_label = Text {
+        position: (30.0, 30.0).into(),
+        bounds,
+        color: (0.4666, 0.2, 1.0, 1.0).into(),
+        text: String::from("Enter some text:"),
+        size: 40.0,
+        ..Default::default()
+    };
 
-    // Draw the text!
+    let code_text = Text {
+        position: (30.0, 90.0).into(),
+        bounds,
+        color: (1.0, 1.0, 1.0, 1.0).into(),
+        text: String::from(format!("{}|", text_state).as_str()),
+        size: 40.0,
+        ..Default::default()
+    };
+
+    text::queue_text_draw(&main_label, glyph_brush);
+
+    text::queue_text_draw(&code_text, glyph_brush);
+
     glyph_brush
         .draw_queued(
             gpu_device,
@@ -413,30 +352,5 @@ fn update_text_state(text_state: &mut String, received_char: &char) {
         _ => {
             text_state.push(*received_char);
         }
-    }
-}
-
-fn handle_keydown(
-    elem_state: ElementState,
-    virtual_keycode: VirtualKeyCode,
-    _modifiers: ModifiersState,
-) {
-    use winit::event::VirtualKeyCode::*;
-
-    if let ElementState::Released = elem_state {
-        return;
-    }
-
-    match virtual_keycode {
-        Copy => {
-            todo!("copy");
-        }
-        Paste => {
-            todo!("paste");
-        }
-        Cut => {
-            todo!("cut");
-        }
-        _ => {}
     }
 }
