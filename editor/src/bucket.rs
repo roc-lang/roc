@@ -9,33 +9,21 @@
 /// Buckets also use the node value 0 (all 0 bits) to mark slots as unoccupied.
 /// This is important for performance.
 use libc::{c_void, calloc, free, mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-use std::fmt;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr::null;
 
 pub const BUCKET_BYTES: usize = 4096;
 
-#[repr(packed)]
+#[derive(Debug)]
 pub struct NodeId<T: Sized> {
     pub bucket_id: BucketId<T>,
     pub slot: BucketSlot<T>,
 }
 
-impl<T: fmt::Debug> fmt::Debug for NodeId<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        unsafe {
-            f.debug_struct("NodeId")
-                .field("bucket_id", &self.bucket_id)
-                .field("slot", &self.slot)
-                .finish()
-        }
-    }
-}
-
 #[test]
 fn size_of_node_id() {
-    assert_eq!(std::mem::size_of::<NodeId<()>>(), 3);
+    assert_eq!(std::mem::size_of::<NodeId<()>>(), 4);
 }
 
 impl<T> Clone for NodeId<T> {
