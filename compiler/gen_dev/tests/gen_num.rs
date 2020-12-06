@@ -1,7 +1,8 @@
-// #[macro_use]
+#[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
+
+#[macro_use]
+extern crate indoc;
 
 extern crate bumpalo;
 extern crate libc;

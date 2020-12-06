@@ -2075,7 +2075,7 @@ fn parse_header<'a>(
                             match package_or_path {
                                 PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
                                     // check whether we can find a Pkg-Config.roc file
-                                    let mut pkg_config_roc = pkg_config_dir.clone();
+                                    let mut pkg_config_roc = pkg_config_dir;
                                     pkg_config_roc.push(package);
                                     pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
                                     pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
@@ -2171,6 +2171,7 @@ fn load_filename<'a>(
 
 /// Load a module from a str
 /// the `filename` is never read, but used for the module name
+#[allow(clippy::too_many_arguments)]
 fn load_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -2340,8 +2341,6 @@ fn send_header<'a>(
         ident_ids.clone()
     };
 
-    dbg!(package_module_ids);
-
     // Send the deps to the coordinator thread for processing,
     // then continue on to parsing and canonicalizing defs.
     //
@@ -2477,6 +2476,7 @@ fn run_solve<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fabricate_effects_module<'a>(
     arena: &'a Bump,
     shorthand: &'a str,
@@ -2510,11 +2510,8 @@ fn fabricate_effects_module<'a>(
     let mut package_module_ids = (*package_module_ids).lock();
 
     for exposed in header.exposes {
-        match exposed.value {
-            ExposesEntry::Exposed(module_name) => {
-                package_module_ids.get_or_insert(&(shorthand, module_name.into()));
-            }
-            _ => {}
+        if let ExposesEntry::Exposed(module_name) = exposed.value {
+            package_module_ids.get_or_insert(&(shorthand, module_name.into()));
         }
     }
 
