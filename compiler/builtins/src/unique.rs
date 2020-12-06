@@ -107,7 +107,7 @@ pub fn uniq_stdlib() -> StdLib {
             Symbol::ATTR_ATTR,
             Symbol::LIST_LIST,
             Symbol::SET_SET,
-            Symbol::MAP_MAP,
+            Symbol::DICT_DICT,
             Symbol::STR_STR,
         ]
         .into_iter()
@@ -831,16 +831,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // Map module
+    // Dict module
 
     // empty : Attr * (Map k v)
-    add_type(Symbol::MAP_EMPTY, {
+    add_type(Symbol::DICT_EMPTY, {
         let_tvars! { star, k , v };
         map_type(star, k, v)
     });
 
     // singleton : k, v -> Attr * (Map k v)
-    add_type(Symbol::MAP_SINGLETON, {
+    add_type(Symbol::DICT_SINGLETON, {
         let_tvars! { star, k , v };
         unique_function(vec![flex(k), flex(v)], map_type(star, k, v))
     });
@@ -859,7 +859,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // get : Attr (* | u) (Map (Attr * key) (Attr u val))
     //     , Attr * key
     //    -> Attr * (Result (Attr u val) [ KeyNotFound ]*)
-    add_type(Symbol::MAP_GET, {
+    add_type(Symbol::DICT_GET, {
         let_tvars! { u, key, val, star1, star2, star3, star4 };
 
         unique_function(
@@ -869,7 +869,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                     vec![
                         container(star1, vec![u]),
                         SolvedType::Apply(
-                            Symbol::MAP_MAP,
+                            Symbol::DICT_DICT,
                             vec![attr_type(star2, key), attr_type(u, val)],
                         ),
                     ],
@@ -893,7 +893,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //        , key
     //        , value
     //        , Attr * (Map key value)
-    add_type(Symbol::MAP_INSERT, {
+    add_type(Symbol::DICT_INSERT, {
         let_tvars! { star1, star2, key, value };
 
         unique_function(
@@ -902,7 +902,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                     Symbol::ATTR_ATTR,
                     vec![
                         flex(star1),
-                        SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
+                        SolvedType::Apply(Symbol::DICT_DICT, vec![flex(key), flex(value)]),
                     ],
                 ),
                 flex(key),
@@ -912,7 +912,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 Symbol::ATTR_ATTR,
                 vec![
                     flex(star2),
-                    SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
+                    SolvedType::Apply(Symbol::DICT_DICT, vec![flex(key), flex(value)]),
                 ],
             ),
         )
@@ -1272,7 +1272,7 @@ fn map_type(u: VarId, key: VarId, value: VarId) -> SolvedType {
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
+            SolvedType::Apply(Symbol::DICT_DICT, vec![flex(key), flex(value)]),
         ],
     )
 }
