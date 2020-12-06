@@ -103,6 +103,7 @@ impl Dependencies {
     pub fn add_module(
         &mut self,
         module_id: ModuleId,
+        opt_effect_module: Option<ModuleId>,
         dependencies: &MutSet<ModuleId>,
         goal_phase: Phase,
     ) -> MutSet<(ModuleId, Phase)> {
@@ -145,7 +146,8 @@ impl Dependencies {
         // all the dependencies can be loaded
         for dep in dependencies {
             // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
-            if !format!("{:?}", dep).contains("Effect") {
+
+            if Some(*dep) != opt_effect_module {
                 output.insert((*dep, LoadHeader));
             }
         }
@@ -680,6 +682,7 @@ struct State<'a> {
     pub stdlib: StdLib,
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
+    pub opt_effect_module: Option<ModuleId>,
 
     pub headers_parsed: MutSet<ModuleId>,
 
@@ -1264,6 +1267,7 @@ where
                 goal_phase,
                 stdlib,
                 output_path: None,
+                opt_effect_module: None,
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
@@ -1429,6 +1433,7 @@ fn update<'a>(
 
             let work = state.dependencies.add_module(
                 header.module_id,
+                state.opt_effect_module,
                 &header.imported_modules,
                 state.goal_phase,
             );
@@ -1516,6 +1521,9 @@ fn update<'a>(
             module_docs,
         } => {
             let module_id = constrained_module.module.module_id;
+
+            state.opt_effect_module = Some(module_id);
+
             log!("made effect module for {:?}", module_id);
             state
                 .module_cache
