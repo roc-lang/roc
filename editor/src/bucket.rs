@@ -330,7 +330,8 @@ fn size_of_bucket_str() {
 /// Same with Call and Closure, since all functions must have 1+ arguments.
 #[derive(Debug)]
 pub struct BucketList<T: Sized> {
-    first_node_id: NodeId<T>,
+    first_node_id: BucketId<T>,
+    first_node_sl: BucketSlot<T>,
     first_segment_len: u8,
 }
 
@@ -348,7 +349,8 @@ impl<'a, T: 'a + Sized> BucketList<T> {
     pub fn new(first_node_id: NodeId<T>, first_segment_len: u8) -> Self {
         BucketList {
             first_segment_len,
-            first_node_id,
+            first_node_id: first_node_id.bucket_id,
+            first_node_sl: first_node_id.slot,
         }
     }
 
@@ -373,14 +375,16 @@ impl<'a, T: 'a + Sized> BucketList<T> {
         BucketListIter {
             continues_with_cons,
             len_remaining,
-            node_id: self.first_node_id,
+            bucket_id: self.first_node_id,
+            slot: self.first_node_sl,
             buckets,
         }
     }
 }
 
 struct BucketListIter<'a, T: Sized> {
-    node_id: NodeId<T>,
+    bucket_id: BucketId<T>,
+    slot: BucketSlot<T>,
     len_remaining: u8,
     continues_with_cons: bool,
     buckets: &'a Buckets,
@@ -400,16 +404,23 @@ where
                 false => None,
                 // We need to continue with a Cons cell.
                 true => {
+                    let node_id = NodeId {
+                        bucket_id: self.bucket_id,
+                        slot: self.slot,
+                    }
+                    .next_slot();
+
                     // Since we have continues_with_cons set, the next slot
                     // will definitely be occupied with a BucketList struct.
-                    let node = self.buckets.get_unchecked(self.node_id.next_slot());
+                    let node = self.buckets.get_unchecked(node_id);
                     let next_list = unsafe { &*(node as *const T as *const BucketList<T>) };
 
                     // Replace the current iterator with an iterator into that
                     // list, and then continue with next() on that iterator.
                     let next_iter = next_list.bucket_list_iter(self.buckets);
 
-                    self.node_id = next_iter.node_id;
+                    self.bucket_id = next_iter.bucket_id;
+                    self.slot = next_iter.slot;
                     self.len_remaining = next_iter.len_remaining;
                     self.continues_with_cons = next_iter.continues_with_cons;
 
@@ -422,14 +433,21 @@ where
                 // Don't advance the node pointer's slot, because that might
                 // advance past the end of the bucket!
 
-                Some(self.buckets.get_unchecked(self.node_id))
+                Some(self.buckets.get_unchecked(NodeId {
+                    bucket_id: self.bucket_id,
+                    slot: self.slot,
+                }))
             }
             len_remaining => {
                 // Get the current node
-                let node = self.buckets.get_unchecked(self.node_id);
+                let node_id = NodeId {
+                    bucket_id: self.bucket_id,
+                    slot: self.slot,
+                };
+                let node = self.buckets.get_unchecked(node_id);
 
                 // Advance the node pointer to the next slot in the current bucket
-                self.node_id = self.node_id.next_slot();
+                self.slot = self.slot.increment();
                 self.len_remaining = len_remaining - 1;
 
                 Some(node)
