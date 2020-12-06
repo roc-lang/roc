@@ -7,7 +7,14 @@ use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, 
 use roc_load::file::MonomorphizedModule;
 use roc_mono::layout::LayoutIds;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CodeGenTiming {
+    pub code_gen: Duration,
+    pub emit_o_file: Duration,
+}
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
@@ -21,10 +28,12 @@ pub fn gen_from_mono_module(
     app_o_file: &Path,
     opt_level: OptLevel,
     emit_debug_info: bool,
-) {
+) -> CodeGenTiming {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
+
+    let code_gen_start = SystemTime::now();
 
     for (home, (module_path, src)) in loaded.sources {
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -160,6 +169,9 @@ pub fn gen_from_mono_module(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let emit_o_file_start = SystemTime::now();
+
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
     if emit_debug_info {
@@ -231,6 +243,13 @@ pub fn gen_from_mono_module(
         target_machine
             .write_to_file(&env.module, FileType::Object, &app_o_file)
             .expect("Writing .o file failed");
+    }
+
+    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+
+    CodeGenTiming {
+        emit_o_file,
+        code_gen,
     }
 }
 
