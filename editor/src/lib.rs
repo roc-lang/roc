@@ -27,6 +27,7 @@ use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
 
 pub mod ast;
+pub mod bucket;
 mod buffer;
 pub mod file;
 mod keyboard_input;
