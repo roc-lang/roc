@@ -1,12 +1,10 @@
-use crate::bucket::{BucketList, BucketStr, NodeId};
+use crate::bucket::{BucketId, BucketList, BucketSlot, BucketStr, NodeId};
 use arraystring::{typenum::U14, ArrayString};
 use roc_can::def::Annotation;
 use roc_can::expr::{Field, Recursive};
 use roc_module::ident::Lowercase;
 use roc_module::low_level::LowLevel;
-use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
-use roc_problem::can::RuntimeError;
 use roc_types::subs::Variable;
 use roc_types::types::Alias;
 
@@ -25,7 +23,7 @@ pub enum IntStyle {
     Binary,
 }
 
-/// Experimental idea for an Expr that fits in 16B.
+/// An Expr that fits in 16B.
 /// It has a 1B discriminant and variants which hold payloads of at most 15B.
 #[derive(Debug)]
 pub enum Expr2 {
@@ -42,26 +40,30 @@ pub enum Expr2 {
     },
     /// A number literal (without a dot) containing underscores
     NumWithUnderscores {
-        number: i64,             // 8B
-        var: Variable,           // 4B
-        text: NodeId<BucketStr>, // 3B
+        number: i64,                    // 8B
+        var: Variable,                  // 4B
+        text_id: BucketId<BucketStr>,   // 2B
+        text_sl: BucketSlot<BucketStr>, // 1B
     },
     /// A float literal (with a dot) containing underscores
     FloatWithUnderscores {
-        number: f64,             // 8B
-        var: Variable,           // 4B
-        text: NodeId<BucketStr>, // 3B
+        number: f64,                    // 8B
+        var: Variable,                  // 4B
+        text_id: BucketId<BucketStr>,   // 2B
+        text_sl: BucketSlot<BucketStr>, // 1B
     },
     /// string literals of length up to 14B
     SmallStr(ArrayString<U14>), // 15B
     /// string literals of length up to 4094B
-    MedStr(NodeId<BucketStr>), // 4B
+    MedStr {
+        str_id: BucketId<BucketStr>,
+        str_sl: BucketSlot<BucketStr>,
+    }, // 4B
     /// string literals of length over 4094B, but requires calling malloc/free
     BigStr {
         pointer: *const u8, // 8B on 64-bit systems
-        len: u32, // 4B, meaning maximum string literal size of 4GB. Could theoretically fit 7B here, which would go up to the full isize::MAX
+        len: u32, // 4B, meaning maximum string literal size of 4GB. Could theoretically fit 7B here, which would get closer to the full isize::MAX
     },
-
     // Lookups
     Var(Symbol), // 8B
 
@@ -71,37 +73,40 @@ pub enum Expr2 {
         list_var: Variable, // 4B - required for uniqueness of the list
         elem_var: Variable, // 4B
     },
-
     List {
         list_var: Variable,       // 4B - required for uniqueness of the list
         elem_var: Variable,       // 4B
         elems: BucketList<Expr2>, // 4B
     },
-
     If {
         cond_var: Variable,                   // 4B
         expr_var: Variable,                   // 4B
         branches: BucketList<(Expr2, Expr2)>, // 4B
-        final_else: NodeId<Expr2>,            // 3B
+        final_else_id: BucketId<Expr2>,       // 2B
+        final_else_sl: BucketSlot<Expr2>,     // 1B
     },
     When {
         cond_var: Variable,               // 4B
         expr_var: Variable,               // 4B
         branches: BucketList<WhenBranch>, // 4B
-        cond: ExprId,                     // 3B
+        cond_id: BucketId<Expr2>,         // 2B
+        cond_sl: BucketSlot<Expr2>,       // 1B
     },
     LetRec {
         // TODO need to make this Alias type here bucket-friendly, which will be hard!
         aliases: BucketList<(Symbol, Alias)>, // 4B
         defs: BucketList<Def>,                // 4B
         body_var: Variable,                   // 4B
-        body: NodeId<Expr2>,                  // 3B
+        body_id: BucketId<Expr2>,             // 2B
+        body_sl: BucketSlot<Expr2>,           // 1B
     },
     LetNonRec {
         // TODO need to make this Alias type here bucket-friendly, which will be hard!
         aliases: BucketList<(Symbol, Alias)>, // 4B
-        def: NodeId<Def>,                     // 3B
-        body: NodeId<Expr2>,                  // 3B
+        def_id: BucketId<Def>,                // 2B
+        def_sl: BucketSlot<Def>,              // 1B
+        body_id: BucketId<Expr2>,             // 2B
+        body_sl: BucketSlot<Expr2>,           // 1B
         body_var: Variable,                   // 4B
     },
     Call {
@@ -111,10 +116,10 @@ pub enum Expr2 {
         expr_and_args: BucketList<(Variable, NodeId<Expr2>)>, // 4B
         fn_var: Variable,      // 4B
         closure_var: Variable, // 4B
-        called_via: CalledVia, // 1B
         /// Cached outside expr_and_args so we don't have to potentially
         /// traverse that whole linked list chain to count all the args.
         arity: u16, // 2B
+        called_via: CalledVia2, // 1B
     },
     RunLowLevel {
         op: LowLevel,                                // 1B
@@ -128,38 +133,43 @@ pub enum Expr2 {
         /// in a 16B node that already needs to hold this much other data.
         captured_symbols: BucketList<(Symbol, Variable)>, // 4B
         args: BucketList<(Variable, NodeId<Pat2>)>, // 4B
-        body: NodeId<Expr2>,                        // 3B
         recursive: Recursive,                       // 1B
-        vars: NodeId<ClosureVars>,                  // 3B
+        body_id: BucketId<Expr2>,                   // 2B
+        body_sl: BucketSlot<Expr2>,                 // 1B
+        vars_id: BucketId<ClosureVars>,             // 2B
+        vars_sl: BucketSlot<ClosureVars>,           // 1B
     },
-
     // Product Types
     Record {
         record_var: Variable,                                     // 4B
         fields: BucketList<(BucketStr, Variable, NodeId<Expr2>)>, // 4B
     },
-
     /// Empty record constant
     EmptyRecord,
-
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
-        field: NodeId<BucketStr>, // 3B
-        expr: NodeId<Expr2>,      // 3B
-        vars: NodeId<AccessVars>, // 3B
+        field_id: BucketId<BucketStr>,   // 3B
+        field_sl: BucketSlot<BucketStr>, // 3B
+        expr_id: BucketId<Expr2>,        // 2B
+        expr_sl: BucketSlot<Expr2>,      // 1B
+        vars_id: BucketId<AccessVars>,   // 2B
+        vars_sl: BucketSlot<AccessVars>, // 1B
     },
 
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
-        record_vars: NodeId<RecordVars>, // 3B
-        function_var: Variable,          // 4B
-        closure_var: Variable,           // 4B
-        field: NodeId<BucketStr>,        // 3B
+        record_vars_id: BucketId<RecordVars>,   // 3B
+        record_vars_sl: BucketSlot<RecordVars>, // 3B
+        function_var: Variable,                 // 4B
+        closure_var: Variable,                  // 4B
+        field_id: BucketId<BucketStr>,          // 2B
+        field_sl: BucketSlot<BucketStr>,        // 1B
     },
     Update {
         symbol: Symbol,                          // 8B
         updates: BucketList<(Lowercase, Field)>, // 4B
-        vars: NodeId<UpdateVars>,                // 3B
+        vars_id: BucketId<UpdateVars>,           // 2B
+        vars_sl: BucketSlot<UpdateVars>,         // 1B
     },
 
     // Sum Types
@@ -167,14 +177,48 @@ pub enum Expr2 {
         // NOTE: A BucketStr node is a 2B length and then 14B bytes,
         // plus more bytes in adjacent nodes if necessary. Thus we have
         // a hard cap of 4094 bytes as the maximum length of tags and fields.
-        name: NodeId<BucketStr>,                          // 3B
-        variant_var: Variable,                            // 4B
-        ext_var: Variable,                                // 4B
-        arguments: BucketList<(Variable, NodeId<Expr2>)>, // 4B
+        name_id: BucketId<BucketStr>,   // 2B
+        name_sl: BucketSlot<BucketStr>, // 1B
+        variant_var: Variable,          // 4B
+        ext_var: Variable,              // 4B
+        arguments: BucketList<(Variable, BucketId<Expr2>, BucketSlot<Expr2>)>, // 4B
     },
 
     // Compiles, but will crash if reached
-    RuntimeError(RuntimeError),
+    RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// It's critical that this fit in 1 byte. If it takes 2B, Expr::Call is too big.
+/// That's why we have all the variants in here, instead of having separate
+/// UnaryOp and Binary
+pub enum CalledVia2 {
+    /// Calling with space, e.g. (foo bar)
+    Space,
+
+    /// (-), e.g. (-x)
+    Negate,
+    /// (!), e.g. (!x)
+    Not,
+
+    // highest precedence binary op
+    Caret,
+    Star,
+    Slash,
+    DoubleSlash,
+    Percent,
+    DoublePercent,
+    Plus,
+    Minus,
+    Equals,
+    NotEquals,
+    LessThan,
+    GreaterThan,
+    LessThanOrEq,
+    GreaterThanOrEq,
+    And,
+    Or,
+    Pizza, // lowest precedence binary op
 }
 
 #[derive(Debug)]
@@ -339,4 +383,9 @@ pub struct ExprBucketSlot(u8);
 #[test]
 fn size_of_expr() {
     assert_eq!(std::mem::size_of::<Expr2>(), 16);
+}
+
+#[test]
+fn size_of_called_via() {
+    assert_eq!(std::mem::size_of::<CalledVia2>(), 1);
 }
