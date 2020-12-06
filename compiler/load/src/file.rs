@@ -1868,13 +1868,7 @@ fn load_pkg_config<'a>(
 ) -> Result<Msg<'a>, LoadingProblem> {
     let module_start_time = SystemTime::now();
 
-    let mut filename = PathBuf::from(src_dir);
-
-    filename.push("platform");
-    filename.push(PKG_CONFIG_FILE_NAME);
-
-    // End with .roc
-    filename.set_extension(ROC_FILE_EXTENSION);
+    let filename = PathBuf::from(src_dir);
 
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
@@ -2081,7 +2075,7 @@ fn parse_header<'a>(
                                     if pkg_config_roc.as_path().exists() {
                                         let load_pkg_config_msg = load_pkg_config(
                                             arena,
-                                            &pkg_config_dir,
+                                            &pkg_config_roc,
                                             shorthand,
                                             module_ids,
                                             package_module_ids,
