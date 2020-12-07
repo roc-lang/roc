@@ -360,7 +360,7 @@ impl<'a> PackageModuleIds<'a> {
         }
     }
 
-    pub fn to_module_ids(self) -> ModuleIds {
+    pub fn into_module_ids(self) -> ModuleIds {
         let by_name: MutMap<InlinableString, ModuleId> = self
             .by_name
             .into_iter()

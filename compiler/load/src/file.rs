@@ -411,7 +411,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 let qualified_module_ids = Arc::clone(&state.arc_modules);
                 let qualified_module_ids = { (*qualified_module_ids).lock().clone() };
 
-                let module_ids = qualified_module_ids.to_module_ids();
+                let module_ids = qualified_module_ids.into_module_ids();
 
                 let exposed_symbols = state
                     .exposed_symbols_by_module
@@ -1426,7 +1426,7 @@ fn update<'a>(
                 }
             }
 
-            state.platform_path = state.platform_path.or(header.to_platform.clone());
+            state.platform_path = state.platform_path.or_else(|| header.to_platform.clone());
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
@@ -1806,7 +1806,7 @@ fn finish_specialization<'a>(
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
-        .to_module_ids();
+        .into_module_ids();
 
     let interns = Interns {
         module_ids,
@@ -1880,7 +1880,7 @@ fn finish<'a>(
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
-        .to_module_ids();
+        .into_module_ids();
 
     let interns = Interns {
         module_ids,
@@ -2602,11 +2602,13 @@ fn fabricate_effects_module<'a>(
         functions
     };
 
-    let mut package_module_ids = (*package_module_ids).lock();
+    {
+        let mut module_ids = (*module_ids).lock();
 
-    for exposed in header.exposes {
-        if let ExposesEntry::Exposed(module_name) = exposed.value {
-            package_module_ids.get_or_insert(&(shorthand, module_name.into()));
+        for exposed in header.exposes {
+            if let ExposesEntry::Exposed(module_name) = exposed.value {
+                module_ids.get_or_insert(&PQModuleName::Qualified(shorthand, module_name.into()));
+            }
         }
     }
 
@@ -2671,7 +2673,7 @@ fn fabricate_effects_module<'a>(
 
     let mut var_store = VarStore::default();
 
-    let module_ids = { (*module_ids).lock().clone() }.to_module_ids();
+    let module_ids = { (*module_ids).lock().clone() }.into_module_ids();
 
     let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
     let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
