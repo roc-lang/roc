@@ -559,6 +559,7 @@ struct ModuleHeader<'a> {
     imported_modules: MutSet<ModuleId>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
+    to_platform: Option<To<'a>>,
     src: &'a [u8],
     module_timing: ModuleTiming,
 }
@@ -600,6 +601,7 @@ pub struct MonomorphizedModule<'a> {
     pub interns: Interns,
     pub subs: Subs,
     pub output_path: Box<str>,
+    pub platform_path: Box<str>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
@@ -692,6 +694,7 @@ struct State<'a> {
     pub stdlib: StdLib,
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
+    pub platform_path: Option<To<'a>>,
     pub opt_effect_module: Option<ModuleId>,
 
     pub headers_parsed: MutSet<ModuleId>,
@@ -1272,6 +1275,7 @@ where
                 goal_phase,
                 stdlib,
                 output_path: None,
+                platform_path: None,
                 opt_effect_module: None,
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
@@ -1421,6 +1425,8 @@ fn update<'a>(
                     shorthands.insert(shorthand, package_or_path.clone());
                 }
             }
+
+            state.platform_path = state.platform_path.or(header.to_platform.clone());
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
@@ -1811,6 +1817,7 @@ fn finish_specialization<'a>(
         procedures,
         module_cache,
         output_path,
+        platform_path,
         ..
     } = state;
 
@@ -1827,11 +1834,33 @@ fn finish_specialization<'a>(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
+    let path_to_platform = {
+        let package_or_path = match platform_path {
+            Some(To::ExistingPackage(shorthand)) => {
+                match (*state.arc_shorthands).lock().get(shorthand) {
+                    Some(p_or_p) => p_or_p.clone(),
+                    None => unreachable!(),
+                }
+            }
+            Some(To::NewPackage(p_or_p)) => p_or_p,
+            None => panic!("no platform!"),
+        };
+
+        match package_or_path {
+            PackageOrPath::Path(StrLiteral::PlainLine(path)) => path,
+            PackageOrPath::Path(_) => unreachable!("invalid"),
+            _ => todo!("packages"),
+        }
+    };
+
+    let platform_path = path_to_platform.into();
+
     MonomorphizedModule {
         can_problems,
         mono_problems,
         type_problems,
         output_path: output_path.unwrap_or(DEFAULT_APP_OUTPUT_PATH).into(),
+        platform_path,
         exposed_to_host,
         module_id: state.root_id,
         subs,
@@ -2064,6 +2093,7 @@ fn parse_header<'a>(
             &[],
             header.exposes.into_bump_slice(),
             header.imports.into_bump_slice(),
+            None,
             parse_state,
             module_ids,
             ident_ids_by_module,
@@ -2085,6 +2115,7 @@ fn parse_header<'a>(
                 packages,
                 header.provides.into_bump_slice(),
                 header.imports.into_bump_slice(),
+                Some(header.to.value.clone()),
                 parse_state,
                 module_ids.clone(),
                 ident_ids_by_module.clone(),
@@ -2255,6 +2286,7 @@ fn send_header<'a>(
     packages: &'a [Located<PackageEntry<'a>>],
     exposes: &'a [Located<ExposesEntry<'a, &'a str>>],
     imports: &'a [Located<ImportsEntry<'a>>],
+    to_platform: Option<To<'a>>,
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -2421,6 +2453,7 @@ fn send_header<'a>(
             imported_modules,
             deps_by_name,
             exposes: exposed,
+            to_platform,
             src: parse_state.bytes,
             exposed_imports: scope,
             module_timing,
