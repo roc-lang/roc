@@ -3,11 +3,14 @@ app "effect-example"
     imports [ base.Task.{ Task, after } ]
     provides [ main ] to base
 
-main : Task {}
+# TODO `main : Task {}` does not work
+# it will then think that the `Task` module is unused
+# (if we also don't use any of the other importd symbols)
+main : Task.Task {}
 main =
     when if 1 == 1 then True 3 else False 3.14 is
-        True n -> Effect.putLine (Str.fromInt n)
-        _ -> Effect.putLine "Yay"
+        True n -> Task.putLine (Str.fromInt n)
+        _ -> Task.putLine "Yay"
 
 # main : Effect.Effect {} as Fx
 # main =

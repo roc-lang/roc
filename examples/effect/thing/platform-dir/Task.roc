@@ -4,6 +4,6 @@ interface Task
 
 Task a : Effect.Effect a
 
-putLine = Effect.putLine
+putLine = \line -> Effect.putLine line
 
 after = Effect.after

@@ -119,14 +119,8 @@ pub fn canonicalize_module_defs<'a>(
         } else {
             // This is a type alias
 
-            // the same scheme as with identifiers won't work here, e.g.
-            //
-            // Task : Effect
-            //
-            // really is not the same as
-            //
-            // Task a : Effect a
-            panic!("TODO add type aliases to type alias dictionary, based on exposed types");
+            // the should already be added to the scope when this module is canonicalized
+            debug_assert!(scope.contains_alias(symbol));
         }
     }
 
