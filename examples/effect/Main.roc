@@ -1,7 +1,9 @@
-app "effect-example" imports [ Effect ] provides [ main ] to "./platform"
+app "effect-example"
+    packages { base: "./thing/platform-dir" }
+    imports [ base.Task.{ Task, after } ]
+    provides [ main ] to base
 
-
-main : Effect.Effect {} as Fx
+main : Task {}
 main =
     when if 1 == 1 then True 3 else False 3.14 is
         True n -> Effect.putLine (Str.fromInt n)

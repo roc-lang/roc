@@ -97,6 +97,7 @@ pub fn canonicalize_module_defs<'a>(
         let first_char = ident.as_inline_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
+            // this is a value definition
             let expr_var = var_store.fresh();
 
             match scope.import(ident, symbol, region) {
@@ -116,6 +117,15 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
         } else {
+            // This is a type alias
+
+            // the same scheme as with identifiers won't work here, e.g.
+            //
+            // Task : Effect
+            //
+            // really is not the same as
+            //
+            // Task a : Effect a
             panic!("TODO add type aliases to type alias dictionary, based on exposed types");
         }
     }
