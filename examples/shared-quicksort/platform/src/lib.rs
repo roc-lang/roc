@@ -1,9 +1,11 @@
+#![allow(non_snake_case)]
+
 use roc_std::RocCallResult;
 use roc_std::RocList;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "_quicksort_1_exposed"]
+    #[link_name = "roc__quicksort_1_exposed"]
     fn quicksort(list: RocList<i64>, output: &mut RocCallResult<RocList<i64>>) -> ();
 }
 

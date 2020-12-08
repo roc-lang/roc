@@ -1,7 +1,9 @@
 platform folkertdev/foo
-    provides [ mainForHost ]
-    requires { main : Effect {} }
+    requires { rocMain : Effect {} }
+    exposes []
+    packages {}
     imports []
+    provides [ mainForHost ]
     effects Effect
         {
             putChar : Int -> Effect {},
@@ -10,4 +12,4 @@ platform folkertdev/foo
         }
 
 mainForHost : Effect {} as Fx
-mainForHost = main
+mainForHost = rocMain

@@ -1,19 +1,21 @@
+#![allow(non_snake_case)]
+
 use roc_std::alloca;
 use roc_std::RocCallResult;
 use std::alloc::Layout;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "Main_makeClosure_1_exposed"]
+    #[link_name = "roc__makeClosure_1_exposed"]
     fn make_closure(output: *mut u8) -> ();
 
-    #[link_name = "Main_makeClosure_1_size"]
+    #[link_name = "roc__makeClosure_1_size"]
     fn closure_size() -> i64;
 
-    #[link_name = "Main_makeClosure_1_MyClosure_caller"]
+    #[link_name = "roc__makeClosure_1_MyClosure_caller"]
     fn call_MyClosure(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
 
-    #[link_name = "Main_makeClosure_1_MyClosure_size"]
+    #[link_name = "roc__makeClosure_1_MyClosure_size"]
     fn size_MyClosure() -> i64;
 }
 
@@ -65,7 +67,12 @@ pub fn rust_main() -> isize {
 
                 let closure_data_ptr = buffer.offset(16);
 
-                call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8)
+                let result =
+                    call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8);
+
+                std::alloc::dealloc(buffer, layout);
+
+                result
             }
             Err(msg) => {
                 std::alloc::dealloc(buffer, layout);
@@ -80,7 +87,6 @@ pub fn rust_main() -> isize {
     println!(
         "Roc closure took {:.4} ms to compute this answer: {:?}",
         duration.as_secs_f64() * 1000.0,
-        // truncate the answer, so stdout is not swamped
         answer
     );
 

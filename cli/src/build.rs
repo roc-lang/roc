@@ -13,7 +13,7 @@ use target_lexicon::Triple;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     buf.push_str(&format!(
-        "        {:.3} ms   {}\n",
+        "        {:9.3} ms   {}\n",
         duration.as_secs_f64() * 1000.0,
         label,
     ));
@@ -53,7 +53,14 @@ pub fn build_file(
         let module_name = loaded.interns.module_name(*module_id);
 
         buf.push_str("    ");
-        buf.push_str(module_name);
+
+        if module_name.is_empty() {
+            // the App module
+            buf.push_str("Application Module");
+        } else {
+            buf.push_str(module_name);
+        }
+
         buf.push('\n');
 
         report_timing(buf, "Read .roc file from disk", module_timing.read_roc_file);
@@ -81,15 +88,10 @@ pub fn build_file(
         }
     }
 
-    println!(
-        "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
-        buf
-    );
-
     let cwd = app_o_file.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
 
-    program::gen_from_mono_module(
+    let code_gen_timing = program::gen_from_mono_module(
         &arena,
         loaded,
         roc_file_path,
@@ -97,6 +99,19 @@ pub fn build_file(
         &app_o_file,
         opt_level,
         emit_debug_info,
+    );
+
+    buf.push('\n');
+    buf.push_str("    ");
+    buf.push_str("Code Generation");
+    buf.push('\n');
+
+    report_timing(buf, "Generate LLVM IR", code_gen_timing.code_gen);
+    report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
+
+    println!(
+        "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
+        buf
     );
 
     println!("\nSuccess! 🎉\n\n\t➡ {}\n", app_o_file.display());

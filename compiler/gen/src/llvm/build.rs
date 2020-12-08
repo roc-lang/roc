@@ -1230,39 +1230,62 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     use roc_mono::ir::Stmt::*;
 
     match stmt {
-        Let(symbol, expr, layout, cont) => {
-            let context = &env.context;
+        Let(first_symbol, first_expr, first_layout, mut cont) => {
+            let mut queue = Vec::new_in(env.arena);
 
-            let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
-            let expr_bt = if let Layout::RecursivePointer = layout {
-                match expr {
-                    Expr::AccessAtIndex { field_layouts, .. } => {
-                        let layout = Layout::Struct(field_layouts);
+            queue.push((first_symbol, first_expr, first_layout));
 
-                        block_of_memory(env.context, &layout, env.ptr_bytes)
+            while let Let(symbol, expr, layout, new_cont) = cont {
+                queue.push((symbol, expr, layout));
+
+                cont = new_cont;
+            }
+
+            let mut stack = Vec::with_capacity_in(queue.len(), env.arena);
+
+            for (symbol, expr, layout) in queue {
+                let context = &env.context;
+
+                let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
+                let expr_bt = if let Layout::RecursivePointer = layout {
+                    match expr {
+                        Expr::AccessAtIndex { field_layouts, .. } => {
+                            let layout = Layout::Struct(field_layouts);
+
+                            block_of_memory(env.context, &layout, env.ptr_bytes)
+                        }
+                        _ => unreachable!(
+                            "a recursive pointer can only be loaded from a recursive tag union"
+                        ),
                     }
-                    _ => unreachable!(
-                        "a recursive pointer can only be loaded from a recursive tag union"
-                    ),
-                }
-            } else {
-                basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
-            };
-            let alloca =
-                create_entry_block_alloca(env, parent, expr_bt, symbol.ident_string(&env.interns));
+                } else {
+                    basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
+                };
+                let alloca = create_entry_block_alloca(
+                    env,
+                    parent,
+                    expr_bt,
+                    symbol.ident_string(&env.interns),
+                );
 
-            env.builder.build_store(alloca, val);
+                env.builder.build_store(alloca, val);
 
-            // Make a new scope which includes the binding we just encountered.
-            // This should be done *after* compiling the bound expr, since any
-            // recursive (in the LetRec sense) bindings should already have
-            // been extracted as procedures. Nothing in here should need to
-            // access itself!
-            // scope = scope.clone();
+                // Make a new scope which includes the binding we just encountered.
+                // This should be done *after* compiling the bound expr, since any
+                // recursive (in the LetRec sense) bindings should already have
+                // been extracted as procedures. Nothing in here should need to
+                // access itself!
+                // scope = scope.clone();
 
-            scope.insert(*symbol, (layout.clone(), alloca));
+                scope.insert(*symbol, (layout.clone(), alloca));
+                stack.push(*symbol);
+            }
+
             let result = build_exp_stmt(env, layout_ids, scope, parent, cont);
-            scope.remove(symbol);
+
+            for symbol in stack {
+                scope.remove(&symbol);
+            }
 
             result
         }
