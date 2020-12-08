@@ -987,8 +987,11 @@ impl<'a> Expr<'a> {
             } => {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
-                    TagName::Private(s) => alloc.text(format!("{}", s)),
-                    TagName::Closure(s) => alloc.text(format!("Closure({})", s)),
+                    TagName::Private(s) => symbol_to_doc(alloc, *s),
+                    TagName::Closure(s) => alloc
+                        .text("ClosureTag(")
+                        .append(symbol_to_doc(alloc, *s))
+                        .append(")"),
                 };
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
@@ -1006,7 +1009,10 @@ impl<'a> Expr<'a> {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
                     TagName::Private(s) => alloc.text(format!("{}", s)),
-                    TagName::Closure(s) => alloc.text(format!("Closure({})", s)),
+                    TagName::Closure(s) => alloc
+                        .text("ClosureTag(")
+                        .append(symbol_to_doc(alloc, *s))
+                        .append(")"),
                 };
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));

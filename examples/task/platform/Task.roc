@@ -23,10 +23,9 @@ after = \effect, transform ->
             Ok a -> transform a
             Err err -> Task.fail err
 
-
 map : Task a err, (a -> b) -> Task b err
 map = \effect, transform ->
     Effect.after effect \result ->
         when result is
             Ok a -> Task.succeed (transform a)
-            Err err -> Task.fail err
+            Err err -> Effect.always (Err err) # Task.fail err  does not work. WEIRD!
