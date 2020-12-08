@@ -49,17 +49,24 @@ pub fn rebuild_host(host_input_path: &Path) {
     let host_dest = host_input_path.with_file_name("host.o");
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
+    let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
 
     if zig_host_src.exists() {
         // Compile host.zig
+        let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
         let output = Command::new("zig")
             .env_clear()
             .env("PATH", &env_path)
+            .env("HOME", &env_home)
             .args(&[
+                "build-lib",
+                zig_host_src.to_str().unwrap(),
+                &emit_bin,
+                // include the zig runtime
+                "-fcompiler-rt",
+                // include libc
                 "--library",
                 "c",
-                "build-obj",
-                zig_host_src.to_str().unwrap(),
             ])
             .output()
             .unwrap();
