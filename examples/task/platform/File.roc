@@ -22,7 +22,7 @@ FileOpenErr a :
         SymLinkLoop Path,
         TooManyOpenFiles Path,
         IoError Path,
-        UnknownError Int Path,
+        UnknownError I64 Path,
     ]a
 
 ## Errors when attempting to read a non-directory file.

@@ -1,9 +1,9 @@
 interface Task
     exposes [ Task, succeed, fail, after, map ]
-    imports [ Effect.{ Effect } ]
+    imports [ Effect ]
 
 
-Task ok err : Effect (Result ok err)
+Task ok err : Effect.Effect (Result ok err)
 
 
 succeed : val -> Task val *
@@ -18,7 +18,7 @@ fail = \val ->
 
 after : Task a err, (a -> Task b err) -> Task b err
 after = \effect, transform ->
-    Effect.after effect, \result ->
+    Effect.after effect \result ->
         when result is
             Ok a -> transform a
             Err err -> Task.fail err
@@ -26,7 +26,7 @@ after = \effect, transform ->
 
 map : Task a err, (a -> b) -> Task b err
 map = \effect, transform ->
-    Effect.after effect, \result ->
+    Effect.after effect \result ->
         when result is
             Ok a -> Task.succeed (transform a)
             Err err -> Task.fail err
