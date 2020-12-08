@@ -7,16 +7,16 @@ use std::alloc::Layout;
 use std::time::SystemTime;
 
 extern "C" {
-    #[link_name = "roc__main_1_exposed"]
+    #[link_name = "roc__mainForHost_1_exposed"]
     fn roc_main(output: *mut u8) -> ();
 
-    #[link_name = "roc__main_1_size"]
+    #[link_name = "roc__mainForHost_1_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__main_1_Fx_caller"]
+    #[link_name = "roc__mainForHost_1_Fx_caller"]
     fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
 
-    #[link_name = "roc__main_1_Fx_size"]
+    #[link_name = "roc__mainForHost_1_Fx_size"]
     fn size_Fx() -> i64;
 }
 
