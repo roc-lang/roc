@@ -551,7 +551,7 @@ pub enum BuildProblem<'a> {
 #[derive(Debug)]
 struct ModuleHeader<'a> {
     module_id: ModuleId,
-    module_name: AppOrInterfaceName<'a>,
+    module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
@@ -620,7 +620,7 @@ pub struct VariablySizedLayouts<'a> {
 #[derive(Debug)]
 struct ParsedModule<'a> {
     module_id: ModuleId,
-    module_name: AppOrInterfaceName<'a>,
+    module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     src: &'a str,
     module_timing: ModuleTiming,
@@ -1478,7 +1478,8 @@ fn update<'a>(
             //
             // e.g. for `app "blah"` we should generate an output file named "blah"
             match &parsed.module_name {
-                AppOrInterfaceName::App(output_str) => match output_str {
+                ModuleNameEnum::PkgConfig(_) => {}
+                ModuleNameEnum::App(output_str) => match output_str {
                     StrLiteral::PlainLine(path) => {
                         state.output_path = Some(path);
                     }
@@ -1486,7 +1487,7 @@ fn update<'a>(
                         todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
                     }
                 },
-                AppOrInterfaceName::Interface(_) => {}
+                ModuleNameEnum::Interface(_) => {}
             }
 
             let module_id = parsed.module_id;
@@ -2108,7 +2109,7 @@ fn parse_header<'a>(
         Ok((ast::Module::Interface { header }, parse_state)) => Ok(send_header(
             Located {
                 region: header.name.region,
-                value: AppOrInterfaceName::Interface(header.name.value),
+                value: ModuleNameEnum::Interface(header.name.value),
             },
             filename,
             opt_shorthand,
@@ -2130,7 +2131,7 @@ fn parse_header<'a>(
             let (module_id, app_module_header_msg) = send_header(
                 Located {
                     region: header.name.region,
-                    value: AppOrInterfaceName::App(header.name.value),
+                    value: ModuleNameEnum::App(header.name.value),
                 },
                 filename,
                 opt_shorthand,
@@ -2294,15 +2295,16 @@ fn load_from_str<'a>(
 }
 
 #[derive(Debug)]
-enum AppOrInterfaceName<'a> {
+enum ModuleNameEnum<'a> {
     /// A filename
     App(StrLiteral<'a>),
     Interface(roc_parse::header::ModuleName<'a>),
+    PkgConfig(&'a str),
 }
 
 #[allow(clippy::too_many_arguments)]
 fn send_header<'a>(
-    loc_name: Located<AppOrInterfaceName<'a>>,
+    loc_name: Located<ModuleNameEnum<'a>>,
     filename: PathBuf,
     opt_shorthand: Option<&'a str>,
     packages: &'a [Located<PackageEntry<'a>>],
@@ -2314,9 +2316,10 @@ fn send_header<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    use AppOrInterfaceName::*;
+    use ModuleNameEnum::*;
 
     let declared_name: ModuleName = match &loc_name.value {
+        PkgConfig(_) => unreachable!(),
         App(_) => ModuleName::APP.into(),
         Interface(module_name) => {
             // TODO check to see if module_name is consistent with filename.
@@ -2483,6 +2486,176 @@ fn send_header<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn send_header_two<'a>(
+    filename: PathBuf,
+    shorthand: &'a str,
+    packages: &'a [Located<PackageEntry<'a>>],
+    provides: &'a [Located<ExposesEntry<'a, &'a str>>],
+    imports: &'a [Located<ImportsEntry<'a>>],
+    to_platform: Option<To<'a>>,
+    parse_state: parser::State<'a>,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    module_timing: ModuleTiming,
+) -> (ModuleId, Msg<'a>) {
+    use inlinable_string::InlinableString;
+
+    let declared_name: InlinableString = "Pkg-Config".into();
+
+    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+        Vec::with_capacity(imports.len());
+    let mut imported_modules: MutSet<ModuleId> = MutSet::default();
+
+    // add standard imports
+    // imported_modules.insert(ModuleId::APP);
+    // imported_modules.insert(ModuleId::EFFECT);
+
+    let mut scope_size = 0;
+
+    for loc_entry in imports {
+        let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
+
+        scope_size += exposed.len();
+
+        imported.push((qualified_module_name, exposed, loc_entry.region));
+    }
+
+    let num_exposes = provides.len();
+    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
+        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
+    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
+
+    // Make sure the module_ids has ModuleIds for all our deps,
+    // then record those ModuleIds in can_module_ids for later.
+    let mut scope: MutMap<Ident, (Symbol, Region)> =
+        HashMap::with_capacity_and_hasher(scope_size, default_hasher());
+    let home: ModuleId;
+
+    let ident_ids = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        let name = PQModuleName::Qualified(&shorthand, declared_name);
+        home = module_ids.get_or_insert(&name);
+
+        // Ensure this module has an entry in the exposed_ident_ids map.
+        ident_ids_by_module
+            .entry(home)
+            .or_insert_with(IdentIds::default);
+
+        // For each of our imports, add an entry to deps_by_name
+        //
+        // e.g. for `imports [ base.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        //
+        // Also build a list of imported_values_to_expose (like `bar` above.)
+        for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
+            let cloned_module_name = qualified_module_name.module.clone();
+            let pq_module_name = match qualified_module_name.opt_package {
+                None => PQModuleName::Qualified(shorthand, qualified_module_name.module.into()),
+                Some(package) => {
+                    PQModuleName::Qualified(package, cloned_module_name.clone().into())
+                }
+            };
+
+            let module_id = module_ids.get_or_insert(&pq_module_name);
+            imported_modules.insert(module_id);
+
+            deps_by_name.insert(pq_module_name, module_id);
+
+            // Add the new exposed idents to the dep module's IdentIds, so
+            // once that module later gets loaded, its lookups will resolve
+            // to the same symbols as the ones we're using here.
+            let ident_ids = ident_ids_by_module
+                .entry(module_id)
+                .or_insert_with(IdentIds::default);
+
+            for ident in exposed_idents {
+                let ident_id = ident_ids.get_or_insert(ident.as_inline_str());
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, region));
+            }
+        }
+
+        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
+
+        // Generate IdentIds entries for all values this module exposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        for loc_exposed in provides.iter() {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
+            let symbol = Symbol::new(home, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        if cfg!(debug_assertions) {
+            home.register_debug_idents(&ident_ids);
+        }
+
+        ident_ids.clone()
+    };
+
+    let mut parse_entries: Vec<_> = (&packages).iter().map(|x| &x.value).collect();
+    let mut package_entries = MutMap::default();
+
+    while let Some(parse_entry) = parse_entries.pop() {
+        use PackageEntry::*;
+        match parse_entry {
+            Entry {
+                shorthand,
+                package_or_path,
+                ..
+            } => {
+                package_entries.insert(*shorthand, package_or_path.value.clone());
+            }
+            SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
+                parse_entries.push(inner);
+            }
+        }
+    }
+
+    // Send the deps to the coordinator thread for processing,
+    // then continue on to parsing and canonicalizing defs.
+    //
+    // We always need to send these, even if deps is empty,
+    // because the coordinator thread needs to receive this message
+    // to decrement its "pending" count.
+    let module_name = ModuleNameEnum::PkgConfig(shorthand);
+    (
+        home,
+        Msg::Header(ModuleHeader {
+            module_id: home,
+            module_path: filename,
+            exposed_ident_ids: ident_ids,
+            module_name,
+            packages: package_entries,
+            imported_modules,
+            deps_by_name,
+            exposes: exposed,
+            to_platform,
+            src: parse_state.bytes,
+            exposed_imports: scope,
+            module_timing,
+        }),
+    )
+}
+
 impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     #[allow(clippy::too_many_arguments)]
@@ -2607,18 +2780,15 @@ fn fabricate_pkg_config_module<'a>(
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let name = format!("{}.Pkg-Config", shorthand);
-    Ok(send_header(
-        Located {
-            region: header.name.region,
-            value: AppOrInterfaceName::Interface(roc_parse::header::ModuleName::new(
-                arena.alloc(name),
-            )),
-        },
+
+    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
+        header.provides.clone().into_bump_slice();
+
+    Ok(send_header_two(
         filename,
-        Some(shorthand),
+        shorthand,
         &[],
-        // header.exposes.into_bump_slice(),
-        &[],
+        provides,
         header.imports.clone().into_bump_slice(),
         None,
         parse_state,
@@ -2931,8 +3101,9 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match module_name {
-        AppOrInterfaceName::App(_) => None,
-        AppOrInterfaceName::Interface(name) => Some(crate::docs::generate_module_docs(
+        ModuleNameEnum::PkgConfig(_) => None,
+        ModuleNameEnum::App(_) => None,
+        ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
             name.as_str().into(),
             &exposed_ident_ids,
             &parsed_defs,
