@@ -5,7 +5,7 @@ ConsList a : [ Cons a (ConsList a), Nil ]
 empty : ConsList a
 empty = Nil
 
-len : ConsList a -> Int
+len : ConsList a -> I64
 len = \list ->
     when list is
         Cons _ rest -> 1 + len rest

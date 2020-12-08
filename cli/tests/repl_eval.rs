@@ -54,12 +54,12 @@ mod repl_eval {
 
     #[test]
     fn literal_0x0() {
-        expect_success("0x0", "0 : Int");
+        expect_success("0x0", "0 : I64");
     }
 
     #[test]
     fn literal_0x42() {
-        expect_success("0x42", "66 : Int");
+        expect_success("0x42", "66 : I64");
     }
 
     #[test]
@@ -79,7 +79,7 @@ mod repl_eval {
 
     #[test]
     fn int_addition() {
-        expect_success("0x1 + 2", "3 : Int");
+        expect_success("0x1 + 2", "3 : I64");
     }
 
     #[test]
@@ -89,7 +89,7 @@ mod repl_eval {
 
     #[test]
     fn num_rem() {
-        expect_success("299 % 10", "Ok 9 : Result Int [ DivByZero ]*");
+        expect_success("299 % 10", "Ok 9 : Result I64 [ DivByZero ]*");
     }
 
     #[test]
@@ -191,7 +191,7 @@ mod repl_eval {
 
     #[test]
     fn str_count_graphemes() {
-        expect_success("Str.countGraphemes \"å🤔\"", "2 : Int");
+        expect_success("Str.countGraphemes \"å🤔\"", "2 : I64");
     }
 
     #[test]
@@ -206,7 +206,7 @@ mod repl_eval {
 
     #[test]
     fn literal_int_list() {
-        expect_success("[ 0x1, 0x2, 0x3 ]", "[ 1, 2, 3 ] : List Int");
+        expect_success("[ 0x1, 0x2, 0x3 ]", "[ 1, 2, 3 ] : List I64");
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod repl_eval {
     fn nested_int_list() {
         expect_success(
             r#"[ [ [ 4, 3, 2 ], [ 1, 0x0 ] ], [ [] ], [] ]"#,
-            r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List Int))"#,
+            r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List I64))"#,
         );
     }
 
@@ -316,7 +316,7 @@ mod repl_eval {
     fn basic_2_field_i64_record() {
         expect_success(
             "{ foo: 0x4, bar: 0x2 }",
-            "{ bar: 2, foo: 4 } : { bar : Int, foo : Int }",
+            "{ bar: 2, foo: 4 } : { bar : I64, foo : I64 }",
         );
     }
 
@@ -340,7 +340,7 @@ mod repl_eval {
     fn basic_3_field_record() {
         expect_success(
             "{ foo: 4.1, bar: 2, baz: 0x5 }",
-            "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int, foo : F64 }",
+            "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : I64, foo : F64 }",
         );
     }
 
@@ -387,7 +387,7 @@ mod repl_eval {
     fn list_of_3_field_records() {
         expect_success(
             "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
-            "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : Int, foo : F64 }",
+            "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : I64, foo : F64 }",
         );
     }
 
