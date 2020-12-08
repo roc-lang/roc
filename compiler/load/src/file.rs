@@ -690,6 +690,7 @@ enum Msg<'a> {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
+    pub platform_id: Option<ModuleId>,
     pub goal_phase: Phase,
     pub stdlib: StdLib,
     pub exposed_types: SubsByModule,
@@ -841,12 +842,6 @@ enum BuildTask<'a> {
         module_name: PQModuleName<'a>,
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         shorthands: Arc<Mutex<MutMap<&'a str, PackageOrPath<'a>>>>,
-        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-        mode: Mode,
-    },
-    LoadPkgConfig {
-        shorthand: &'a str,
-        module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
         mode: Mode,
     },
@@ -1272,6 +1267,7 @@ where
 
             let mut state = State {
                 root_id,
+                platform_id: None,
                 goal_phase,
                 stdlib,
                 output_path: None,
@@ -1424,6 +1420,10 @@ fn update<'a>(
                 for (shorthand, package_or_path) in header.packages.iter() {
                     shorthands.insert(shorthand, package_or_path.clone());
                 }
+            }
+
+            if let ModuleNameEnum::PkgConfig(_shorthand) = header.module_name {
+                state.platform_id = Some(header.module_id);
             }
 
             state.platform_path = state.platform_path.or_else(|| header.to_platform.clone());
@@ -1603,7 +1603,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            if module_id == state.root_id {
+            if Some(module_id) == state.platform_id {
                 state
                     .exposed_to_host
                     .extend(solved_module.exposed_vars_by_symbol.iter().copied());
@@ -1638,15 +1638,10 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
-                if module_id != state.root_id {
-                    state.exposed_types.insert(
-                        module_id,
-                        ExposedModuleTypes::Valid(
-                            solved_module.solved_types,
-                            solved_module.aliases,
-                        ),
-                    );
-                }
+                state.exposed_types.insert(
+                    module_id,
+                    ExposedModuleTypes::Valid(solved_module.solved_types, solved_module.aliases),
+                );
 
                 if state.goal_phase > Phase::SolveTypes {
                     let layout_cache = state.layout_caches.pop().unwrap_or_default();
@@ -1914,6 +1909,7 @@ fn load_pkg_config<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     shorthand: &'a str,
+    app_module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
@@ -1961,6 +1957,7 @@ fn load_pkg_config<'a>(
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
                         shorthand,
+                        app_module_id,
                         filename,
                         parser_state,
                         module_ids.clone(),
@@ -2183,6 +2180,7 @@ fn parse_header<'a>(
                                             arena,
                                             &pkg_config_roc,
                                             shorthand,
+                                            module_id,
                                             module_ids,
                                             ident_ids_by_module,
                                             mode,
@@ -2488,10 +2486,13 @@ fn send_header<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn send_header_two<'a>(
+    arena: &'a Bump,
     filename: PathBuf,
     shorthand: &'a str,
+    app_module_id: ModuleId,
     packages: &'a [Located<PackageEntry<'a>>],
     provides: &'a [Located<ExposesEntry<'a, &'a str>>],
+    requires: &'a [Located<TypedIdent<'a>>],
     imports: &'a [Located<ImportsEntry<'a>>],
     to_platform: Option<To<'a>>,
     parse_state: parser::State<'a>,
@@ -2501,15 +2502,23 @@ fn send_header_two<'a>(
 ) -> (ModuleId, Msg<'a>) {
     use inlinable_string::InlinableString;
 
-    let declared_name: InlinableString = "Pkg-Config".into();
+    let declared_name: InlinableString = "".into();
 
     let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutSet<ModuleId> = MutSet::default();
 
+    let num_exposes = provides.len();
+    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
+        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
+
     // add standard imports
-    // imported_modules.insert(ModuleId::APP);
-    // imported_modules.insert(ModuleId::EFFECT);
+    // TODO add Effect by default
+    imported_modules.insert(app_module_id);
+    deps_by_name.insert(
+        PQModuleName::Unqualified(ModuleName::APP.into()),
+        app_module_id,
+    );
 
     let mut scope_size = 0;
 
@@ -2521,9 +2530,6 @@ fn send_header_two<'a>(
         imported.push((qualified_module_name, exposed, loc_entry.region));
     }
 
-    let num_exposes = provides.len();
-    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
-        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,
@@ -2579,6 +2585,23 @@ fn send_header_two<'a>(
                 debug_assert!(!scope.contains_key(&ident.clone()));
 
                 scope.insert(ident, (symbol, region));
+            }
+        }
+
+        {
+            let ident_ids = ident_ids_by_module
+                .entry(app_module_id)
+                .or_insert_with(IdentIds::default);
+
+            for (loc_ident, _) in unpack_exposes_entries(arena, requires) {
+                let ident: Ident = loc_ident.value.into();
+                let ident_id = ident_ids.get_or_insert(ident.as_inline_str());
+                let symbol = Symbol::new(app_module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, loc_ident.region));
             }
         }
 
@@ -2771,24 +2794,26 @@ fn run_solve<'a>(
 fn fabricate_pkg_config_module<'a>(
     arena: &'a Bump,
     shorthand: &'a str,
+    app_module_id: ModuleId,
     filename: PathBuf,
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    mode: Mode,
+    _mode: Mode,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
-    let name = format!("{}.Pkg-Config", shorthand);
-
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
         header.provides.clone().into_bump_slice();
 
     Ok(send_header_two(
+        arena,
         filename,
         shorthand,
+        app_module_id,
         &[],
         provides,
+        header.requires.clone().into_bump_slice(),
         header.imports.clone().into_bump_slice(),
         None,
         parse_state,
@@ -3545,19 +3570,6 @@ fn run_task<'a>(
             mode,
         )
         .map(|(_, msg)| msg),
-        LoadPkgConfig {
-            shorthand,
-            module_ids,
-            ident_ids_by_module,
-            mode,
-        } => load_pkg_config(
-            arena,
-            src_dir,
-            shorthand,
-            module_ids,
-            ident_ids_by_module,
-            mode,
-        ),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
