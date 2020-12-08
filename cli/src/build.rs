@@ -45,6 +45,9 @@ pub fn build_file(
         src_dir.as_path(),
         subs_by_module,
     )?;
+
+    let path_to_platform = loaded.platform_path.clone();
+
     let app_o_file = roc_file_path.with_file_name("roc_app.o");
     let buf = &mut String::with_capacity(1024);
 
@@ -127,7 +130,9 @@ pub fn build_file(
     );
 
     // Step 2: link the precompiled host and compiled app
-    let host_input_path = cwd.join("platform").join("host.o");
+    let mut host_input_path = PathBuf::from(cwd);
+    host_input_path.push(&*path_to_platform);
+    host_input_path.push("host.o");
 
     // TODO we should no longer need to do this once we have platforms on
     // a package repository, as we can then get precompiled hosts from there.
