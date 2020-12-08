@@ -559,9 +559,15 @@ struct ModuleHeader<'a> {
     imported_modules: MutSet<ModuleId>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    to_platform: Option<To<'a>>,
     src: &'a [u8],
     module_timing: ModuleTiming,
+}
+
+#[derive(Debug)]
+enum ModuleHeaderExtra<'a> {
+    HeaderForApp { to_platform: To<'a> },
+    HeaderForPkgConfig,
+    HeaderForInterface,
 }
 
 #[derive(Debug)]
@@ -634,7 +640,7 @@ struct ParsedModule<'a> {
 #[derive(Debug)]
 enum Msg<'a> {
     Many(Vec<Msg<'a>>),
-    Header(ModuleHeader<'a>),
+    Header(ModuleHeader<'a>, ModuleHeaderExtra<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
         constrained_module: ConstrainedModule,
@@ -1410,7 +1416,7 @@ fn update<'a>(
 
             Ok(state)
         }
-        Header(header) => {
+        Header(header, header_extra) => {
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
 
@@ -1422,11 +1428,20 @@ fn update<'a>(
                 }
             }
 
-            if let ModuleNameEnum::PkgConfig(_shorthand) = header.module_name {
-                state.platform_id = Some(header.module_id);
-            }
+            use ModuleHeaderExtra::*;
+            match header_extra {
+                HeaderForApp { to_platform } => {
+                    debug_assert_eq!(state.platform_path, None);
 
-            state.platform_path = state.platform_path.or_else(|| header.to_platform.clone());
+                    state.platform_path = Some(to_platform.clone());
+                }
+                HeaderForPkgConfig => {
+                    debug_assert_eq!(state.platform_id, None);
+
+                    state.platform_id = Some(header.module_id);
+                }
+                HeaderForInterface => {}
+            }
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
@@ -1962,7 +1977,6 @@ fn load_pkg_config<'a>(
                         parser_state,
                         module_ids.clone(),
                         ident_ids_by_module.clone(),
-                        mode,
                         &header,
                         pkg_module_timing,
                     )
@@ -2465,22 +2479,29 @@ fn send_header<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
+    let extra = match to_platform {
+        Some(to_platform) => ModuleHeaderExtra::HeaderForApp { to_platform },
+        None => ModuleHeaderExtra::HeaderForInterface,
+    };
+
     (
         home,
-        Msg::Header(ModuleHeader {
-            module_id: home,
-            module_path: filename,
-            exposed_ident_ids: ident_ids,
-            module_name: loc_name.value,
-            packages: package_entries,
-            imported_modules,
-            deps_by_name,
-            exposes: exposed,
-            to_platform,
-            src: parse_state.bytes,
-            exposed_imports: scope,
-            module_timing,
-        }),
+        Msg::Header(
+            ModuleHeader {
+                module_id: home,
+                module_path: filename,
+                exposed_ident_ids: ident_ids,
+                module_name: loc_name.value,
+                packages: package_entries,
+                imported_modules,
+                deps_by_name,
+                exposes: exposed,
+                src: parse_state.bytes,
+                exposed_imports: scope,
+                module_timing,
+            },
+            extra,
+        ),
     )
 }
 
@@ -2494,7 +2515,6 @@ fn send_header_two<'a>(
     provides: &'a [Located<ExposesEntry<'a, &'a str>>],
     requires: &'a [Located<TypedIdent<'a>>],
     imports: &'a [Located<ImportsEntry<'a>>],
-    to_platform: Option<To<'a>>,
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -2660,22 +2680,26 @@ fn send_header_two<'a>(
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
     let module_name = ModuleNameEnum::PkgConfig(shorthand);
+
+    let extra = ModuleHeaderExtra::HeaderForPkgConfig;
     (
         home,
-        Msg::Header(ModuleHeader {
-            module_id: home,
-            module_path: filename,
-            exposed_ident_ids: ident_ids,
-            module_name,
-            packages: package_entries,
-            imported_modules,
-            deps_by_name,
-            exposes: exposed,
-            to_platform,
-            src: parse_state.bytes,
-            exposed_imports: scope,
-            module_timing,
-        }),
+        Msg::Header(
+            ModuleHeader {
+                module_id: home,
+                module_path: filename,
+                exposed_ident_ids: ident_ids,
+                module_name,
+                packages: package_entries,
+                imported_modules,
+                deps_by_name,
+                exposes: exposed,
+                src: parse_state.bytes,
+                exposed_imports: scope,
+                module_timing,
+            },
+            extra,
+        ),
     )
 }
 
@@ -2799,7 +2823,6 @@ fn fabricate_pkg_config_module<'a>(
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    _mode: Mode,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
@@ -2815,7 +2838,6 @@ fn fabricate_pkg_config_module<'a>(
         provides,
         header.requires.clone().into_bump_slice(),
         header.imports.clone().into_bump_slice(),
-        None,
         parse_state,
         module_ids,
         ident_ids_by_module,
