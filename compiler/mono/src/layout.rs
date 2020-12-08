@@ -278,7 +278,7 @@ pub enum Builtin<'a> {
     Float32,
     Float16,
     Str,
-    Map(&'a Layout<'a>, &'a Layout<'a>),
+    Dict(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
     List(MemoryMode, &'a Layout<'a>),
     EmptyStr,
@@ -627,8 +627,8 @@ impl<'a> Builtin<'a> {
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
-    pub const MAP_WORDS: u32 = 6;
-    pub const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
+    pub const DICT_WORDS: u32 = 6;
+    pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Map with {} for value
     pub const LIST_WORDS: u32 = 2;
 
     /// Layout of collection wrapper for List and Str - a struct of (pointer, length).
@@ -653,7 +653,7 @@ impl<'a> Builtin<'a> {
             Float32 => Builtin::F32_SIZE,
             Float16 => Builtin::F16_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
-            Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
+            Dict(_, _) | EmptyMap => Builtin::DICT_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
             List(_, _) | EmptyList => Builtin::LIST_WORDS * pointer_size,
         }
@@ -678,7 +678,7 @@ impl<'a> Builtin<'a> {
             Float32 => align_of::<f32>() as u32,
             Float16 => align_of::<i16>() as u32,
             Str | EmptyStr => pointer_size,
-            Map(_, _) | EmptyMap => pointer_size,
+            Dict(_, _) | EmptyMap => pointer_size,
             Set(_) | EmptySet => pointer_size,
             List(_, _) | EmptyList => pointer_size,
         }
@@ -690,7 +690,7 @@ impl<'a> Builtin<'a> {
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
-            Str | Map(_, _) | Set(_) | List(_, _) => false,
+            Str | Dict(_, _) | Set(_) | List(_, _) => false,
         }
     }
 
@@ -706,7 +706,7 @@ impl<'a> Builtin<'a> {
                 MemoryMode::Unique => element_layout.contains_refcounted(),
             },
 
-            Str | Map(_, _) | Set(_) => true,
+            Str | Dict(_, _) | Set(_) => true,
         }
     }
 }
