@@ -192,4 +192,8 @@ impl Scope {
 
         self.aliases.insert(name, alias);
     }
+
+    pub fn contains_alias(&mut self, name: Symbol) -> bool {
+        self.aliases.contains_key(&name)
+    }
 }

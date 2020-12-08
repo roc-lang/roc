@@ -762,8 +762,8 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                f: {                    y : Int,
-                                         x : Int ,
+                f: {                    y : I64,
+                                         x : I64 ,
                    }
                 
                 f"#
@@ -772,8 +772,8 @@ mod test_fmt {
                 r#"
                 f :
                     {
-                        y : Int,
-                        x : Int,
+                        y : I64,
+                        x : I64,
                     }
 
                 f"#
@@ -787,8 +787,8 @@ mod test_fmt {
             r#"
                 f :
                     {
-                        y : Int,
-                        x : Int,
+                        y : I64,
+                        x : I64,
                     }
 
                 f"#
@@ -800,7 +800,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
                 f :
-                    Int
+                    I64
 
                 f"#
         ));
@@ -880,7 +880,7 @@ mod test_fmt {
                 r#"
                 f :
                     { 
-                        x: Int # comment 1
+                        x: I64 # comment 1
                         ,
                         # comment 2
                     }
@@ -891,7 +891,7 @@ mod test_fmt {
                 r#"
                 f :
                     {
-                        x : Int,
+                        x : I64,
                         # comment 1
                         # comment 2
                     }
@@ -2458,7 +2458,7 @@ mod test_fmt {
     fn record_type() {
         expr_formats_same(indoc!(
             r#"
-            f : { foo : Int }
+            f : { foo : I64 }
             f = { foo: 1000 }
 
             a
@@ -2509,11 +2509,11 @@ mod test_fmt {
     //            r#"
     //            f :
     //                Result a
-    //                    { x : Int
+    //                    { x : I64
     //                    , y : Float
     //                    }
     //                    c
-    //                -> Int
+    //                -> I64
     //            f =
     //                \_ -> 4
     //            "#

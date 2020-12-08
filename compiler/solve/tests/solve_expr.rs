@@ -1326,12 +1326,12 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Int
+                   int : I64
 
                    int
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -1345,7 +1345,7 @@ mod solve_expr {
                    int
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -1354,13 +1354,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Int
+                   int : I64
                    int = 5
 
                    int
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -1369,13 +1369,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Int
+                   int : Num.I64
                    int = 5
 
                    int
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -1390,7 +1390,7 @@ mod solve_expr {
                    int
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -1405,7 +1405,7 @@ mod solve_expr {
                    int
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -1489,13 +1489,13 @@ mod solve_expr {
                 r#"
                     Res a e : [ Okay a, Error e ]
 
-                    ok : Res Int *
+                    ok : Res I64 *
                     ok = Okay 5
 
                     ok
                 "#
             ),
-            "Res Int *",
+            "Res I64 *",
         );
     }
 
@@ -1521,13 +1521,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    ok : Result Int *
+                    ok : Result I64 *
                     ok = Ok 5
 
                     ok
                 "#
             ),
-            "Result Int *",
+            "Result I64 *",
         );
     }
 
@@ -1551,7 +1551,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    ok : Result Int *
+                    ok : Result I64 *
                     ok = Ok 5
 
                     err : Result * Str
@@ -1563,7 +1563,7 @@ mod solve_expr {
                         err
                 "#
             ),
-            "Result Int Str",
+            "Result I64 Str",
         );
     }
 
@@ -1584,19 +1584,19 @@ mod solve_expr {
 
     // #[test]
     // fn annotation_using_num_used() {
-    //     // There was a problem where `Int`, because it is only an annotation
+    //     // There was a problem where `I64`, because it is only an annotation
     //     // wasn't added to the vars_by_symbol.
     //     infer_eq_without_problem(
     //         indoc!(
     //             r#"
-    //                int : Int
+    //                int : I64
 
     //                p = (\x -> x) int
 
     //                p
     //                "#
     //         ),
-    //         "Int",
+    //         "I64",
     //     );
     // }
 
@@ -1631,7 +1631,7 @@ mod solve_expr {
                     x
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -1840,7 +1840,7 @@ mod solve_expr {
                 v
                 "#
             ),
-            "Foo Int",
+            "Foo I64",
         );
     }
 
@@ -1907,7 +1907,7 @@ mod solve_expr {
                     length
                        "#
             ),
-            "Peano -> Int",
+            "Peano -> I64",
         );
     }
 
@@ -2253,13 +2253,13 @@ mod solve_expr {
     //     infer_eq_without_problem(
     //         indoc!(
     //             r#"
-    //                 UserId x : [ UserId Int ]
+    //                 UserId x : [ UserId I64 ]
     //                 UserId x = UserId 42
 
     //                 x
     //             "#
     //         ),
-    //         "Int",
+    //         "I64",
     //     );
     // }
 
@@ -2340,13 +2340,13 @@ mod solve_expr {
                     ListB a : [ Cons a (ListC a) ]
                     ListC a : [ Cons a (ListA a), Nil ]
 
-                    val : ListC Num.Int
+                    val : ListC Num.I64
                     val = Cons 1 (Cons 2 (Cons 3 Nil))
 
                     val
                 "#
             ),
-            "ListC Int",
+            "ListC I64",
         );
     }
 
@@ -2388,7 +2388,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -2400,7 +2400,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "Int, Int, List Int -> [ Pair Int (List Int) ]",
+            "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
         );
     }
 
@@ -2410,7 +2410,7 @@ mod solve_expr {
             infer_eq_without_problem(
                 indoc!(
                     r#"
-                swap : Int, Int, List a -> List a
+                swap : I64, I64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -2421,7 +2421,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -2449,7 +2449,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "Int, Int, List Int -> [ Pair Int (List Int) ]",
+                "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
             );
         });
     }
@@ -2462,14 +2462,14 @@ mod solve_expr {
                 idList : List a -> List a
                 idList = \list -> list
 
-                foo : List Int -> List Int
+                foo : List I64 -> List I64
                 foo = \initialList -> idList initialList
 
 
                 foo
             "#
             ),
-            "List Int -> List Int",
+            "List I64 -> List I64",
         );
     }
 
@@ -2547,7 +2547,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "F64 -> Int",
+            "F64 -> I64",
         );
     }
 
@@ -2559,7 +2559,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "F64 -> Int",
+            "F64 -> I64",
         );
     }
 
@@ -2571,7 +2571,7 @@ mod solve_expr {
                 Num.powInt
                 "#
             ),
-            "Int, Int -> Int",
+            "I64, I64 -> I64",
         );
     }
 
@@ -2789,15 +2789,15 @@ mod solve_expr {
     #[should_panic]
     fn rigid_record_quantification() {
         // the ext here is qualified on the outside (because we have rank 1 types, not rank 2).
-        // That means e.g. `f : { bar : String, foo : Int } -> Bool }` is a valid argument, but
-        // that function could not be applied to the `{ foo : Int }` list. Therefore, this function
+        // That means e.g. `f : { bar : String, foo : I64 } -> Bool }` is a valid argument, but
+        // that function could not be applied to the `{ foo : I64 }` list. Therefore, this function
         // is not allowed.
         //
         // should hit a debug_assert! in debug mode, and produce a type error in release mode
         infer_eq_without_problem(
             indoc!(
                 r#"
-                test : ({ foo : Int }ext -> Bool), { foo : Int } -> Bool
+                test : ({ foo : I64 }ext -> Bool), { foo : I64 } -> Bool
                 test = \fn, a -> fn a
 
                 test
@@ -2814,12 +2814,12 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    negatePoint : { x : Int, y : Int, z ? Num c } -> { x : Int, y : Int, z : Num c }
+                    negatePoint : { x : I64, y : I64, z ? Num c } -> { x : I64, y : I64, z : Num c }
 
                     negatePoint { x: 1, y: 2 }
                 "#
             ),
-            "{ x : Int, y : Int, z : Num c }",
+            "{ x : I64, y : I64, z : Num c }",
         );
     }
 
@@ -2828,7 +2828,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    negatePoint : { x : Int, y : Int, z ? Num c }r -> { x : Int, y : Int, z : Num c }r
+                    negatePoint : { x : I64, y : I64, z ? Num c }r -> { x : I64, y : I64, z : Num c }r
 
                     a = negatePoint { x: 1, y: 2 }
                     b = negatePoint { x: 1, y: 2, blah : "hi" }
@@ -2836,7 +2836,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Int, y : Int, z : Num c }, b : { blah : Str, x : Int, y : Int, z : Num c } }",
+            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num c } }",
         );
     }
 
@@ -2850,7 +2850,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : Int }",
+            "{ x : Num a, y : F64, z : I64 }",
         );
     }
 
@@ -2917,13 +2917,13 @@ mod solve_expr {
             indoc!(
                 r#"
                 \rec ->
-                    { x, y } : { x : Int, y ? Bool }*
+                    { x, y } : { x : I64, y ? Bool }*
                     { x, y ? False } = rec
 
                     { x, y }
                 "#
             ),
-            "{ x : Int, y ? Bool }* -> { x : Int, y : Bool }",
+            "{ x : I64, y ? Bool }* -> { x : I64, y : Bool }",
         );
     }
 
@@ -2944,14 +2944,14 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                empty : List Int
+                empty : List I64
                 empty =
                     []
 
                 List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -2970,7 +2970,7 @@ mod solve_expr {
                 g
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -3023,7 +3023,7 @@ mod solve_expr {
                 app "test" provides [ main ] to "./platform"
 
                 Bar : [ Bar ]
-                Foo : [ Foo Bar Int, Empty ]
+                Foo : [ Foo Bar I64, Empty ]
 
                 foo : Foo
                 foo = Foo Bar 1
@@ -3037,7 +3037,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ Empty, Foo [ Bar ] Int ]",
+            "[ Empty, Foo [ Bar ] I64 ]",
         );
     }
 
@@ -3048,7 +3048,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                Foo : [ @Foo [ @Bar ] Int, @Empty ]
+                Foo : [ @Foo [ @Bar ] I64, @Empty ]
 
                 foo : Foo
                 foo = @Foo @Bar 1
@@ -3062,7 +3062,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ @Empty, @Foo [ @Bar ] Int ]",
+            "[ @Empty, @Foo [ @Bar ] I64 ]",
         );
     }
 
@@ -3073,21 +3073,21 @@ mod solve_expr {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                State a : { count : Int, x : a }
+                State a : { count : I64, x : a }
 
-                foo : State a -> Int
+                foo : State a -> I64
                 foo = \state ->
                     if state.count == 0 then
                         0
                     else
                         1 + foo { count: state.count - 1, x: state.x }
 
-                main : Int
+                main : I64
                 main =
                     foo { count: 3, x: {} }
                 "#
             ),
-            "Int",
+            "I64",
         );
     }
 
@@ -3108,15 +3108,15 @@ mod solve_expr {
                 empty =
                     Empty
 
-                foo : CustomDict Int Int
+                foo : CustomDict I64 I64
                 foo = empty
 
-                main : CustomDict Int Int
+                main : CustomDict I64 I64
                 main =
                     foo
                 "#
             ),
-            "CustomDict Int Int",
+            "CustomDict I64 I64",
         );
     }
 
@@ -3370,12 +3370,12 @@ mod solve_expr {
                         removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
 
 
-                main : Dict Int Int
+                main : Dict I64 I64
                 main =
                     removeHelp 1 Empty
                 "#
             ),
-            "Dict Int Int",
+            "Dict I64 I64",
         );
     }
 
@@ -3410,12 +3410,12 @@ mod solve_expr {
                         Empty
 
 
-                main : Dict Int
+                main : Dict I64
                 main =
                     removeHelp 1 Empty
                 "#
             ),
-            "Dict Int",
+            "Dict I64",
         );
     }
 
@@ -3486,12 +3486,12 @@ mod solve_expr {
 
                 removeMin : Dict k v -> Dict k v
 
-                main : Dict Int Int
+                main : Dict I64 I64
                 main =
                     removeHelp 1 Empty
                 "#
             ),
-            "Dict Int Int",
+            "Dict I64 I64",
         );
     }
 
@@ -3502,7 +3502,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ partitionHelp ] to "./platform"
 
-                swap : Int, Int, List a -> List a
+                swap : I64, I64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -3513,7 +3513,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+                partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -3529,7 +3529,7 @@ mod solve_expr {
                         Pair i list
                 "#
             ),
-            "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
+            "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
         );
     }
 
@@ -3546,12 +3546,12 @@ mod solve_expr {
                 balance = \key, left ->
                     Node key left Empty
 
-                main : Dict Int
+                main : Dict I64
                 main =
                     balance 0 Empty
                 "#
             ),
-            "Dict Int",
+            "Dict I64",
         );
     }
 
@@ -3570,12 +3570,12 @@ mod solve_expr {
                 balance = \key, left ->
                     node key left Empty
 
-                main : Dict Int
+                main : Dict I64
                 main =
                     balance 0 Empty
                 "#
             ),
-            "Dict Int",
+            "Dict I64",
         );
     }
 
@@ -3619,12 +3619,12 @@ mod solve_expr {
                         _ ->
                           Node color key value left right
 
-                main : Dict Int Int
+                main : Dict I64 I64
                 main =
                     balance Red 0 0 Empty Empty
                 "#
             ),
-            "Dict Int Int",
+            "Dict I64 I64",
         );
     }
 
@@ -3648,12 +3648,12 @@ mod solve_expr {
                             Empty
 
 
-                main : Dict Int
+                main : Dict I64
                 main =
                     balance 0 Empty
                 "#
             ),
-            "Dict Int",
+            "Dict I64",
         );
     }
 }

@@ -14,7 +14,7 @@ use roc_types::types::Type::{self, *};
 pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::IntLiteral;
-    let int_type = builtin_type(Symbol::NUM_INT, vec![]);
+    let int_type = builtin_type(Symbol::NUM_I64, vec![]);
     let expected_literal = ForReason(reason, int_type, region);
 
     exists(

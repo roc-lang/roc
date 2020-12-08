@@ -12,6 +12,11 @@ impl Ident {
     }
 }
 
+pub struct QualifiedModuleName<'a> {
+    pub opt_package: Option<&'a str>,
+    pub module: ModuleName,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleName(InlinableString);
 

@@ -1,6 +1,6 @@
 platform folkertdev/foo
     requires { main : Effect {} }
-    exposes []
+    exposes [ Task ]
     packages {}
     imports []
     provides [ mainForHost ]

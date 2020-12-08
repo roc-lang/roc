@@ -265,7 +265,7 @@ mod test_load {
                             imports [ RBTree ] 
                             provides [ main ] to blah
 
-                        empty : RBTree.Dict Int Int
+                        empty : RBTree.Dict I64 I64
                         empty = RBTree.empty
 
                         main = empty
@@ -360,7 +360,7 @@ mod test_load {
                 "floatTest" => "F64",
                 "divisionFn" => "F64, F64 -> Result F64 [ DivByZero ]*",
                 "divisionTest" => "Result F64 [ DivByZero ]*",
-                "intTest" => "Int",
+                "intTest" => "I64",
                 "x" => "F64",
                 "constantNum" => "Num *",
                 "divDep1ByDep2" => "Result F64 [ DivByZero ]*",
@@ -377,10 +377,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "Int, Int, List a -> List a",
-                "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
-                "partitionHelp" => "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
-                "quicksort" => "List (Num a), Int, Int -> List (Num a)",
+                "swap" => "I64, I64, List a -> List a",
+                "partition" => "I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]",
+                "partitionHelp" => "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
+                "quicksort" => "List (Num a), I64, I64 -> List (Num a)",
             },
         );
     }
@@ -406,10 +406,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "Int, Int, List a -> List a",
-                "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
-                "partitionHelp" => "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
-                "quicksort" => "List (Num a), Int, Int -> List (Num a)",
+                "swap" => "I64, I64, List a -> List a",
+                "partition" => "I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]",
+                "partitionHelp" => "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
+                "quicksort" => "List (Num a), I64, I64 -> List (Num a)",
             },
         );
     }

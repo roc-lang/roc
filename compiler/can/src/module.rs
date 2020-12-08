@@ -97,6 +97,7 @@ pub fn canonicalize_module_defs<'a>(
         let first_char = ident.as_inline_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
+            // this is a value definition
             let expr_var = var_store.fresh();
 
             match scope.import(ident, symbol, region) {
@@ -116,7 +117,10 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
         } else {
-            panic!("TODO add type aliases to type alias dictionary, based on exposed types");
+            // This is a type alias
+
+            // the should already be added to the scope when this module is canonicalized
+            debug_assert!(scope.contains_alias(symbol));
         }
     }
 

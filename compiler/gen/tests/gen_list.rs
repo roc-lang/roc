@@ -162,7 +162,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    initThrees : List Int
+                    initThrees : List I64
                     initThrees =
                         []
 
@@ -204,7 +204,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    init : List Int
+                    init : List I64
                     init =
                         []
 
@@ -251,7 +251,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                empty : List Int
+                empty : List I64
                 empty =
                     []
 
@@ -330,7 +330,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                empty : List Int
+                empty : List I64
                 empty =
                     []
 
@@ -347,7 +347,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                alwaysTrue : Int -> Bool
+                alwaysTrue : I64 -> Bool
                 alwaysTrue = \_ ->
                     True
 
@@ -365,11 +365,11 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                alwaysTrue : Int -> Bool
+                alwaysTrue : I64 -> Bool
                 alwaysTrue = \_ ->
                     True
 
-                oneThroughEight : List Int
+                oneThroughEight : List I64
                 oneThroughEight =
                     [1,2,3,4,5,6,7,8]
 
@@ -386,7 +386,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                alwaysFalse : Int -> Bool
+                alwaysFalse : I64 -> Bool
                 alwaysFalse = \_ ->
                     False
 
@@ -403,7 +403,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                intIsLessThanThree : Int -> Bool
+                intIsLessThanThree : I64 -> Bool
                 intIsLessThanThree = \i ->
                     i < 3
 
@@ -440,7 +440,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                empty : List Int
+                empty : List I64
                 empty =
                     []
 
@@ -457,7 +457,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                nonEmpty : List Int
+                nonEmpty : List I64
                 nonEmpty =
                     [ 1 ]
 
@@ -474,7 +474,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                nonEmpty : List Int
+                nonEmpty : List I64
                 nonEmpty =
                     [ 1 ]
 
@@ -491,7 +491,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                nonEmpty : List Int
+                nonEmpty : List I64
                 nonEmpty =
                     [ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 ]
 
@@ -510,7 +510,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                nonEmpty : List Int
+                nonEmpty : List I64
                 nonEmpty =
                     [ 1, 1, -4, 1, 2 ]
 
@@ -528,11 +528,11 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                 nonEmpty : List Int
+                 nonEmpty : List I64
                  nonEmpty =
                      [ 2, 2, -4, 2, 3 ]
 
-                 greaterThanOne : Int -> Bool
+                 greaterThanOne : I64 -> Bool
                  greaterThanOne = \i ->
                      i > 1
 
@@ -730,7 +730,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    emptyList : List Int
+                    emptyList : List I64
                     emptyList =
                         []
 
@@ -752,11 +752,11 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    firstList : List Int
+                    firstList : List I64
                     firstList =
                         []
 
-                    secondList : List Int
+                    secondList : List I64
                     secondList =
                         []
 
@@ -778,11 +778,11 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    firstList : List Int
+                    firstList : List I64
                     firstList =
                         []
 
-                    secondList : List Int
+                    secondList : List I64
                     secondList =
                         []
 
@@ -1229,7 +1229,7 @@ mod gen_list {
                 app "quicksort" provides [ main ] to "./platform"
 
 
-                swap : Int, Int, List a -> List a
+                swap : I64, I64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -1254,7 +1254,7 @@ mod gen_list {
     //        assert_evals_to!(
     //            indoc!(
     //                r#"
-    //                    swap : Int, Int, List a -> List a
+    //                    swap : I64, I64, List a -> List a
     //                    swap = \i, j, list ->
     //                        when Pair (List.get list i) (List.get list j) is
     //                            Pair (Ok atI) (Ok atJ) ->
@@ -1264,7 +1264,7 @@ mod gen_list {
     //
     //                            _ ->
     //                                []
-    //                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+    //                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
     //                    partition = \low, high, initialList ->
     //                        when List.get initialList high is
     //                            Ok pivot ->
@@ -1276,7 +1276,7 @@ mod gen_list {
     //                                Pair (low - 1) initialList
     //
     //
-    //                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+    //                    partitionHelp : I64, I64, List (Num a), I64, I64 -> [ Pair I64 (List (Num a)) ]
     //                    partitionHelp = \i, j, list, high, pivot ->
     //                        if j < high then
     //                            when List.get list j is
@@ -1306,7 +1306,7 @@ mod gen_list {
     //        assert_evals_to!(
     //            indoc!(
     //                r#"
-    //                    swap : Int, Int, List a -> List a
+    //                    swap : I64, I64, List a -> List a
     //                    swap = \i, j, list ->
     //                        when Pair (List.get list i) (List.get list j) is
     //                            Pair (Ok atI) (Ok atJ) ->
@@ -1316,7 +1316,7 @@ mod gen_list {
     //
     //                            _ ->
     //                                []
-    //                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+    //                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
     //                    partition = \low, high, initialList ->
     //                        when List.get initialList high is
     //                            Ok pivot ->
@@ -1328,7 +1328,7 @@ mod gen_list {
     //                                Pair (low - 1) initialList
     //
     //
-    //                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+    //                    partitionHelp : I64, I64, List (Num a), I64, I64 -> [ Pair I64 (List (Num a)) ]
     //
     //                    # when partition 0 0 [ 1,2,3,4,5 ] is
     //                    # Pair list _ -> list
@@ -1352,7 +1352,7 @@ mod gen_list {
                         quicksortHelp list 0 (n - 1)
 
 
-                    quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
                     quicksortHelp = \list, low, high ->
                         if low < high then
                             when partition low high list is
@@ -1364,7 +1364,7 @@ mod gen_list {
                             list
 
 
-                    swap : Int, Int, List a -> List a
+                    swap : I64, I64, List a -> List a
                     swap = \i, j, list ->
                         when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1375,7 +1375,7 @@ mod gen_list {
                             _ ->
                                 []
 
-                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
                     partition = \low, high, initialList ->
                         when List.get initialList high is
                             Ok pivot ->
@@ -1387,7 +1387,7 @@ mod gen_list {
                                 Pair (low - 1) initialList
 
 
-                    partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+                    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
                         if j < high then
                             when List.get list j is
@@ -1422,7 +1422,7 @@ mod gen_list {
                            quicksortHelp list 0 (List.len list - 1)
 
 
-                       quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                       quicksortHelp : List (Num a), I64, I64 -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
                                when partition low high list is
@@ -1434,7 +1434,7 @@ mod gen_list {
                                list
 
 
-                       swap : Int, Int, List a -> List a
+                       swap : I64, I64, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
                                Pair (Ok atI) (Ok atJ) ->
@@ -1445,7 +1445,7 @@ mod gen_list {
                                _ ->
                                    []
 
-                       partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                       partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
                                Ok pivot ->
@@ -1457,7 +1457,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]
+                       partitionHelp : I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            # if j < high then
                            if False then
@@ -1495,7 +1495,7 @@ mod gen_list {
                            quicksortHelp list 0 (List.len list - 1)
 
 
-                       quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                       quicksortHelp : List (Num a), I64, I64 -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
                                when partition low high list is
@@ -1507,7 +1507,7 @@ mod gen_list {
                                list
 
 
-                       swap : Int, Int, List a -> List a
+                       swap : I64, I64, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
                                Pair (Ok atI) (Ok atJ) ->
@@ -1518,7 +1518,7 @@ mod gen_list {
                                _ ->
                                    []
 
-                       partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                       partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
                                Ok pivot ->
@@ -1530,7 +1530,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]
+                       partitionHelp : I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            if j < high then
                                when List.get list j is
@@ -1562,7 +1562,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : List Int
+                x : List I64
                 x = []
 
                 List.len x + List.len x
@@ -1578,7 +1578,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : List Int
+                x : List I64
                 x = [1,2,3]
 
                 List.len x + List.len x
@@ -1594,10 +1594,10 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : List Int
+                x : List I64
                 x = [1,2,3]
 
-                id : List Int -> List Int
+                id : List I64 -> List I64
                 id = \y -> y
 
                 id x
@@ -1613,10 +1613,10 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : List Int
+                x : List I64
                 x = [1,2,3]
 
-                id : List Int -> List Int
+                id : List I64 -> List I64
                 id = \y -> List.set y 0 0
 
                 id x
@@ -1632,7 +1632,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                id : List Int -> [ Pair (List Int) Int ]
+                id : List I64 -> [ Pair (List I64) I64 ]
                 id = \y -> Pair y 4
 
                 when id [1,2,3] is

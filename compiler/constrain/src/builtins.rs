@@ -92,7 +92,7 @@ pub fn num_floatingpoint() -> Type {
 
 #[inline(always)]
 pub fn num_int() -> Type {
-    Type::Alias(Symbol::NUM_INT, vec![], Box::new(num_num(num_integer())))
+    Type::Alias(Symbol::NUM_I64, vec![], Box::new(num_num(num_integer())))
 }
 
 #[inline(always)]

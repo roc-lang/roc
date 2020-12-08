@@ -79,9 +79,12 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
                 get_zig_files(&path_buf, cb).unwrap();
             } else {
                 let path = path_buf.as_path();
-                let path_ext = path.extension().unwrap();
-                if path_ext == "zig" {
-                    cb(path);
+
+                match path.extension() {
+                    Some(osstr) if osstr == "zig" => {
+                        cb(path);
+                    }
+                    _ => {}
                 }
             }
         }

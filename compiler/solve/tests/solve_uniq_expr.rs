@@ -1124,7 +1124,7 @@ mod solve_uniq_expr {
                     x
                 "#
             ),
-            "Attr * Int",
+            "Attr * I64",
         );
     }
 
@@ -1377,7 +1377,7 @@ mod solve_uniq_expr {
                     x
                 "#
             ),
-            "Attr * Int",
+            "Attr * I64",
         );
     }
 
@@ -1405,7 +1405,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    swap : Int, Int, List a -> List a
+                    swap : I64, I64, List a -> List a
                     swap = \i, j, list ->
                         when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1418,7 +1418,7 @@ mod solve_uniq_expr {
                     swap
                 "#
             ),
-            "Attr * (Attr * Int, Attr * Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))"
+            "Attr * (Attr * I64, Attr * I64, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))"
         );
     }
 
@@ -1431,7 +1431,7 @@ mod solve_uniq_expr {
             infer_eq(
             indoc!(
                 r#"
-                quicksort : List (Num a), Int, Int -> List (Num a)
+                quicksort : List (Num a), I64, I64 -> List (Num a)
                 quicksort = \list, low, high ->
                     when partition low high list is
                         Pair partitionIndex partitioned ->
@@ -1440,7 +1440,7 @@ mod solve_uniq_expr {
                                 |> quicksort (partitionIndex + 1) high
 
 
-                swap : Int, Int, List a -> List a
+                swap : I64, I64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -1452,7 +1452,7 @@ mod solve_uniq_expr {
                             []
 
 
-                partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -1480,7 +1480,7 @@ mod solve_uniq_expr {
                 quicksort
                    "#
             ),
-            "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr Shared a)))))"
+            "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared I64, Attr Shared I64 -> Attr b (List (Attr Shared (Num (Attr Shared a)))))"
         );
         })
     }
@@ -2149,7 +2149,7 @@ mod solve_uniq_expr {
                     Num.maxInt // Num.maxInt
                 "#
             ),
-            "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
+            "Attr * (Result (Attr * I64) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -2161,7 +2161,7 @@ mod solve_uniq_expr {
                     3 // 4
                 "#
             ),
-            "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
+            "Attr * (Result (Attr * I64) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -2173,7 +2173,7 @@ mod solve_uniq_expr {
                     3 // Num.maxInt
                 "#
             ),
-            "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
+            "Attr * (Result (Attr * I64) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -2264,17 +2264,17 @@ mod solve_uniq_expr {
 
     #[test]
     fn list_len() {
-        infer_eq("List.len", "Attr * (Attr * (List *) -> Attr * Int)");
+        infer_eq("List.len", "Attr * (Attr * (List *) -> Attr * I64)");
     }
 
     #[test]
     fn list_get() {
-        infer_eq("List.get", "Attr * (Attr (* | b) (List (Attr b a)), Attr * Int -> Attr * (Result (Attr b a) (Attr * [ OutOfBounds ]*)))");
+        infer_eq("List.get", "Attr * (Attr (* | b) (List (Attr b a)), Attr * I64 -> Attr * (Result (Attr b a) (Attr * [ OutOfBounds ]*)))");
     }
 
     #[test]
     fn list_set() {
-        infer_eq("List.set", "Attr * (Attr (* | b | c) (List (Attr b a)), Attr * Int, Attr (b | c) a -> Attr * (List (Attr b a)))");
+        infer_eq("List.set", "Attr * (Attr (* | b | c) (List (Attr b a)), Attr * I64, Attr (b | c) a -> Attr * (List (Attr b a)))");
     }
 
     #[test]
@@ -2286,7 +2286,7 @@ mod solve_uniq_expr {
     fn list_repeat() {
         infer_eq(
             "List.repeat",
-            "Attr * (Attr * Int, Attr Shared a -> Attr * (List (Attr Shared a)))",
+            "Attr * (Attr * I64, Attr Shared a -> Attr * (List (Attr Shared a)))",
         );
     }
 
@@ -2487,15 +2487,15 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                Model : { foo : Int }
+                Model : { foo : I64 }
 
-                extract : Model -> Int
+                extract : Model -> I64
                 extract = \{ foo } -> foo
 
                 extract
                 "#
             ),
-            "Attr * (Attr (* | a) Model -> Attr a Int)",
+            "Attr * (Attr (* | a) Model -> Attr a I64)",
         );
     }
 
@@ -2504,15 +2504,15 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                Model : { foo : Int, bar : Int  }
+                Model : { foo : I64, bar : I64  }
 
-                extract : Model -> Int
+                extract : Model -> I64
                 extract = \{ foo } -> foo
 
                 extract
                 "#
             ),
-            "Attr * (Attr (* | a) Model -> Attr a Int)",
+            "Attr * (Attr (* | a) Model -> Attr a I64)",
         );
     }
 
@@ -2521,15 +2521,15 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                Model : { foo : Int, bar : Int }
+                Model : { foo : I64, bar : I64 }
 
-                extract : Model -> Int
+                extract : Model -> I64
                 extract = \{foo, bar} -> foo + bar
 
                 extract
                 "#
             ),
-            "Attr * (Attr (* | * | *) Model -> Attr * Int)",
+            "Attr * (Attr (* | * | *) Model -> Attr * I64)",
         );
     }
 
@@ -2627,13 +2627,13 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                f : Int, Int -> Int
+                f : I64, I64 -> I64
                 f = \a, b -> a + b
 
                 f
                 "#
             ),
-            "Attr * (Attr * Int, Attr * Int -> Attr * Int)",
+            "Attr * (Attr * I64, Attr * I64 -> Attr * I64)",
         );
     }
 
@@ -2642,13 +2642,13 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                foobar : Int -> Int
+                foobar : I64 -> I64
                 foobar = \x -> Num.abs x
 
                 foobar
                 "#
             ),
-            "Attr * (Attr * Int -> Attr * Int)",
+            "Attr * (Attr * I64 -> Attr * I64)",
         );
     }
 
@@ -2662,7 +2662,7 @@ mod solve_uniq_expr {
                 f
                 "#
             ),
-            "Attr * (Attr a Int, Attr b Int -> Attr c Int)",
+            "Attr * (Attr a I64, Attr b I64 -> Attr c I64)",
         );
     }
 
@@ -3001,13 +3001,13 @@ mod solve_uniq_expr {
                 Model a : { foo : Set a }
 
 
-                initialModel : position -> Model Int
+                initialModel : position -> Model I64
                 initialModel = \_ -> { foo : Set.empty }
 
                 initialModel
                 "#
             ),
-            "Attr * (Attr * position -> Attr * (Model (Attr * Int)))",
+            "Attr * (Attr * position -> Attr * (Model (Attr * I64)))",
         );
     }
 
@@ -3035,12 +3035,12 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    negatePoint : { x : Int, y : Int, z ? Num c } -> { x : Int, y : Int, z : Num c }
+                    negatePoint : { x : I64, y : I64, z ? Num c } -> { x : I64, y : I64, z : Num c }
 
                     negatePoint { x: 1, y: 2 }
                 "#
             ),
-            "Attr * { x : Attr * Int, y : Attr * Int, z : Attr * (Num (Attr * c)) }",
+            "Attr * { x : Attr * I64, y : Attr * I64, z : Attr * (Num (Attr * c)) }",
         );
     }
 
@@ -3049,7 +3049,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    negatePoint : { x : Int, y : Int, z ? Num c }r -> { x : Int, y : Int, z : Num c }r
+                    negatePoint : { x : I64, y : I64, z ? Num c }r -> { x : I64, y : I64, z : Num c }r
 
                     a = negatePoint { x: 1, y: 2 }
                     b = negatePoint { x: 1, y: 2, blah : "hi" }
@@ -3057,7 +3057,7 @@ mod solve_uniq_expr {
                     { a, b }
                 "#
             ),
-            "Attr * { a : Attr * { x : Attr * Int, y : Attr * Int, z : Attr * (Num (Attr * c)) }, b : Attr * { blah : Attr * Str, x : Attr * Int, y : Attr * Int, z : Attr * (Num (Attr * c)) } }"
+            "Attr * { a : Attr * { x : Attr * I64, y : Attr * I64, z : Attr * (Num (Attr * c)) }, b : Attr * { blah : Attr * Str, x : Attr * I64, y : Attr * I64, z : Attr * (Num (Attr * c)) } }"
         );
     }
 
@@ -3071,7 +3071,7 @@ mod solve_uniq_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "Attr * { x : Attr * (Num (Attr * a)), y : Attr * F64, z : Attr * Int }",
+            "Attr * { x : Attr * (Num (Attr * a)), y : Attr * F64, z : Attr * I64 }",
         );
     }
 
@@ -3149,14 +3149,14 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                empty : List Int
+                empty : List I64
                 empty = 
                     []
 
                 List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
-            "Attr a Int",
+            "Attr a I64",
         );
     }
 }
