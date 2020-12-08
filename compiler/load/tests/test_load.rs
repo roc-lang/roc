@@ -424,7 +424,7 @@ mod test_load {
             hashmap! {
                 "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
                 "initialModel" => "position -> Model position",
-                "reconstructPath" => "Map position position, position -> List position",
+                "reconstructPath" => "Dict position position, position -> List position",
                 "updateCost" => "position, position, Model position -> Model position",
                 "cheapestOpen" => "(position -> F64), Model position -> Result position [ KeyNotFound ]*",
                 "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",

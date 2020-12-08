@@ -836,13 +836,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // empty : Attr * (Map k v)
     add_type(Symbol::DICT_EMPTY, {
         let_tvars! { star, k , v };
-        map_type(star, k, v)
+        dict_type(star, k, v)
     });
 
     // singleton : k, v -> Attr * (Map k v)
     add_type(Symbol::DICT_SINGLETON, {
         let_tvars! { star, k , v };
-        unique_function(vec![flex(k), flex(v)], map_type(star, k, v))
+        unique_function(vec![flex(k), flex(v)], dict_type(star, k, v))
     });
 
     let key_not_found = SolvedType::Apply(
@@ -1267,7 +1267,7 @@ fn set_type(u: VarId, a: VarId) -> SolvedType {
 }
 
 #[inline(always)]
-fn map_type(u: VarId, key: VarId, value: VarId) -> SolvedType {
+fn dict_type(u: VarId, key: VarId, value: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![

@@ -628,7 +628,7 @@ impl<'a> Builtin<'a> {
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
     pub const DICT_WORDS: u32 = 6;
-    pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Map with {} for value
+    pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Dict with {} for value
     pub const LIST_WORDS: u32 = 2;
 
     /// Layout of collection wrapper for List and Str - a struct of (pointer, length).

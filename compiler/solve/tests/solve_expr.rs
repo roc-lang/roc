@@ -2508,10 +2508,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Map.insert
+                Dict.insert
                 "#
             ),
-            "Map a b, a, b -> Map a b",
+            "Dict a b, a, b -> Dict a b",
         );
     }
 
@@ -2592,9 +2592,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                reconstructPath : Map position position, position -> List position
+                reconstructPath : Dict position position, position -> List position
                 reconstructPath = \cameFrom, goal ->
-                    when Map.get cameFrom goal is
+                    when Dict.get cameFrom goal is
                         Err KeyNotFound ->
                             []
 
@@ -2604,7 +2604,7 @@ mod solve_expr {
                 reconstructPath
                 "#
             ),
-            "Map position position, position -> List position",
+            "Dict position position, position -> List position",
         );
     }
 
@@ -3101,22 +3101,22 @@ mod solve_expr {
                 # The color of a node. Leaves are considered Black.
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                CustomDict k v : [ Node NodeColor k v (CustomDict k v) (CustomDict k v), Empty ]
 
                 # Create an empty dictionary.
-                empty : Dict k v
+                empty : CustomDict k v
                 empty =
                     Empty
 
-                foo : Dict Int Int
+                foo : CustomDict Int Int
                 foo = empty
 
-                main : Dict Int Int
+                main : CustomDict Int Int
                 main =
                     foo
                 "#
             ),
-            "Dict Int Int",
+            "CustomDict Int Int",
         );
     }
 
