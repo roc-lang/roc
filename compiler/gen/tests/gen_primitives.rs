@@ -135,7 +135,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [ Pair Int Int ]
+                x : [ Pair I64 I64 ]
                 x = Pair 0x2 0x3
 
                 when x is
@@ -152,7 +152,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [A Int, B Int]
+                x : [A I64, B I64]
                 x = A 0x2
 
                 when x is
@@ -170,7 +170,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [A Int, B Int]
+                x : [A I64, B I64]
                 x = B 0x3
 
                 when x is
@@ -293,7 +293,7 @@ mod gen_primitives {
             indoc!(
                 r#"
                 wrapper = \{} ->
-                    alwaysFloatIdentity : Int -> (F64 -> F64)
+                    alwaysFloatIdentity : I64 -> (F64 -> F64)
                     alwaysFloatIdentity = \_ ->
                         (\a -> a)
 
@@ -557,14 +557,14 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                len : LinkedList a -> Int
+                len : LinkedList a -> I64
                 len = \list ->
                     when list is
                         Nil -> 0
                         Cons _ rest -> 1 + len rest
 
                 main =
-                    nil : LinkedList Int
+                    nil : LinkedList I64
                     nil = Nil
 
                     len nil
@@ -584,10 +584,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList Int
+                nil : LinkedList I64
                 nil = Nil
 
-                length : LinkedList a -> Int
+                length : LinkedList a -> I64
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -611,10 +611,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                one : LinkedList Int
+                one : LinkedList I64
                 one = Cons 1 Nil
 
-                length : LinkedList a -> Int
+                length : LinkedList a -> I64
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -638,10 +638,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                one : LinkedList Int
+                one : LinkedList I64
                 one = Cons 1 Nil
 
-                length : LinkedList a -> Int
+                length : LinkedList a -> I64
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -665,10 +665,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                three : LinkedList Int
+                three : LinkedList I64
                 three = Cons 3 (Cons 2 (Cons 1 Nil))
 
-                length : LinkedList a -> Int
+                length : LinkedList a -> I64
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -693,7 +693,7 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                three : LinkedList Int
+                three : LinkedList I64
                 three = Cons 3 (Cons 2 (Cons 1 Nil))
 
 
@@ -721,10 +721,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                zero : LinkedList Int
+                zero : LinkedList I64
                 zero = Nil
 
-                sum : LinkedList Int -> Int
+                sum : LinkedList I64 -> I64
                 sum = \list ->
                     when list is
                         Nil -> 0
@@ -748,7 +748,7 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                three : LinkedList Int
+                three : LinkedList I64
                 three = Cons 3 (Cons 2 (Cons 1 Nil))
 
                 sum : LinkedList (Num a) -> Num a
@@ -779,7 +779,7 @@ mod gen_primitives {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe Int)
+                x : Maybe (Maybe I64)
                 x = Just (Just 41)
 
                 when x is
@@ -796,7 +796,7 @@ mod gen_primitives {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe Int)
+                x : Maybe (Maybe I64)
                 x = Just Nothing
 
                 when x is
@@ -814,7 +814,7 @@ mod gen_primitives {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe Int)
+                x : Maybe (Maybe I64)
                 x = Nothing
 
                 when x is
@@ -1128,7 +1128,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList Int
+                    myList : ConsList I64
                     myList = empty
 
                     isEmpty myList
@@ -1159,7 +1159,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList Int
+                    myList : ConsList I64
                     myList = Cons 0x1 Nil
 
                     isEmpty myList
@@ -1177,16 +1177,16 @@ mod gen_primitives {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                State a : { count : Int, x : a }
+                State a : { count : I64, x : a }
 
-                foo : State a -> Int
+                foo : State a -> I64
                 foo = \state ->
                     if state.count == 0 then
                         0
                     else
                         1 + foo { count: state.count - 1, x: state.x }
 
-                main : Int
+                main : I64
                 main =
                     foo { count: 3, x: {} }
                 "#
@@ -1267,7 +1267,7 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : Dict Int {}
+                main : Dict I64 {}
                 main =
                     insert 0 {} Empty
                 "#
@@ -1308,7 +1308,7 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : Dict Int
+                main : Dict I64
                 main =
                     balance Red 0 Empty Empty
                 "#
@@ -1331,7 +1331,7 @@ mod gen_primitives {
                 balance = \key, left ->
                     Node key left Empty
 
-                main : Dict Int
+                main : Dict I64
                 main =
                     balance 0 Empty
                 "#
@@ -1378,7 +1378,7 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : Dict Int Int
+                main : Dict I64 I64
                 main =
                     balance Red 0 0 Empty Empty
                 "#
@@ -1428,7 +1428,7 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : Dict Int Int
+                main : Dict I64 I64
                 main =
                     balance Red 0 0 Empty Empty
                 "#
@@ -1448,7 +1448,7 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                balance : ConsList Int -> Int
+                balance : ConsList I64 -> I64
                 balance = \right ->
                   when right is
                     Cons 1 foo ->
@@ -1457,7 +1457,7 @@ mod gen_primitives {
                             _ -> 3
                     _ -> 3
 
-                main : Int
+                main : I64
                 main =
                     when balance Nil is
                         _ -> 3
@@ -1474,13 +1474,13 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                balance : ConsList Int -> Int
+                balance : ConsList I64 -> I64
                 balance = \right ->
                   when right is
                     Cons 1 (Cons 1 _) -> 3
                     _ -> 3
 
-                main : Int
+                main : I64
                 main =
                     when balance Nil is
                         _ -> 3
@@ -1502,7 +1502,7 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                balance : ConsList Int -> Int
+                balance : ConsList I64 -> I64
                 balance = \right ->
                   when right is
                     Cons 1 foo ->
@@ -1511,7 +1511,7 @@ mod gen_primitives {
                             _ -> 3
                     _ -> 3
 
-                main : Int
+                main : I64
                 main =
                     when balance Nil is
                         _ -> 3
@@ -1531,13 +1531,13 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                foo : ConsList Int -> Int
+                foo : ConsList I64 -> I64
                 foo = \list ->
                     when list is
                         Cons _ (Cons x _) -> x
                         _ -> 0
 
-                main : Int
+                main : I64
                 main =
                     foo (Cons 1 (Cons 32 Nil))
                 "#
@@ -1554,15 +1554,15 @@ mod gen_primitives {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                BTree : [ Node BTree BTree, Leaf Int ]
+                BTree : [ Node BTree BTree, Leaf I64 ]
 
-                foo : BTree -> Int
+                foo : BTree -> I64
                 foo = \btree ->
                     when btree is
                         Node (Node (Leaf x) _) _ -> x
                         _ -> 0
 
-                main : Int
+                main : I64
                 main =
                     foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
                 "#

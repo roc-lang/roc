@@ -742,7 +742,7 @@ define_builtins! {
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
-        2 NUM_INT: "Int" imported // the Int.Int type alias
+        2 NUM_I64: "I64" imported // the Num.I64 type alias
         3 NUM_INTEGER: "Integer" imported // Int : Num Integer
         4 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
         5 NUM_F64: "F64" imported // the Num.F64 type alias

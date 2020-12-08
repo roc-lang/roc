@@ -20,7 +20,7 @@ mod gen_tags {
                 r#"
                 Maybe a : [ Just a, Nothing ]
 
-                x : Maybe Int
+                x : Maybe I64
                 x = Nothing
 
                 x
@@ -39,7 +39,7 @@ mod gen_tags {
                 r#"
                 Maybe a : [ Just a, Nothing ]
 
-                x : Maybe Int
+                x : Maybe I64
                 x = Nothing
 
                 x
@@ -58,7 +58,7 @@ mod gen_tags {
                 r#"
                 Maybe a : [ Just a, Nothing ]
 
-                y : Maybe Int
+                y : Maybe I64
                 y = Just 0x4
 
                 y
@@ -76,7 +76,7 @@ mod gen_tags {
                 r#"
                 Maybe a : [ Just a, Nothing ]
 
-                y : Maybe Int
+                y : Maybe I64
                 y = Just 0x4
 
                 y
@@ -114,7 +114,7 @@ mod gen_tags {
     //     assert_evals_to!(
     //         indoc!(
     //             r#"
-    //             x : Result Int Int
+    //             x : Result I64 I64
     //             x = Err 41
 
     //             x
@@ -185,7 +185,7 @@ mod gen_tags {
     //                r#"
     //                LinkedList a : [ Cons a (LinkedList a), Nil ]
     //
-    //                empty : LinkedList Int
+    //                empty : LinkedList I64
     //                empty = Nil
     //
     //                1
@@ -203,7 +203,7 @@ mod gen_tags {
     //                r#"
     //                LinkedList a : [ Cons a (LinkedList a), Nil ]
     //
-    //                singleton : LinkedList Int
+    //                singleton : LinkedList I64
     //                singleton = Cons 0x1 Nil
     //
     //                1
@@ -290,7 +290,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [ Nothing, Just Int ]
+                x : [ Nothing, Just I64 ]
                 x = Nothing
 
                 when x is
@@ -308,7 +308,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [ Nothing, Just Int ]
+                x : [ Nothing, Just I64 ]
                 x = Just 41
 
                 when x is
@@ -326,7 +326,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : Result Int Int
+                x : Result I64 I64
                 x = Err 41
 
                 when x is
@@ -346,7 +346,7 @@ mod gen_tags {
                 r#"
                 These a b : [ This a, That b, These a b ]
 
-                x : These Int Int
+                x : These I64 I64
                 x = These 0x3 0x2
 
                 when x is
@@ -398,7 +398,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-            x : Result Int Int
+            x : Result I64 I64
             x = Ok 2
 
             when x is
@@ -464,7 +464,7 @@ mod gen_tags {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe Int)
+                x : Maybe (Maybe I64)
                 x = Just (Just 41)
 
                 when x is
@@ -558,7 +558,7 @@ mod gen_tags {
                 r#"
                 Unit : [ Unit ]
 
-                f : Unit -> Int
+                f : Unit -> I64
                 f = \Unit -> 42
 
                 f Unit
@@ -587,7 +587,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                f : {} -> Int
+                f : {} -> I64
                 f = \{} -> 42
 
                 f {}
@@ -614,7 +614,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [ Pair Int ]
+                x : [ Pair I64 ]
                 x = Pair 2
 
                 x
@@ -634,7 +634,7 @@ mod gen_tags {
 
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe Int)
+                x : Maybe (Maybe I64)
                 x = Just (Just 41)
 
                 main =
@@ -806,7 +806,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r"#
-                x : [ Three Bool Int, Empty ]
+                x : [ Three Bool I64, Empty ]
                 x = Three (1 == 1) 32
 
                 x
@@ -820,7 +820,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r"#
-                x : [ Three Bool [ Red, Green, Blue ] Int, Empty ]
+                x : [ Three Bool [ Red, Green, Blue ] I64, Empty ]
                 x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
 
                 x
@@ -836,7 +836,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r"#
-                x : [ Three Bool Int, Empty ]
+                x : [ Three Bool I64, Empty ]
                 x = Three (1 == 1) 32
 
                 when x is
@@ -854,7 +854,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r"#
-                x : [ Three Bool [ Red, Green, Blue ] Int, Empty ]
+                x : [ Three Bool [ Red, Green, Blue ] I64, Empty ]
                 x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
 
                 when x is

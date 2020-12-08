@@ -2,7 +2,7 @@ app "quicksort" provides [ quicksort ] to "./platform"
 
 quicksort = \originalList ->
 
-    quicksortHelp : List (Num a), Int, Int -> List (Num a)
+    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
             when partition low high list is
@@ -14,7 +14,7 @@ quicksort = \originalList ->
             list
 
 
-    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
     partition = \low, high, initialList ->
         when List.get initialList high is
             Ok pivot ->
@@ -25,7 +25,7 @@ quicksort = \originalList ->
             Err _ ->
                 Pair (low - 1) initialList
 
-    partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
     partitionHelp = \i, j, list, high, pivot ->
         if j < high then
             when List.get list j is
@@ -41,7 +41,7 @@ quicksort = \originalList ->
             Pair i list
 
 
-    swap : Int, Int, List a -> List a
+    swap : I64, I64, List a -> List a
     swap = \i, j, list ->
         when Pair (List.get list i) (List.get list j) is
             Pair (Ok atI) (Ok atJ) ->
