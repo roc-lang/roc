@@ -93,7 +93,7 @@ pub fn rebuild_host(host_input_path: &Path) {
             .output()
             .unwrap();
 
-        validate_output("host.rs", "cargo build --release", output);
+        validate_output("src/lib.rs", "cargo build --release", output);
 
         let output = Command::new("ld")
             .env_clear()

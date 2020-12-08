@@ -21,11 +21,11 @@ singleton = \key, value ->
   Node Black key value Empty Empty
 
 # {-| Determine the number of key-value pairs in the dictionary. -}
-size : Dict k v -> Int
+size : Dict k v -> I64
 size = \dict ->
     sizeHelp 0 dict
 
-sizeHelp : Int, Dict k v -> Int
+sizeHelp : I64, Dict k v -> I64
 sizeHelp = \n, dict ->
   when dict is
     Empty ->

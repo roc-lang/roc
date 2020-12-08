@@ -75,7 +75,6 @@ pub fn helper<'a>(
     println!("{:?}", exposed_to_host);
     println!("=================================\n");
     */
-
     debug_assert_eq!(exposed_to_host.len(), 1);
     let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
 

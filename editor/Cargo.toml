@@ -23,13 +23,17 @@ roc_solve = { path = "../compiler/solve" }
 roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_gen = { path = "../compiler/gen" }
+roc_fmt = { path = "../compiler/fmt" }
+
 roc_reporting = { path = "../compiler/reporting" }
  # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", "process", "io-driver"] }
+arraystring = "0.3.0"
+libc = "0.2"
+page_size = "0.4"
 # NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
 # The reason for this fork is that the way Inkwell is designed, you have to use
@@ -57,7 +61,11 @@ zerocopy = "0.3"
 env_logger = "0.7"
 futures = "0.3"
 wgpu_glyph = "0.10"
-bytemuck = "1.4"
+cgmath = "0.17.0"
+
+[dependencies.bytemuck]
+version = "1.4"
+features = ["derive"]
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

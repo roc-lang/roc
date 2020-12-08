@@ -310,6 +310,107 @@ impl fmt::Debug for ModuleId {
     }
 }
 
+/// base.Task
+/// 1. build mapping from short name to package
+/// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
+/// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
+/// 4. throw away short names. stash the module id in the can env under the resolved module name
+/// 5. test:
+
+/// Package-qualified module name
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PQModuleName<'a> {
+    Unqualified(InlinableString),
+    Qualified(&'a str, InlinableString),
+}
+
+impl<'a> PQModuleName<'a> {
+    pub fn to_module_name(&self) -> &InlinableString {
+        match self {
+            PQModuleName::Unqualified(name) => name,
+            PQModuleName::Qualified(_, name) => name,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageModuleIds<'a> {
+    by_name: MutMap<PQModuleName<'a>, ModuleId>,
+    by_id: Vec<PQModuleName<'a>>,
+}
+
+impl<'a> PackageModuleIds<'a> {
+    pub fn get_or_insert(&mut self, module_name: &PQModuleName<'a>) -> ModuleId {
+        match self.by_name.get(module_name) {
+            Some(id) => *id,
+            None => {
+                let by_id = &mut self.by_id;
+                let module_id = ModuleId(by_id.len() as u32);
+
+                by_id.push(module_name.clone());
+
+                self.by_name.insert(module_name.clone(), module_id);
+
+                if cfg!(debug_assertions) {
+                    Self::insert_debug_name(module_id, &module_name);
+                }
+
+                module_id
+            }
+        }
+    }
+
+    pub fn into_module_ids(self) -> ModuleIds {
+        let by_name: MutMap<InlinableString, ModuleId> = self
+            .by_name
+            .into_iter()
+            .map(|(pqname, module_id)| (pqname.to_module_name().clone(), module_id))
+            .collect();
+
+        let by_id: Vec<InlinableString> = self
+            .by_id
+            .into_iter()
+            .map(|pqname| pqname.to_module_name().clone())
+            .collect();
+
+        ModuleIds { by_name, by_id }
+    }
+
+    #[cfg(debug_assertions)]
+    fn insert_debug_name(module_id: ModuleId, module_name: &PQModuleName) {
+        let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
+
+        if !names.contains_key(&module_id.0) {
+            match module_name {
+                PQModuleName::Unqualified(module) => {
+                    names.insert(module_id.0, module.to_string().into());
+                }
+                PQModuleName::Qualified(package, module) => {
+                    let name = format!("{}.{}", package, module).into();
+                    names.insert(module_id.0, name);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn insert_debug_name(_module_id: ModuleId, _module_name: &PQModuleName) {
+        // By design, this is a no-op in release builds!
+    }
+
+    pub fn get_id(&self, module_name: &PQModuleName<'a>) -> Option<&ModuleId> {
+        self.by_name.get(module_name)
+    }
+
+    pub fn get_name(&self, id: ModuleId) -> Option<&PQModuleName> {
+        self.by_id.get(id.0 as usize)
+    }
+
+    pub fn available_modules(&self) -> impl Iterator<Item = &PQModuleName> {
+        self.by_id.iter()
+    }
+}
+
 /// Stores a mapping between ModuleId and InlinableString.
 ///
 /// Each module name is stored twice, for faster lookups.
@@ -346,7 +447,10 @@ impl ModuleIds {
     fn insert_debug_name(module_id: ModuleId, module_name: &InlinableString) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        names.insert(module_id.0, module_name.to_string().into());
+        // TODO make sure modules are never added more than once!
+        if !names.contains_key(&module_id.0) {
+            names.insert(module_id.0, module_name.to_string().into());
+        }
     }
 
     #[cfg(not(debug_assertions))]
@@ -495,7 +599,8 @@ macro_rules! define_builtins {
                     if cfg!(debug_assertions) {
                         let module_id = ModuleId($module_id);
 
-                        ModuleIds::insert_debug_name(module_id, &$module_name.into());
+                        let name = PQModuleName::Unqualified($module_name.into());
+                        PackageModuleIds::insert_debug_name(module_id, &name);
                         module_id.register_debug_idents(&ident_ids);
                     }
 
@@ -548,6 +653,34 @@ macro_rules! define_builtins {
                 )+
 
                 ModuleIds { by_name, by_id }
+            }
+        }
+
+        impl<'a> Default for PackageModuleIds<'a> {
+            fn default() -> Self {
+                // +1 because the user will be compiling at least 1 non-builtin module!
+                let capacity = $total + 1;
+
+                let mut by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
+                let mut by_id = Vec::with_capacity(capacity);
+
+                let mut insert_both = |id: ModuleId, name_str: &'static str| {
+                    let raw_name: InlinableString = name_str.into();
+                    let name = PQModuleName::Unqualified(raw_name);
+
+                    if cfg!(debug_assertions) {
+                        Self::insert_debug_name(id, &name);
+                    }
+
+                    by_name.insert(name.clone(), id);
+                    by_id.push(name);
+                };
+
+                $(
+                    insert_both(ModuleId($module_id), $module_name);
+                )+
+
+                PackageModuleIds { by_name, by_id }
             }
         }
 
@@ -609,7 +742,7 @@ define_builtins! {
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
-        2 NUM_INT: "Int" imported // the Int.Int type alias
+        2 NUM_I64: "I64" imported // the Num.I64 type alias
         3 NUM_INTEGER: "Integer" imported // Int : Num Integer
         4 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
         5 NUM_F64: "F64" imported // the Num.F64 type alias

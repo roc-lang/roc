@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate pretty_assertions;
+
 #[macro_use]
 extern crate indoc;
 

@@ -11,19 +11,29 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-use crate::rect::Rect;
+// Inspired by https://github.com/sotrh/learn-wgpu
+// by Benjamin Hansen, licensed under the MIT license
+
+// See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
+
+use crate::buffer::create_rect_buffers;
+use crate::text::{build_glyph_brush, Text};
 use crate::vertex::Vertex;
 use std::error::Error;
 use std::io;
 use std::path::Path;
-use wgpu::util::DeviceExt;
-use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
-use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
+use winit::event;
+use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
 
 pub mod ast;
+pub mod bucket;
+mod buffer;
+pub mod file;
+mod keyboard_input;
 mod rect;
-pub mod text_state;
+pub mod text;
+mod util;
 mod vertex;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
@@ -51,7 +61,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let surface = unsafe { instance.create_surface(&window) };
 
     // Initialize GPU
-    let (device, queue) = futures::executor::block_on(async {
+    let (gpu_device, cmd_queue) = futures::executor::block_on(async {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -81,59 +91,21 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     // Prepare swap chain
     let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
     let mut size = window.inner_size();
-    let mut swap_chain = device.create_swap_chain(
-        &surface,
-        &wgpu::SwapChainDescriptor {
-            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
-            format: render_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Immediate,
-        },
-    );
 
-    // Prepare Triangle Pipeline
-    let triangle_vs_module =
-        device.create_shader_module(wgpu::include_spirv!("shaders/rect.vert.spv"));
-    let triangle_fs_module =
-        device.create_shader_module(wgpu::include_spirv!("shaders/rect.frag.spv"));
+    let swap_chain_descr = wgpu::SwapChainDescriptor {
+        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+        format: render_format,
+        width: size.width,
+        height: size.height,
+        //Immediate may cause tearing, change present_mode if this becomes a problem
+        present_mode: wgpu::PresentMode::Immediate,
+    };
 
-    let triangle_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[],
-        push_constant_ranges: &[],
-    });
+    let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
 
-    let triangle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&triangle_pipeline_layout),
-        vertex_stage: wgpu::ProgrammableStageDescriptor {
-            module: &triangle_vs_module,
-            entry_point: "main",
-        },
-        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
-            module: &triangle_fs_module,
-            entry_point: "main",
-        }),
-        // Use the default rasterizer state: no culling, no depth bias
-        rasterization_state: None,
-        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: &[wgpu::TextureFormat::Bgra8UnormSrgb.into()],
-        depth_stencil_state: None,
-        vertex_state: wgpu::VertexStateDescriptor {
-            index_format: wgpu::IndexFormat::Uint16,
-            vertex_buffers: &[Vertex::buffer_descriptor()],
-        },
-        sample_count: 1,
-        sample_mask: !0,
-        alpha_to_coverage_enabled: false,
-    });
+    let rect_pipeline = make_rect_pipeline(&gpu_device, &swap_chain_descr);
 
-    // Prepare glyph_brush
-    let inconsolata =
-        ab_glyph::FontArc::try_from_slice(include_bytes!("../Inconsolata-Regular.ttf"))?;
-
-    let mut glyph_brush = GlyphBrushBuilder::using_font(inconsolata).build(&device, render_format);
+    let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
     let mut text_state = String::new();
@@ -152,178 +124,97 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
         }
 
         match event {
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::CloseRequested,
+            Event::WindowEvent {
+                event: event::WindowEvent::CloseRequested,
                 ..
             } => *control_flow = winit::event_loop::ControlFlow::Exit,
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::Resized(new_size),
+            Event::WindowEvent {
+                event: event::WindowEvent::Resized(new_size),
                 ..
             } => {
                 size = new_size;
 
-                swap_chain = device.create_swap_chain(
+                swap_chain = gpu_device.create_swap_chain(
                     &surface,
                     &wgpu::SwapChainDescriptor {
                         usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
                         format: render_format,
                         width: size.width,
                         height: size.height,
+                        //Immediate may cause tearing, change present_mode if this becomes a problem
                         present_mode: wgpu::PresentMode::Immediate,
                     },
                 );
             }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::ReceivedCharacter(ch),
+            Event::WindowEvent {
+                event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                match ch {
-                    '\u{8}' | '\u{7f}' => {
-                        // In Linux, we get a '\u{8}' when you press backspace,
-                        // but in macOS we get '\u{7f}'.
-                        text_state.pop();
-                    }
-                    '\u{e000}'..='\u{f8ff}'
-                    | '\u{f0000}'..='\u{ffffd}'
-                    | '\u{100000}'..='\u{10fffd}' => {
-                        // These are private use characters; ignore them.
-                        // See http://www.unicode.org/faq/private_use.html
-                    }
-                    _ => {
-                        text_state.push(ch);
-                    }
-                }
+                update_text_state(&mut text_state, &ch);
             }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::KeyboardInput { input, .. },
+            Event::WindowEvent {
+                event: event::WindowEvent::KeyboardInput { input, .. },
                 ..
             } => {
                 if let Some(virtual_keycode) = input.virtual_keycode {
-                    handle_keydown(input.state, virtual_keycode, keyboard_modifiers);
+                    keyboard_input::handle_keydown(
+                        input.state,
+                        virtual_keycode,
+                        keyboard_modifiers,
+                    );
                 }
             }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::ModifiersChanged(modifiers),
+            Event::WindowEvent {
+                event: event::WindowEvent::ModifiersChanged(modifiers),
                 ..
             } => {
                 keyboard_modifiers = modifiers;
             }
-            winit::event::Event::MainEventsCleared => window.request_redraw(),
-            winit::event::Event::RedrawRequested { .. } => {
+            Event::MainEventsCleared => window.request_redraw(),
+            Event::RedrawRequested { .. } => {
                 // Get a command encoder for the current frame
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Redraw"),
-                });
-
-                // Get the next frame
-                let frame = swap_chain
-                    .get_current_frame()
-                    .expect("Failed to acquire next swap chain texture")
-                    .output;
-
-                // Test Rectangle
-                let test_rect_1 = Rect {
-                    top: 0.9,
-                    left: -0.8,
-                    width: 0.2,
-                    height: 0.3,
-                    color: [0.0, 1.0, 1.0],
-                };
-                let test_rect_2 = Rect {
-                    top: 0.0,
-                    left: 0.0,
-                    width: 0.5,
-                    height: 0.5,
-                    color: [1.0, 1.0, 0.0],
-                };
-                let mut rectangles = Vec::new();
-                rectangles.extend_from_slice(&test_rect_1.as_array());
-                rectangles.extend_from_slice(&test_rect_2.as_array());
-
-                let mut rect_index_buffers = Vec::new();
-                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
-                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
-                // Vertex Buffer for drawing rectangles
-                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&rectangles),
-                    usage: wgpu::BufferUsage::VERTEX,
-                });
-
-                // Index Buffer for drawing rectangles
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Index Buffer"),
-                    contents: bytemuck::cast_slice(&rect_index_buffers),
-                    usage: wgpu::BufferUsage::INDEX,
-                });
-
-                // Clear frame
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                            attachment: &frame.view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.007,
-                                    g: 0.007,
-                                    b: 0.007,
-                                    a: 1.0,
-                                }),
-                                store: true,
-                            },
-                        }],
-                        depth_stencil_attachment: None,
+                let mut encoder =
+                    gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Redraw"),
                     });
 
-                    render_pass.set_pipeline(&triangle_pipeline);
+                let rect_buffers = create_rect_buffers(&gpu_device, &mut encoder);
 
-                    render_pass.set_vertex_buffer(
-                        0,                       // The buffer slot to use for this vertex buffer.
-                        vertex_buffer.slice(..), // Use the entire buffer.
-                    );
+                let frame = swap_chain
+                    .get_current_frame()
+                    .expect("Failed to acquire next SwapChainFrame")
+                    .output;
 
-                    render_pass.set_index_buffer(index_buffer.slice(..));
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                        attachment: &frame.view,
+                        resolve_target: None,
+                        ops: wgpu::Operations::default(),
+                    }],
+                    depth_stencil_attachment: None,
+                });
 
-                    render_pass.draw_indexed(
-                        0..((&rect_index_buffers).len() as u32), // Draw all of the vertices from our test data.
-                        0,                                       // Base Vertex
-                        0..1,                                    // Instances
-                    );
+                if rect_buffers.num_rects > 0 {
+                    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+                    render_pass.set_pipeline(&rect_pipeline);
+                    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
                 }
 
-                glyph_brush.queue(Section {
-                    screen_position: (30.0, 30.0),
-                    bounds: (size.width as f32, size.height as f32),
-                    text: vec![Text::new("Enter some text:")
-                        .with_color([0.4666, 0.2, 1.0, 1.0])
-                        .with_scale(40.0)],
-                    ..Section::default()
-                });
+                drop(render_pass);
 
-                glyph_brush.queue(Section {
-                    screen_position: (30.0, 90.0),
-                    bounds: (size.width as f32, size.height as f32),
-                    text: vec![Text::new(format!("{}|", text_state).as_str())
-                        .with_color([1.0, 1.0, 1.0, 1.0])
-                        .with_scale(40.0)],
-                    ..Section::default()
-                });
-
-                // Draw the text!
-                glyph_brush
-                    .draw_queued(
-                        &device,
-                        &mut staging_belt,
-                        &mut encoder,
-                        &frame.view,
-                        size.width,
-                        size.height,
-                    )
-                    .expect("Draw queued");
+                draw_all_text(
+                    &gpu_device,
+                    &mut staging_belt,
+                    &mut encoder,
+                    &frame,
+                    &size,
+                    &text_state,
+                    &mut glyph_brush,
+                );
 
                 staging_belt.finish();
-                queue.submit(Some(encoder.finish()));
+                cmd_queue.submit(Some(encoder.finish()));
 
                 // Recall unused staging buffers
                 use futures::task::SpawnExt;
@@ -341,27 +232,126 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     })
 }
 
-fn handle_keydown(
-    elem_state: ElementState,
-    virtual_keycode: VirtualKeyCode,
-    _modifiers: ModifiersState,
+fn make_rect_pipeline(
+    gpu_device: &wgpu::Device,
+    swap_chain_descr: &wgpu::SwapChainDescriptor,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+        label: Some("Pipeline Layout"),
+    });
+    let pipeline = create_render_pipeline(
+        &gpu_device,
+        &pipeline_layout,
+        swap_chain_descr.format,
+        &[Vertex::DESC],
+        wgpu::include_spirv!("shaders/rect.vert.spv"),
+        wgpu::include_spirv!("shaders/rect.frag.spv"),
+    );
+
+    pipeline
+}
+
+fn create_render_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    color_format: wgpu::TextureFormat,
+    vertex_descs: &[wgpu::VertexBufferDescriptor],
+    vs_src: wgpu::ShaderModuleSource,
+    fs_src: wgpu::ShaderModuleSource,
+) -> wgpu::RenderPipeline {
+    let vs_module = device.create_shader_module(vs_src);
+    let fs_module = device.create_shader_module(fs_src);
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Render Pipeline"),
+        layout: Some(&layout),
+        vertex_stage: wgpu::ProgrammableStageDescriptor {
+            module: &vs_module,
+            entry_point: "main",
+        },
+        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+            module: &fs_module,
+            entry_point: "main",
+        }),
+        rasterization_state: None,
+        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
+        color_states: &[wgpu::ColorStateDescriptor {
+            format: color_format,
+            color_blend: wgpu::BlendDescriptor::REPLACE,
+            alpha_blend: wgpu::BlendDescriptor::REPLACE,
+            write_mask: wgpu::ColorWrite::ALL,
+        }],
+        depth_stencil_state: None,
+        sample_count: 1,
+        sample_mask: !0,
+        alpha_to_coverage_enabled: false,
+        vertex_state: wgpu::VertexStateDescriptor {
+            index_format: wgpu::IndexFormat::Uint32,
+            vertex_buffers: vertex_descs,
+        },
+    })
+}
+
+fn draw_all_text(
+    gpu_device: &wgpu::Device,
+    staging_belt: &mut wgpu::util::StagingBelt,
+    encoder: &mut wgpu::CommandEncoder,
+    frame: &wgpu::SwapChainTexture,
+    size: &winit::dpi::PhysicalSize<u32>,
+    text_state: &str,
+    glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
 ) {
-    use winit::event::VirtualKeyCode::*;
+    let bounds = (size.width as f32, size.height as f32).into();
 
-    if let ElementState::Released = elem_state {
-        return;
-    }
+    let main_label = Text {
+        position: (30.0, 30.0).into(),
+        bounds,
+        color: (0.4666, 0.2, 1.0, 1.0).into(),
+        text: String::from("Enter some text:"),
+        size: 40.0,
+        ..Default::default()
+    };
 
-    match virtual_keycode {
-        Copy => {
-            todo!("copy");
+    let code_text = Text {
+        position: (30.0, 90.0).into(),
+        bounds,
+        color: (1.0, 1.0, 1.0, 1.0).into(),
+        text: String::from(format!("{}|", text_state).as_str()),
+        size: 40.0,
+        ..Default::default()
+    };
+
+    text::queue_text_draw(&main_label, glyph_brush);
+
+    text::queue_text_draw(&code_text, glyph_brush);
+
+    glyph_brush
+        .draw_queued(
+            gpu_device,
+            staging_belt,
+            encoder,
+            &frame.view,
+            size.width,
+            size.height,
+        )
+        .expect("Draw queued");
+}
+
+fn update_text_state(text_state: &mut String, received_char: &char) {
+    match received_char {
+        '\u{8}' | '\u{7f}' => {
+            // In Linux, we get a '\u{8}' when you press backspace,
+            // but in macOS we get '\u{7f}'.
+            text_state.pop();
         }
-        Paste => {
-            todo!("paste");
+        '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
+            // These are private use characters; ignore them.
+            // See http://www.unicode.org/faq/private_use.html
         }
-        Cut => {
-            todo!("cut");
+        _ => {
+            text_state.push(*received_char);
         }
-        _ => {}
     }
 }
