@@ -2,7 +2,7 @@ platform folkertdev/foo
     requires { main : Effect {} }
     exposes []
     packages {}
-    imports [ File ]
+    imports [ ]
     provides [ mainForHost ]
     effects Effect
         {

@@ -1933,10 +1933,14 @@ fn load_pkg_config<'a>(
             let parse_header_duration = parse_start.elapsed().unwrap();
 
             // Insert the first entries for this module's timings
-            let mut module_timing = ModuleTiming::new(module_start_time);
+            let mut pkg_module_timing = ModuleTiming::new(module_start_time);
+            let mut effect_module_timing = ModuleTiming::new(module_start_time);
 
-            module_timing.read_roc_file = file_io_duration;
-            module_timing.parse_header = parse_header_duration;
+            pkg_module_timing.read_roc_file = file_io_duration;
+            pkg_module_timing.parse_header = parse_header_duration;
+
+            effect_module_timing.read_roc_file = file_io_duration;
+            effect_module_timing.parse_header = parse_header_duration;
 
             match parsed {
                 Ok((ast::Module::Interface { header }, _parse_state)) => {
@@ -1951,16 +1955,34 @@ fn load_pkg_config<'a>(
                         header
                     )))
                 }
-                Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
-                    arena,
-                    shorthand,
-                    module_ids,
-                    ident_ids_by_module,
-                    mode,
-                    header,
-                    module_timing,
-                )
-                .map(|x| x.1),
+                Ok((ast::Module::Platform { header }, parser_state)) => {
+                    // make a Pkg-Config module that ultimately exposes `main` to the host
+                    let pkg_config_module_msg = fabricate_pkg_config_module(
+                        arena,
+                        shorthand,
+                        filename,
+                        parser_state,
+                        module_ids.clone(),
+                        ident_ids_by_module.clone(),
+                        mode,
+                        &header,
+                        pkg_module_timing,
+                    )
+                    .map(|x| x.1)?;
+
+                    let effects_module_msg = fabricate_effects_module(
+                        arena,
+                        shorthand,
+                        module_ids,
+                        ident_ids_by_module,
+                        mode,
+                        header,
+                        effect_module_timing,
+                    )
+                    .map(|x| x.1)?;
+
+                    Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
+                }
                 Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
             }
         }
@@ -2570,6 +2592,40 @@ fn run_solve<'a>(
         solved_module,
         module_timing,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fabricate_pkg_config_module<'a>(
+    arena: &'a Bump,
+    shorthand: &'a str,
+    filename: PathBuf,
+    parse_state: parser::State<'a>,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    mode: Mode,
+    header: &PlatformHeader<'a>,
+    module_timing: ModuleTiming,
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    let name = format!("{}.Pkg-Config", shorthand);
+    Ok(send_header(
+        Located {
+            region: header.name.region,
+            value: AppOrInterfaceName::Interface(roc_parse::header::ModuleName::new(
+                arena.alloc(name),
+            )),
+        },
+        filename,
+        Some(shorthand),
+        &[],
+        // header.exposes.into_bump_slice(),
+        &[],
+        header.imports.clone().into_bump_slice(),
+        None,
+        parse_state,
+        module_ids,
+        ident_ids_by_module,
+        module_timing,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
