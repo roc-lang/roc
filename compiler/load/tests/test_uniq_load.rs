@@ -235,7 +235,7 @@ mod test_uniq_load {
                 "floatTest" => "Attr Shared F64",
                 "divisionFn" => "Attr Shared (Attr * F64, Attr * F64 -> Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*)))",
                 "divisionTest" =>  "Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*))",
-                "intTest" => "Attr * Int",
+                "intTest" => "Attr * I64",
                 "x" => "Attr * F64",
                 "constantNum" => "Attr * (Num (Attr * *))",
                 "divDep1ByDep2" => "Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*))",
@@ -271,11 +271,11 @@ mod test_uniq_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "Attr * (Attr * Int, Attr * Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))",
-                "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr * [ Pair (Attr * Int) (Attr b (List (Attr Shared (Num (Attr Shared a))))) ])",
+                "swap" => "Attr * (Attr * I64, Attr * I64, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))",
+                "partition" => "Attr * (Attr Shared I64, Attr Shared I64, Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr * [ Pair (Attr * I64) (Attr b (List (Attr Shared (Num (Attr Shared a))))) ])",
 
-                "partitionHelp" => "Attr Shared (Attr b Int, Attr Shared Int, Attr c (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared (Num (Attr Shared a)) -> Attr * [ Pair (Attr b Int) (Attr c (List (Attr Shared (Num (Attr Shared a))))) ])",
-                "quicksort" => "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr Shared a)))))",
+                "partitionHelp" => "Attr Shared (Attr b I64, Attr Shared I64, Attr c (List (Attr Shared (Num (Attr Shared a)))), Attr Shared I64, Attr Shared (Num (Attr Shared a)) -> Attr * [ Pair (Attr b I64) (Attr c (List (Attr Shared (Num (Attr Shared a))))) ])",
+                "quicksort" => "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared I64, Attr Shared I64 -> Attr b (List (Attr Shared (Num (Attr Shared a)))))",
             },
         );
     }

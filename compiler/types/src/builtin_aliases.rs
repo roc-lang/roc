@@ -50,7 +50,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 
     // Int : Num Integer
     add_alias(
-        Symbol::NUM_INT,
+        Symbol::NUM_I64,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
@@ -155,7 +155,7 @@ fn float_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn int_type() -> SolvedType {
-    SolvedType::Alias(Symbol::NUM_INT, Vec::new(), Box::new(int_alias_content()))
+    SolvedType::Alias(Symbol::NUM_I64, Vec::new(), Box::new(int_alias_content()))
 }
 
 #[inline(always)]

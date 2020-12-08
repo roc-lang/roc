@@ -1207,7 +1207,7 @@ fn int_type(u: VarId) -> SolvedType {
         vec![
             flex(u),
             SolvedType::Alias(
-                Symbol::NUM_INT,
+                Symbol::NUM_I64,
                 Vec::new(),
                 Box::new(builtin_aliases::num_type(SolvedType::Apply(
                     Symbol::ATTR_ATTR,

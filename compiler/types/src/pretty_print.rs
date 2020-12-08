@@ -19,8 +19,8 @@ static EMPTY_TAG_UNION: &str = "[]";
 ///
 /// Separately, if we're inside a type parameter, we may need to use parens:
 ///
-/// List Int
-/// List (List Int)
+/// List I64
+/// List (List I64)
 ///
 /// Otherwise, parens are unnecessary.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -330,7 +330,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
 
                     match &content {
                         Alias(nested, _, _) => match *nested {
-                            Symbol::NUM_INTEGER => buf.push_str("Int"),
+                            Symbol::NUM_INTEGER => buf.push_str("I64"),
                             Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
 
                             _ => write_parens!(write_parens, buf, {
@@ -343,7 +343,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                             let attr_content = subs.get_without_compacting(nested_args[1]).content;
                             match &attr_content {
                                 Alias(nested, _, _) => match *nested {
-                                    Symbol::NUM_INTEGER => buf.push_str("Int"),
+                                    Symbol::NUM_INTEGER => buf.push_str("I64"),
                                     Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
                                     _ => write_parens!(write_parens, buf, {
                                         buf.push_str("Num ");
@@ -403,7 +403,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
-            // If the `ext` has concrete fields (e.g. { foo : Int}{ bar : Bool }), merge them
+            // If the `ext` has concrete fields (e.g. { foo : I64}{ bar : Bool }), merge them
             let RecordStructure { fields, ext } = gather_fields(subs, fields, ext_var);
             let ext_var = ext;
 
@@ -465,8 +465,8 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                     // This is an open record, so print the variable
                     // right after the '}'
                     //
-                    // e.g. the "*" at the end of `{ x: Int }*`
-                    // or the "r" at the end of `{ x: Int }r`
+                    // e.g. the "*" at the end of `{ x: I64 }*`
+                    // or the "r" at the end of `{ x: I64 }r`
                     write_content(env, content, subs, buf, parens)
                 }
             }
@@ -523,8 +523,8 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
-                // e.g. the "*" at the end of `{ x: Int }*`
-                // or the "r" at the end of `{ x: Int }r`
+                // e.g. the "*" at the end of `{ x: I64 }*`
+                // or the "r" at the end of `{ x: I64 }r`
                 write_content(env, content, subs, buf, parens)
             }
         }
@@ -576,8 +576,8 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
-                // e.g. the "*" at the end of `{ x: Int }*`
-                // or the "r" at the end of `{ x: Int }r`
+                // e.g. the "*" at the end of `{ x: I64 }*`
+                // or the "r" at the end of `{ x: I64 }r`
                 write_content(env, content, subs, buf, parens)
             }
 
@@ -754,7 +754,7 @@ fn write_apply(
             match &arg_content {
                 Content::Structure(FlatType::Apply(symbol, nested_args)) => match *symbol {
                     Symbol::NUM_INTEGER if nested_args.is_empty() => {
-                        buf.push_str("Int");
+                        buf.push_str("I64");
                     }
                     Symbol::NUM_FLOATINGPOINT if nested_args.is_empty() => {
                         buf.push_str("F64");
@@ -768,7 +768,7 @@ fn write_apply(
                             double_nested_args,
                         ))) => match double_nested_symbol {
                             Symbol::NUM_INTEGER if double_nested_args.is_empty() => {
-                                buf.push_str("Int");
+                                buf.push_str("I64");
                             }
                             Symbol::NUM_FLOATINGPOINT if double_nested_args.is_empty() => {
                                 buf.push_str("F64");

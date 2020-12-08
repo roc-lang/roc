@@ -623,7 +623,7 @@ mod test_reporting {
                     Num
                     Set
                     Result
-                    Int
+                    F64
                 "#
             ),
         );
@@ -634,7 +634,7 @@ mod test_reporting {
     //        report_problem_as(
     //            indoc!(
     //                r#"
-    //                foo : Int as Int
+    //                foo : I64 as I64
     //                foo = 42
     //
     //                foo
@@ -657,7 +657,7 @@ mod test_reporting {
     //        report_problem_as(
     //            indoc!(
     //                r#"
-    //                foo : Int as a
+    //                foo : I64 as a
     //                foo = 42
     //
     //                foo
@@ -961,7 +961,7 @@ mod test_reporting {
                 r#"
                 bar = { bar : 0x3 }
 
-                f : { foo : Int } -> Bool
+                f : { foo : I64 } -> Bool
                 f = \_ -> True
 
                 f bar
@@ -978,11 +978,11 @@ mod test_reporting {
 
                 This `bar` value is a:
 
-                    { bar : Int }
+                    { bar : I64 }
 
                 But `f` needs the 1st argument to be:
 
-                    { foo : Int }
+                    { foo : I64 }
 
                 Tip: Seems like a record field typo. Maybe `bar` should be `foo`?
 
@@ -1037,7 +1037,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Red Int, Green Bool ] -> Bool
+                f : [ Red I64, Green Bool ] -> Bool
                 f = \_ -> True
 
                 f (Blue 3.14)
@@ -1058,7 +1058,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    [ Green Bool, Red Int ]
+                    [ Green Bool, Red I64 ]
 
                 Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1075,7 +1075,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Int
+                x : I64
                 x = if True then 3.14 else 4
 
                 x
@@ -1096,7 +1096,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int
+                    I64
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1110,7 +1110,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Int
+                x : I64
                 x =
                     when True is
                         _ -> 3.14
@@ -1124,7 +1124,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│   x : Int
+                1│   x : I64
                 2│   x =
                 3│>      when True is
                 4│>          _ -> 3.14
@@ -1135,7 +1135,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int
+                    I64
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1149,7 +1149,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Int -> Int
+                x : I64 -> I64
                 x = \_ -> 3.14
 
                 x
@@ -1161,7 +1161,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : Int -> Int
+                1│  x : I64 -> I64
                 2│  x = \_ -> 3.14
                               ^^^^
 
@@ -1171,7 +1171,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int
+                    I64
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1185,7 +1185,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Int
+                x : I64
                 x = 42
 
                 x 3
@@ -1211,7 +1211,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Int -> Int
+                f : I64 -> I64
                 f = \_ -> 42
 
                 f 1 2
@@ -1237,7 +1237,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Int, Int -> Int
+                f : I64, I64 -> I64
                 f = \_, _ -> 42
 
                 f 1
@@ -1372,9 +1372,9 @@ mod test_reporting {
                 these names seem close though:
 
                     Bool
-                    Int
                     F64
                     Num
+                    Map
                 "#
             ),
         )
@@ -1483,7 +1483,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                { x } : { x : Int }
+                { x } : { x : I64 }
                 { x } = { x: 4.0 }
 
                 x
@@ -1495,7 +1495,7 @@ mod test_reporting {
 
                 Something is off with the body of this definition:
 
-                1│  { x } : { x : Int }
+                1│  { x } : { x : I64 }
                 2│  { x } = { x: 4.0 }
                             ^^^^^^^^^^
 
@@ -1505,7 +1505,7 @@ mod test_reporting {
 
                 But the type annotation says it should be:
 
-                    { x : Int }
+                    { x : I64 }
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1644,7 +1644,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : { a : Int, b : F64, c : Bool }
+                x : { a : I64, b : F64, c : Bool }
                 x = { b: 4.0 }
 
                 x
@@ -1656,7 +1656,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : { a : Int, b : F64, c : Bool }
+                1│  x : { a : I64, b : F64, c : Bool }
                 2│  x = { b: 4.0 }
                         ^^^^^^^^^^
 
@@ -1666,7 +1666,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int, b : F64, c : Bool }
+                    { a : I64, b : F64, c : Bool }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -1788,7 +1788,7 @@ mod test_reporting {
 
                 The body is an integer of type:
 
-                    Int
+                    I64
 
                 But the type annotation on `f` says it should be:
 
@@ -1796,7 +1796,7 @@ mod test_reporting {
 
                 Tip: The type annotation uses the type variable `msg` to say that this
                 definition can produce any type of value. But in the body I see that
-                it will only produce a `Int` value of a single specific type. Maybe
+                it will only produce a `I64` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
@@ -1810,7 +1810,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> [ Ok Int, InvalidFoo ]
+                f : Bool -> [ Ok I64, InvalidFoo ]
                 f = \_ -> ok 4
 
                 f
@@ -1828,9 +1828,9 @@ mod test_reporting {
                 these names seem close though:
 
                     f
-                    Int
                     F64
                     Num
+                    Map
                "#
             ),
         )
@@ -1842,7 +1842,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> Int
+                f : Bool -> I64
                 f = \_ ->
                     ok = 3
 
@@ -1867,7 +1867,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
-                1│  f : Bool -> Int
+                1│  f : Bool -> I64
                 2│  f = \_ ->
                 3│      ok = 3
                 4│
@@ -1880,7 +1880,7 @@ mod test_reporting {
 
                 But the type annotation on `f` says it should be:
 
-                    Int
+                    I64
                 "#
             ),
         )
@@ -2005,7 +2005,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { fo: Int }ext -> Int
+                f : { fo: I64 }ext -> I64
                 f = \r ->
                     r2 = { r & foo: r.fo }
 
@@ -2026,7 +2026,7 @@ mod test_reporting {
 
                 This is usually a typo. Here are the `r` fields that are most similar:
 
-                    { fo : Int
+                    { fo : I64
                     }ext
 
                 So maybe `.foo` should be `.fo`?
@@ -2259,12 +2259,12 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Either : [ Left Int, Right Bool ]
+                Either : [ Left I64, Right Bool ]
 
                 x : Either
                 x = Left 42
 
-                f : Either -> Int
+                f : Either -> I64
                 f = \Left v -> v
 
                 f x
@@ -2296,7 +2296,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : [ Left Int, Right Bool ]
+                x : [ Left I64, Right Bool ]
                 x = Left 42
 
 
@@ -2425,7 +2425,7 @@ mod test_reporting {
                 r#"
                 RemoteData e a :  [ NotAsked, Loading, Failure e, Success a ]
 
-                x : RemoteData Int Str
+                x : RemoteData I64 Str
 
                 when x is
                     NotAsked -> 3
@@ -2488,7 +2488,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                y : [ Nothing, Just Int ]
+                y : [ Nothing, Just I64 ]
                 y = Just 4
                 x = { a: y, b: 42}
 
@@ -2581,9 +2581,9 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Foo : { x : Int }
+                Foo : { x : I64 }
 
-                f : Foo -> Int
+                f : Foo -> I64
                 f = \r -> r.x
 
                 f { y: 3.14 }
@@ -2605,7 +2605,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    { x : Int }
+                    { x : I64 }
 
                 Tip: Seems like a record field typo. Maybe `y` should be `x`?
 
@@ -2835,7 +2835,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : { foo : Int, bar : F64, foo : Str }
+                a : { foo : I64, bar : F64, foo : Str }
                 a = { bar: 3.0, foo: "foo" }
 
                 a
@@ -2847,12 +2847,12 @@ mod test_reporting {
 
                 This record type defines the `.foo` field twice!
 
-                1│  a : { foo : Int, bar : F64, foo : Str }
+                1│  a : { foo : I64, bar : F64, foo : Str }
                           ^^^^^^^^^             ^^^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1│  a : { foo : Int, bar : F64, foo : Str }
+                1│  a : { foo : I64, bar : F64, foo : Str }
                                                 ^^^^^^^^^
 
                 For clarity, remove the previous `.foo` definitions from this record
@@ -2867,7 +2867,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : [ Foo Int, Bar F64, Foo Str ]
+                a : [ Foo I64, Bar F64, Foo Str ]
                 a = Foo "foo"
 
                 a
@@ -2879,12 +2879,12 @@ mod test_reporting {
 
                 This tag union type defines the `Foo` tag twice!
 
-                1│  a : [ Foo Int, Bar F64, Foo Str ]
+                1│  a : [ Foo I64, Bar F64, Foo Str ]
                           ^^^^^^^           ^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1│  a : [ Foo Int, Bar F64, Foo Str ]
+                1│  a : [ Foo I64, Bar F64, Foo Str ]
                                             ^^^^^^^
 
                 For clarity, remove the previous `Foo` definitions from this tag union
@@ -2899,7 +2899,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                bar : Int
+                bar : I64
                 foo = \x -> x
 
                 # NOTE: neither bar or foo are defined at this point
@@ -2913,7 +2913,7 @@ mod test_reporting {
                 This annotation does not match the definition immediately following
                 it:
 
-                1│>  bar : Int
+                1│>  bar : I64
                 2│>  foo = \x -> x
 
                 Is it a typo? If not, put either a newline or comment between them.
@@ -2927,7 +2927,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                bar : Int
+                bar : I64
 
                 foo = \x -> x
 
@@ -2943,7 +2943,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                MyAlias 1 : Int
+                MyAlias 1 : I64
 
                 4
                 "#
@@ -2954,7 +2954,7 @@ mod test_reporting {
 
                 This pattern in the definition of `MyAlias` is not what I expect:
 
-                1│  MyAlias 1 : Int
+                1│  MyAlias 1 : I64
                             ^
 
                 Only type variables like `a` or `value` can occur in this position.
@@ -2963,7 +2963,7 @@ mod test_reporting {
 
                 `MyAlias` is not used anywhere in your code.
 
-                1│  MyAlias 1 : Int
+                1│  MyAlias 1 : I64
                     ^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `MyAlias` then remove it so future readers
@@ -2978,7 +2978,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : Num Int F64
+                a : Num I64 F64
                 a = 3
 
                 a
@@ -2990,7 +2990,7 @@ mod test_reporting {
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                1│  a : Num Int F64
+                1│  a : Num I64 F64
                         ^^^^^^^^^^^
 
                 Are there missing parentheses?
@@ -3004,7 +3004,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> Num Int F64
+                f : Bool -> Num I64 F64
                 f = \_ -> 3
 
                 f
@@ -3016,7 +3016,7 @@ mod test_reporting {
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                1│  f : Bool -> Num Int F64
+                1│  f : Bool -> Num I64 F64
                                 ^^^^^^^^^^^
 
                 Are there missing parentheses?
@@ -3032,7 +3032,7 @@ mod test_reporting {
                 r#"
                 Pair a b : [ Pair a b ]
 
-                x : Pair Int
+                x : Pair I64
                 x = Pair 2 3
 
                 x
@@ -3044,7 +3044,7 @@ mod test_reporting {
 
                 The `Pair` alias expects 2 type arguments, but it got 1 instead:
 
-                3│  x : Pair Int
+                3│  x : Pair I64
                         ^^^^^^^^
 
                 Are there missing parentheses?
@@ -3060,7 +3060,7 @@ mod test_reporting {
                 r#"
                 Pair a b : [ Pair a b ]
 
-                x : Pair Int Int Int
+                x : Pair I64 I64 I64
                 x = 3
 
                 x
@@ -3072,7 +3072,7 @@ mod test_reporting {
 
                 The `Pair` alias expects 2 type arguments, but it got 3 instead:
 
-                3│  x : Pair Int Int Int
+                3│  x : Pair I64 I64 I64
                         ^^^^^^^^^^^^^^^^
 
                 Are there missing parentheses?
@@ -3088,7 +3088,7 @@ mod test_reporting {
                 r#"
                 Foo a : [ Foo ]
 
-                f : Foo Int
+                f : Foo I64
 
                 f
                 "#
@@ -3176,7 +3176,7 @@ mod test_reporting {
                 AList a b : [ ACons a (BList a b), ANil ]
                 BList a b : [ BCons a (AList a b), BNil ]
 
-                x : AList Int Int
+                x : AList I64 I64
                 x = ACons 0 (BCons 1 (ACons "foo" BNil ))
 
                 y : BList a a
@@ -3191,19 +3191,19 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                4│  x : AList Int Int
+                4│  x : AList I64 I64
                 5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 This `ACons` global tag application has the type:
 
                     [ ACons (Num Integer) [ BCons (Num Integer) [ ACons Str [
-                    BCons Int [ ACons Int (BList Int Int), ANil ] as a, BNil ], ANil
+                    BCons I64 [ ACons I64 (BList I64 I64), ANil ] as a, BNil ], ANil
                     ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ ACons Int (BList Int Int), ANil ] as a
+                    [ ACons I64 (BList I64 I64), ANil ] as a
                 "#
             ),
         )
@@ -3575,7 +3575,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Int, y ? Int } -> Int
+                f : { x : I64, y ? I64 } -> I64
                 f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
 
                 f
@@ -3592,11 +3592,11 @@ mod test_reporting {
 
                 The argument is a pattern that matches record values of type:
 
-                    { x : Int, y ? Str }
+                    { x : I64, y ? Str }
 
                 But the annotation on `f` says the 1st argument should be:
 
-                    { x : Int, y ? Int }
+                    { x : I64, y ? I64 }
                 "#
             ),
         )
@@ -3608,7 +3608,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 \rec ->
-                    { x, y } : { x : Int, y ? Bool }
+                    { x, y } : { x : I64, y ? Bool }
                     { x, y } = rec
 
                     { x, y }
@@ -3620,16 +3620,16 @@ mod test_reporting {
 
                 Something is off with the body of this definition:
 
-                2│>      { x, y } : { x : Int, y ? Bool }
+                2│>      { x, y } : { x : I64, y ? Bool }
                 3│>      { x, y } = rec
 
                 The body is a value of type:
 
-                    { x : Int, y : Bool }
+                    { x : I64, y : Bool }
 
                 But the type annotation says it should be:
 
-                    { x : Int, y ? Bool }
+                    { x : I64, y ? Bool }
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -3643,7 +3643,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Int, y ? Int } -> Int
+                f : { x : I64, y ? I64 } -> I64
                 f = \{ x, y } -> x + y
 
                 f
@@ -3660,11 +3660,11 @@ mod test_reporting {
 
                 The argument is a pattern that matches record values of type:
 
-                    { x : Int, y : Int }
+                    { x : I64, y : I64 }
 
                 But the annotation on `f` says the 1st argument should be:
 
-                    { x : Int, y ? Int }
+                    { x : I64, y ? I64 }
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -3678,7 +3678,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Int, y ? Int } -> Int
+                f : { x : I64, y ? I64 } -> I64
                 f = \r ->
                         when r is
                             { x, y } -> x + y
@@ -3697,11 +3697,11 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { x : Int, y : Int }
+                    { x : I64, y : I64 }
 
                 But the expression between `when` and `is` has the type:
 
-                    { x : Int, y ? Int }
+                    { x : I64, y ? I64 }
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -3715,7 +3715,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Int, y ? Int } -> Int
+                f : { x : I64, y ? I64 } -> I64
                 f = \r -> r.y
 
                 f
@@ -3732,11 +3732,11 @@ mod test_reporting {
 
                 This `r` value is a:
 
-                    { x : Int, y ? Int }
+                    { x : I64, y ? I64 }
 
                 But you are trying to use it as:
 
-                    { x : Int, y : Int }
+                    { x : I64, y : I64 }
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -3750,7 +3750,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                    f : { x : Int, y ? Int } -> Int
+                    f : { x : I64, y ? I64 } -> I64
                     f = \r -> .y r
 
                     f
@@ -3767,11 +3767,11 @@ mod test_reporting {
 
                 This `r` value is a:
 
-                    { x : Int, y ? Int }
+                    { x : I64, y ? I64 }
 
                 But this function needs the 1st argument to be:
 
-                    { x : Int, y : Int }
+                    { x : I64, y : I64 }
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -3785,7 +3785,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Int, y : Int } -> Int
+                f : { x : I64, y : I64 } -> I64
                 f = \r ->
                         when r is
                             { x, y : "foo" } -> x + 0
@@ -3805,11 +3805,11 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { x : Int, y : Str }
+                    { x : I64, y : Str }
 
                 But the expression between `when` and `is` has the type:
 
-                    { x : Int, y : Int }
+                    { x : I64, y : I64 }
                 "#
             ),
         )
@@ -3820,7 +3820,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Int, y ? Int } -> Int
+                f : { x : I64, y ? I64 } -> I64
                 f = \r ->
                         when r is
                             { x, y ? "foo" } -> (\g, _ -> g) x y
@@ -3840,11 +3840,11 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { x : Int, y ? Str }
+                    { x : I64, y ? Str }
 
                 But the expression between `when` and `is` has the type:
 
-                    { x : Int, y ? Int }
+                    { x : I64, y ? I64 }
                 "#
             ),
         )

@@ -375,7 +375,7 @@ mod test_mono {
     fn ir_when_just() {
         compiles_to_ir(
             r#"
-            x : [ Nothing, Just Int ]
+            x : [ Nothing, Just I64 ]
             x = Just 41
 
             when x is
@@ -412,7 +412,7 @@ mod test_mono {
     fn one_element_tag() {
         compiles_to_ir(
             r#"
-            x : [ Pair Int ]
+            x : [ Pair I64 ]
             x = Pair 2
 
             x
@@ -502,7 +502,7 @@ mod test_mono {
             r#"
             Maybe a : [ Nothing, Just a ]
 
-            x : Maybe (Maybe Int)
+            x : Maybe (Maybe I64)
             x = Just (Just 41)
 
             when x is
@@ -795,7 +795,7 @@ mod test_mono {
         compiles_to_ir(
             r#"
             wrapper = \{} ->
-                x : Result Int Int
+                x : Result I64 I64
                 x = Ok 2
 
                 y =
@@ -1002,10 +1002,10 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                x : List Int
+                x : List I64
                 x = [1,2,3]
 
-                id : List Int -> List Int
+                id : List I64 -> List I64
                 id = \y -> List.set y 0 0
 
                 id x
@@ -1185,7 +1185,7 @@ mod test_mono {
             compiles_to_ir(
                 indoc!(
                     r#"
-                quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                quicksortHelp : List (Num a), I64, I64 -> List (Num a)
                 quicksortHelp = \list, low, high ->
                     if low < high then
                         (Pair partitionIndex partitioned) = Pair 0 []
@@ -1376,7 +1376,7 @@ mod test_mono {
                     r#"
                     app "test" provides [ main ] to "./platform"
 
-                    partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+                    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
                         if j < high then
                             when List.get list j is
@@ -1412,7 +1412,7 @@ mod test_mono {
                     r#"
                     app "test" provides [ main ] to "./platform"
 
-                    quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
                     quicksortHelp = \list, low, high ->
                         if low < high then
                             (Pair partitionIndex partitioned) = partition low high list
@@ -1424,7 +1424,7 @@ mod test_mono {
                             list
 
 
-                    swap : Int, Int, List a -> List a
+                    swap : I64, I64, List a -> List a
                     swap = \i, j, list ->
                         when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1435,7 +1435,7 @@ mod test_mono {
                             _ ->
                                 []
 
-                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
                     partition = \low, high, initialList ->
                         when List.get initialList high is
                             Ok pivot ->
@@ -1447,7 +1447,7 @@ mod test_mono {
                                 Pair (low - 1) initialList
 
 
-                    partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+                    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
                         if j < high then
                             when List.get list j is
@@ -1690,10 +1690,10 @@ mod test_mono {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                x : List Int
+                x : List I64
                 x = [1,2,3]
 
-                add : List Int -> List Int
+                add : List I64 -> List I64
                 add = \y -> List.set y 0 0
 
                 main =
@@ -1992,7 +1992,7 @@ mod test_mono {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe Int)
+                x : Maybe (Maybe I64)
                 x = Just (Just 41)
 
                 when x is
@@ -2047,10 +2047,10 @@ mod test_mono {
                 r#"
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList Int
+                nil : LinkedList I64
                 nil = Nil
 
-                length : LinkedList a -> Int
+                length : LinkedList a -> I64
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -2102,7 +2102,7 @@ mod test_mono {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                swap : Int, Int, List a -> List a
+                swap : I64, I64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
