@@ -2,6 +2,63 @@ const std = @import("std");
 const str = @import("../../../compiler/builtins/bitcode/src/str.zig");
 const testing = std.testing;
 
+extern fn roc__main_1_exposed([*]u8) void;
+extern fn roc__main_1_size() i64;
+extern fn roc__main_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
+extern fn roc__main_1_Fx_size() i64;
+
+pub export fn main() u8 {
+    const stdout = std.io.getStdOut().writer();
+
+    const size = @intCast(usize, roc__main_1_size());
+    const raw_output = std.heap.c_allocator.alloc(u8, size) catch unreachable;
+    var output = @ptrCast([*]u8, raw_output);
+
+    defer {
+        std.heap.c_allocator.free(raw_output);
+    }
+
+    roc__main_1_exposed(output);
+
+    const elements = @ptrCast([*]u64, @alignCast(8, output));
+
+    var flag = elements[0];
+
+    if (flag == 0) {
+        // all is well
+        const function_pointer = @intToPtr(*const u8, elements[1]);
+        const closure_data_pointer = @ptrCast([*]u8, output[16..size]);
+
+        call_the_closure(function_pointer, closure_data_pointer);
+    } else {
+        unreachable;
+    }
+
+    return 0;
+}
+
+fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) void {
+    const size = roc__main_1_Fx_size();
+    const raw_output = std.heap.c_allocator.alloc(u8, @intCast(usize, size)) catch unreachable;
+    var output = @ptrCast([*]u8, raw_output);
+
+    defer {
+        std.heap.c_allocator.free(raw_output);
+    }
+
+    roc__main_1_Fx_caller(function_pointer, closure_data_pointer, output);
+
+    const elements = @ptrCast([*]u64, @alignCast(8, output));
+
+    var flag = elements[0];
+
+    if (flag == 0) {
+        return;
+    } else {
+        unreachable;
+    }
+}
+
 extern var errno: c_int;
 
 const FILE = extern struct {
