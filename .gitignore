@@ -3,6 +3,9 @@ zig-cache
 .direnv
 *.rs.bk
 
+# llvm human-readable output 
+*.ll
+
 #valgrind
 vgcore.*
 

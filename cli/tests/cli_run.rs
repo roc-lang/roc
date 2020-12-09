@@ -145,30 +145,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_module)]
-    fn run_multi_module() {
-        check_output(
-            &example_file("multi-module", "Quicksort.roc"),
-            "quicksort",
-            &[],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            false,
-        );
-    }
-
-    #[test]
-    #[serial(multi_module)]
-    fn run_multi_module_optimized() {
-        check_output(
-            &example_file("multi-module", "Quicksort.roc"),
-            "quicksort",
-            &["--optimize"],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            false,
-        );
-    }
-
-    #[test]
-    #[serial(multi_module)]
     // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
     #[ignore]
     fn run_multi_module_valgrind() {

@@ -2,7 +2,7 @@ platform folkertdev/foo
     requires { main : Effect {} }
     exposes []
     packages {}
-    imports [ File ]
+    imports [ Task ]
     provides [ mainForHost ]
     effects Effect
         {
@@ -10,5 +10,5 @@ platform folkertdev/foo
             readAllUtf8 : Str -> Effect { errno : I64, bytes : Str }
         }
 
-mainForHost : Effect {} as Fx
+mainForHost : Task.Task {} I64 as Fx
 mainForHost = main

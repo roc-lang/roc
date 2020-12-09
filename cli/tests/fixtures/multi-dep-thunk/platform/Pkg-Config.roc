@@ -3,5 +3,8 @@ platform examples/multi-dep-thunk
     exposes []
     packages {}
     imports []
-    provides [ main ]
+    provides [ mainForHost ]
     effects Effect {}
+
+mainForHost : Str
+mainForHost = main
