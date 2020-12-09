@@ -162,10 +162,12 @@ pub enum Expr2 {
 
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
-        record_vars_id: NodeId<RecordVars>, // 4B
-        function_var: Variable,             // 4B
-        closure_var: Variable,              // 4B
-        field: PoolStr,                     // 4B
+        function_var: Variable, // 4B
+        closure_var: Variable,  // 4B
+        field: PoolStr,         // 4B
+        record_var: Variable,   // 4B
+        ext_var: Variable,      // 4B
+        field_var: Variable,    // 4B
     },
     Update {
         symbol: Symbol,                       // 8B
@@ -200,13 +202,6 @@ pub struct Def {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Pat2 {
     Todo,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct RecordVars {
-    record_var: Variable, // 4B
-    ext_var: Variable,    // 4B
-    field_var: Variable,  // 4B
 }
 
 /// This is 15B, so it fits in a Node slot.
