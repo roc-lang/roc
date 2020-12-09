@@ -155,7 +155,7 @@ pub enum Expr2 {
     EmptyRecord,
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
-        field: NodeId<PoolStr>,   // 4B
+        field: PoolStr,           // 4B
         expr: NodeId<Expr2>,      // 4B
         vars: NodeId<AccessVars>, // 4B
     },
@@ -165,7 +165,7 @@ pub enum Expr2 {
         record_vars_id: NodeId<RecordVars>, // 4B
         function_var: Variable,             // 4B
         closure_var: Variable,              // 4B
-        field_id: NodeId<PoolStr>,          // 4B
+        field: PoolStr,                     // 4B
     },
     Update {
         symbol: Symbol,                       // 8B
@@ -175,7 +175,7 @@ pub enum Expr2 {
 
     // Sum Types
     Tag {
-        name_id: NodeId<PoolStr>,                      // 4B
+        name: PoolStr,                                 // 4B
         variant_var: Variable,                         // 4B
         ext_var: Variable,                             // 4B
         arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
