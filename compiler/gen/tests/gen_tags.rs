@@ -868,4 +868,48 @@ mod gen_tags {
             (i64, bool, u8)
         );
     }
+
+    #[test]
+    fn phantom_polymorphic() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                Point coordinate : [ Point coordinate I64 I64 ]
+
+                World : [ @World ]
+
+                zero : Point World
+                zero = Point @World 0 0
+
+                add : Point a -> Point a
+                add = \(Point c x y) -> (Point c x y)
+
+                add zero
+                #"
+            ),
+            (0, 0),
+            (i64, i64)
+        );
+    }
+
+    #[test]
+    fn phantom_polymorphic_record() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                Point coordinate : { coordinate : coordinate, x : I64, y : I64 }
+
+                zero : Point {}
+                zero = { coordinate : {}, x : 0, y : 0 }
+
+                add : Point a -> Point a
+                add = \{ coordinate } -> { coordinate, x: 0, y: 0 }
+
+                add zero
+                #"
+            ),
+            (0, 0),
+            (i64, i64)
+        );
+    }
 }
