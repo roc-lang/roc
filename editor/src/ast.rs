@@ -28,33 +28,45 @@ pub enum IntStyle {
 /// It has a 1B discriminant and variants which hold payloads of at most 31B.
 #[derive(Debug)]
 pub enum Expr2 {
-    /// A number literal (without a dot) containing no underscores
-    Num {
+    /// A negative number literal without a dot
+    I64 {
         number: i64,     // 8B
         var: Variable,   // 4B
         style: IntStyle, // 1B
+        text: PoolStr,   // 8B
     },
-    /// A floating-point literal (with a dot) containing no underscores
+    /// A nonnegative number literal without a dot
+    U64 {
+        number: u64,     // 8B
+        var: Variable,   // 4B
+        style: IntStyle, // 1B
+        text: PoolStr,   // 8B
+    },
+    /// A large (over 64-bit) negative number literal without a dot.
+    /// This only comes up for literals that won't fit in 64-bit integers.
+    I128 {
+        number: i128,    // 16B
+        var: Variable,   // 4B
+        style: IntStyle, // 1B
+        text: PoolStr,   // 8B
+    },
+    /// A large (over 64-bit) nonnegative number literal without a dot
+    /// This only comes up for literals that won't fit in 64-bit integers.
+    U128 {
+        number: u128,    // 16B
+        var: Variable,   // 4B
+        style: IntStyle, // 1B
+        text: PoolStr,   // 8B
+    },
+    /// A floating-point literal (with a dot)
     Float {
         number: f64,   // 8B
         var: Variable, // 4B
     },
-    /// A number literal (without a dot) containing underscores
-    NumWithUnderscores {
-        number: i64,           // 8B
-        var: Variable,         // 4B
-        text: NodeId<PoolStr>, // 8B
-    },
-    /// A float literal (with a dot) containing underscores
-    FloatWithUnderscores {
-        number: f64,           // 8B
-        var: Variable,         // 4B
-        text: NodeId<PoolStr>, // 8B
-    },
     /// string literals of length up to 30B
     SmallStr(ArrayString<U30>), // 31B
     /// string literals of length 31B or more
-    Str(NodeId<PoolStr>), // 8B
+    Str(PoolStr), // 8B
     // Lookups
     Var(Symbol), // 8B
 
@@ -67,130 +79,99 @@ pub enum Expr2 {
     List {
         list_var: Variable,         // 4B - required for uniqueness of the list
         elem_var: Variable,         // 4B
-        first_elem: PoolVec<Expr2>, // 16B
+        first_elem: PoolVec<Expr2>, // 8B
     },
     If {
         cond_var: Variable,                // 4B
         expr_var: Variable,                // 4B
-        branches: PoolVec<(Expr2, Expr2)>, // 16B
-        final_else: NodeId<Expr2>,         // 8B
+        branches: PoolVec<(Expr2, Expr2)>, // 8B
+        final_else: NodeId<Expr2>,         // 4B
     },
     When {
         cond_var: Variable,            // 4B
         expr_var: Variable,            // 4B
-        branches: PoolVec<WhenBranch>, // 9B
-        cond: NodeId<Expr2>,           // 8B
+        branches: PoolVec<WhenBranch>, // 8B
+        cond: NodeId<Expr2>,           // 4B
     },
     LetRec {
         // TODO need to make this Alias type here page-friendly, which will be hard!
-        aliases: PoolVec<(Symbol, Alias)>, // 9B
-        defs: PoolVec<Def>,                // 9B
-        body_var: Variable,                // 4B
-        body_id: NodeId<Expr2>,            // 8B
+        aliases: PoolVec<(Symbol, Alias)>, // 8B
+        defs: PoolVec<Def>,                // 8B
+        body_var: Variable,                // 8B
+        body_id: NodeId<Expr2>,            // 4B
     },
-    // LetNonRec {
-    //     // TODO need to make this Alias type here page-friendly, which will be hard!
-    //     aliases: PoolVec<(Symbol, Alias)>, // 9B
-    //     def_id: NodeId<Def>,               // 8B
-    //     body_id: NodeId<Expr2>,            // 8B
-    //     body_var: Variable,                // 4B
-    // },
-    // Call {
-    //     /// NOTE: the first elem in this list is the expression and its variable.
-    //     /// The others are arguments. This is because we didn't have room for
-    //     /// both the expr and its variable otherwise.
-    //     expr_and_args: PoolVec<(Variable, NodeId<Expr2>)>, // 9B
-    //     fn_var: Variable,      // 4B
-    //     closure_var: Variable, // 4B
-    //     /// Cached outside expr_and_args so we don't have to potentially
-    //     /// traverse that whole linked list chain to count all the args.
-    //     arity: usize, // 8B - could make this smaller if need be
-    //     called_via: CalledVia, // 2B
-    // },
-    // RunLowLevel {
-    //     op: LowLevel,                             // 1B
-    //     args: PoolVec<(Variable, NodeId<Expr2>)>, // 9B
-    //     ret_var: Variable,                        // 4B
-    // },
-    // Closure {
-    //     captured_symbols: PoolVec<(Symbol, Variable)>, // 9B
-    //     args: PoolVec<(Variable, NodeId<Pat2>)>,       // 9B
-    //     recursive: Recursive,                          // 1B
-    //     extra: NodeId<ClosureExtra>,                   // 8B
-    // },
+    LetNonRec {
+        // TODO need to make this Alias type here page-friendly, which will be hard!
+        aliases: PoolVec<(Symbol, Alias)>, // 8B
+        def_id: NodeId<Def>,               // 4B
+        body_id: NodeId<Expr2>,            // 4B
+        body_var: Variable,                // 4B
+    },
+    Call {
+        /// NOTE: the first elem in this list is the expression and its variable.
+        /// The others are arguments. This is because we didn't have room for
+        /// both the expr and its variable otherwise.
+        expr_and_args: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
+        fn_var: Variable,      // 4B
+        closure_var: Variable, // 4B
+        /// Cached outside expr_and_args so we don't have to potentially
+        /// traverse that whole linked list chain to count all the args.
+        arity: usize, // 8B - could make this smaller if need be
+        called_via: CalledVia, // 2B
+    },
+    RunLowLevel {
+        op: LowLevel,                             // 1B
+        args: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
+        ret_var: Variable,                        // 4B
+    },
+    Closure {
+        args: PoolVec<(Variable, NodeId<Pat2>)>, // 8B
+        name: Symbol,                            // 8B
+        body: NodeId<Expr2>,                     // 4B
+        function_type: Variable,                 // 4B
+        recursive: Recursive,                    // 1B
+        extra: NodeId<ClosureExtra>,             // 4B
+    },
     // Product Types
-    // Record {
-    //     record_var: Variable,                                // 4B
-    //     fields: PoolVec<(PoolStr, Variable, NodeId<Expr2>)>, // 9B
-    // },
+    Record {
+        record_var: Variable,                                // 4B
+        fields: PoolVec<(PoolStr, Variable, NodeId<Expr2>)>, // 8B
+    },
     /// Empty record constant
-    // EmptyRecord,
-    // /// Look up exactly one field on a record, e.g. (expr).foo.
-    // Access {
-    //     field: NodeId<PoolStr>,   // 8B
-    //     expr: NodeId<Expr2>,      // 8B
-    //     vars: NodeId<AccessVars>, // 8B
-    // },
+    EmptyRecord,
+    /// Look up exactly one field on a record, e.g. (expr).foo.
+    Access {
+        field: NodeId<PoolStr>,   // 4B
+        expr: NodeId<Expr2>,      // 4B
+        vars: NodeId<AccessVars>, // 4B
+    },
 
-    // /// field accessor as a function, e.g. (.foo) expr
-    // Accessor {
-    //     record_vars_id: NodeId<RecordVars>, // 8B
-    //     function_var: Variable,             // 4B
-    //     closure_var: Variable,              // 4B
-    //     field_id: NodeId<PoolStr>,          // 8B
-    // },
-    // Update {
-    //     symbol: Symbol,                       // 8B
-    //     updates: PoolVec<(Lowercase, Field)>, // 9B
-    //     vars_id: NodeId<UpdateVars>,          // 8B
-    // },
+    /// field accessor as a function, e.g. (.foo) expr
+    Accessor {
+        record_vars_id: NodeId<RecordVars>, // 4B
+        function_var: Variable,             // 4B
+        closure_var: Variable,              // 4B
+        field_id: NodeId<PoolStr>,          // 4B
+    },
+    Update {
+        symbol: Symbol,                       // 8B
+        updates: PoolVec<(Lowercase, Field)>, // 8B
+        vars_id: NodeId<UpdateVars>,          // 4B
+    },
 
     // Sum Types
-    // Tag {
-    //     // NOTE: A PoolStr node is a 2B length and then 14B bytes,
-    //     // plus more bytes in adjacent nodes if necessary. Thus we have
-    //     // a hard cap of 4094 bytes as the maximum length of tags and fields.
-    //     name_id: NodeId<PoolStr>,                      // 8B
-    //     variant_var: Variable,                         // 4B
-    //     ext_var: Variable,                             // 4B
-    //     arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 9B
-    // },
+    Tag {
+        // NOTE: A PoolStr node is a 2B length and then 14B bytes,
+        // plus more bytes in adjacent nodes if necessary. Thus we have
+        // a hard cap of 4094 bytes as the maximum length of tags and fields.
+        name_id: NodeId<PoolStr>,                      // 4B
+        variant_var: Variable,                         // 4B
+        ext_var: Variable,                             // 4B
+        arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
+    },
 
     // Compiles, but will crash if reached
     RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// It's critical that this fit in 1 byte. If it takes 2B, Expr::Call is too big.
-/// That's why we have all the variants in here, instead of having separate
-/// UnaryOp and Binary
-pub enum CalledVia2 {
-    /// Calling with space, e.g. (foo bar)
-    Space,
-
-    /// (-), e.g. (-x)
-    Negate,
-    /// (!), e.g. (!x)
-    Not,
-
-    // highest precedence binary op
-    Caret,
-    Star,
-    Slash,
-    DoubleSlash,
-    Percent,
-    DoublePercent,
-    Plus,
-    Minus,
-    Equals,
-    NotEquals,
-    LessThan,
-    GreaterThan,
-    LessThanOrEq,
-    GreaterThanOrEq,
-    And,
-    Or,
-    Pizza, // lowest precedence binary op
 }
 
 #[derive(Debug)]
@@ -230,15 +211,14 @@ pub struct AccessVars {
     field_var: Variable,  // 4B
 }
 
-/// This is 32B, so it fits in a Node slot.
+/// This is overflow data from a Closure variant, which needs to store
+/// more than 32B of total data
 #[derive(Debug)]
 pub struct ClosureExtra {
-    name: Symbol,              // 8B
-    body: NodeId<Expr2>,       // 8B
-    function_type: Variable,   // 4B
-    closure_type: Variable,    // 4B
-    closure_ext_var: Variable, // 4B
-    return_type: Variable,     // 4B
+    return_type: Variable,                         // 4B
+    captured_symbols: PoolVec<(Symbol, Variable)>, // 8B
+    closure_type: Variable,                        // 4B
+    closure_ext_var: Variable,                     // 4B
 }
 
 #[derive(Debug)]
@@ -278,10 +258,5 @@ pub struct ExprPoolSlot(u8);
 
 #[test]
 fn size_of_expr() {
-    assert_eq!(std::mem::size_of::<Expr2>(), 32);
-}
-
-#[test]
-fn size_of_called_via() {
-    assert_eq!(std::mem::size_of::<CalledVia2>(), 1);
+    assert_eq!(std::mem::size_of::<Expr2>(), crate::pool::NODE_BYTES);
 }

@@ -15,6 +15,8 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr::null;
 
+pub const NODE_BYTES: usize = 32;
+
 // Each page has 128 slots. Each slot holds one 32B node
 // This means each page is 4096B, which is the size of a memory page
 // on typical systems where the compiler will be run.
@@ -56,19 +58,18 @@ impl<T> Clone for NodeId<T> {
 
 impl<T> Copy for NodeId<T> {}
 
-/// S is a slot size; e.g. Pool<[u8; 32]> for a pool of 32-bit slots
-pub struct Pool<S> {
-    nodes: *mut S,
+pub struct Pool {
+    nodes: *mut [u8; NODE_BYTES],
     num_nodes: u32,
     capacity: u32,
     // free_1node_slots: Vec<NodeId<T>>,
 }
 
-impl<S> Pool<S> {
+impl Pool {
     pub fn with_capacity(&mut self, nodes: u32) -> Self {
         // round up number of nodes requested to nearest page size in bytes
         let bytes_per_page = page_size::get();
-        let node_bytes = size_of::<S>() * nodes as usize;
+        let node_bytes = NODE_BYTES * nodes as usize;
         let leftover = node_bytes % bytes_per_page;
         let bytes_to_mmap = if leftover == 0 {
             node_bytes
@@ -89,12 +90,12 @@ impl<S> Pool<S> {
                 0,
                 0,
             )
-        } as *mut S;
+        } as *mut [u8; NODE_BYTES];
 
         // This is our actual capacity, in nodes.
         // It might be higher than the requested capacity due to rounding up
         // to nearest page size.
-        let capacity = (bytes_to_mmap / size_of::<S>()) as u32;
+        let capacity = (bytes_to_mmap / NODE_BYTES) as u32;
 
         Pool {
             nodes,
@@ -105,7 +106,7 @@ impl<S> Pool<S> {
 
     pub fn add<T>(&mut self, node: T) -> NodeId<T> {
         // It's only safe to store this if T is the same size as S.
-        debug_assert_eq!(size_of::<T>(), size_of::<S>());
+        debug_assert_eq!(size_of::<T>(), NODE_BYTES);
 
         let index = self.num_nodes;
 
@@ -141,23 +142,23 @@ impl<S> Pool<S> {
 
     // A node is available iff its bytes are all zeroes
     #[allow(dead_code)]
-    unsafe fn is_available<T>(&self, node_id: NodeId<T>) -> bool {
-        debug_assert_eq!(size_of::<T>(), size_of::<S>());
+    fn is_available<T>(&self, node_id: NodeId<T>) -> bool {
+        debug_assert_eq!(size_of::<T>(), NODE_BYTES);
 
         unsafe {
-            let node_ptr = self.nodes.offset(node_id.index as isize) as *const [u8; size_of::<S>()];
+            let node_ptr = self.nodes.offset(node_id.index as isize) as *const [u8; NODE_BYTES];
 
-            *node_ptr == [0; size_of::<S>()]
+            *node_ptr == [0; NODE_BYTES]
         }
     }
 }
 
-impl<S> Drop for Pool<S> {
+impl Drop for Pool {
     fn drop(&mut self) {
         unsafe {
             libc::munmap(
                 self.nodes as *mut c_void,
-                size_of::<S>() * self.capacity as usize,
+                NODE_BYTES * self.capacity as usize,
             );
         }
     }
@@ -192,9 +193,9 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     /// the usual array, and then there's one more node at the end which
     /// continues the list with a new length and NodeId value. PoolVec
     /// iterators automatically do these jumps behind the scenes when necessary.
-    pub fn new<I: ExactSizeIterator<Item = T>, S>(nodes: I, pool: &mut Pool<S>) -> Self {
+    pub fn new<I: ExactSizeIterator<Item = T>, S>(nodes: I, pool: &mut Pool) -> Self {
         debug_assert!(nodes.len() <= u32::MAX as usize);
-        debug_assert!(size_of::<T>() <= size_of::<S>());
+        debug_assert!(size_of::<T>() <= NODE_BYTES);
 
         let len = nodes.len() as u32;
 
@@ -223,7 +224,7 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn iter<S>(self, pool: &'a Pool<S>) -> impl ExactSizeIterator<Item = &'a T> {
+    pub fn iter<S>(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
         self.pool_list_iter(pool)
     }
 
@@ -232,7 +233,7 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     /// actually do want to have this separate function for code reuse
     /// in the iterator's next() method.
     #[inline(always)]
-    fn pool_list_iter<S>(&self, pool: &'a Pool<S>) -> PoolVecIter<'a, S, T> {
+    fn pool_list_iter(&self, pool: &'a Pool) -> PoolVecIter<'a, T> {
         PoolVecIter {
             pool,
             current_node_id: self.first_node_id,
@@ -240,12 +241,12 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn free<S>(self, pool: &'a mut Pool<S>) {
+    pub fn free<S>(self, pool: &'a mut Pool) {
         // zero out the memory
         unsafe {
             let index = self.first_node_id.index as isize;
             let node_ptr = pool.nodes.offset(index) as *mut c_void;
-            let bytes = self.len as usize * size_of::<S>();
+            let bytes = self.len as usize * NODE_BYTES;
 
             libc::memset(node_ptr, 0, bytes);
         }
@@ -254,13 +255,13 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     }
 }
 
-struct PoolVecIter<'a, S, T> {
-    pool: &'a Pool<S>,
+struct PoolVecIter<'a, T> {
+    pool: &'a Pool,
     current_node_id: NodeId<T>,
     len_remaining: u32,
 }
 
-impl<'a, S, T> ExactSizeIterator for PoolVecIter<'a, S, T>
+impl<'a, T> ExactSizeIterator for PoolVecIter<'a, T>
 where
     T: 'a,
 {
@@ -269,7 +270,7 @@ where
     }
 }
 
-impl<'a, S, T> Iterator for PoolVecIter<'a, S, T>
+impl<'a, T> Iterator for PoolVecIter<'a, T>
 where
     T: 'a,
 {
