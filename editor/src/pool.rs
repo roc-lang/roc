@@ -10,7 +10,7 @@
 ///
 /// Pages also use the node value 0 (all 0 bits) to mark nodes as unoccupied.
 /// This is important for performance.
-use libc::{c_void, calloc, free, mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use std::mem::size_of;
 use std::ptr::null;
 
@@ -18,7 +18,31 @@ pub const NODE_SIZE: usize = 32;
 
 // Pages are an internal concept which never leave this module.
 const PAGE_BYTES: usize = 4096;
-const NODES_PER_PAGE: usize = PAGE_BYTES / NODE_SIZE;
+const NODES_PER_PAGE: u8 = (PAGE_BYTES / NODE_SIZE) as u8;
+
+// Each page has 128 slots. Each slot holds one 32B node
+// This means each page is 4096B, which is the size of a memory page
+// on typical systems where the compiler will be run.
+//
+// Nice things about this system include:
+// * Allocating a new page is as simple as asking the OS for a memory page.
+// * Since each node is 32B, each node's memory address will be a multiple of 16.
+// * Thanks to the free lists and our consistent chunk sizes, we should
+//   end up with very little fragmentation.
+// * Finding a slot for a given node should be very fast: see if the relevant
+//   free list has any openings; if not, try the next size up.
+//
+// Less nice things include:
+// * This system makes it very hard to ever give a page back to the OS.
+//   We could try doing the Mesh Allocator strategy: whenever we allocate
+//   something, assign it to a random slot in the page, and then periodically
+//   try to merge two pages into one (by locking and remapping them in the OS)
+//   and then returning the redundant physical page back to the OS. This should
+//   work in theory, but is pretty complicated, and we'd need to schedule it.
+//   Keep in mind that we can't use the Mesh Allocator itself because it returns
+//   usize pointers, which would be too big for us to have 16B nodes.
+//   On the plus side, we could be okay with higher memory usage early on,
+//   and then later use the Mesh strategy to reduce long-running memory usage.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeId<T: Sized>(*const T);
@@ -29,114 +53,67 @@ pub struct Pool {
 }
 
 impl Pool {
+    /// Returns a pool with a capacity equal to the given number of 4096-byte pages.
+    // pub fn with_pages(pages: usize) {
+    //     todo!();
+    // }
+
     // fn find_space_for(&mut self, nodes: u8) -> Result<PageId<T>, ()> {}
 
-    pub fn add<T: Sized>(&mut self) -> Result<NodeId<T>, ()> {
-        let num_pages = self.buckets.len();
+    pub fn add<T: Sized>(&mut self, node: T) -> NodeId<T> {
+        // It's only safe to store this as a *mut T if T is the size of a node.
+        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
 
-        match self.pages.last() {}
+        match self.pages.last_mut() {
+            Some(page) if page.node_count < NODES_PER_PAGE => Pool::add_to_page(page, node),
+            _ => {
+                // This page is either full or doesn't exist, so create a new one.
+                let mut page = Page::default();
+                let node_id = Pool::add_to_page(&mut page, node);
 
-        if self.next_unused_node.offset_from(self.first_node) < NODES_PER_PAGE {
-            let bucket = Page::default();
+                self.pages.push(page);
 
-            self.buckets.push(bucket);
-
-            Ok(NodeId(bucket.first_node as *const T))
-        } else {
-            Err(())
+                node_id
+            }
         }
     }
 
-    fn get_unchecked<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> &'a T {
+    /// Reserves the given number of contiguous node slots, and returns
+    /// the NodeId of the first one. We only allow reserving 2^32 in a row.
+    fn reserve<T: Sized>(&mut self, _nodes: u32) -> NodeId<T> {
+        todo!("Implement Pool::reserve");
+    }
+
+    fn add_to_page<T: Sized>(page: &mut Page, node: T) -> NodeId<T> {
         unsafe {
-            self.buckets
-                .get(node_id.bucket_id.value as usize)
-                .unwrap()
-                .get_unchecked(node_id.node.value)
+            let node_ptr = (page.first_node as *const T).offset(page.node_count as isize) as *mut T;
+
+            *node_ptr = node;
+
+            page.node_count += 1;
+
+            NodeId(node_ptr)
         }
     }
 
-    pub fn get<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> Option<&'a T> {
-        self.buckets
-            .get(node_id.bucket_id.value as usize)
-            .and_then(|bucket| bucket.get(node_id.node))
+    pub fn get<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> &'a T {
+        unsafe { &*node_id.0 }
+    }
+
+    // A node is available iff its bytes are all zeroes
+    #[allow(dead_code)]
+    unsafe fn is_available<T>(&self, node_id: NodeId<T>) -> bool {
+        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
+
+        let ptr = node_id.0 as *const [u8; NODE_SIZE];
+
+        *ptr == [0; NODE_SIZE]
     }
 }
 
 struct Page {
-    #[allow(dead_code)]
-    next_unused_node: *const [u8; NODE_SIZE],
-    first_node: *mut [u8; NODE_SIZE],
-}
-
-impl Page {
-    /// If there's room left in the bucket, adds the item and returns
-    /// the node where it was put. If there was no room left, returns Err(()).
-    #[allow(dead_code)]
-    pub fn add<T: Sized>(&mut self, node: T) -> Result<NodeId<T>, ()> {
-        // It's only safe to store this as a *const T if T is the size of a node.
-        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
-
-        // Once next_unused_node exceeds NODES_PER_PAGE, we have no room left.
-        if self.next_unused_node <= NODES_PER_PAGE {
-            let chosen_node = self.next_unused_node;
-
-            unsafe { *chosen_node = node };
-            self.next_unused_node = self.next_unused_node.add(1);
-
-            Ok(NodeId(chosen_node))
-        } else {
-            // No room left!
-            Err(())
-        }
-    }
-
-    /// If the given node is available, inserts the given node into it.
-    /// Otherwise, returns the node that was in the already-occupied node.
-    #[allow(dead_code)]
-    pub fn insert<T: Sized>(&mut self, node: T, node: NodeId<T>) -> Result<(), &T> {
-        // It's only safe to store this as a *const T if T is the size of a node.
-        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
-
-        let node = node.0;
-
-        unsafe {
-            if self.is_available(node) {
-                self.put_unchecked(node, node);
-
-                Ok(())
-            } else {
-                Err(self.get_unchecked(node))
-            }
-        }
-    }
-
-    pub fn get<'a, T: Sized>(&'a self, node: NodeId<T>) -> Option<&'a T> {
-        // It's only safe to store this as a *const T if T is the size of a node.
-        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
-
-        unsafe {
-            let node_ptr = self.first_node.offset(node.value as isize) as *const T;
-            let value: &[u8; NODE_SIZE] = &*(node_ptr as *const [u8; NODE_SIZE]);
-
-            if *value != [0; NODE_SIZE] {
-                Some(&*(value as *const [u8; NODE_SIZE] as *const T))
-            } else {
-                None
-            }
-        }
-    }
-
-    unsafe fn get_unchecked<T>(&self, node: u8) -> &T {
-        &*(self.first_node.offset(node as isize) as *const T)
-    }
-
-    // A node is available iff its bytes are all zeroes
-    unsafe fn is_available<T>(&self, node_id: NodeId<T>) -> bool {
-        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
-
-        *node_id.0 == [0; NODE_SIZE]
-    }
+    first_node: *const [u8; NODE_SIZE],
+    node_count: u8,
 }
 
 impl Default for Page {
@@ -144,7 +121,7 @@ impl Default for Page {
         let first_node = if page_size::get() == 4096 {
             unsafe {
                 // mmap exactly one memory page (4096 bytes)
-                mmap(
+                libc::mmap(
                     null::<c_void>() as *mut c_void,
                     PAGE_BYTES,
                     PROT_READ | PROT_WRITE,
@@ -157,12 +134,12 @@ impl Default for Page {
             // Somehow the page size is not 4096 bytes, so fall back on calloc.
             // (We use calloc over malloc because we rely on the bytes having
             // been zeroed to tell which nodes are available.)
-            unsafe { calloc(1, PAGE_BYTES) }
+            unsafe { libc::calloc(1, PAGE_BYTES) }
         } as *mut [u8; NODE_SIZE];
 
         Page {
-            next_unused_node: first_node,
             first_node,
+            node_count: 0,
         }
     }
 }
@@ -171,163 +148,185 @@ impl Drop for Page {
     fn drop(&mut self) {
         if page_size::get() == 4096 {
             unsafe {
-                munmap(self.first_node as *mut c_void, PAGE_BYTES);
+                libc::munmap(self.first_node as *mut c_void, PAGE_BYTES);
             }
         } else {
             unsafe {
-                free(self.first_node as *mut c_void);
+                libc::free(self.first_node as *mut c_void);
             }
         }
     }
 }
 
+/// A string of at most 2^32 bytes, allocated in a pool if it fits in a Page,
+/// or using malloc as a fallback if not. Like std::str::String, this has
+/// both a length and capacity.
 #[derive(Debug)]
-pub struct PageStr {
+pub struct PoolStr {
     first_node_id: NodeId<()>,
-    first_segment_len: u8,
+    len: u32,
+    cap: u32,
 }
 
 #[test]
-fn size_of_bucket_str() {
-    assert_eq!(std::mem::size_of::<PageList<()>>(), 4);
+fn pool_str_size() {
+    assert_eq!(size_of::<PoolStr>(), size_of::<usize>() + 8);
 }
 
-/// A non-empty list inside a bucket. It takes 4B of memory.
-///
-/// This is internally represented as an array of at most 255 nodes, which
-/// can grow to 256+ nodes by having the last nodeent be a linked list Cons
-/// cell which points to another such backing array which has more nodes.
-///
-/// In practice, these will almost be far below 256 nodes, but in theory
-/// they can be enormous in length thanks to the linked list fallback.
-///
-/// Since these are non-empty lists, we need separate variants for collections
-/// that can be empty, e.g. EmptyRecord and EmptyList. In contrast, we don't
-/// need an EmptyList or EmptyWhen, since although those use PageList
-/// to store their branches, having zero branches is syntactically invalid.
-/// Same with Call and Closure, since all functions must have 1+ arguments.
+/// An array of at most 2^32 elements, allocated in a pool if it fits in a Page,
+/// or using malloc as a fallback if not. Like std::vec::Vec, this has both
+/// a length and capacity.
 #[derive(Debug)]
-pub struct PageList<T: Sized> {
+pub struct PoolVec<T: Sized> {
     first_node_id: NodeId<T>,
-    first_segment_len: u8,
+    len: u32,
+    cap: u32,
 }
 
 #[test]
-fn size_of_bucket_list() {
-    assert_eq!(std::mem::size_of::<PageList<()>>(), 4);
+fn pool_vec_size() {
+    assert_eq!(size_of::<PoolVec<()>>(), size_of::<usize>() + 8);
 }
 
-impl<'a, T: 'a + Sized> PageList<T> {
-    /// If given a first_segment_len of 0, that means this is a PageList
-    /// consisting of 256+ nodes. The first 255 are stored in the usual
-    /// array, and then there's one more nodeent at the end which continues
-    /// the list with a new length and NodeId value. PageList iterators
-    /// automatically do these jumps behind the scenes when necessary.
-    pub fn new(first_node_id: NodeId<T>, first_segment_len: u8) -> Self {
-        PageList {
-            first_segment_len,
-            first_node_id: first_node_id.bucket_id,
-            first_node_sl: first_node_id.node,
+impl<'a, T: 'a + Sized> PoolVec<T> {
+    /// If given a slice of length > 128, the first 128 nodes will be stored in
+    /// the usual array, and then there's one more node at the end which
+    /// continues the list with a new length and NodeId value. PoolVec
+    /// iterators automatically do these jumps behind the scenes when necessary.
+    pub fn new<I: ExactSizeIterator<Item = T>>(nodes: I, pool: &mut Pool) -> Self {
+        debug_assert!(nodes.len() <= u32::MAX as usize);
+        debug_assert!(size_of::<T>() <= NODE_SIZE);
+
+        let len = nodes.len() as u32;
+
+        if len > 0 {
+            if len <= NODES_PER_PAGE as u32 {
+                let first_node_id = pool.reserve(len);
+                let mut next_node_ptr = first_node_id.0 as *mut T;
+
+                for node in nodes {
+                    unsafe {
+                        *next_node_ptr = node;
+
+                        next_node_ptr = next_node_ptr.offset(1);
+                    }
+                }
+
+                PoolVec {
+                    first_node_id,
+                    len,
+                    cap: len,
+                }
+            } else {
+                let first_node_ptr = unsafe {
+                    // mmap enough memory to hold it
+                    libc::mmap(
+                        null::<c_void>() as *mut c_void,
+                        len as usize,
+                        PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS,
+                        0,
+                        0,
+                    )
+                };
+
+                PoolVec {
+                    first_node_id: NodeId(first_node_ptr as *const T),
+                    len,
+                    cap: len,
+                }
+            }
+        } else {
+            PoolVec {
+                first_node_id: NodeId(std::ptr::null()),
+                len: 0,
+                cap: 0,
+            }
         }
     }
 
-    pub fn into_iter(self, buckets: &'a Pages) -> impl Iterator<Item = &'a T> {
-        self.bucket_list_iter(buckets)
+    pub fn iter(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
+        self.pool_list_iter(pool)
     }
 
     /// Private version of into_iter which exposes the implementation detail
-    /// of PageListIter. We don't want that struct to be public, but we
+    /// of PoolVecIter. We don't want that struct to be public, but we
     /// actually do want to have this separate function for code reuse
     /// in the iterator's next() method.
-    fn bucket_list_iter(&self, buckets: &'a Pages) -> PageListIter<'a, T> {
-        let first_segment_len = self.first_segment_len;
-        let continues_with_cons = first_segment_len == 0;
-        let len_remaining = if continues_with_cons {
-            // We have 255 nodes followed by a Cons cell continuing the list.
-            u8::MAX
-        } else {
-            first_segment_len
-        };
+    #[inline(always)]
+    fn pool_list_iter(&self, pool: &'a Pool) -> PoolVecIter<'a, T> {
+        PoolVecIter {
+            _pool: pool,
+            current_node_id: NodeId(self.first_node_id.0),
+            len_remaining: self.len,
+        }
+    }
 
-        PageListIter {
-            continues_with_cons,
-            len_remaining,
-            bucket_id: self.first_node_id,
-            node: self.first_node_sl,
-            buckets,
+    pub fn free(self) {
+        if self.len <= NODES_PER_PAGE as u32 {
+            // If this was small enough to fit in a Page, then zero it out.
+            unsafe {
+                libc::memset(
+                    self.first_node_id.0 as *mut c_void,
+                    0,
+                    self.len as usize * NODE_SIZE,
+                );
+            }
+
+        // TODO insert it into the pool's free list
+        } else {
+            // This was bigger than a Page, so we mmap'd it. Now we free it!
+            unsafe {
+                libc::munmap(self.first_node_id.0 as *mut c_void, self.len as usize);
+            }
         }
     }
 }
 
-struct PageListIter<'a, T: Sized> {
+struct PoolVecIter<'a, T: Sized> {
+    /// This iterator returns elements which have the same lifetime as the pool
+    _pool: &'a Pool,
     current_node_id: NodeId<T>,
-    len_remaining: u8,
-    continues_with_cons: bool,
-    buckets: &'a Pages,
+    len_remaining: u32,
 }
 
-impl<'a, T: Sized> Iterator for PageListIter<'a, T>
+impl<'a, T: Sized> ExactSizeIterator for PoolVecIter<'a, T>
+where
+    T: 'a,
+{
+    fn len(&self) -> usize {
+        self.len_remaining as usize
+    }
+}
+
+impl<'a, T: Sized> Iterator for PoolVecIter<'a, T>
 where
     T: 'a,
 {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.len_remaining {
-            0 => match self.continues_with_cons {
-                // We're done! This is by far the most common case, so we put
-                // it first to avoid branch mispredictions.
-                false => None,
-                // We need to continue with a Cons cell.
-                true => {
-                    let node_id = NodeId {
-                        bucket_id: self.bucket_id,
-                        node: self.node,
-                    }
-                    .next_node();
+        let len_remaining = self.len_remaining;
 
-                    // Since we have continues_with_cons set, the next node
-                    // will definitely be occupied with a PageList struct.
-                    let node = self.buckets.get_unchecked(node_id);
-                    let next_list = unsafe { &*(node as *const T as *const PageList<T>) };
+        if len_remaining > 1 {
+            // Get the current node
+            let node_ptr = self.current_node_id.0;
 
-                    // Replace the current iterator with an iterator into that
-                    // list, and then continue with next() on that iterator.
-                    let next_iter = next_list.bucket_list_iter(self.buckets);
+            // Advance the node pointer to the next node in the current page
+            self.current_node_id = NodeId(unsafe { node_ptr.offset(1) });
+            self.len_remaining = len_remaining - 1;
 
-                    self.bucket_id = next_iter.bucket_id;
-                    self.node = next_iter.node;
-                    self.len_remaining = next_iter.len_remaining;
-                    self.continues_with_cons = next_iter.continues_with_cons;
+            Some(unsafe { &*node_ptr })
+        } else if len_remaining == 1 {
+            self.len_remaining = 0;
 
-                    self.next()
-                }
-            },
-            1 => {
-                self.len_remaining = 0;
+            // Don't advance the node pointer's node, because that might
+            // advance past the end of the page!
 
-                // Don't advance the node pointer's node, because that might
-                // advance past the end of the bucket!
-
-                Some(self.buckets.get_unchecked(NodeId {
-                    bucket_id: self.bucket_id,
-                    node: self.node,
-                }))
-            }
-            len_remaining => {
-                // Get the current node
-                let node_id = NodeId {
-                    bucket_id: self.bucket_id,
-                    node: self.node,
-                };
-                let node = self.buckets.get_unchecked(node_id);
-
-                // Advance the node pointer to the next node in the current bucket
-                self.node = self.node.increment();
-                self.len_remaining = len_remaining - 1;
-
-                Some(node)
-            }
+            Some(unsafe { &*self.current_node_id.0 })
+        } else {
+            // len_remaining was 0
+            None
         }
     }
 }
