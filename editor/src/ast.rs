@@ -175,9 +175,6 @@ pub enum Expr2 {
 
     // Sum Types
     Tag {
-        // NOTE: A PoolStr node is a 2B length and then 14B bytes,
-        // plus more bytes in adjacent nodes if necessary. Thus we have
-        // a hard cap of 4094 bytes as the maximum length of tags and fields.
         name_id: NodeId<PoolStr>,                      // 4B
         variant_var: Variable,                         // 4B
         ext_var: Variable,                             // 4B
