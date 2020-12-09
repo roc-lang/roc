@@ -269,12 +269,18 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
-            // Add builtin defs (e.g. List.get) to the module's defs
-            let builtin_defs = builtins::builtin_defs(var_store);
-
-            for (symbol, def) in builtin_defs {
-                if references.contains(&symbol) {
-                    declarations.push(Declaration::Builtin(def));
+            // TODO this loops over all symbols in the module, we can speed it up by having an
+            // iterator over all builtin symbols
+            for symbol in references.iter() {
+                if symbol.is_builtin() {
+                    match builtins::builtin_defs_map(*symbol, var_store) {
+                        Some(def) => {
+                            declarations.push(Declaration::Builtin(def));
+                        }
+                        None => {
+                            // this can be the case for builtin types
+                        }
+                    }
                 }
             }
 

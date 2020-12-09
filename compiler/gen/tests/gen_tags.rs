@@ -899,11 +899,11 @@ mod gen_tags {
                 r"#
                 Point coordinate : { coordinate : coordinate, x : I64, y : I64 }
 
-                zero : Point {}
-                zero = { coordinate : {}, x : 0, y : 0 }
+                zero : Point I64
+                zero = { coordinate : 0, x : 0, y : 0 }
 
                 add : Point a -> Point a
-                add = \{ coordinate } -> { coordinate, x: 0, y: 0 }
+                add = \{ coordinate } -> { coordinate, x: 0 + 0, y: 0 }
 
                 add zero
                 #"
