@@ -95,8 +95,8 @@ pub enum Expr2 {
         elem_var: Variable, // 4B
     },
     List {
-        list_var: Variable,         // 4B - required for uniqueness of the list
-        elem_var: Variable,         // 4B
+        list_var: Variable,    // 4B - required for uniqueness of the list
+        elem_var: Variable,    // 4B
         elems: PoolVec<Expr2>, // 8B
     },
     If {
