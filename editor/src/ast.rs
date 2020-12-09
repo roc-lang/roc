@@ -126,16 +126,12 @@ pub enum Expr2 {
         body_var: Variable,                // 4B
     },
     Call {
-        /// NOTE: the first elem in this list is the expression and its variable.
-        /// The others are arguments. This is because we didn't have room for
-        /// both the expr and its variable otherwise.
-        expr_and_args: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
-        fn_var: Variable,      // 4B
-        closure_var: Variable, // 4B
-        /// Cached outside expr_and_args so we don't have to potentially
-        /// traverse that whole linked list chain to count all the args.
-        arity: usize, // 8B - could make this smaller if need be
-        called_via: CalledVia, // 2B
+        args: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
+        expr: NodeId<Expr2>,                      // 4B
+        expr_var: Variable,                       // 4B
+        fn_var: Variable,                         // 4B
+        closure_var: Variable,                    // 4B
+        called_via: CalledVia,                    // 2B
     },
     RunLowLevel {
         op: LowLevel,                             // 1B
