@@ -14,14 +14,21 @@ import Maybe.Extra exposing (orList)
 type alias Model =
     { tree : Token
     , keyboard : Keyboard
+    , shiftDown : Bool
     , actions : List Msg
     , token : Maybe Token
     }
 
 
 type Keyboard
-    = Editing String TokenPath
+    = Editing Caret TokenPath
     | Navigating TokenPath
+
+
+type alias Caret =
+    { before : String
+    , after : String
+    }
 
 
 type TokenPath
@@ -29,10 +36,26 @@ type TokenPath
     | Next Int TokenPath
 
 
+type alias PathToParent =
+    TokenPath
+
+
 type Token
-    = Atom String
+    = Atom Kind
+    | Group Kind Layout (List Token)
+
+
+type Kind
+    = Empty
+    | TypeName String
     | Syntax String
-    | Group String Layout (List Token)
+    | TagName String
+    | FieldName String
+    | ParamName String
+    | FnName String
+    | VarName String
+    | StrVal String
+    | NumVal String
 
 
 type Layout
@@ -73,7 +96,6 @@ moveStep dir tok path { sibilings, current, layout } =
                         |> Maybe.andThen
                             (\t ->
                                 moves t path (selectable xs) n l (moveSteps ( dir, l ))
-                                  
                             )
                         |> Maybe.withDefault End
 
@@ -97,7 +119,7 @@ moveStep dir tok path { sibilings, current, layout } =
 
 moveSteps : ( Direction, Layout ) -> List Move
 moveSteps dl =
-    case  dl of
+    case dl of
         ( Up, Vert ) ->
             [ PrevSibiling
             , Parent
@@ -105,7 +127,7 @@ moveSteps dl =
             ]
 
         ( Up, Hori ) ->
-            [ Parent 
+            [ Parent
             , PrevSibiling
             , LastChild
             ]
@@ -167,6 +189,15 @@ type Move
     | LastChild
 
 
+type Direction
+    = Down
+    | Up
+    | Left
+    | Right
+    | Inside
+    | Outside
+
+
 moves : Token -> TokenPath -> List Int -> Int -> Layout -> List Move -> Maybe TokenPath
 moves tok path sibilings current layout mvs =
     case tok of
@@ -185,10 +216,10 @@ moves tok path sibilings current layout mvs =
                                 prevSibiling current sibilings
 
                             FirstChild ->
-                                firstChild current toks path
+                                firstChild toks path
 
                             LastChild ->
-                                lastChild current toks path
+                                lastChild toks path
                     )
                 |> orList
 
@@ -225,8 +256,8 @@ prevSibiling n xs =
         |> Maybe.map selectedChild
 
 
-firstChild : Int -> List Token -> TokenPath -> Maybe TokenPath
-firstChild current its p =
+firstChild : List Token -> TokenPath -> Maybe TokenPath
+firstChild its p =
     selectable its
         |> List.head
         |> Maybe.map (\i -> appendPath i p)
@@ -237,8 +268,8 @@ selectedChild n =
     Next n End
 
 
-lastChild : Int -> List Token -> TokenPath -> Maybe TokenPath
-lastChild current its p =
+lastChild : List Token -> TokenPath -> Maybe TokenPath
+lastChild its p =
     selectable its
         |> ListE.last
         |> Maybe.map (\i -> appendPath i p)
@@ -278,50 +309,46 @@ selectable ts =
 isSelectable : Token -> Bool
 isSelectable t =
     case t of
-        Syntax _ ->
+        Atom (Syntax _) ->
             False
 
         _ ->
             True
 
 
-type Direction
-    = Down
-    | Up
-    | Left
-    | Right
-    | Inside
-    | Outside
+token : Kind -> Token
+token =
+    Atom
 
 
-token : String -> Token
-token s =
-    Atom s
-
-
-tokenWith : String -> List Token -> Token
+tokenWith : Kind -> List Token -> Token
 tokenWith s xs =
     Group s Hori xs
 
 
 syntax : String -> Token
 syntax s =
-    Syntax s
+    Atom (Syntax s)
 
 
 group : Layout -> List Token -> Token
 group l xs =
-    Group "" l xs
+    Group Empty l xs
+
+
+empty : Token
+empty =
+    token Empty
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { tree =
-            group Vert
-                [ testState
-                , testViewFn
+            treeRoot
+                [ token Empty
                 ]
-      , keyboard = Navigating (Next 0 End)
+      , keyboard = Editing (Caret "" "") (Next 0 End)
+      , shiftDown = False
       , actions = []
       , token = Nothing
       }
@@ -329,19 +356,26 @@ init _ =
     )
 
 
+treeRoot : List Token -> Token
+treeRoot =
+    group Vert
+
+
 view : Model -> Html Msg
 view model =
-    H.div [ A.class "flex flex-col justify-start items-start" ] <|
+    H.div [ A.class "flex flex-col justify-start items-start mx-16" ] <|
         H.p [ A.class "my-4 text-lg" ] [ H.text intro ]
             :: (case model.keyboard of
                     Navigating path ->
-                        [ viewToken (Just path) End model.tree ]
+                        [ viewToken Nothing (Just path) End model.tree ]
 
-                    Editing _ path ->
-                        [ viewToken (Just path) End model.tree ]
+                    Editing caret path ->
+                        [ viewToken (Just caret) (Just path) End model.tree
+                        ]
                )
 
 
+intro : String
 intro =
     "Welcome to Prototype :) Use Arrow keys to navigate. Spacebar enters in a group of tokens. Escape goes level up"
 
@@ -352,22 +386,30 @@ intro =
 --    ]
 
 
-viewToken : Maybe TokenPath -> TokenPath -> Token -> Html Msg
-viewToken selPath path token_ =
+viewToken : Maybe Caret -> Maybe TokenPath -> TokenPath -> Token -> Html Msg
+viewToken mCaret selPath path token_ =
     let
         ( self, sty, xs ) =
             case token_ of
                 Group name lay xs_ ->
-                    ( H.text name, tokenStyles (isSel selPath) lay name, xs_ )
+                    ( H.text <| Debug.toString name, tokenStyles (isSel selPath) lay "name", xs_ )
 
-                Atom var ->
-                    ( H.text var, tokenStyles (isSel selPath) Hori var, [] )
-
-                Syntax s ->
+                Atom (Syntax s) ->
                     ( H.text s, noStyle, [] )
 
+                Atom k ->
+                    case ( mCaret, selPath ) of
+                        ( Just car, Just End ) ->
+                            ( viewCaret car
+                            , A.class "px-2 py-1"
+                            , []
+                            )
+
+                        _ ->
+                            ( H.text "var", tokenStyles (isSel selPath) Hori "var", [] )
+
         viewSubtoken idx subtoken =
-            viewToken
+            viewToken mCaret
                 (case selPath of
                     Just (Next n subpath) ->
                         if n == idx then
@@ -392,6 +434,23 @@ viewToken selPath path token_ =
     <|
         self
             :: subtokens
+
+
+viewCaret : Caret -> Html Msg
+viewCaret caret =
+    if String.isEmpty caret.before && String.isEmpty caret.after then
+        H.span [ A.class "text-gray-600 font-italic flex flex-row items-baseline" ] [ caretEl, H.text "Expression" ]
+
+    else
+        H.span
+            [ A.class "flex flex-row items-baseline"
+            ]
+            [ H.text caret.before, caretEl, H.text caret.after ]
+
+
+caretEl : Html msg
+caretEl =
+    H.span [ A.class "inline-block w-px h-3 mx-px bg-pink-500 animate-pulse" ] []
 
 
 appendPath : Int -> TokenPath -> TokenPath
@@ -429,8 +488,6 @@ tokenStyles sel layout name =
     A.class <|
         String.join " "
             [ "px-2"
-            , "py-1"
-            , "my-1"
             , "bg-gray-100"
             , "dark:bg-gray-800"
             , if
@@ -470,67 +527,183 @@ update msg model =
     case msg of
         UserMouseHover tok path ->
             { model
-                | keyboard = Navigating path
-                , token = Just tok
+                | token = Just tok
             }
 
-        Move dir ->
-            { model
-                | keyboard = mapKeyboard (move dir model.tree) model.keyboard
-            }
-
-        _ ->
+        Keyboard event ->
             model
 
 
+type alias Typing =
+    ( Caret, TokenPath, Token )
+
+
+onKeyboardEvent : KeyboardEvent -> Typing -> Typing
+onKeyboardEvent ev ( c, path, tok ) =
+    ( c, path, tok )
+
+
+type KeyboardEvent
+    = Chr Char
+    | Shift
+    | Esc
+    | Entr
+    | Spc
+    | Arrow Direction
+
+
+type ModifyTree
+    = AddChild Layout Token
+    | AddSibiling Token
+    | Replace Token
+    | Cut
+
+
+modify : ModifyTree -> TokenPath -> Token -> Token
+modify act path tok =
+    case ( act, path, tok ) of
+        ( AddChild l t, End, Atom k ) ->
+            Group k l [ t ]
+
+        ( AddChild _ t, End, Group gt l xs ) ->
+            Group gt l <| xs ++ [ t ]
+
+        ( AddChild l t, Next n sub, Atom k ) ->
+            Group k l [ t ]
+
+        ( AddChild _ t, Next n sub, Group k l xs ) ->
+            updateGroup k l (modify act sub) n xs
+
+        ( AddSibiling t, End, _ ) ->
+            treeRoot [ tok, t ]
+
+        ( AddSibiling t, Next n End, Group k l xs ) ->
+            ListE.splitAt (n + 1) xs
+                |> (\( a, b ) -> a ++ [ t ] ++ b)
+                |> Group k l
+
+        ( AddSibiling t, Next n sub, Atom k ) ->
+            treeRoot [ tok, t ]
+
+        ( AddSibiling t, Next n sub, Group k l xs ) ->
+            updateGroup k l (modify act sub) n xs
+
+        ( Replace t, End, _ ) ->
+            t
+
+        ( Replace t, Next n sub, Atom k ) ->
+            t
+
+        ( Replace t, Next n sub, Group k l xs ) ->
+            updateGroup k l (modify act sub) n xs
+
+        ( Cut, End, _ ) ->
+            empty
+
+        ( Cut, Next n End, Atom _ ) ->
+            tok
+
+        ( Cut, Next n End, Group k l xs ) ->
+            Group k l (ListE.removeAt n xs)
+
+        ( Cut, Next n sub, Atom _ ) ->
+            tok
+
+        ( Cut, Next n sub, Group k l xs ) ->
+            updateGroup k l (modify act sub) n xs
+
+
+updateGroup k l fn n xs =
+    Group k l <| runAt fn n xs
+
+
+runAt fn idx xs =
+    ListE.updateAt idx fn xs
+
+
+type MovePath
+    = ToFirstChild
+    | ToNextSibiling
+    | ToParent
+    | ToLastChild
+    | ToPrevSibiling
+
+
+movePath : MovePath -> TokenPath -> Token -> Maybe TokenPath
+movePath moveCmd path tok =
+    case ( moveCmd, path, tok ) of
+        ( ToNextSibiling, End, _ ) ->
+            Nothing
+
+        ( ToNextSibiling, _, Atom _ ) ->
+            Nothing
+
+        ( ToNextSibiling, Next n End, Group k l xs ) ->
+            nextSibiling n (selectable xs)
+
+        ( ToNextSibiling, Next n sub, Group k l xs ) ->
+            ListE.getAt n xs
+                |> Maybe.andThen (movePath moveCmd sub)
+                |> Maybe.map (Next n)
+
+        ( ToPrevSibiling, End, _ ) ->
+            Nothing
+
+        ( ToPrevSibiling, _, Atom _ ) ->
+            Nothing
+
+        ( ToPrevSibiling, Next n End, Group _ _ xs ) ->
+            prevSibiling n (selectable xs)
+
+        ( ToPrevSibiling, Next n sub, Group _ _ xs ) ->
+            moveInGroup moveCmd n sub xs
+
+        ( ToParent, End, _ ) ->
+            Nothing
+
+        ( ToParent, Next _ End, _ ) ->
+            Just End
+
+        ( ToParent, Next n sub, Atom _ ) ->
+            Nothing
+
+        ( ToParent, Next n sub, Group k l xs ) ->
+            moveInGroup moveCmd n sub xs
+
+        ( ToFirstChild, End, Atom _ ) ->
+            Nothing
+
+        ( ToFirstChild, Next _ _, Atom _ ) ->
+            Nothing
+
+        ( ToFirstChild, End, Group _ _ xs ) ->
+            firstChild xs End
+
+        ( ToFirstChild, Next n sub, Group _ _ xs ) ->
+            moveInGroup moveCmd n sub xs
+
+        ( ToLastChild, End, Atom _ ) ->
+            Nothing
+
+        ( ToLastChild, Next _ _, Atom _ ) ->
+            Nothing
+
+        ( ToLastChild, End, Group _ _ xs ) ->
+            lastChild xs End
+
+        ( ToLastChild, Next n sub, Group _ _ xs ) ->
+            moveInGroup moveCmd n sub xs
+
+
+moveInGroup moveCmd n sub xs =
+    ListE.getAt n xs
+        |> Maybe.andThen (movePath moveCmd sub)
+        |> Maybe.map (Next n)
+
+
 type Msg
-    = Move Direction
-    | Escape
-    | Enter
-    | Space
-    | Type Int
+    = Keyboard KeyboardEvent
     | UserMouseHover Token TokenPath
-
-
-{-| Transforms keyboard signals into our own language
-There should be modifiers and whatnots here
--}
-keyToAction : Int -> Msg
-keyToAction k =
-    case k of
-        40 ->
-            Move Down
-
-        39 ->
-            Move Right
-
-        37 ->
-            Move Left
-
-        38 ->
-            Move Up
-
-        27 ->
-            Move Outside
-
-        13 ->
-            Enter
-
-        32 ->
-            Move Inside
-
-        _ ->
-            Type k
-
-
-mapKeyboard : (TokenPath -> TokenPath) -> Keyboard -> Keyboard
-mapKeyboard fn key =
-    case key of
-        Navigating tp ->
-            Navigating (fn tp)
-
-        Editing s tp ->
-            Editing s (fn tp)
 
 
 state : Model -> ( Model, Cmd Msg )
@@ -547,11 +720,7 @@ main =
         , subscriptions =
             \_ ->
                 Sub.batch
-                    [ Browser.Events.onKeyDown
-                        (Ev.keyCode
-                            |> Json.map
-                                keyToAction
-                        )
+                    [ Browser.Events.onKeyDown (Json.succeed (Keyboard Spc))
                     ]
         }
 
@@ -560,23 +729,23 @@ testState : Token
 testState =
     group Vert
         [ group Hori
-            [ token "State", syntax ":" ]
+            [ token (TypeName "State"), syntax ":" ]
         , group Vert
             [ syntax "{"
             , group Hori
-                [ token "session"
+                [ token (FieldName "session")
                 , syntax " : "
-                , token "Session"
+                , token (TypeName "Session")
                 ]
             , group Hori
-                [ token "problems"
+                [ token <| FieldName "problems"
                 , syntax " : "
-                , tokenWith "List" [ token "Problem" ]
+                , tokenWith (TypeName "List") [ token <| TypeName "Problem" ]
                 ]
             , group Hori
-                [ token "form"
+                [ token (FieldName "form")
                 , syntax " : "
-                , tokenWith "Maybe" [ token "Form" ]
+                , tokenWith (TypeName "Maybe") [ token (TypeName "Form") ]
                 ]
             , syntax "}"
             ]
@@ -587,27 +756,27 @@ testViewFn : Token
 testViewFn =
     group Vert
         [ group Hori
-            [ token "view"
+            [ token (FnName "view")
             , syntax ":"
-            , token "State"
+            , token (TypeName "State")
             , syntax "->"
-            , tokenWith "Elem" [ token "Event" ]
+            , tokenWith (TypeName "Elem") [ token (TypeName "Event") ]
             ]
         , group Hori
-            [ token "view"
-            , syntax " = \\ "
-            , token "state"
+            [ token (FnName "view")
+            , syntax "="
+            , syntax "\\"
+            , token (ParamName "state")
             , syntax "->"
             ]
         , group Vert
             [ group Hori
-                [ token "content"
+                [ token (VarName "content")
                 , syntax "="
-                , tokenWith "col"
+                , tokenWith (FnName "col")
                     [ group Hori [ syntax "{", syntax "}" ]
                     , group Vert
                         [ syntax "["
-                        , token "a"
                         , syntax "]"
                         ]
                     ]
@@ -615,12 +784,12 @@ testViewFn =
             , group Hori
                 [ syntax "{"
                 , group Hori
-                    [ token "title"
+                    [ token (FieldName "title")
                     , syntax ":"
-                    , token "\"Register\""
+                    , token (StrVal "Register")
                     , syntax ","
                     ]
-                , token "content"
+                , token (VarName "content")
                 , syntax "}"
                 ]
             ]

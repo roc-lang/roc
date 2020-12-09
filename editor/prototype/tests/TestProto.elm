@@ -67,7 +67,7 @@ suite =
                         |> testMove Right
                         |> testMove Right
                         |> Expect.equal (Next 1 (Next 1 (Next 2 End)))
-           , test "Down selects first child in group if in horizontal group " <|
+            , test "Down selects first child in group if in horizontal group " <|
                 \_ ->
                     testMove Down End
                         |> testMove Down
@@ -77,6 +77,131 @@ suite =
                         |> testMove Right
                         |> testMove Down
                         |> Expect.equal (Next 1 (Next 2 (Next 2 (Next 0 End))))
+            ]
+        , let
+            t =
+                token (FnName "view")
+
+            a =
+                syntax ":"
+
+            b =
+                token (TypeName "Model")
+
+            c =
+                token (TypeName "Result")
+          in
+          describe "Modifying tree given the commands"
+            [ test "Add Child to a group" <|
+                \_ ->
+                    modify (AddChild Vert t) End (treeRoot [])
+                        |> Expect.equal (treeRoot [ t ])
+            , test "Add Child to a Edge" <|
+                \_ ->
+                    modify (AddChild Hori t) (Next 0 End) (treeRoot [ empty ])
+                        |> Expect.equal (treeRoot [ group Hori [ t ] ])
+            , test "Add Sibiling to a root Token " <|
+                \_ ->
+                    modify (AddSibiling t) End empty
+                        |> Expect.equal (treeRoot [ empty, t ])
+            , test "Add Sibiling to a root Group" <|
+                \_ ->
+                    modify (AddSibiling t) End (treeRoot [])
+                        |> Expect.equal (treeRoot [ treeRoot [], t ])
+            , test "Add Sibiling to a Child Atom " <|
+                \_ ->
+                    modify (AddSibiling t) (Next 1 End) (treeRoot [ empty, empty ])
+                        |> Expect.equal (treeRoot [ empty, empty, t ])
+            , test "Add Sibiling to a Child Group " <|
+                \_ ->
+                    modify (AddSibiling t) (Next 0 End) (treeRoot [ empty, treeRoot [] ])
+                        |> Expect.equal (treeRoot [ empty, t, treeRoot [] ])
+            , test "Add Sibiling to a deep group " <|
+                \_ ->
+                    modify (AddSibiling t)
+                        (Next 1 (Next 1 End))
+                        (treeRoot [ empty, treeRoot [ empty, a, b, c ] ])
+                        |> Expect.equal
+                            (treeRoot [ empty, treeRoot [ empty, a, t, b, c ] ])
+            , test "Replace Token with a token" <|
+                \_ ->
+                    modify (Replace t) End (treeRoot [ empty ])
+                        |> Expect.equal t
+            , test "Replace Token deep in tree" <|
+                \_ ->
+                    modify (Replace t)
+                        (Next 0 (Next 1 End))
+                        (treeRoot [ group Vert [ a, b, c ] ])
+                        |> Expect.equal (treeRoot [ group Vert [ a, t, c ] ])
+            , test "Cut token at root empties it" <|
+                \_ ->
+                    modify Cut End (treeRoot [])
+                        |> Expect.equal empty
+            , test "Cut token at deeper path" <|
+                \_ ->
+                    modify Cut
+                        (Next 0 (Next 1 End))
+                        (treeRoot [ group Vert [ a, b, c ] ])
+                        |> Expect.equal (treeRoot [ group Vert [ a, c ] ])
+            ]
+        , let
+            t =
+                token (FnName "view")
+
+            a =
+                syntax ":"
+
+            b =
+                token (TypeName "Model")
+
+            c =
+                token (TypeName "Result")
+
+            p =
+                token
+                    (ParamName "model")
+
+            tree =
+                treeRoot
+                    [ group Hori [ t, a, b, syntax "->", c ]
+                    , group Hori [ t, syntax "=", syntax "\\", p ]
+                    ]
+
+            testMovePath txt cmd path exp =
+                test txt <|
+                    \_ ->
+                        movePath cmd path tree
+                            |> Expect.equal exp
+          in
+          describe "Moving to a new path if possible on a token"
+            [ testMovePath "Move To Next Sibiling"
+                ToNextSibiling
+                (Next 0 End)
+                (Just (Next 1 End))
+            , testMovePath "Dont move to sibiling if against edge"
+                ToNextSibiling
+                (Next 1 End)
+                Nothing
+            , testMovePath "Dont move to prev sibiling if against edge"
+                ToPrevSibiling
+                (Next 0 End)
+                Nothing
+            , testMovePath "Move To Prev Sibiling"
+                ToPrevSibiling
+                (Next 1 End)
+                (Just (Next 0 End))
+            , testMovePath "Move To Parent"
+                ToParent
+                (Next 1 End)
+                (Just End)
+            , testMovePath "Move To First Child"
+                ToFirstChild
+                (Next 1 End)
+                (Just (Next 1 (Next 0 End)))
+            , testMovePath "Move To Last Child"
+                ToLastChild
+                (Next 1 End)
+                (Just (Next 1 (Next 3 End)))
             ]
         ]
 
