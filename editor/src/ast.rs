@@ -97,7 +97,7 @@ pub enum Expr2 {
     List {
         list_var: Variable,         // 4B - required for uniqueness of the list
         elem_var: Variable,         // 4B
-        first_elem: PoolVec<Expr2>, // 8B
+        elems: PoolVec<Expr2>, // 8B
     },
     If {
         cond_var: Variable,                // 4B
