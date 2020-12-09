@@ -53,21 +53,12 @@ pub fn rebuild_host(host_input_path: &Path) {
 
     if zig_host_src.exists() {
         // Compile host.zig
-        let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
+        // TODO set current_dir?
         let output = Command::new("zig")
             .env_clear()
             .env("PATH", &env_path)
             .env("HOME", &env_home)
-            .args(&[
-                "build-lib",
-                zig_host_src.to_str().unwrap(),
-                &emit_bin,
-                // include the zig runtime
-                "-fcompiler-rt",
-                // include libc
-                "--library",
-                "c",
-            ])
+            .args(&["build"])
             .output()
             .unwrap();
 
