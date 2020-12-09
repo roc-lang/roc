@@ -1618,7 +1618,14 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            if Some(module_id) == state.platform_id {
+            // if there is a platform, the Pkg-Config module provides host-exposed,
+            // otherwise the App module exposes host-exposed
+            let is_host_exposed = match state.platform_id {
+                None => module_id == state.root_id,
+                Some(platform_id) => module_id == platform_id,
+            };
+
+            if is_host_exposed {
                 state
                     .exposed_to_host
                     .extend(solved_module.exposed_vars_by_symbol.iter().copied());
@@ -2505,6 +2512,7 @@ fn send_header<'a>(
     )
 }
 
+// TODO refactor so more logic is shared with `send_header`
 #[allow(clippy::too_many_arguments)]
 fn send_header_two<'a>(
     arena: &'a Bump,
