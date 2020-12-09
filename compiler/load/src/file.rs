@@ -564,10 +564,10 @@ struct ModuleHeader<'a> {
 }
 
 #[derive(Debug)]
-enum ModuleHeaderExtra<'a> {
-    HeaderForApp { to_platform: To<'a> },
-    HeaderForPkgConfig,
-    HeaderForInterface,
+enum HeaderFor<'a> {
+    App { to_platform: To<'a> },
+    PkgConfig,
+    Interface,
 }
 
 #[derive(Debug)]
@@ -640,7 +640,7 @@ struct ParsedModule<'a> {
 #[derive(Debug)]
 enum Msg<'a> {
     Many(Vec<Msg<'a>>),
-    Header(ModuleHeader<'a>, ModuleHeaderExtra<'a>),
+    Header(ModuleHeader<'a>, HeaderFor<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
         constrained_module: ConstrainedModule,
@@ -1428,19 +1428,19 @@ fn update<'a>(
                 }
             }
 
-            use ModuleHeaderExtra::*;
+            use HeaderFor::*;
             match header_extra {
-                HeaderForApp { to_platform } => {
+                App { to_platform } => {
                     debug_assert_eq!(state.platform_path, None);
 
                     state.platform_path = Some(to_platform.clone());
                 }
-                HeaderForPkgConfig => {
+                PkgConfig => {
                     debug_assert_eq!(state.platform_id, None);
 
                     state.platform_id = Some(header.module_id);
                 }
-                HeaderForInterface => {}
+                Interface => {}
             }
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
@@ -2487,8 +2487,8 @@ fn send_header<'a>(
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
     let extra = match to_platform {
-        Some(to_platform) => ModuleHeaderExtra::HeaderForApp { to_platform },
-        None => ModuleHeaderExtra::HeaderForInterface,
+        Some(to_platform) => HeaderFor::App { to_platform },
+        None => HeaderFor::Interface,
     };
 
     (
@@ -2689,7 +2689,7 @@ fn send_header_two<'a>(
     // to decrement its "pending" count.
     let module_name = ModuleNameEnum::PkgConfig(shorthand);
 
-    let extra = ModuleHeaderExtra::HeaderForPkgConfig;
+    let extra = HeaderFor::PkgConfig;
     (
         home,
         Msg::Header(
