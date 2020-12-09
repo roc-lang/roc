@@ -24,26 +24,43 @@ pub enum IntStyle {
     Binary,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum IntVal {
+    I64(i64),
+    U64(u64),
+    I32(i32),
+    U32(u32),
+    I16(i16),
+    U16(u16),
+    I8(i8),
+    U8(u8),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum FloatVal {
+    F64(f64),
+    F32(f32),
+}
+
+#[test]
+fn size_of_intval() {
+    assert_eq!(std::mem::size_of::<IntVal>(), 16);
+}
+
 /// An Expr that fits in 32B.
 /// It has a 1B discriminant and variants which hold payloads of at most 31B.
 #[derive(Debug)]
 pub enum Expr2 {
     /// A negative number literal without a dot
-    I64 {
-        number: i64,     // 8B
-        var: Variable,   // 4B
-        style: IntStyle, // 1B
-        text: PoolStr,   // 8B
-    },
-    /// A nonnegative number literal without a dot
-    U64 {
-        number: u64,     // 8B
+    SmallInt {
+        number: IntVal,  // 16B
         var: Variable,   // 4B
         style: IntStyle, // 1B
         text: PoolStr,   // 8B
     },
     /// A large (over 64-bit) negative number literal without a dot.
-    /// This only comes up for literals that won't fit in 64-bit integers.
+    /// This variant can't use IntVal because if IntVal stored 128-bit
+    /// integers, it would be 32B on its own because of alignment.
     I128 {
         number: i128,    // 16B
         var: Variable,   // 4B
@@ -51,7 +68,8 @@ pub enum Expr2 {
         text: PoolStr,   // 8B
     },
     /// A large (over 64-bit) nonnegative number literal without a dot
-    /// This only comes up for literals that won't fit in 64-bit integers.
+    /// This variant can't use IntVal because if IntVal stored 128-bit
+    /// integers, it would be 32B on its own because of alignment.
     U128 {
         number: u128,    // 16B
         var: Variable,   // 4B
@@ -60,8 +78,8 @@ pub enum Expr2 {
     },
     /// A floating-point literal (with a dot)
     Float {
-        number: f64,   // 8B
-        var: Variable, // 4B
+        number: FloatVal, // 16B
+        var: Variable,    // 4B
     },
     /// string literals of length up to 30B
     SmallStr(ArrayString<U30>), // 31B
