@@ -55,7 +55,7 @@ const RocStr = extern struct {
 
             return ret_small_str;
         } else {
-            var result = RocStr.initBigStr(allocator, u64, InPlace.Clone, length);
+            var result = RocStr.initBig(allocator, u64, InPlace.Clone, length);
 
             @memcpy(@ptrCast([*]u8, result.str_bytes), bytes_ptr, length);
 
@@ -63,7 +63,7 @@ const RocStr = extern struct {
         }
     }
 
-    pub fn initBigStr(allocator: *Allocator, comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
+    pub fn initBig(allocator: *Allocator, comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
         const length = @sizeOf(T) + number_of_chars;
         var new_bytes: []T = allocator.alloc(T, length) catch unreachable;
 
@@ -151,7 +151,7 @@ const RocStr = extern struct {
             // just return the bytes
             return str;
         } else {
-            var new_str = RocStr.initBigStr(allocator, T, in_place, str.str_len);
+            var new_str = RocStr.initBig(allocator, T, in_place, str.str_len);
 
             var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
             var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
@@ -826,7 +826,7 @@ fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPla
         const result_is_big = combined_length >= small_str_bytes;
 
         if (result_is_big) {
-            var result = RocStr.initBigStr(allocator, T, result_in_place, combined_length);
+            var result = RocStr.initBig(allocator, T, result_in_place, combined_length);
 
             {
                 const old_if_small = &@bitCast([16]u8, arg1);
