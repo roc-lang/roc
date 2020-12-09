@@ -75,19 +75,19 @@ pub enum Expr2 {
         branches: PoolVec<(Expr2, Expr2)>, // 16B
         final_else: NodeId<Expr2>,         // 8B
     },
-    // When {
-    //     cond_var: Variable,            // 4B
-    //     expr_var: Variable,            // 4B
-    //     branches: PoolVec<WhenBranch>, // 9B
-    //     cond: NodeId<Expr2>,           // 8B
-    // },
-    // LetRec {
-    //     // TODO need to make this Alias type here page-friendly, which will be hard!
-    //     aliases: PoolVec<(Symbol, Alias)>, // 9B
-    //     defs: PoolVec<Def>,                // 9B
-    //     body_var: Variable,                // 4B
-    //     body_id: NodeId<Expr2>,            // 8B
-    // },
+    When {
+        cond_var: Variable,            // 4B
+        expr_var: Variable,            // 4B
+        branches: PoolVec<WhenBranch>, // 9B
+        cond: NodeId<Expr2>,           // 8B
+    },
+    LetRec {
+        // TODO need to make this Alias type here page-friendly, which will be hard!
+        aliases: PoolVec<(Symbol, Alias)>, // 9B
+        defs: PoolVec<Def>,                // 9B
+        body_var: Variable,                // 4B
+        body_id: NodeId<Expr2>,            // 8B
+    },
     // LetNonRec {
     //     // TODO need to make this Alias type here page-friendly, which will be hard!
     //     aliases: PoolVec<(Symbol, Alias)>, // 9B

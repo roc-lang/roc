@@ -11,14 +11,9 @@
 /// Pages also use the node value 0 (all 0 bits) to mark nodes as unoccupied.
 /// This is important for performance.
 use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr::null;
-
-pub const NODE_SIZE: usize = 32;
-
-// Pages are an internal concept which never leave this module.
-const PAGE_BYTES: usize = 4096;
-const NODES_PER_PAGE: u8 = (PAGE_BYTES / NODE_SIZE) as u8;
 
 // Each page has 128 slots. Each slot holds one 32B node
 // This means each page is 4096B, which is the size of a memory page
@@ -44,148 +39,152 @@ const NODES_PER_PAGE: u8 = (PAGE_BYTES / NODE_SIZE) as u8;
 //   On the plus side, we could be okay with higher memory usage early on,
 //   and then later use the Mesh strategy to reduce long-running memory usage.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NodeId<T: Sized>(*const T);
+#[derive(Debug, PartialEq, Eq)]
+pub struct NodeId<T> {
+    index: u32,
+    _phantom: PhantomData<T>,
+}
 
-pub struct Pool {
-    pages: Vec<Page>,
+impl<T> Clone for NodeId<T> {
+    fn clone(&self) -> Self {
+        NodeId {
+            index: self.index,
+            _phantom: PhantomData::default(),
+        }
+    }
+}
+
+impl<T> Copy for NodeId<T> {}
+
+/// S is a slot size; e.g. Pool<[u8; 32]> for a pool of 32-bit slots
+pub struct Pool<S> {
+    nodes: *mut S,
+    num_nodes: u32,
+    capacity: u32,
     // free_1node_slots: Vec<NodeId<T>>,
 }
 
-impl Pool {
-    /// Returns a pool with a capacity equal to the given number of 4096-byte pages.
-    // pub fn with_pages(pages: usize) {
-    //     todo!();
-    // }
+impl<S> Pool<S> {
+    pub fn with_capacity(&mut self, nodes: u32) -> Self {
+        // round up number of nodes requested to nearest page size in bytes
+        let bytes_per_page = page_size::get();
+        let node_bytes = size_of::<S>() * nodes as usize;
+        let leftover = node_bytes % bytes_per_page;
+        let bytes_to_mmap = if leftover == 0 {
+            node_bytes
+        } else {
+            node_bytes + bytes_per_page - leftover
+        };
 
-    // fn find_space_for(&mut self, nodes: u8) -> Result<PageId<T>, ()> {}
+        let nodes = unsafe {
+            // mmap anonymous memory pages - that is, contiguous virtual memory
+            // addresses from the OS which will be lazily translated into
+            // physical memory one 4096-byte page at a time, once we actually
+            // try to read or write in that page's address range.
+            libc::mmap(
+                null::<c_void>() as *mut c_void,
+                bytes_to_mmap,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                0,
+                0,
+            )
+        } as *mut S;
 
-    pub fn add<T: Sized>(&mut self, node: T) -> NodeId<T> {
-        // It's only safe to store this as a *mut T if T is the size of a node.
-        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
+        // This is our actual capacity, in nodes.
+        // It might be higher than the requested capacity due to rounding up
+        // to nearest page size.
+        let capacity = (bytes_to_mmap / size_of::<S>()) as u32;
 
-        match self.pages.last_mut() {
-            Some(page) if page.node_count < NODES_PER_PAGE => Pool::add_to_page(page, node),
-            _ => {
-                // This page is either full or doesn't exist, so create a new one.
-                let mut page = Page::default();
-                let node_id = Pool::add_to_page(&mut page, node);
+        Pool {
+            nodes,
+            num_nodes: 0,
+            capacity,
+        }
+    }
 
-                self.pages.push(page);
+    pub fn add<T>(&mut self, node: T) -> NodeId<T> {
+        // It's only safe to store this if T is the same size as S.
+        debug_assert_eq!(size_of::<T>(), size_of::<S>());
 
-                node_id
+        let index = self.num_nodes;
+
+        if index < self.capacity {
+            let node_ptr = unsafe { self.nodes.offset(index as isize) } as *mut T;
+
+            unsafe { *node_ptr = node };
+
+            self.num_nodes = index + 1;
+
+            NodeId {
+                index,
+                _phantom: PhantomData::default(),
             }
+        } else {
+            todo!("pool ran out of capacity. TODO reallocate the nodes pointer to map to a bigger space. Can use mremap on Linux, but must memcpy lots of bytes on macOS and Windows.");
         }
     }
 
     /// Reserves the given number of contiguous node slots, and returns
     /// the NodeId of the first one. We only allow reserving 2^32 in a row.
-    fn reserve<T: Sized>(&mut self, _nodes: u32) -> NodeId<T> {
+    fn reserve<T>(&mut self, _nodes: u32) -> NodeId<T> {
         todo!("Implement Pool::reserve");
     }
 
-    fn add_to_page<T: Sized>(page: &mut Page, node: T) -> NodeId<T> {
+    pub fn get<'a, T>(&'a self, node_id: NodeId<T>) -> &'a T {
         unsafe {
-            let node_ptr = (page.first_node as *const T).offset(page.node_count as isize) as *mut T;
+            let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
 
-            *node_ptr = node;
-
-            page.node_count += 1;
-
-            NodeId(node_ptr)
+            &*node_ptr
         }
-    }
-
-    pub fn get<'a, T: Sized>(&'a self, node_id: NodeId<T>) -> &'a T {
-        unsafe { &*node_id.0 }
     }
 
     // A node is available iff its bytes are all zeroes
     #[allow(dead_code)]
     unsafe fn is_available<T>(&self, node_id: NodeId<T>) -> bool {
-        debug_assert_eq!(size_of::<T>(), NODE_SIZE);
+        debug_assert_eq!(size_of::<T>(), size_of::<S>());
 
-        let ptr = node_id.0 as *const [u8; NODE_SIZE];
+        unsafe {
+            let node_ptr = self.nodes.offset(node_id.index as isize) as *const [u8; size_of::<S>()];
 
-        *ptr == [0; NODE_SIZE]
-    }
-}
-
-struct Page {
-    first_node: *const [u8; NODE_SIZE],
-    node_count: u8,
-}
-
-impl Default for Page {
-    fn default() -> Self {
-        let first_node = if page_size::get() == 4096 {
-            unsafe {
-                // mmap exactly one memory page (4096 bytes)
-                libc::mmap(
-                    null::<c_void>() as *mut c_void,
-                    PAGE_BYTES,
-                    PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS,
-                    0,
-                    0,
-                )
-            }
-        } else {
-            // Somehow the page size is not 4096 bytes, so fall back on calloc.
-            // (We use calloc over malloc because we rely on the bytes having
-            // been zeroed to tell which nodes are available.)
-            unsafe { libc::calloc(1, PAGE_BYTES) }
-        } as *mut [u8; NODE_SIZE];
-
-        Page {
-            first_node,
-            node_count: 0,
+            *node_ptr == [0; size_of::<S>()]
         }
     }
 }
 
-impl Drop for Page {
+impl<S> Drop for Pool<S> {
     fn drop(&mut self) {
-        if page_size::get() == 4096 {
-            unsafe {
-                libc::munmap(self.first_node as *mut c_void, PAGE_BYTES);
-            }
-        } else {
-            unsafe {
-                libc::free(self.first_node as *mut c_void);
-            }
+        unsafe {
+            libc::munmap(
+                self.nodes as *mut c_void,
+                size_of::<S>() * self.capacity as usize,
+            );
         }
     }
 }
 
-/// A string of at most 2^32 bytes, allocated in a pool if it fits in a Page,
-/// or using malloc as a fallback if not. Like std::str::String, this has
-/// both a length and capacity.
+/// A string containing at most 2^32 pool-allocated bytes.
 #[derive(Debug)]
 pub struct PoolStr {
     first_node_id: NodeId<()>,
     len: u32,
-    cap: u32,
 }
 
 #[test]
 fn pool_str_size() {
-    assert_eq!(size_of::<PoolStr>(), size_of::<usize>() + 8);
+    assert_eq!(size_of::<PoolStr>(), 8);
 }
 
-/// An array of at most 2^32 elements, allocated in a pool if it fits in a Page,
-/// or using malloc as a fallback if not. Like std::vec::Vec, this has both
-/// a length and capacity.
+/// An array of at most 2^32 pool-allocated nodes.
 #[derive(Debug)]
-pub struct PoolVec<T: Sized> {
+pub struct PoolVec<T> {
     first_node_id: NodeId<T>,
     len: u32,
-    cap: u32,
 }
 
 #[test]
 fn pool_vec_size() {
-    assert_eq!(size_of::<PoolVec<()>>(), size_of::<usize>() + 8);
+    assert_eq!(size_of::<PoolVec<()>>(), 8);
 }
 
 impl<'a, T: 'a + Sized> PoolVec<T> {
@@ -193,59 +192,38 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     /// the usual array, and then there's one more node at the end which
     /// continues the list with a new length and NodeId value. PoolVec
     /// iterators automatically do these jumps behind the scenes when necessary.
-    pub fn new<I: ExactSizeIterator<Item = T>>(nodes: I, pool: &mut Pool) -> Self {
+    pub fn new<I: ExactSizeIterator<Item = T>, S>(nodes: I, pool: &mut Pool<S>) -> Self {
         debug_assert!(nodes.len() <= u32::MAX as usize);
-        debug_assert!(size_of::<T>() <= NODE_SIZE);
+        debug_assert!(size_of::<T>() <= size_of::<S>());
 
         let len = nodes.len() as u32;
 
         if len > 0 {
-            if len <= NODES_PER_PAGE as u32 {
-                let first_node_id = pool.reserve(len);
-                let mut next_node_ptr = first_node_id.0 as *mut T;
+            let first_node_id = pool.reserve(len);
+            let index = first_node_id.index as isize;
+            let mut next_node_ptr = unsafe { pool.nodes.offset(index) } as *mut T;
 
-                for node in nodes {
-                    unsafe {
-                        *next_node_ptr = node;
+            for node in nodes {
+                unsafe {
+                    *next_node_ptr = node;
 
-                        next_node_ptr = next_node_ptr.offset(1);
-                    }
-                }
-
-                PoolVec {
-                    first_node_id,
-                    len,
-                    cap: len,
-                }
-            } else {
-                let first_node_ptr = unsafe {
-                    // mmap enough memory to hold it
-                    libc::mmap(
-                        null::<c_void>() as *mut c_void,
-                        len as usize,
-                        PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS,
-                        0,
-                        0,
-                    )
-                };
-
-                PoolVec {
-                    first_node_id: NodeId(first_node_ptr as *const T),
-                    len,
-                    cap: len,
+                    next_node_ptr = next_node_ptr.offset(1);
                 }
             }
+
+            PoolVec { first_node_id, len }
         } else {
             PoolVec {
-                first_node_id: NodeId(std::ptr::null()),
+                first_node_id: NodeId {
+                    index: 0,
+                    _phantom: PhantomData::default(),
+                },
                 len: 0,
-                cap: 0,
             }
         }
     }
 
-    pub fn iter(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
+    pub fn iter<S>(self, pool: &'a Pool<S>) -> impl ExactSizeIterator<Item = &'a T> {
         self.pool_list_iter(pool)
     }
 
@@ -254,43 +232,35 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     /// actually do want to have this separate function for code reuse
     /// in the iterator's next() method.
     #[inline(always)]
-    fn pool_list_iter(&self, pool: &'a Pool) -> PoolVecIter<'a, T> {
+    fn pool_list_iter<S>(&self, pool: &'a Pool<S>) -> PoolVecIter<'a, S, T> {
         PoolVecIter {
-            _pool: pool,
-            current_node_id: NodeId(self.first_node_id.0),
+            pool,
+            current_node_id: self.first_node_id,
             len_remaining: self.len,
         }
     }
 
-    pub fn free(self) {
-        if self.len <= NODES_PER_PAGE as u32 {
-            // If this was small enough to fit in a Page, then zero it out.
-            unsafe {
-                libc::memset(
-                    self.first_node_id.0 as *mut c_void,
-                    0,
-                    self.len as usize * NODE_SIZE,
-                );
-            }
+    pub fn free<S>(self, pool: &'a mut Pool<S>) {
+        // zero out the memory
+        unsafe {
+            let index = self.first_node_id.index as isize;
+            let node_ptr = pool.nodes.offset(index) as *mut c_void;
+            let bytes = self.len as usize * size_of::<S>();
+
+            libc::memset(node_ptr, 0, bytes);
+        }
 
         // TODO insert it into the pool's free list
-        } else {
-            // This was bigger than a Page, so we mmap'd it. Now we free it!
-            unsafe {
-                libc::munmap(self.first_node_id.0 as *mut c_void, self.len as usize);
-            }
-        }
     }
 }
 
-struct PoolVecIter<'a, T: Sized> {
-    /// This iterator returns elements which have the same lifetime as the pool
-    _pool: &'a Pool,
+struct PoolVecIter<'a, S, T> {
+    pool: &'a Pool<S>,
     current_node_id: NodeId<T>,
     len_remaining: u32,
 }
 
-impl<'a, T: Sized> ExactSizeIterator for PoolVecIter<'a, T>
+impl<'a, S, T> ExactSizeIterator for PoolVecIter<'a, S, T>
 where
     T: 'a,
 {
@@ -299,7 +269,7 @@ where
     }
 }
 
-impl<'a, T: Sized> Iterator for PoolVecIter<'a, T>
+impl<'a, S, T> Iterator for PoolVecIter<'a, S, T>
 where
     T: 'a,
 {
@@ -310,10 +280,14 @@ where
 
         if len_remaining > 1 {
             // Get the current node
-            let node_ptr = self.current_node_id.0;
+            let index = self.current_node_id.index;
+            let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *const T;
 
             // Advance the node pointer to the next node in the current page
-            self.current_node_id = NodeId(unsafe { node_ptr.offset(1) });
+            self.current_node_id = NodeId {
+                index: index + 1,
+                _phantom: PhantomData::default(),
+            };
             self.len_remaining = len_remaining - 1;
 
             Some(unsafe { &*node_ptr })
@@ -323,7 +297,10 @@ where
             // Don't advance the node pointer's node, because that might
             // advance past the end of the page!
 
-            Some(unsafe { &*self.current_node_id.0 })
+            let index = self.current_node_id.index;
+            let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *const T;
+
+            Some(unsafe { &*node_ptr })
         } else {
             // len_remaining was 0
             None
