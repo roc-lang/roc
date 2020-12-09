@@ -308,29 +308,3 @@ where
         }
     }
 }
-
-#[test]
-fn mmap_benchmark() {
-    use std::time::SystemTime;
-
-    let start_time = SystemTime::now();
-    let pool = Pool::with_capacity(1234567890);
-    let end_time = SystemTime::now();
-    let elapsed = end_time.duration_since(start_time).unwrap();
-
-    println!("Time to init pool: {:?}", elapsed);
-
-    // touch a bunch of pages to see how long they take to fault in
-    for i in 1..100 {
-        let start_time = SystemTime::now();
-        unsafe {
-            *pool.nodes.offset(i * 10) = [1; NODE_BYTES];
-        };
-        let end_time = SystemTime::now();
-        let elapsed = end_time.duration_since(start_time).unwrap();
-
-        println!("Time to touch page {}: {:?}", i, elapsed);
-    }
-
-    assert_eq!(pool.capacity, 128);
-}
