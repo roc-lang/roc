@@ -170,7 +170,8 @@ pub enum Expr2 {
     Update {
         symbol: Symbol,                       // 8B
         updates: PoolVec<(Lowercase, Field)>, // 8B
-        vars_id: NodeId<UpdateVars>,          // 4B
+        record_var: Variable,                 // 4B
+        ext_var: Variable,                    // 4B
     },
 
     // Sum Types
@@ -199,12 +200,6 @@ pub struct Def {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Pat2 {
     Todo,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct UpdateVars {
-    record_var: Variable, // 4B
-    ext_var: Variable,    // 4B
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
