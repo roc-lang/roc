@@ -53,9 +53,10 @@ pub fn rebuild_host(host_input_path: &Path) {
 
     if zig_host_src.exists() {
         // Compile host.zig
-        // TODO set current_dir?
+        let platform_dir = host_input_path.parent().unwrap();
         let output = Command::new("zig")
             .env_clear()
+            .current_dir(platform_dir)
             .env("PATH", &env_path)
             .env("HOME", &env_home)
             .args(&["build"])

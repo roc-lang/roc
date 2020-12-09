@@ -12,7 +12,7 @@ const InPlace = packed enum(u8) {
     Clone,
 };
 
-const RocStr = extern struct {
+pub const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
 
