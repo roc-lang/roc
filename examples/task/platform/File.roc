@@ -2,16 +2,6 @@ interface File
     exposes [ Err, readUtf8,  ]
     imports [ Task.{ Task }, Effect.{ after }, Path.{ Path } ]
 
-# These various file errors come from the POSIX errno values - see
-# http://www.virtsync.com/c-error-codes-include-errno for the actual codes, and
-# https://www.gnu.org/software/libc/manual/html_node/Error-Codes.html for documentation
-#
-# The goal of this design is:
-# * Whenever a function returns a `Task`, that task's error type represents all the errors that could happen.
-# * The errors are union-friendly; if I run a task that reads, and then another that writes, I should get all the read *and* write errors.
-# * To make the errors friendlier to chaining, they should always include the `Path` of the attempted operation. This way it's possible to tell which one failed after the fact.
-
-
 ## These errors can happen when opening a file, before attempting to read from
 ## it or write to it. The #FileReadErr and #FileWriteErr tag unions begin with
 ## these tags and then add more specific ones.
@@ -79,3 +69,6 @@ readUtf8 = \path ->
 ## Like #readChunks except after each chunk you can either `Continue`,
 ## specifying how many bytes you'd like to read next, or `Stop` early.
 #readChunksOrStop : Path, U64, state, (state, List U8 -> [ Continue U64 (Task state []err), Stop (Task state []err) ]) -> Task state (FileReadErr err)
+
+readBytes : Str -> Task.Task Str (FileReadErr *)
+readBytes = \path -> Effect.always (Ok path)
