@@ -73,11 +73,9 @@ impl<'a> ClosureLayout<'a> {
     }
     fn from_unwrapped(arena: &'a Bump, layouts: &'a [Layout<'a>]) -> Self {
         debug_assert!(!layouts.is_empty());
-        let layout = if layouts.len() == 1 {
-            &layouts[0]
-        } else {
-            arena.alloc(Layout::Struct(layouts))
-        };
+
+        // DO NOT unwrap 1-element records here!
+        let layout = arena.alloc(Layout::Struct(layouts));
 
         ClosureLayout {
             captured: &[],
@@ -104,6 +102,7 @@ impl<'a> ClosureLayout<'a> {
         use crate::ir::Wrapped;
 
         match self.layout {
+            Layout::Struct(fields) if fields.len() == 1 => Wrapped::SingleElementRecord,
             Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
             Layout::Union(_) => Wrapped::MultiTagUnion,
             _ => Wrapped::SingleElementRecord,
@@ -170,7 +169,10 @@ impl<'a> ClosureLayout<'a> {
         closure_layout: Self,
         ret_layout: &'a Layout<'a>,
     ) -> Layout<'a> {
-        let closure_data_layout = closure_layout.layout;
+        let closure_data_layout = match closure_layout.layout {
+            Layout::Struct(fields) if fields.len() == 1 => &fields[0],
+            other => other,
+        };
 
         // define the function pointer
         let function_ptr_layout = {
@@ -194,7 +196,10 @@ impl<'a> ClosureLayout<'a> {
 
     pub fn as_named_layout(&self, symbol: Symbol) -> Layout<'a> {
         let layouts = if self.captured.is_empty() {
-            self.layout.clone()
+            match self.layout {
+                Layout::Struct(fields) if fields.len() == 1 => fields[0].clone(),
+                other => other.clone(),
+            }
         } else if let Some((_, tag_args)) = self
             .captured
             .iter()
@@ -216,7 +221,10 @@ impl<'a> ClosureLayout<'a> {
     }
 
     pub fn as_block_of_memory_layout(&self) -> Layout<'a> {
-        self.layout.clone()
+        match self.layout {
+            Layout::Struct(fields) if fields.len() == 1 => fields[0].clone(),
+            other => other.clone(),
+        }
     }
 
     pub fn build_closure_data(
@@ -227,6 +235,7 @@ impl<'a> ClosureLayout<'a> {
         use crate::ir::Expr;
 
         match self.layout {
+            Layout::Struct(fields) if fields.len() == 1 => Err(symbols[0]),
             Layout::Struct(fields) => {
                 debug_assert!(fields.len() > 1);
                 debug_assert_eq!(fields.len(), symbols.len());
@@ -234,6 +243,8 @@ impl<'a> ClosureLayout<'a> {
                 Ok(Expr::Struct(symbols))
             }
             Layout::Union(tags) => {
+                // NOTE it's very important that this Union consists of Closure tags
+                // and is not an unpacked 1-element record
                 let expr = Expr::Tag {
                     tag_layout: Layout::Union(tags),
                     tag_name: TagName::Closure(original),
