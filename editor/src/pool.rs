@@ -66,7 +66,7 @@ pub struct Pool {
 }
 
 impl Pool {
-    pub fn with_capacity(&mut self, nodes: u32) -> Self {
+    pub fn with_capacity(nodes: u32) -> Self {
         // round up number of nodes requested to nearest page size in bytes
         let bytes_per_page = page_size::get();
         let node_bytes = NODE_BYTES * nodes as usize;
