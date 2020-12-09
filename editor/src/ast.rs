@@ -155,9 +155,11 @@ pub enum Expr2 {
     EmptyRecord,
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
-        field: PoolStr,           // 4B
-        expr: NodeId<Expr2>,      // 4B
-        vars: NodeId<AccessVars>, // 4B
+        field: PoolStr,       // 4B
+        expr: NodeId<Expr2>,  // 4B
+        record_var: Variable, // 4B
+        ext_var: Variable,    // 4B
+        field_var: Variable,  // 4B
     },
 
     /// field accessor as a function, e.g. (.foo) expr
@@ -202,14 +204,6 @@ pub struct Def {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Pat2 {
     Todo,
-}
-
-/// This is 15B, so it fits in a Node slot.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct AccessVars {
-    record_var: Variable, // 4B
-    ext_var: Variable,    // 4B
-    field_var: Variable,  // 4B
 }
 
 /// This is overflow data from a Closure variant, which needs to store
