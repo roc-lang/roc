@@ -1,10 +1,12 @@
-use crate::bucket::{BucketId, BucketList, BucketSlot, BucketStr, NodeId};
-use arraystring::{typenum::U14, ArrayString};
+use crate::bucket::{BucketList, BucketStr, NodeId};
+use arraystring::{typenum::U30, ArrayString};
 use roc_can::def::Annotation;
 use roc_can::expr::{Field, Recursive};
 use roc_module::ident::Lowercase;
 use roc_module::low_level::LowLevel;
+use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
+use roc_problem::can::RuntimeError;
 use roc_types::subs::Variable;
 use roc_types::types::Alias;
 
@@ -23,8 +25,8 @@ pub enum IntStyle {
     Binary,
 }
 
-/// An Expr that fits in 16B.
-/// It has a 1B discriminant and variants which hold payloads of at most 15B.
+/// An Expr that fits in 32B.
+/// It has a 1B discriminant and variants which hold payloads of at most 31B.
 #[derive(Debug)]
 pub enum Expr2 {
     /// A number literal (without a dot) containing no underscores
@@ -40,28 +42,25 @@ pub enum Expr2 {
     },
     /// A number literal (without a dot) containing underscores
     NumWithUnderscores {
-        number: i64,                    // 8B
-        var: Variable,                  // 4B
-        text_id: BucketId<BucketStr>,   // 2B
-        text_sl: BucketSlot<BucketStr>, // 1B
+        number: i64,             // 8B
+        var: Variable,           // 4B
+        text: NodeId<BucketStr>, // 8B
     },
     /// A float literal (with a dot) containing underscores
     FloatWithUnderscores {
-        number: f64,                    // 8B
-        var: Variable,                  // 4B
-        text_id: BucketId<BucketStr>,   // 2B
-        text_sl: BucketSlot<BucketStr>, // 1B
+        number: f64,             // 8B
+        var: Variable,           // 4B
+        text: NodeId<BucketStr>, // 8B
     },
-    /// string literals of length up to 14B
-    SmallStr(ArrayString<U14>), // 15B
+    /// string literals of length up to 30B
+    SmallStr(ArrayString<U30>), // 31B
     /// string literals of length up to 4094B
     MedStr {
-        str_id: BucketId<BucketStr>,
-        str_sl: BucketSlot<BucketStr>,
-    }, // 4B
+        str: NodeId<BucketStr>, // 8B
+    },
     /// string literals of length over 4094B, but requires calling malloc/free
     BigStr {
-        pointer: *const u8, // 8B on 64-bit systems
+        pointer: *const u8, // 8B
         len: u32, // 4B, meaning maximum string literal size of 4GB. Could theoretically fit 7B here, which would get closer to the full isize::MAX
     },
     // Lookups
@@ -76,100 +75,82 @@ pub enum Expr2 {
     List {
         list_var: Variable,       // 4B - required for uniqueness of the list
         elem_var: Variable,       // 4B
-        elems: BucketList<Expr2>, // 4B
+        elems: BucketList<Expr2>, // 9B
     },
     If {
         cond_var: Variable,                   // 4B
         expr_var: Variable,                   // 4B
-        branches: BucketList<(Expr2, Expr2)>, // 4B
-        final_else_id: BucketId<Expr2>,       // 2B
-        final_else_sl: BucketSlot<Expr2>,     // 1B
+        branches: BucketList<(Expr2, Expr2)>, // 9B
+        final_else: NodeId<Expr2>,            // 8B
     },
     When {
         cond_var: Variable,               // 4B
         expr_var: Variable,               // 4B
-        branches: BucketList<WhenBranch>, // 4B
-        cond_id: BucketId<Expr2>,         // 2B
-        cond_sl: BucketSlot<Expr2>,       // 1B
+        branches: BucketList<WhenBranch>, // 9B
+        cond: NodeId<Expr2>,              // 8B
     },
     LetRec {
         // TODO need to make this Alias type here bucket-friendly, which will be hard!
-        aliases: BucketList<(Symbol, Alias)>, // 4B
-        defs: BucketList<Def>,                // 4B
+        aliases: BucketList<(Symbol, Alias)>, // 9B
+        defs: BucketList<Def>,                // 9B
         body_var: Variable,                   // 4B
-        body_id: BucketId<Expr2>,             // 2B
-        body_sl: BucketSlot<Expr2>,           // 1B
+        body_id: NodeId<Expr2>,               // 8B
     },
     LetNonRec {
         // TODO need to make this Alias type here bucket-friendly, which will be hard!
-        aliases: BucketList<(Symbol, Alias)>, // 4B
-        def_id: BucketId<Def>,                // 2B
-        def_sl: BucketSlot<Def>,              // 1B
-        body_id: BucketId<Expr2>,             // 2B
-        body_sl: BucketSlot<Expr2>,           // 1B
+        aliases: BucketList<(Symbol, Alias)>, // 9B
+        def_id: NodeId<Def>,                  // 8B
+        body_id: NodeId<Expr2>,               // 8B
         body_var: Variable,                   // 4B
     },
     Call {
         /// NOTE: the first elem in this list is the expression and its variable.
         /// The others are arguments. This is because we didn't have room for
         /// both the expr and its variable otherwise.
-        expr_and_args: BucketList<(Variable, NodeId<Expr2>)>, // 4B
+        expr_and_args: BucketList<(Variable, NodeId<Expr2>)>, // 9B
         fn_var: Variable,      // 4B
         closure_var: Variable, // 4B
         /// Cached outside expr_and_args so we don't have to potentially
         /// traverse that whole linked list chain to count all the args.
-        arity: u16, // 2B
-        called_via: CalledVia2, // 1B
+        arity: usize, // 8B - could make this smaller if need be
+        called_via: CalledVia, // 2B
     },
     RunLowLevel {
         op: LowLevel,                                // 1B
-        args: BucketList<(Variable, NodeId<Expr2>)>, // 4B
+        args: BucketList<(Variable, NodeId<Expr2>)>, // 9B
         ret_var: Variable,                           // 4B
     },
     Closure {
-        /// NOTE: the first elem in this list is the function's name Symbol, plus Variable::NONE
-        ///
-        /// This is not ideal, but there's no room for an 8-byte Symbol
-        /// in a 16B node that already needs to hold this much other data.
-        captured_symbols: BucketList<(Symbol, Variable)>, // 4B
-        args: BucketList<(Variable, NodeId<Pat2>)>, // 4B
-        recursive: Recursive,                       // 1B
-        body_id: BucketId<Expr2>,                   // 2B
-        body_sl: BucketSlot<Expr2>,                 // 1B
-        vars_id: BucketId<ClosureVars>,             // 2B
-        vars_sl: BucketSlot<ClosureVars>,           // 1B
+        captured_symbols: BucketList<(Symbol, Variable)>, // 9B
+        args: BucketList<(Variable, NodeId<Pat2>)>,       // 9B
+        recursive: Recursive,                             // 1B
+        extra: NodeId<ClosureExtra>,                      // 8B
     },
     // Product Types
     Record {
         record_var: Variable,                                     // 4B
-        fields: BucketList<(BucketStr, Variable, NodeId<Expr2>)>, // 4B
+        fields: BucketList<(BucketStr, Variable, NodeId<Expr2>)>, // 9B
     },
     /// Empty record constant
     EmptyRecord,
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
-        field_id: BucketId<BucketStr>,   // 3B
-        field_sl: BucketSlot<BucketStr>, // 3B
-        expr_id: BucketId<Expr2>,        // 2B
-        expr_sl: BucketSlot<Expr2>,      // 1B
-        vars_id: BucketId<AccessVars>,   // 2B
-        vars_sl: BucketSlot<AccessVars>, // 1B
+        field: NodeId<BucketStr>, // 8B
+        expr: NodeId<Expr2>,      // 8B
+        vars: NodeId<AccessVars>, // 8B
     },
 
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
-        record_vars_id: BucketId<RecordVars>,   // 3B
-        record_vars_sl: BucketSlot<RecordVars>, // 3B
-        function_var: Variable,                 // 4B
-        closure_var: Variable,                  // 4B
-        field_id: BucketId<BucketStr>,          // 2B
-        field_sl: BucketSlot<BucketStr>,        // 1B
+        record_vars_id: NodeId<RecordVars>, // 8B
+        function_var: Variable,             // 4B
+        closure_var: Variable,              // 4B
+        field_id: NodeId<BucketStr>,        // 8B
     },
     Update {
         symbol: Symbol,                          // 8B
-        updates: BucketList<(Lowercase, Field)>, // 4B
-        vars_id: BucketId<UpdateVars>,           // 2B
-        vars_sl: BucketSlot<UpdateVars>,         // 1B
+        updates: BucketList<(Lowercase, Field)>, // 9B
+        vars_id: NodeId<UpdateVars>,             // 8B
     },
 
     // Sum Types
@@ -177,11 +158,10 @@ pub enum Expr2 {
         // NOTE: A BucketStr node is a 2B length and then 14B bytes,
         // plus more bytes in adjacent nodes if necessary. Thus we have
         // a hard cap of 4094 bytes as the maximum length of tags and fields.
-        name_id: BucketId<BucketStr>,   // 2B
-        name_sl: BucketSlot<BucketStr>, // 1B
-        variant_var: Variable,          // 4B
-        ext_var: Variable,              // 4B
-        arguments: BucketList<(Variable, BucketId<Expr2>, BucketSlot<Expr2>)>, // 4B
+        name_id: NodeId<BucketStr>,                       // 8B
+        variant_var: Variable,                            // 4B
+        ext_var: Variable,                                // 4B
+        arguments: BucketList<(Variable, NodeId<Expr2>)>, // 9B
     },
 
     // Compiles, but will crash if reached
@@ -258,13 +238,15 @@ pub struct AccessVars {
     field_var: Variable,  // 4B
 }
 
-/// This is 16B, so it fits in a Node slot.
+/// This is 32B, so it fits in a Node slot.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ClosureVars {
-    function_type: Variable,
-    closure_type: Variable,
-    closure_ext_var: Variable,
-    return_type: Variable,
+pub struct ClosureExtra {
+    name: Symbol,              // 8B
+    body: NodeId<Expr2>,       // 8B
+    function_type: Variable,   // 4B
+    closure_type: Variable,    // 4B
+    closure_ext_var: Variable, // 4B
+    return_type: Variable,     // 4B
 }
 
 #[derive(Debug)]
@@ -321,19 +303,13 @@ pub struct Exprs {
     pub buckets: Vec<ExprBucket>,
 }
 
-// Each bucket has 256 slots. Each slot holds one 16B node
+// Each bucket has 128 slots. Each slot holds one 32B node
 // This means each bucket is 4096B, which is the size of a memory page
 // on typical systems where the compiler will be run.
 //
-// Because each bucket has 256 slots, and arrays of nodes must fit inside
-// a single bucket, this implies that nodes which contain arrays of nodes
-// (e.g. If, When, Record, Tag, Call, Closure) can only contain at most
-// 255 nodes. So functions can have at most 255 arguments, records can have
-// at most 255 fields, etc.
-//
 // Nice things about this system include:
 // * Allocating a new bucket is as simple as asking the OS for a memory page.
-// * Since each node is 16B, each node's memory address will be a multiple of 16.
+// * Since each node is 32B, each node's memory address will be a multiple of 16.
 // * Thanks to the free lists and our consistent chunk sizes, we should
 //   end up with very little fragmentation.
 // * Finding a slot for a given node should be very fast: see if the relevant
@@ -350,7 +326,7 @@ pub struct Exprs {
 //   usize pointers, which would be too big for us to have 16B nodes.
 //   On the plus side, we could be okay with higher memory usage early on,
 //   and then later use the Mesh strategy to reduce long-running memory usage.
-type ExprBucketSlots = [Expr2; 256];
+type ExprBucketSlots = [Expr2; 128];
 
 #[test]
 fn size_of_expr_bucket() {
@@ -382,7 +358,7 @@ pub struct ExprBucketSlot(u8);
 
 #[test]
 fn size_of_expr() {
-    assert_eq!(std::mem::size_of::<Expr2>(), 16);
+    assert_eq!(std::mem::size_of::<Expr2>(), 32);
 }
 
 #[test]
