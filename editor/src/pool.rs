@@ -11,6 +11,7 @@
 /// Pages also use the node value 0 (all 0 bits) to mark nodes as unoccupied.
 /// This is important for performance.
 use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr::null;
@@ -279,32 +280,36 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let len_remaining = self.len_remaining;
 
-        if len_remaining > 1 {
-            // Get the current node
-            let index = self.current_node_id.index;
-            let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *const T;
+        match len_remaining.cmp(&1) {
+            Ordering::Greater => {
+                // Get the current node
+                let index = self.current_node_id.index;
+                let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *const T;
 
-            // Advance the node pointer to the next node in the current page
-            self.current_node_id = NodeId {
-                index: index + 1,
-                _phantom: PhantomData::default(),
-            };
-            self.len_remaining = len_remaining - 1;
+                // Advance the node pointer to the next node in the current page
+                self.current_node_id = NodeId {
+                    index: index + 1,
+                    _phantom: PhantomData::default(),
+                };
+                self.len_remaining = len_remaining - 1;
 
-            Some(unsafe { &*node_ptr })
-        } else if len_remaining == 1 {
-            self.len_remaining = 0;
+                Some(unsafe { &*node_ptr })
+            }
+            Ordering::Equal => {
+                self.len_remaining = 0;
 
-            // Don't advance the node pointer's node, because that might
-            // advance past the end of the page!
+                // Don't advance the node pointer's node, because that might
+                // advance past the end of the page!
 
-            let index = self.current_node_id.index;
-            let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *const T;
+                let index = self.current_node_id.index;
+                let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *const T;
 
-            Some(unsafe { &*node_ptr })
-        } else {
-            // len_remaining was 0
-            None
+                Some(unsafe { &*node_ptr })
+            }
+            Ordering::Less => {
+                // len_remaining was 0
+                None
+            }
         }
     }
 }
