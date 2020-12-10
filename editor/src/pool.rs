@@ -109,14 +109,22 @@ impl Pool {
         // It's only safe to store this if T is the same size as S.
         debug_assert_eq!(size_of::<T>(), NODE_BYTES);
 
+        let node_id = self.reserve(1);
+        let node_ptr = unsafe { self.nodes.offset(node_id.index as isize) } as *mut T;
+
+        unsafe { *node_ptr = node };
+
+        node_id
+    }
+
+    /// Reserves the given number of contiguous node slots, and returns
+    /// the NodeId of the first one. We only allow reserving 2^32 in a row.
+    fn reserve<T>(&mut self, nodes: u32) -> NodeId<T> {
+        // TODO once we have a free list, look in there for an open slot first!
         let index = self.num_nodes;
 
         if index < self.capacity {
-            let node_ptr = unsafe { self.nodes.offset(index as isize) } as *mut T;
-
-            unsafe { *node_ptr = node };
-
-            self.num_nodes = index + 1;
+            self.num_nodes = index + nodes;
 
             NodeId {
                 index,
@@ -125,12 +133,6 @@ impl Pool {
         } else {
             todo!("pool ran out of capacity. TODO reallocate the nodes pointer to map to a bigger space. Can use mremap on Linux, but must memcpy lots of bytes on macOS and Windows.");
         }
-    }
-
-    /// Reserves the given number of contiguous node slots, and returns
-    /// the NodeId of the first one. We only allow reserving 2^32 in a row.
-    fn reserve<T>(&mut self, _nodes: u32) -> NodeId<T> {
-        todo!("Implement Pool::reserve");
     }
 
     pub fn get<'a, T>(&'a self, node_id: NodeId<T>) -> &'a T {
