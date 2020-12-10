@@ -190,10 +190,6 @@ fn pool_vec_size() {
 }
 
 impl<'a, T: 'a + Sized> PoolVec<T> {
-    /// If given a slice of length > 128, the first 128 nodes will be stored in
-    /// the usual array, and then there's one more node at the end which
-    /// continues the list with a new length and NodeId value. PoolVec
-    /// iterators automatically do these jumps behind the scenes when necessary.
     pub fn new<I: ExactSizeIterator<Item = T>, S>(nodes: I, pool: &mut Pool) -> Self {
         debug_assert!(nodes.len() <= u32::MAX as usize);
         debug_assert!(size_of::<T>() <= NODE_BYTES);
