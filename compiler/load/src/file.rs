@@ -3183,17 +3183,7 @@ fn canonicalize_and_constrain<'a>(
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
 
     match canonicalized {
-        Ok(mut module_output) => {
-            // Add builtin defs (e.g. List.get) to the module's defs
-            let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
-            let references = &module_output.references;
-
-            for (symbol, def) in builtin_defs {
-                if references.contains(&symbol) {
-                    module_output.declarations.push(Declaration::Builtin(def));
-                }
-            }
-
+        Ok(module_output) => {
             let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
 
             let module = Module {
