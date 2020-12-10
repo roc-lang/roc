@@ -5,5 +5,6 @@ app "effect-example"
 
 main : Task.Task {} I64
 main =
-    Task.putLine "foo"
+    Task.after (Task.putLine "foo") \{} ->
+        Task.putLine "bar"
 

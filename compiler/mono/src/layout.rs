@@ -398,7 +398,8 @@ impl<'a> Layout<'a> {
         if let Layout::PhantomEmptyStruct = self {
             false
         } else {
-            self.stack_size(1) == 0
+            // self.stack_size(1) == 0
+            false
         }
     }
 
