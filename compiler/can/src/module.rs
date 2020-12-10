@@ -273,13 +273,9 @@ pub fn canonicalize_module_defs<'a>(
             // iterator over all builtin symbols
             for symbol in references.iter() {
                 if symbol.is_builtin() {
-                    match builtins::builtin_defs_map(*symbol, var_store) {
-                        Some(def) => {
-                            declarations.push(Declaration::Builtin(def));
-                        }
-                        None => {
-                            // this can be the case for builtin types
-                        }
+                    // this can fail when the symbol is for builtin types, or has no implementation yet
+                    if let Some(def) = builtins::builtin_defs_map(*symbol, var_store) {
+                        declarations.push(Declaration::Builtin(def));
                     }
                 }
             }
