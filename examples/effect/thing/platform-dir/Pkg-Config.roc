@@ -2,7 +2,7 @@ platform folkertdev/foo
     requires { main : Effect {} }
     exposes []
     packages {}
-    imports [Effect]
+    imports [Task]
     provides [ mainForHost ]
     effects Effect
         {
@@ -11,5 +11,5 @@ platform folkertdev/foo
             getLine : Effect Str
         }
 
-mainForHost : Effect.Effect {} as Fx
+mainForHost : Task.Task {} I64 as Fx
 mainForHost = main
