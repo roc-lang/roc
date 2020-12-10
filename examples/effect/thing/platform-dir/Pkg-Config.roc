@@ -11,5 +11,5 @@ platform folkertdev/foo
             getLine : Effect Str
         }
 
-mainForHost : Task.Task {} I64 as Fx
+mainForHost : Task.Task {} F64 as Fx
 mainForHost = main

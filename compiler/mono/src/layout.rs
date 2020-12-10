@@ -227,6 +227,10 @@ impl<'a> ClosureLayout<'a> {
         }
     }
 
+    pub fn internal_layout(&self) -> Layout<'a> {
+        self.layout.clone()
+    }
+
     pub fn build_closure_data(
         &self,
         original: Symbol,
