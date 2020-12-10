@@ -1636,8 +1636,11 @@ fn specialize_external<'a>(
                                 Layout::Struct(field_layouts) => {
                                     // NOTE closure unions do not store the tag!
                                     let field_layouts = &field_layouts[1..];
+
+                                    // TODO check for field_layouts.len() == 1 and do a rename in that case?
                                     for (index, (symbol, _variable)) in captured.iter().enumerate()
                                     {
+                                        // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
                                         let expr = Expr::AccessAtIndex {
                                             index: index as _,
                                             field_layouts,

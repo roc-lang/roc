@@ -1571,4 +1571,28 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn unified_empty_closure() {
+        // none of the Closure tags will have a payload
+        // this was not handled correctly in the past
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo = \{} ->
+                    when A is
+                        A -> (\_ -> 3.14)
+                        B -> (\_ -> 3.14)
+
+                main : F64
+                main =
+                    (foo {}) 0
+                "#
+            ),
+            3.14,
+            f64
+        );
+    }
 }
