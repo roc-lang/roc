@@ -1245,6 +1245,10 @@ fn patterns_to_when<'a>(
     // patterns that are not yet in a when (e.g. in let or function arguments) must be irrefutable
     // to pass type checking. So the order in which we add them to the body does not matter: there
     // are only stores anyway, no branches.
+    //
+    // NOTE this fails if the pattern contains rigid variables,
+    // see https://github.com/rtfeldman/roc/issues/786
+    // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
         let mono_pattern = from_can_pattern(env, layout_cache, &pattern.value);
