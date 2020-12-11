@@ -1595,4 +1595,124 @@ mod gen_primitives {
             f64
         );
     }
+
+    #[test]
+    fn task_always_twice() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                effectAlways : a -> Effect a
+                effectAlways = \x ->
+                    inner = \{} -> x
+
+                    @Effect inner
+
+                effectAfter : Effect a, (a -> Effect b) -> Effect b
+                effectAfter = \(@Effect thunk), transform -> transform (thunk {})
+
+                Task a err : Effect (Result a err)
+
+                always : a -> Task a *
+                always = \x -> effectAlways (Ok x)
+
+                fail : err -> Task * err
+                fail = \x -> effectAlways (Err x)
+
+                after : Task a err, (a -> Task b err) -> Task b err
+                after = \task, transform ->
+                    effectAfter task \res ->
+                        when res is
+                            Ok x -> transform x
+                            Err e -> fail e
+
+                main : Task {} F64
+                main = after (always "foo") (\_ -> always {})
+
+                "#
+            ),
+            0,
+            i64,
+            |_| 0
+        );
+    }
+
+    #[test]
+    fn wildcard_rigid() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                Task a err : Effect (Result a err)
+
+                # this failed because of the `*`, but worked with `err`
+                always : a -> Task a *
+                always = \x ->
+                    inner = \{} -> (Ok x)
+
+                    @Effect inner
+
+
+                main : Task {} F64
+                main = always {}
+                "#
+            ),
+            0,
+            i64,
+            |_| 0
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn todo_bad_error_message() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                effectAlways : a -> Effect a
+                effectAlways = \x ->
+                    inner = \{} -> x
+
+                    @Effect inner
+
+                effectAfter : Effect a, (a -> Effect b) -> Effect b
+                effectAfter = \(@Effect thunk), transform -> transform (thunk {})
+
+                Task a err : Effect (Result a err)
+
+                always : a -> Task a F64
+                always = \x -> effectAlways (Ok x)
+
+                # the problem is that this restricts to `Task {} *`
+                fail : err -> Task {} err
+                fail = \x -> effectAlways (Err x)
+
+                after : Task a err, (a -> Task b err) -> Task b err
+                after = \task, transform ->
+                    effectAfter task \res ->
+                        when res is
+                            Ok x -> transform x
+                            # but here it must be `forall b. Task b {}`
+                            Err e -> fail e
+
+                main : Task {} F64
+                main =
+                    after (always "foo") (\_ -> always {})
+                "#
+            ),
+            0,
+            i64,
+            |_| 0
+        );
+    }
 }
