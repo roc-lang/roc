@@ -11,8 +11,9 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-// Inspired by https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen, licensed under the MIT license
+// Inspired by:
+// https://github.com/sotrh/learn-wgpu by Benjamin Hansen, licensed under the MIT license
+// https://github.com/cloudhead/rgx by Alexis Sellier, licensed under the MIT license
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
@@ -25,6 +26,9 @@ use std::path::Path;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
+use wgpu::{BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindGroup, ShaderStage};
+use wgpu::util::DeviceExt;
+use cgmath::{Ortho};
 
 pub mod ast;
 pub mod bucket;
@@ -45,6 +49,35 @@ pub fn launch(_filepaths: &[&Path]) -> io::Result<()> {
 
     Ok(())
 }
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    // We can't use cgmath with bytemuck directly so we'll have
+    // to convert the Matrix4 into a 4x4 f32 array
+    ortho: [[f32; 4]; 4]
+}
+
+
+impl Uniforms {
+    fn new(w: u32, h: u32) -> Self {
+        let ortho: cgmath::Matrix4<f32> =
+            Ortho::<f32> {
+                left: 0.0,
+                right: w as f32,
+                bottom: h as f32,
+                top: 0.0,
+                near: -1.0,
+                far: 1.0,
+            }
+            .into();
+
+        Self {
+            ortho: ortho.into(),
+        }
+    }
+}
+
 
 fn run_event_loop() -> Result<(), Box<dyn Error>> {
     env_logger::init();
@@ -103,7 +136,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
 
-    let rect_pipeline = make_rect_pipeline(&gpu_device, &swap_chain_descr);
+    let (rect_pipeline, ortho_bind_group) = make_rect_pipeline(&gpu_device, &swap_chain_descr);
 
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
@@ -195,9 +228,10 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 });
 
                 if rect_buffers.num_rects > 0 {
+                    render_pass.set_pipeline(&rect_pipeline);
+                    render_pass.set_bind_group(1, &ortho_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
                     render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-                    render_pass.set_pipeline(&rect_pipeline);
                     render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
                 }
 
@@ -235,9 +269,50 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 fn make_rect_pipeline(
     gpu_device: &wgpu::Device,
     swap_chain_descr: &wgpu::SwapChainDescriptor,
-) -> wgpu::RenderPipeline {
+) -> (wgpu::RenderPipeline, BindGroup) {
+    let uniforms = Uniforms::new(swap_chain_descr.width, swap_chain_descr.height);
+
+    let ortho_buffer = gpu_device.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("Ortho Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[uniforms]),
+            usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        }
+    );    
+
+    let ortho_bind_group_layout = 
+        gpu_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStage::VERTEX,
+                    ty: wgpu::BindingType::UniformBuffer {
+                        dynamic: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: None
+        });
+
+    let ortho_bind_group = gpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: &ortho_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(ortho_buffer.slice(..))
+            }
+        ],
+        label: Some("ortho_bind_group"),
+    });
+        
+
+
     let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        bind_group_layouts: &[],
+        bind_group_layouts: &[
+            &ortho_bind_group_layout
+        ],
         push_constant_ranges: &[],
         label: Some("Pipeline Layout"),
     });
@@ -250,7 +325,7 @@ fn make_rect_pipeline(
         wgpu::include_spirv!("shaders/rect.frag.spv"),
     );
 
-    pipeline
+    (pipeline, ortho_bind_group)
 }
 
 fn create_render_pipeline(
