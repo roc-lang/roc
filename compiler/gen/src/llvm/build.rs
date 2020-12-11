@@ -36,6 +36,7 @@ use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutSet};
+use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
@@ -811,6 +812,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_layout: Layout::Union(fields),
             union_size,
             tag_id,
+            tag_name,
             ..
         } => {
             let tag_layout = Layout::Union(fields);
@@ -826,12 +828,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = fields[*tag_id as usize];
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, _val_layout) = load_symbol_and_layout(env, scope, field_symbol);
+            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
+                // closures ignore (and do not store) the discriminant
+                &fields[*tag_id as usize][1..]
+            } else {
+                &fields[*tag_id as usize]
+            };
 
-                // this check fails for recursive tag unions, but can be helpful while debugging
-                // debug_assert_eq!(tag_field_layout, val_layout);
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, val_layout) = load_symbol_and_layout(env, scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -852,6 +857,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                         field_vals.push(ptr);
                     } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        debug_assert_eq!(tag_field_layout, val_layout);
+
                         field_vals.push(val);
                     }
                 }

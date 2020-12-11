@@ -260,10 +260,17 @@ impl<'a> ClosureLayout<'a> {
             Layout::Union(tags) => {
                 // NOTE it's very important that this Union consists of Closure tags
                 // and is not an unpacked 1-element record
+
+                let tag_id = self
+                    .captured
+                    .iter()
+                    .position(|(tn, _)| *tn == TagName::Closure(original))
+                    .unwrap() as _;
+
                 let expr = Expr::Tag {
                     tag_layout: Layout::Union(tags),
                     tag_name: TagName::Closure(original),
-                    tag_id: 0,
+                    tag_id,
                     union_size: tags.len() as u8,
                     arguments: symbols,
                 };
