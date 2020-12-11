@@ -28,6 +28,8 @@ type Keyboard
 type alias Caret =
     { before : String
     , after : String
+    , shiftDown : Bool
+    , selecte : String
     }
 
 
@@ -347,7 +349,7 @@ init _ =
             treeRoot
                 [ token Empty
                 ]
-      , keyboard = Editing (Caret "" "") (Next 0 End)
+      , keyboard = Editing (Caret "" "" False "") (Next 0 End)
       , shiftDown = False
       , actions = []
       , token = Nothing
@@ -540,16 +542,50 @@ type alias Typing =
 
 onKeyboardEvent : KeyboardEvent -> Typing -> Typing
 onKeyboardEvent ev ( c, path, tok ) =
-    ( c, path, tok )
+    case ev of
+        Char char ->
+            ( { c
+                | after =
+                    String.append c.after
+                        (String.fromChar <|
+                            if c.shiftDown then
+                                Char.toUpper char
+
+                            else
+                                char
+                        )
+              }
+            , path
+            , tok
+            )
+
+        Shift ->
+            ( { c | shiftDown = True }, path, tok )
+
+        LiftUp ->
+            ( { c | shiftDown = False }, path, tok )
+
+        Esc ->
+            ( c, path, tok )
+
+        Enter ->
+            ( c, path, tok )
+
+        Spc ->
+            ( c, path, tok )
+
+        Arrow dir ->
+            ( c, path, tok )
 
 
 type KeyboardEvent
-    = Chr Char
+    = Char Char
     | Shift
     | Esc
-    | Entr
+    | Enter
     | Spc
     | Arrow Direction
+    | LiftUp
 
 
 type ModifyTree

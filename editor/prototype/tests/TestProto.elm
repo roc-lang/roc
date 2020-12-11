@@ -203,6 +203,63 @@ suite =
                 (Next 1 End)
                 (Just (Next 1 (Next 3 End)))
             ]
+        , let
+            c =
+                Caret "" "" False ""
+
+            path =
+                End
+
+            t =
+                token Empty
+
+            st =
+                ( c, path, t )
+
+            tst txt xs exp =
+                test txt <|
+                    \_ ->
+                        List.foldl onKeyboardEvent st xs
+                            |> Expect.equal exp
+          in
+          describe "On Keyboard Event"
+            [ tst "Press Shift"
+                [ Shift ]
+                ( { c | shiftDown = True }, path, t )
+            , tst "Press shift, lift up shift"
+                [ Shift, LiftUp ]
+                ( c, path, t )
+            , tst "Press some uppercase"
+                [ Shift
+                , Char 's'
+                , LiftUp
+                ]
+                ( { c | after = "S" }, path, t )
+            , tst "write a bit"
+                [ Shift
+                , Char 's'
+                , LiftUp
+                , Char 't'
+                , Char 'a'
+                , Char 't'
+                , Char 'e'
+                ]
+                ( { c | after = "State" }, path, t )
+            , tst "Change the tree structure"
+                [ Shift
+                , Char 's'
+                , LiftUp
+                , Char 't'
+                , Char 'a'
+                , Char 't'
+                , Char 'e'
+                , Char ' '
+                , Shift
+                , Char ':'
+                , LiftUp
+                ]
+                ( c, Next 1 End, treeRoot [ group Hori [ token (TypeName "State"), syntax ":" ], token Empty ] )
+            ]
         ]
 
 
