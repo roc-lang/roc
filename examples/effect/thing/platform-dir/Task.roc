@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, putLine, after, always, map, after, fail]
+    exposes [ Task, after, always, fail, putLine, map ]
     imports [ Effect ]
 
 Task a err : Effect.Effect (Result a err)

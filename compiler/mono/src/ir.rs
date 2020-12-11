@@ -425,14 +425,6 @@ impl<'a> Procs<'a> {
             .from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        if let Some(existing) = self.partial_procs.get(&symbol) {
-            // only assert that we're really adding the same thing
-            debug_assert_eq!(annotation, existing.annotation);
-            debug_assert_eq!(captured_symbols, existing.captured_symbols);
-            debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
-            return Ok(layout);
-        }
-
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
@@ -451,33 +443,38 @@ impl<'a> Procs<'a> {
                 if !already_specialized {
                     let pending = PendingSpecialization::from_var(env.subs, annotation);
 
-                    let pattern_symbols = pattern_symbols.into_bump_slice();
+                    let partial_proc;
+                    if let Some(existing) = self.partial_procs.get(&symbol) {
+                        // if we're adding the same partial proc twice, they must be the actual same!
+                        //
+                        // NOTE we can't skip extra work! we still need to make the specialization for this
+                        // invocation. The content of the `annotation` can be different, even if the variable
+                        // number is the same
+                        debug_assert_eq!(annotation, existing.annotation);
+                        debug_assert_eq!(captured_symbols, existing.captured_symbols);
+                        debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
+
+                        partial_proc = existing.clone();
+                    } else {
+                        let pattern_symbols = pattern_symbols.into_bump_slice();
+
+                        partial_proc = PartialProc {
+                            annotation,
+                            pattern_symbols,
+                            captured_symbols,
+                            body: body.value,
+                            is_self_recursive,
+                        };
+                    }
+
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout.clone(), pending);
 
-                            self.partial_procs.insert(
-                                symbol,
-                                PartialProc {
-                                    annotation,
-                                    pattern_symbols,
-                                    captured_symbols,
-                                    body: body.value,
-                                    is_self_recursive,
-                                },
-                            );
+                            self.partial_procs.insert(symbol, partial_proc);
                         }
                         None => {
-                            // TODO should pending_procs hold a Rc<Proc>?
-                            let partial_proc = PartialProc {
-                                annotation,
-                                pattern_symbols,
-                                captured_symbols,
-                                body: body.value,
-                                is_self_recursive,
-                            };
-
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
