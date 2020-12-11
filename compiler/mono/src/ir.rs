@@ -1618,45 +1618,111 @@ fn specialize_external<'a>(
             ret_layout,
         } => {
             // unpack the closure symbols, if any
-            if let CapturedSymbols::Captured(captured) = captured_symbols {
-                let mut layouts = Vec::with_capacity_in(captured.len(), env.arena);
+            match (opt_closure_layout.clone(), captured_symbols) {
+                (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
+                    debug_assert!(!captured.is_empty());
 
-                for (_, variable) in captured.iter() {
-                    let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
-                    layouts.push(layout);
-                }
+                    let wrapped = closure_layout.get_wrapped();
 
-                let field_layouts = layouts.into_bump_slice();
+                    let internal_layout = closure_layout.internal_layout();
 
-                let wrapped = match &opt_closure_layout {
-                    Some(x) => x.get_wrapped(),
-                    None => unreachable!("symbols are captured, so this must be a closure"),
-                };
+                    match internal_layout {
+                        Layout::Union(_) => {
+                            // here we rely on the fact that a union in a closure would be stored in a one-element record
+                            // a closure layout that is a union must be a of the shape `Closure1 ... | Closure2 ...`
+                            let tag_layout = closure_layout.as_named_layout(proc_name);
 
-                for (index, (symbol, variable)) in captured.iter().enumerate() {
-                    // layout is cached anyway, re-using the one found above leads to
-                    // issues (combining by-ref and by-move in pattern match
-                    let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+                            match tag_layout {
+                                Layout::Struct(field_layouts) => {
+                                    // NOTE closure unions do not store the tag!
+                                    let field_layouts = &field_layouts[1..];
 
-                    // if the symbol has a layout that is dropped from data structures (e.g. `{}`)
-                    // then regenerate the symbol here. The value may not be present in the closure
-                    // data struct
-                    let expr = {
-                        if layout.is_dropped_because_empty() {
-                            Expr::Struct(&[])
-                        } else {
-                            Expr::AccessAtIndex {
-                                index: index as _,
-                                field_layouts,
-                                structure: Symbol::ARG_CLOSURE,
-                                wrapped,
+                                    // TODO check for field_layouts.len() == 1 and do a rename in that case?
+                                    for (index, (symbol, _variable)) in captured.iter().enumerate()
+                                    {
+                                        // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
+                                        let expr = Expr::AccessAtIndex {
+                                            index: index as _,
+                                            field_layouts,
+                                            structure: Symbol::ARG_CLOSURE,
+                                            wrapped,
+                                        };
+
+                                        let layout = field_layouts[index].clone();
+
+                                        specialized_body = Stmt::Let(
+                                            *symbol,
+                                            expr,
+                                            layout,
+                                            env.arena.alloc(specialized_body),
+                                        );
+                                    }
+                                }
+                                _ => unreachable!("closure tag must store a struct"),
                             }
                         }
-                    };
+                        Layout::Struct(field_layouts) => {
+                            debug_assert_eq!(
+                                captured.len(),
+                                field_layouts.len(),
+                                "{:?} captures {:?} but has layout {:?}",
+                                proc_name,
+                                &captured,
+                                &field_layouts
+                            );
 
-                    specialized_body =
-                        Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
+                            if field_layouts.len() > 1 {
+                                for (index, (symbol, _variable)) in captured.iter().enumerate() {
+                                    let expr = Expr::AccessAtIndex {
+                                        index: index as _,
+                                        field_layouts,
+                                        structure: Symbol::ARG_CLOSURE,
+                                        wrapped,
+                                    };
+
+                                    let layout = field_layouts[index].clone();
+
+                                    specialized_body = Stmt::Let(
+                                        *symbol,
+                                        expr,
+                                        layout,
+                                        env.arena.alloc(specialized_body),
+                                    );
+                                }
+                            } else {
+                                let symbol = captured[0].0;
+
+                                substitute_in_exprs(
+                                    env.arena,
+                                    &mut specialized_body,
+                                    symbol,
+                                    Symbol::ARG_CLOSURE,
+                                );
+                            }
+                        }
+                        _other => {
+                            // the closure argument is not a union or a record
+                            debug_assert_eq!(
+                                captured.len(),
+                                1,
+                                "mismatch {:?} captures {:?}",
+                                proc_name,
+                                &captured
+                            );
+
+                            let symbol = captured[0].0;
+
+                            substitute_in_exprs(
+                                env.arena,
+                                &mut specialized_body,
+                                symbol,
+                                Symbol::ARG_CLOSURE,
+                            );
+                        }
+                    }
                 }
+                (None, CapturedSymbols::None) => {}
+                _ => unreachable!("to closure or not to closure?"),
             }
 
             // reset subs, so we don't get type errors when specializing for a different signature

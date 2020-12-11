@@ -1477,10 +1477,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
         Dec(symbol, cont) => {
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
-            let layout = layout.clone();
 
             if layout.contains_refcounted() {
-                decrement_refcount_layout(env, parent, layout_ids, value, &layout);
+                decrement_refcount_layout(env, parent, layout_ids, value, layout);
             }
 
             build_exp_stmt(env, layout_ids, scope, parent, cont)
@@ -2323,33 +2322,14 @@ pub fn build_proc<'a, 'ctx, 'env>(
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
-        // the closure argument (if any) comes in as an opaque sequence of bytes.
-        // we need to cast that to the specific closure data layout that the body expects
-        let value = if let Symbol::ARG_CLOSURE = *arg_symbol {
-            // generate a caller function (to be used by the host)
-            // build_closure_caller(env, fn_val);
-            // builder.position_at_end(entry);
-
-            // blindly trust that there is a layout available for the closure data
-            let layout = proc.closure_data_layout.clone().unwrap();
-
-            // cast the input into the type that the body expects
-            let closure_data_type =
-                basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
-
-            cast_basic_basic(env.builder, arg_val, closure_data_type)
-        } else {
-            arg_val
-        };
-
         let alloca = create_entry_block_alloca(
             env,
             fn_val,
-            value.get_type(),
+            arg_val.get_type(),
             arg_symbol.ident_string(&env.interns),
         );
 
-        builder.build_store(alloca, value);
+        builder.build_store(alloca, arg_val);
 
         scope.insert(*arg_symbol, (layout.clone(), alloca));
     }

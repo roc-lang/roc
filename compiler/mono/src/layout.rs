@@ -86,6 +86,9 @@ impl<'a> ClosureLayout<'a> {
     fn from_tag_union(arena: &'a Bump, tags: &'a [(TagName, &'a [Layout<'a>])]) -> Self {
         debug_assert!(tags.len() > 1);
 
+        // if the closed-over value is actually a layout, it should be wrapped in a 1-element record
+        debug_assert!(matches!(tags[0].0, TagName::Closure(_)));
+
         let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
 
         for (_, tag_args) in tags.iter() {
@@ -117,7 +120,15 @@ impl<'a> ClosureLayout<'a> {
         let mut tags = std::vec::Vec::new();
         match roc_types::pretty_print::chase_ext_tag_union(subs, closure_var, &mut tags) {
             Ok(()) | Err((_, Content::FlexVar(_))) if !tags.is_empty() => {
-                // this is a closure
+                // special-case the `[ Closure1, Closure2, Closure3 ]` case, where none of
+                // the tags have a payload
+                let all_no_payload = tags.iter().all(|(_, arguments)| arguments.is_empty());
+
+                if all_no_payload {
+                    return Ok(None);
+                }
+
+                // otherwise, this is a closure with a payload
                 let variant = union_sorted_tags_help(arena, tags, None, subs);
 
                 use UnionVariant::*;
@@ -147,9 +158,9 @@ impl<'a> ClosureLayout<'a> {
                         Ok(Some(closure_layout))
                     }
                     Wrapped(tags) => {
-                        // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
                         let closure_layout =
                             ClosureLayout::from_tag_union(arena, tags.into_bump_slice());
+
                         Ok(Some(closure_layout))
                     }
                 }
@@ -227,6 +238,10 @@ impl<'a> ClosureLayout<'a> {
         }
     }
 
+    pub fn internal_layout(&self) -> Layout<'a> {
+        self.layout.clone()
+    }
+
     pub fn build_closure_data(
         &self,
         original: Symbol,
@@ -262,7 +277,13 @@ impl<'a> ClosureLayout<'a> {
             }
 
             _ => {
-                debug_assert_eq!(symbols.len(), 1);
+                debug_assert_eq!(
+                    symbols.len(),
+                    1,
+                    "symbols {:?} for layout {:?}",
+                    &symbols,
+                    &self.layout
+                );
 
                 Err(symbols[0])
             }
@@ -398,7 +419,8 @@ impl<'a> Layout<'a> {
         if let Layout::PhantomEmptyStruct = self {
             false
         } else {
-            self.stack_size(1) == 0
+            // self.stack_size(1) == 0
+            false
         }
     }
 

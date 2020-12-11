@@ -157,7 +157,7 @@ impl Dependencies {
         output
     }
 
-    pub fn add_platform_module(
+    pub fn add_effect_module(
         &mut self,
         module_id: ModuleId,
         dependencies: &MutSet<ModuleId>,
@@ -1580,7 +1580,7 @@ fn update<'a>(
                 .constrained
                 .insert(module_id, constrained_module);
 
-            let mut work = state.dependencies.add_platform_module(
+            let mut work = state.dependencies.add_effect_module(
                 module_id,
                 &MutSet::default(),
                 state.goal_phase,
