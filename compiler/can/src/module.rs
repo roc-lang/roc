@@ -240,8 +240,8 @@ pub fn canonicalize_module_defs<'a>(
             // exposed_symbols and added to exposed_vars_by_symbol. If any were
             // not, that means they were declared as exposed but there was
             // no actual declaration with that name!
-            if !exposed_symbols.is_empty() {
-                panic!("TODO gracefully handle invalid `exposes` entry (or entries) which had no corresponding definition: {:?}", exposed_symbols);
+            for symbol in exposed_symbols {
+                env.problem(Problem::ExposedButNotDefined(symbol));
             }
 
             // Incorporate any remaining output.lookups entries into references.
