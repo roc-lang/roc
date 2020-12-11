@@ -4749,10 +4749,33 @@ fn reuse_function_symbol<'a>(
 ) -> Stmt<'a> {
     match procs.partial_procs.get(&original) {
         None => {
-            // danger: a foreign symbol may not be specialized!
-            debug_assert!(
-                env.home == original.module_id() || original.module_id() == ModuleId::ATTR
-            );
+            let is_imported =
+                !(env.home == original.module_id() || original.module_id() == ModuleId::ATTR);
+
+            match arg_var {
+                Some(arg_var) if is_imported => {
+                    let layout = layout_cache
+                        .from_var(env.arena, arg_var, env.subs)
+                        .expect("creating layout does not fail");
+
+                    procs.insert_passed_by_name(
+                        env,
+                        arg_var,
+                        original,
+                        layout.clone(),
+                        layout_cache,
+                    );
+                }
+                _ => {
+                    // danger: a foreign symbol may not be specialized!
+                    debug_assert!(
+                        !is_imported,
+                        "symbol {:?} while processing module {:?}",
+                        original,
+                        (env.home, &arg_var),
+                    );
+                }
+            }
 
             result
         }

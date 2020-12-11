@@ -2,20 +2,15 @@ platform folkertdev/foo
     requires { main : Effect {} }
     exposes []
     packages {}
-    imports []
+    imports [Task]
     provides [ mainForHost ]
     effects Effect
         {
-            putLine : Str -> Effect {}
+            putChar : I64 -> Effect {},
+            putLine : Str -> Effect {},
+            getLine : {} -> Effect Str
         }
 
 
-# putChar : I64 -> Effect {},
-# getLine : Effect Str
-
-
-Effect a : [ Effect ({} -> a) ]
-Task a err : Effect (Result a err)
-
-mainForHost : Task {} F64 as Fx
+mainForHost : Task.Task {} F64 as Fx
 mainForHost = main

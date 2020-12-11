@@ -4,6 +4,5 @@ app "effect-example"
     provides [ main ] to base
 
 main : Task.Task {} F64
-main = 
-    # Task.after (Task.always "foo") (\_ -> Task.always {})
-    Task.after (Task.putLine "foo") \{} -> Task.putLine "bar"
+main =
+    Task.after (Task.getLine {}) \lineThisThing -> Task.putLine lineThisThing
