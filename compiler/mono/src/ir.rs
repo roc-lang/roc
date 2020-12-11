@@ -1408,7 +1408,7 @@ pub fn specialize_all<'a>(
         let partial_proc = match procs.partial_procs.get(&name) {
             Some(v) => v.clone(),
             None => {
-                unreachable!("now this is an error");
+                panic!("Cannot find a partial proc for {:?}", name);
             }
         };
 

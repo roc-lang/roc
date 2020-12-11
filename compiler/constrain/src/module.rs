@@ -200,22 +200,20 @@ pub fn pre_constrain_imports(
 
             match exposed_types.get(&module_id) {
                 Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
-                    let solved_type = solved_types.get(&symbol).unwrap_or_else(|| {
-                        panic!(
-                            "Could not find {:?} in solved_types {:?}",
-                            loc_symbol.value, solved_types
-                        )
-                    });
+                    // If the exposed value was invalid (e.g. it didn't have
+                    // a corresponding definition), it won't have an entry
+                    // in solved_types
+                    if let Some(solved_type) = solved_types.get(&symbol) {
+                        // TODO should this be a union?
+                        for (k, v) in new_aliases.clone() {
+                            imported_aliases.insert(k, v);
+                        }
 
-                    // TODO should this be a union?
-                    for (k, v) in new_aliases.clone() {
-                        imported_aliases.insert(k, v);
+                        imported_symbols.push(Import {
+                            loc_symbol,
+                            solved_type: solved_type.clone(),
+                        });
                     }
-
-                    imported_symbols.push(Import {
-                        loc_symbol,
-                        solved_type: solved_type.clone(),
-                    });
                 }
                 Some(ExposedModuleTypes::Invalid) => {
                     // If that module was invalid, use True constraints
