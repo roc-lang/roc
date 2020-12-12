@@ -146,6 +146,8 @@ pub enum RuntimeError {
 
     /// When the author specifies a type annotation but no implementation
     NoImplementation,
+
+    ExposedButNotDefined(Symbol),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
