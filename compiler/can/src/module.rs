@@ -240,8 +240,8 @@ pub fn canonicalize_module_defs<'a>(
             // exposed_symbols and added to exposed_vars_by_symbol. If any were
             // not, that means they were declared as exposed but there was
             // no actual declaration with that name!
-            if !exposed_symbols.is_empty() {
-                panic!("TODO gracefully handle invalid `exposes` entry (or entries) which had no corresponding definition: {:?}", exposed_symbols);
+            for symbol in exposed_symbols {
+                env.problem(Problem::ExposedButNotDefined(symbol));
             }
 
             // Incorporate any remaining output.lookups entries into references.
@@ -269,12 +269,14 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
-            // Add builtin defs (e.g. List.get) to the module's defs
-            let builtin_defs = builtins::builtin_defs(var_store);
-
-            for (symbol, def) in builtin_defs {
-                if references.contains(&symbol) {
-                    declarations.push(Declaration::Builtin(def));
+            // TODO this loops over all symbols in the module, we can speed it up by having an
+            // iterator over all builtin symbols
+            for symbol in references.iter() {
+                if symbol.is_builtin() {
+                    // this can fail when the symbol is for builtin types, or has no implementation yet
+                    if let Some(def) = builtins::builtin_defs_map(*symbol, var_store) {
+                        declarations.push(Declaration::Builtin(def));
+                    }
                 }
             }
 

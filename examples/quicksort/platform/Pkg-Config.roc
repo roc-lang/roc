@@ -1,7 +1,10 @@
 platform examples/quicksort
-    requires { quicksort : List (Num a) -> List (Num a) }
+    requires { quicksort : List I64 -> List I64 }
     exposes []
     packages {}
     imports []
-    provides [ main ]
+    provides [ mainForHost ]
     effects Effect {}
+
+mainForHost : List I64 -> List I64 
+mainForHost = \list -> quicksort list

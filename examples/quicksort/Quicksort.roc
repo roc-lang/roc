@@ -1,4 +1,7 @@
-app "quicksort" provides [ quicksort ] to "./platform"
+app "quicksort"
+    packages { base: "platform" }
+    imports []
+    provides [ quicksort ] to base
 
 quicksort = \originalList ->
 

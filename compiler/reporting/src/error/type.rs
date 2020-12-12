@@ -29,6 +29,22 @@ pub fn type_problem<'b>(
         CircularType(region, symbol, overall_type) => {
             to_circular_report(alloc, filename, region, symbol, overall_type)
         }
+        UnexposedLookup(symbol) => {
+            let title = "UNRECOGNIZED NAME".to_string();
+            let doc = alloc
+                .stack(vec![alloc
+                    .reflow("The ")
+                    .append(alloc.module(symbol.module_id()))
+                    .append(alloc.reflow(" module does not expose anything by the name "))
+                    .append(alloc.symbol_unqualified(symbol))])
+                .append(alloc.reflow("."));
+
+            Report {
+                filename,
+                title,
+                doc,
+            }
+        }
         BadType(type_problem) => {
             use roc_types::types::Problem::*;
             match type_problem {
