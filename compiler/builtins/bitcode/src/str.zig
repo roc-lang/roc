@@ -12,7 +12,7 @@ const InPlace = packed enum(u8) {
     Clone,
 };
 
-const RocStr = extern struct {
+pub const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
 
@@ -181,10 +181,16 @@ const RocStr = extern struct {
         return self.len() == 0;
     }
 
+    pub fn asSlice(self: RocStr) []u8 {
+        // Since this conditional would be prone to branch misprediction,
+        // make sure it will compile to a cmov.
+        return self.asU8ptr()[0..self.len()];
+    }
+
     pub fn asU8ptr(self: RocStr) [*]u8 {
-        const if_small = &@bitCast([16]u8, self);
-        const if_big = @ptrCast([*]u8, self.str_bytes);
-        return if (self.isSmallStr() or self.isEmpty()) if_small else if_big;
+        // Since this conditional would be prone to branch misprediction,
+        // make sure it will compile to a cmov.
+        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([16]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
     }
 
     // Given a pointer to some bytes, write the first (len) bytes of this
@@ -193,18 +199,9 @@ const RocStr = extern struct {
     // One use for this function is writing into an `alloca` for a C string that
     // only needs to live long enough to be passed as an argument to
     // a C function - like the file path argument to `fopen`.
-    pub fn memcpy(self: RocStr, dest: [*]u8, len: usize) void {
-        const small_src = @ptrCast(*u8, self);
-        const big_src = self.str_bytes_ptr;
-
-        // For a small string, copy the bytes directly from `self`.
-        // For a large string, copy from the pointed-to bytes.
-
-        // Since this conditional would be prone to branch misprediction,
-        // make sure it will compile to a cmov.
-        const src: [*]u8 = if (self.isSmallStr()) small_src else big_src;
-
-        @memcpy(dest, src, len);
+    pub fn memcpy(self: RocStr, dest: [*]u8, length: usize) void {
+        const src = self.asU8ptr();
+        @memcpy(dest, src, length);
     }
 
     test "RocStr.eq: equal" {
