@@ -447,9 +447,9 @@ mod test_reporting {
                 these names seem close though:
 
                     baz
-                    Map
                     Str
                     main
+                    F64
                 "#
             ),
         )
@@ -1374,7 +1374,7 @@ mod test_reporting {
                     Bool
                     F64
                     Num
-                    Map
+                    Set
                 "#
             ),
         )
@@ -1830,7 +1830,7 @@ mod test_reporting {
                     f
                     F64
                     Num
-                    Map
+                    Set
                "#
             ),
         )
@@ -3534,8 +3534,8 @@ mod test_reporting {
 
                     Bool
                     Num
-                    Map
                     Set
+                    Str
                 "#
             ),
         )
