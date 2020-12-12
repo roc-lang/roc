@@ -178,22 +178,23 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     },
                 );
 
-                //update orthographic buffer according to new window size
+                // update orthographic buffer according to new window size
                 let new_uniforms = Uniforms::new(size.width, size.height);
 
                 let new_ortho_buffer =
                     gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Ortho Uniform Buffer"),
+                        label: Some("Ortho uniform buffer"),
                         contents: bytemuck::cast_slice(&[new_uniforms]),
                         usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_SRC,
                     });
 
-                // Get a command encoder for the current frame
+                // get a command encoder for the current frame
                 let mut encoder =
                     gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("Resize"),
                     });
 
+                // overwrite the new buffer over the old one
                 encoder.copy_buffer_to_buffer(
                     &new_ortho_buffer,
                     0,
@@ -301,12 +302,14 @@ fn make_rect_pipeline(
 ) -> (wgpu::RenderPipeline, BindGroup, Buffer) {
     let uniforms = Uniforms::new(swap_chain_descr.width, swap_chain_descr.height);
 
+    // orthographic projection is used to transfrom pixel coords to the coordinate system used by wgpu
     let ortho_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Ortho Uniform Buffer"),
+        label: Some("Ortho uniform buffer"),
         contents: bytemuck::cast_slice(&[uniforms]),
         usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
     });
 
+    // bind groups consist of extra resources that are provided to the shaders
     let ortho_bind_group_layout = gpu_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         entries: &[BindGroupLayoutEntry {
             binding: 0,
@@ -317,7 +320,7 @@ fn make_rect_pipeline(
             },
             count: None,
         }],
-        label: None,
+        label: Some("Ortho bind group layout"),
     });
 
     let ortho_bind_group = gpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -326,13 +329,13 @@ fn make_rect_pipeline(
             binding: 0,
             resource: wgpu::BindingResource::Buffer(ortho_buffer.slice(..)),
         }],
-        label: Some("ortho_bind_group"),
+        label: Some("Ortho bind group"),
     });
 
     let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         bind_group_layouts: &[&ortho_bind_group_layout],
         push_constant_ranges: &[],
-        label: Some("Rectangle Pipeline Layout"),
+        label: Some("Rectangle pipeline layout"),
     });
     let pipeline = create_render_pipeline(
         &gpu_device,
@@ -358,7 +361,7 @@ fn create_render_pipeline(
     let fs_module = device.create_shader_module(fs_src);
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
+        label: Some("Render pipeline"),
         layout: Some(&layout),
         vertex_stage: wgpu::ProgrammableStageDescriptor {
             module: &vs_module,

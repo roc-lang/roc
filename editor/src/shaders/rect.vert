@@ -4,6 +4,7 @@
 // https://github.com/cloudhead/rgx by Alexis Sellier, licensed under the MIT license
 
 layout(set = 0, binding = 0) uniform Globals {
+    // orthographic projection is used to transform pixel coords to the coordinate system used by wgpu 
 	mat4 ortho;
 } global;
 
