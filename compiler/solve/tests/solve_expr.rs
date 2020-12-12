@@ -1322,21 +1322,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn annotation_using_int() {
-        infer_eq(
-            indoc!(
-                r#"
-                   int : I64
-
-                   int
-                "#
-            ),
-            "I64",
-        );
-    }
-
-    #[test]
-    fn annotation_using_num_integer() {
+    fn qualified_annotation_num_integer() {
         infer_eq(
             indoc!(
                 r#"
@@ -1348,44 +1334,12 @@ mod solve_expr {
             "I64",
         );
     }
-
     #[test]
-    fn annotated_int() {
-        infer_eq(
-            indoc!(
-                r#"
-                   int : I64
-                   int = 5
-
-                   int
-                "#
-            ),
-            "I64",
-        );
-    }
-
-    #[test]
-    fn qualified_annotated_int() {
-        infer_eq(
-            indoc!(
-                r#"
-                   int : Num.I64
-                   int = 5
-
-                   int
-                "#
-            ),
-            "I64",
-        );
-    }
-
-    #[test]
-    fn annotated_num_integer() {
+    fn annotation_num_integer() {
         infer_eq(
             indoc!(
                 r#"
                    int : Num Integer
-                   int = 5
 
                    int
                 "#
@@ -1395,14 +1349,80 @@ mod solve_expr {
     }
 
     #[test]
-    fn qualified_annotated_num_integer() {
+    fn qualified_annotation_using_i128() {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Num.Integer
-                   int = 5
+                int : Num.I128
 
-                   int
+                int
+                "#
+            ),
+            "I128",
+        );
+    }
+    #[test]
+    fn annotation_using_i128() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : I128
+
+                int
+                "#
+            ),
+            "I128",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_u128() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.U128
+
+                int
+                "#
+            ),
+            "U128",
+        );
+    }
+    #[test]
+    fn annotation_using_u128() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : U128
+
+                int
+                "#
+            ),
+            "U128",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_i64() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.I64
+
+                int
+                "#
+            ),
+            "I64",
+        );
+    }
+    #[test]
+    fn annotation_using_i64() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : I64
+
+                int
                 "#
             ),
             "I64",
@@ -1410,11 +1430,200 @@ mod solve_expr {
     }
 
     #[test]
-    fn annotation_using_float() {
+    fn qualified_annotation_using_u64() {
         infer_eq(
             indoc!(
                 r#"
-                   float : F64
+                int : Num.U64
+
+                int
+                "#
+            ),
+            "U64",
+        );
+    }
+    #[test]
+    fn annotation_using_u64() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : U64
+
+                int
+                "#
+            ),
+            "U64",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_i32() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.I32
+
+                int
+                "#
+            ),
+            "I32",
+        );
+    }
+    #[test]
+    fn annotation_using_i32() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : I32
+
+                int
+                "#
+            ),
+            "I32",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_u32() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.U32
+
+                int
+                "#
+            ),
+            "U32",
+        );
+    }
+    #[test]
+    fn annotation_using_u32() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : U32
+
+                int
+                "#
+            ),
+            "U32",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_i16() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.I16
+
+                int
+                "#
+            ),
+            "I16",
+        );
+    }
+    #[test]
+    fn annotation_using_i16() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : I16
+
+                int
+                "#
+            ),
+            "I16",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_u16() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.U16
+
+                int
+                "#
+            ),
+            "U16",
+        );
+    }
+    #[test]
+    fn annotation_using_u16() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : U16
+
+                int
+                "#
+            ),
+            "U16",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_i8() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.I8
+
+                int
+                "#
+            ),
+            "I8",
+        );
+    }
+    #[test]
+    fn annotation_using_i8() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : I8
+
+                int
+                "#
+            ),
+            "I8",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_using_u8() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : Num.U8
+
+                int
+                "#
+            ),
+            "U8",
+        );
+    }
+    #[test]
+    fn annotation_using_u8() {
+        infer_eq(
+            indoc!(
+                r#"
+                int : U8
+
+                int
+                "#
+            ),
+            "U8",
+        );
+    }
+
+    #[test]
+    fn qualified_annotation_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num.Num Num.FloatingPoint
 
                    float
                 "#
@@ -1422,9 +1631,8 @@ mod solve_expr {
             "F64",
         );
     }
-
     #[test]
-    fn annotation_using_num_floatingpoint() {
+    fn annotation_num_floatingpoint() {
         infer_eq(
             indoc!(
                 r#"
@@ -1438,12 +1646,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn qualified_annotated_float() {
+    fn qualified_annotation_f64() {
         infer_eq(
             indoc!(
                 r#"
                    float : Num.F64
-                   float = 5.5
 
                    float
                 "#
@@ -1451,14 +1658,12 @@ mod solve_expr {
             "F64",
         );
     }
-
     #[test]
-    fn annotated_float() {
+    fn annotation_f64() {
         infer_eq(
             indoc!(
                 r#"
                    float : F64
-                   float = 5.5
 
                    float
                 "#
@@ -1468,17 +1673,29 @@ mod solve_expr {
     }
 
     #[test]
-    fn annotated_num_floatingpoint() {
+    fn qualified_annotation_f32() {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num FloatingPoint
-                   float = 5.5
+                   float : Num.F32
 
                    float
                 "#
             ),
-            "F64",
+            "F32",
+        );
+    }
+    #[test]
+    fn annotation_f32() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : F32
+
+                   float
+                "#
+            ),
+            "F32",
         );
     }
 
@@ -1564,21 +1781,6 @@ mod solve_expr {
                 "#
             ),
             "Result I64 Str",
-        );
-    }
-
-    #[test]
-    fn qualified_annotated_num_floatingpoint() {
-        infer_eq(
-            indoc!(
-                r#"
-                   float : Num.Num Num.FloatingPoint
-                   float = 5.5
-
-                   float
-                "#
-            ),
-            "F64",
         );
     }
 
