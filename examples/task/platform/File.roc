@@ -1,6 +1,8 @@
 interface File
-    exposes [ Err, readUtf8,  ]
-    imports [ Task.{ Task }, Effect.{ after }, Path.{ Path } ]
+    exposes [ FileReadErr, FileOpenErr, FileWriteErr, DirReadErr, readUtf8 ]
+    imports [ Task.{ Task }, Effect.{ after }, Path ]
+
+Path : Path.Path
 
 # These various file errors come from the POSIX errno values - see
 # http://www.virtsync.com/c-error-codes-include-errno for the actual codes, and
@@ -57,18 +59,18 @@ FileWriteErr a :
 #    Effect.readBytes (Path.toStr path)
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-readUtf8 : Path -> Task Str (FileReadErr [ BadUtf8 ]*)
+readUtf8 : Path -> Task.Task Str (FileReadErr [ BadUtf8 ]*)
 readUtf8 = \path ->
-   Effect.map (Effect.readAllUtf8 (Path.toStr path)) \answer ->
-      # errno values - see
-      # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
-      when answer.errno is
-          0 -> Ok answer.bytes # TODO use Str.fromUtf8 to validate a byte list as UTF-8 and return (Err BadUtf8) if validation fails
-          1 -> Err (PermissionDenied path)
-          2 -> Err (FileNotFound path)
-          19 -> Err (FileWasDir path)
-          # TODO handle other errno scenarios that could come up
-          _ -> Err (UnknownError errno path)
+    Effect.map (Effect.readAllUtf8 (Path.toStr path)) \answer ->
+        # errno values - see
+        # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
+        when answer.errno is
+            0 -> Ok answer.bytes # TODO use Str.fromUtf8 to validate a byte list as UTF-8 and return (Err BadUtf8) if validation fails
+            1 -> Err (PermissionDenied path)
+            2 -> Err (FileNotFound path)
+            19 -> Err (FileWasDir path)
+            # TODO handle other errno scenarios that could come up
+            _ -> Err (UnknownError answer.errno path)
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##
