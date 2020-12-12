@@ -1773,7 +1773,7 @@ fn update<'a>(
                 .notify(module_id, Phase::MakeSpecializations);
 
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
-                debug_assert!(work.is_empty());
+                debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
