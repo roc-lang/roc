@@ -833,13 +833,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
-    // empty : Attr * (Map k v)
+    // empty : Attr * (Dict k v)
     add_type(Symbol::DICT_EMPTY, {
         let_tvars! { star, k , v };
         dict_type(star, k, v)
     });
 
-    // singleton : k, v -> Attr * (Map k v)
+    // singleton : k, v -> Attr * (Dict k v)
     add_type(Symbol::DICT_SINGLETON, {
         let_tvars! { star, k , v };
         unique_function(vec![flex(k), flex(v)], dict_type(star, k, v))
@@ -856,7 +856,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ],
     );
 
-    // get : Attr (* | u) (Map (Attr * key) (Attr u val))
+    // get : Attr (* | u) (Dict (Attr * key) (Attr u val))
     //     , Attr * key
     //    -> Attr * (Result (Attr u val) [ KeyNotFound ]*)
     add_type(Symbol::DICT_GET, {
@@ -889,10 +889,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // insert : Attr * (Map key value)
+    // insert : Attr * (Dict key value)
     //        , key
     //        , value
-    //        , Attr * (Map key value)
+    //        , Attr * (Dict key value)
     add_type(Symbol::DICT_INSERT, {
         let_tvars! { star1, star2, key, value };
 
