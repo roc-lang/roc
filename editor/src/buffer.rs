@@ -39,10 +39,6 @@ impl QuadBufferBuilder {
         max_y: f32,
         color: [f32; 3],
     ) -> Self {
-        // println!("min_x {:?}", min_x);
-        // println!("min_y {:?}", min_y);
-        // println!("max_x {:?}", max_x);
-        // println!("max_y {:?}", max_y);
         self.vertex_data.extend(&[
             Vertex {
                 position: (min_x, min_y).into(),
@@ -99,6 +95,12 @@ pub fn create_rect_buffers(
         height: 300.0,
         color: [1.0, 0.0, 0.0],
     };
+    let test_rect_2 = Rect {
+        top_left_coords: (400.0, 300.0).into(),
+        width: 400.0,
+        height: 300.0,
+        color: [0.0, 0.0, 1.0],
+    };
 
     let vertex_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -119,6 +121,7 @@ pub fn create_rect_buffers(
     let num_rects = {
         let (stg_vertex, stg_index, num_indices) = QuadBufferBuilder::new()
             .push_rect(&test_rect_1)
+            .push_rect(&test_rect_2)
             .build(&gpu_device);
 
         stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
