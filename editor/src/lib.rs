@@ -71,7 +71,7 @@ impl Uniforms {
                 far: 1.0,
             }
             .into();
-
+            println!("{:?}", ortho);
         Self {
             ortho: ortho.into(),
         }
@@ -124,6 +124,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     // Prepare swap chain
     let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
     let mut size = window.inner_size();
+    println!("size: {:?}", size);
 
     let swap_chain_descr = wgpu::SwapChainDescriptor {
         usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
@@ -229,7 +230,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 if rect_buffers.num_rects > 0 {
                     render_pass.set_pipeline(&rect_pipeline);
-                    render_pass.set_bind_group(1, &ortho_bind_group, &[]);
+                    render_pass.set_bind_group(0, &ortho_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
                     render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
                     render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
@@ -314,7 +315,7 @@ fn make_rect_pipeline(
             &ortho_bind_group_layout
         ],
         push_constant_ranges: &[],
-        label: Some("Pipeline Layout"),
+        label: Some("Rectangle Pipeline Layout"),
     });
     let pipeline = create_render_pipeline(
         &gpu_device,

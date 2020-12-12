@@ -24,9 +24,9 @@ impl QuadBufferBuilder {
         let coords = rect.top_left_coords;
         self.push_quad(
             coords.x,
-            coords.y - rect.height,
-            coords.x + rect.width,
             coords.y,
+            coords.x + rect.width,
+            coords.y + rect.height,
             rect.color,
         )
     }
@@ -39,6 +39,10 @@ impl QuadBufferBuilder {
         max_y: f32,
         color: [f32; 3],
     ) -> Self {
+        // println!("min_x {:?}", min_x);
+        // println!("min_y {:?}", min_y);
+        // println!("max_x {:?}", max_x);
+        // println!("max_y {:?}", max_y);
         self.vertex_data.extend(&[
             Vertex {
                 position: (min_x, min_y).into(),
@@ -90,21 +94,9 @@ pub fn create_rect_buffers(
 ) -> RectBuffers {
     // Test Rectangles
     let test_rect_1 = Rect {
-        top_left_coords: (-0.2, 0.6).into(),
-        width: 0.1,
-        height: 0.5,
-        color: [0.0, 0.0, 1.0],
-    };
-    let test_rect_2 = Rect {
-        top_left_coords: (-0.5, 0.0).into(),
-        width: 0.5,
-        height: 0.5,
-        color: [0.0, 1.0, 0.0],
-    };
-    let test_rect_3 = Rect {
-        top_left_coords: (0.3, 0.3).into(),
-        width: 0.6,
-        height: 0.1,
+        top_left_coords: (0.0, 0.0).into(),
+        width: 400.0,
+        height: 300.0,
         color: [1.0, 0.0, 0.0],
     };
 
@@ -127,8 +119,6 @@ pub fn create_rect_buffers(
     let num_rects = {
         let (stg_vertex, stg_index, num_indices) = QuadBufferBuilder::new()
             .push_rect(&test_rect_1)
-            .push_rect(&test_rect_2)
-            .push_rect(&test_rect_3)
             .build(&gpu_device);
 
         stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
