@@ -8,7 +8,7 @@ platform folkertdev/foo
         {
             putChar : I64 -> Effect {},
             putLine : Str -> Effect {},
-            getLine : {} -> Effect Str
+            getLine : Effect Str
         }
 
 

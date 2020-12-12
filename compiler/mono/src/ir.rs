@@ -4758,6 +4758,8 @@ fn reuse_function_symbol<'a>(
                         .from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
 
+                    add_needed_external(procs, env, arg_var, original);
+
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
@@ -4765,6 +4767,11 @@ fn reuse_function_symbol<'a>(
                         layout.clone(),
                         layout_cache,
                     );
+
+                    // an imported symbol is always a function pointer:
+                    // either it's a function, or a top-level 0-argument thunk
+                    let expr = Expr::FunctionPointer(original, layout.clone());
+                    return Stmt::Let(original, expr, layout, env.arena.alloc(result));
                 }
                 _ => {
                     // danger: a foreign symbol may not be specialized!

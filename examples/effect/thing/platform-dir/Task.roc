@@ -10,8 +10,8 @@ always = \x -> Effect.always (Ok x)
 fail : err -> Task * err
 fail = \x -> Effect.always (Err x)
 
-getLine : {} -> Task Str *
-getLine = \{} -> Effect.after (Effect.getLine {}) always
+getLine : Task Str *
+getLine = Effect.after Effect.getLine always
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
