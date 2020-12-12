@@ -6,12 +6,11 @@ platform folkertdev/foo
     provides [ mainForHost ]
     effects Effect
         {
-            putLine : Str -> Effect {}
+            putChar : I64 -> Effect {},
+            putLine : Str -> Effect {},
+            getLine : {} -> Effect Str
         }
 
-
-# putChar : I64 -> Effect {},
-# getLine : Effect Str
 
 mainForHost : Task.Task {} F64 as Fx
 mainForHost = main
