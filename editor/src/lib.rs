@@ -11,17 +11,21 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-// Inspired by https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen, licensed under the MIT license
+// Inspired by:
+// https://github.com/sotrh/learn-wgpu by Benjamin Hansen, licensed under the MIT license
+// https://github.com/cloudhead/rgx by Alexis Sellier, licensed under the MIT license
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
 use crate::buffer::create_rect_buffers;
 use crate::text::{build_glyph_brush, Text};
 use crate::vertex::Vertex;
+use cgmath::Ortho;
 use std::error::Error;
 use std::io;
 use std::path::Path;
+use wgpu::util::DeviceExt;
+use wgpu::{BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, ShaderStage};
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
@@ -44,6 +48,31 @@ pub fn launch(_filepaths: &[&Path]) -> io::Result<()> {
     run_event_loop().expect("Error running event loop");
 
     Ok(())
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    // We can't use cgmath with bytemuck directly so we'll have
+    // to convert the Matrix4 into a 4x4 f32 array
+    ortho: [[f32; 4]; 4],
+}
+
+impl Uniforms {
+    fn new(w: u32, h: u32) -> Self {
+        let ortho: cgmath::Matrix4<f32> = Ortho::<f32> {
+            left: 0.0,
+            right: w as f32,
+            bottom: h as f32,
+            top: 0.0,
+            near: -1.0,
+            far: 1.0,
+        }
+        .into();
+        Self {
+            ortho: ortho.into(),
+        }
+    }
 }
 
 fn run_event_loop() -> Result<(), Box<dyn Error>> {
@@ -103,7 +132,8 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
 
-    let rect_pipeline = make_rect_pipeline(&gpu_device, &swap_chain_descr);
+    let (rect_pipeline, ortho_bind_group, ortho_buffer) =
+        make_rect_pipeline(&gpu_device, &swap_chain_descr);
 
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
@@ -124,10 +154,12 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
         }
 
         match event {
+            //Close
             Event::WindowEvent {
                 event: event::WindowEvent::CloseRequested,
                 ..
             } => *control_flow = winit::event_loop::ControlFlow::Exit,
+            //Resize
             Event::WindowEvent {
                 event: event::WindowEvent::Resized(new_size),
                 ..
@@ -145,13 +177,43 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         present_mode: wgpu::PresentMode::Immediate,
                     },
                 );
+
+                // update orthographic buffer according to new window size
+                let new_uniforms = Uniforms::new(size.width, size.height);
+
+                let new_ortho_buffer =
+                    gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Ortho uniform buffer"),
+                        contents: bytemuck::cast_slice(&[new_uniforms]),
+                        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_SRC,
+                    });
+
+                // get a command encoder for the current frame
+                let mut encoder =
+                    gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Resize"),
+                    });
+
+                // overwrite the new buffer over the old one
+                encoder.copy_buffer_to_buffer(
+                    &new_ortho_buffer,
+                    0,
+                    &ortho_buffer,
+                    0,
+                    (std::mem::size_of::<Uniforms>() * vec![new_uniforms].as_slice().len())
+                        as wgpu::BufferAddress,
+                );
+
+                cmd_queue.submit(Some(encoder.finish()));
             }
+            //Received Character
             Event::WindowEvent {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
                 update_text_state(&mut text_state, &ch);
             }
+            //Keyboard Input
             Event::WindowEvent {
                 event: event::WindowEvent::KeyboardInput { input, .. },
                 ..
@@ -164,6 +226,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     );
                 }
             }
+            //Modifiers Changed
             Event::WindowEvent {
                 event: event::WindowEvent::ModifiersChanged(modifiers),
                 ..
@@ -195,9 +258,10 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 });
 
                 if rect_buffers.num_rects > 0 {
+                    render_pass.set_pipeline(&rect_pipeline);
+                    render_pass.set_bind_group(0, &ortho_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
                     render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-                    render_pass.set_pipeline(&rect_pipeline);
                     render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
                 }
 
@@ -235,11 +299,43 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 fn make_rect_pipeline(
     gpu_device: &wgpu::Device,
     swap_chain_descr: &wgpu::SwapChainDescriptor,
-) -> wgpu::RenderPipeline {
+) -> (wgpu::RenderPipeline, BindGroup, Buffer) {
+    let uniforms = Uniforms::new(swap_chain_descr.width, swap_chain_descr.height);
+
+    // orthographic projection is used to transfrom pixel coords to the coordinate system used by wgpu
+    let ortho_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Ortho uniform buffer"),
+        contents: bytemuck::cast_slice(&[uniforms]),
+        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+    });
+
+    // bind groups consist of extra resources that are provided to the shaders
+    let ortho_bind_group_layout = gpu_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStage::VERTEX,
+            ty: wgpu::BindingType::UniformBuffer {
+                dynamic: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+        label: Some("Ortho bind group layout"),
+    });
+
+    let ortho_bind_group = gpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: &ortho_bind_group_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(ortho_buffer.slice(..)),
+        }],
+        label: Some("Ortho bind group"),
+    });
+
     let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        bind_group_layouts: &[],
+        bind_group_layouts: &[&ortho_bind_group_layout],
         push_constant_ranges: &[],
-        label: Some("Pipeline Layout"),
+        label: Some("Rectangle pipeline layout"),
     });
     let pipeline = create_render_pipeline(
         &gpu_device,
@@ -250,7 +346,7 @@ fn make_rect_pipeline(
         wgpu::include_spirv!("shaders/rect.frag.spv"),
     );
 
-    pipeline
+    (pipeline, ortho_bind_group, ortho_buffer)
 }
 
 fn create_render_pipeline(
@@ -265,7 +361,7 @@ fn create_render_pipeline(
     let fs_module = device.create_shader_module(fs_src);
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
+        label: Some("Render pipeline"),
         layout: Some(&layout),
         vertex_stage: wgpu::ProgrammableStageDescriptor {
             module: &vs_module,
