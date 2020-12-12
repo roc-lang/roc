@@ -37,6 +37,19 @@ pub fn can_problem<'b>(
             alloc.module(module_id),
             alloc.reflow(" isn't used, you don't need to import it."),
         ]),
+        Problem::ExposedButNotDefined(symbol) => {
+            alloc.stack(vec![
+                alloc
+                    .symbol_unqualified(symbol)
+                    .append(alloc.reflow(" is listed as exposed, but it isn't defined in this module.")),
+                alloc
+                    .reflow("You can fix this by adding a definition for ")
+                    .append(alloc.symbol_unqualified(symbol))
+                    .append(alloc.reflow(", or by removing it from "))
+                    .append(alloc.keyword("exposes"))
+                    .append(alloc.reflow("."))
+            ])
+        }
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
 

@@ -305,8 +305,15 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn module(&'a self, module_id: ModuleId) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", self.interns.module_name(module_id)))
-            .annotate(Annotation::Module)
+        let name = self.interns.module_name(module_id);
+        let name = if name.is_empty() {
+            // Render the app module as "app"
+            "app".to_string()
+        } else {
+            name.to_string()
+        };
+
+        self.text(name).annotate(Annotation::Module)
     }
 
     pub fn inlinable_string(&'a self, s: InlinableString) -> DocBuilder<'a, Self, Annotation> {

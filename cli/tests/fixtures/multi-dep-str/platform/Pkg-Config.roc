@@ -3,5 +3,8 @@ platform examples/multi-module
     exposes []
     packages {}
     imports []
-    provides [ main ]
+    provides [ mainForHost ]
     effects Effect {}
+
+mainForHost : Str
+mainForHost = main

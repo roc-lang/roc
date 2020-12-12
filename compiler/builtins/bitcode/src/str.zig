@@ -1,10 +1,16 @@
 const std = @import("std");
 const mem = std.mem;
+const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const Allocator = mem.Allocator;
 const unicode = std.unicode;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
+
+const InPlace = packed enum(u8) {
+    InPlace,
+    Clone,
+};
 
 const RocStr = extern struct {
     str_bytes: ?[*]u8,
@@ -49,11 +55,38 @@ const RocStr = extern struct {
 
             return ret_small_str;
         } else {
-            var result = allocateStr(allocator, u64, InPlace.Clone, length);
+            var result = RocStr.initBig(allocator, u64, InPlace.Clone, length);
 
             @memcpy(@ptrCast([*]u8, result.str_bytes), bytes_ptr, length);
 
             return result;
+        }
+    }
+
+    pub fn initBig(allocator: *Allocator, comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
+        const length = @sizeOf(T) + number_of_chars;
+        var new_bytes: []T = allocator.alloc(T, length) catch unreachable;
+
+        if (in_place == InPlace.InPlace) {
+            new_bytes[0] = @intCast(T, number_of_chars);
+        } else {
+            new_bytes[0] = std.math.minInt(T);
+        }
+
+        var first_element = @ptrCast([*]align(@alignOf(T)) u8, new_bytes);
+        first_element += @sizeOf(usize);
+
+        return RocStr{
+            .str_bytes = first_element,
+            .str_len = number_of_chars,
+        };
+    }
+
+    pub fn deinit(self: RocStr, allocator: *Allocator) void {
+        if (!self.isSmallStr() and !self.isEmpty()) {
+            const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
+            const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
+            allocator.free(str_bytes);
         }
     }
 
@@ -73,15 +106,6 @@ const RocStr = extern struct {
                 .str_bytes = new_bytes_ptr,
                 .str_len = length,
             };
-        }
-    }
-
-    pub fn deinit(self: RocStr, allocator: *Allocator) void {
-        if (!self.isSmallStr() and !self.isEmpty()) {
-            const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
-
-            const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
-            allocator.free(str_bytes);
         }
     }
 
@@ -120,6 +144,22 @@ const RocStr = extern struct {
         }
 
         return true;
+    }
+
+    pub fn clone(allocator: *Allocator, comptime T: type, in_place: InPlace, str: RocStr) RocStr {
+        if (str.isSmallStr() or str.isEmpty()) {
+            // just return the bytes
+            return str;
+        } else {
+            var new_str = RocStr.initBig(allocator, T, in_place, str.str_len);
+
+            var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
+            var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
+
+            @memcpy(new_bytes, old_bytes, str.str_len);
+
+            return new_str;
+        }
     }
 
     pub fn isSmallStr(self: RocStr) bool {
@@ -178,8 +218,7 @@ const RocStr = extern struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(testing.allocator, str2_ptr, str2_len);
 
-        // TODO: fix those tests
-        // expect(roc_str1.eq(roc_str2));
+        expect(roc_str1.eq(roc_str2));
 
         roc_str1.deinit(testing.allocator);
         roc_str2.deinit(testing.allocator);
@@ -220,8 +259,7 @@ const RocStr = extern struct {
             roc_str2.deinit(testing.allocator);
         }
 
-        // TODO: fix those tests
-        // expect(!roc_str1.eq(roc_str2));
+        expect(!roc_str1.eq(roc_str2));
     }
 };
 
@@ -236,9 +274,9 @@ pub fn strFromIntC(int: i64) callconv(.C) RocStr {
     return strFromInt(std.heap.c_allocator, int);
 }
 
-inline fn strFromInt(allocator: *Allocator, int: i64) RocStr {
+fn strFromInt(allocator: *Allocator, int: i64) RocStr {
     // prepare for having multiple integer types in the future
-    return strFromIntHelp(allocator, i64, int);
+    return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ allocator, i64, int });
 }
 
 fn strFromIntHelp(allocator: *Allocator, comptime T: type, int: T) RocStr {
@@ -259,10 +297,10 @@ fn strFromIntHelp(allocator: *Allocator, comptime T: type, int: T) RocStr {
 // Str.split
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
 pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
-    strSplitInPlace(std.heap.c_allocator, array, string, delimiter);
+    return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ std.heap.c_allocator, array, string, delimiter });
 }
 
-inline fn strSplitInPlace(allocator: *Allocator, array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
+fn strSplitInPlace(allocator: *Allocator, array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     var ret_array_index: usize = 0;
     var slice_start_index: usize = 0;
     var str_index: usize = 0;
@@ -765,10 +803,10 @@ test "endsWith: hello world ends with world" {
 // Str.concat
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
 pub fn strConcatC(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
-    return strConcat(std.heap.c_allocator, ptr_size, result_in_place, arg1, arg2);
+    return @call(.{ .modifier = always_inline }, strConcat, .{ std.heap.c_allocator, ptr_size, result_in_place, arg1, arg2 });
 }
 
-inline fn strConcat(allocator: *Allocator, ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
+fn strConcat(allocator: *Allocator, ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     return switch (ptr_size) {
         4 => strConcatHelp(allocator, i32, result_in_place, arg1, arg2),
         8 => strConcatHelp(allocator, i64, result_in_place, arg1, arg2),
@@ -778,9 +816,9 @@ inline fn strConcat(allocator: *Allocator, ptr_size: u32, result_in_place: InPla
 
 fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
-        return cloneStr(allocator, T, result_in_place, arg2);
+        return RocStr.clone(allocator, T, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
-        return cloneStr(allocator, T, result_in_place, arg1);
+        return RocStr.clone(allocator, T, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();
 
@@ -788,7 +826,7 @@ fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPla
         const result_is_big = combined_length >= small_str_bytes;
 
         if (result_is_big) {
-            var result = allocateStr(allocator, T, result_in_place, combined_length);
+            var result = RocStr.initBig(allocator, T, result_in_place, combined_length);
 
             {
                 const old_if_small = &@bitCast([16]u8, arg1);
@@ -840,46 +878,6 @@ fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPla
 
         return result;
     }
-}
-
-const InPlace = packed enum(u8) {
-    InPlace,
-    Clone,
-};
-
-fn cloneStr(allocator: *Allocator, comptime T: type, in_place: InPlace, str: RocStr) RocStr {
-    if (str.isSmallStr() or str.isEmpty()) {
-        // just return the bytes
-        return str;
-    } else {
-        var new_str = allocateStr(allocator, T, in_place, str.str_len);
-
-        var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
-        var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
-
-        @memcpy(new_bytes, old_bytes, str.str_len);
-
-        return new_str;
-    }
-}
-
-fn allocateStr(allocator: *Allocator, comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
-    const length = @sizeOf(T) + number_of_chars;
-    var new_bytes: []T = allocator.alloc(T, length) catch unreachable;
-
-    if (in_place == InPlace.InPlace) {
-        new_bytes[0] = @intCast(T, number_of_chars);
-    } else {
-        new_bytes[0] = std.math.minInt(T);
-    }
-
-    var first_element = @ptrCast([*]align(@alignOf(T)) u8, new_bytes);
-    first_element += @sizeOf(usize);
-
-    return RocStr{
-        .str_bytes = first_element,
-        .str_len = number_of_chars,
-    };
 }
 
 test "RocStr.concat: small concat small" {

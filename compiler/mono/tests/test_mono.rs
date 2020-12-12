@@ -2278,8 +2278,7 @@ mod test_mono {
                     ret Test.3;
 
                 procedure Test.3 (Test.11, #Attr.12):
-                    let Test.2 = Index 0 #Attr.12;
-                    ret Test.2;
+                    ret #Attr.12;
 
                 procedure Test.0 ():
                     let Test.10 = Struct {};
@@ -2328,8 +2327,7 @@ mod test_mono {
                     ret Test.10;
 
                 procedure Test.3 (Test.9, #Attr.12):
-                    let Test.2 = Index 0 #Attr.12;
-                    ret Test.2;
+                    ret #Attr.12;
 
                 procedure Test.0 ():
                     let Test.8 = Struct {};
