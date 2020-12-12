@@ -157,7 +157,7 @@ impl Dependencies {
         output
     }
 
-    pub fn add_platform_module(
+    pub fn add_effect_module(
         &mut self,
         module_id: ModuleId,
         dependencies: &MutSet<ModuleId>,
@@ -1580,7 +1580,7 @@ fn update<'a>(
                 .constrained
                 .insert(module_id, constrained_module);
 
-            let mut work = state.dependencies.add_platform_module(
+            let mut work = state.dependencies.add_effect_module(
                 module_id,
                 &MutSet::default(),
                 state.goal_phase,
@@ -1773,7 +1773,7 @@ fn update<'a>(
                 .notify(module_id, Phase::MakeSpecializations);
 
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
-                debug_assert!(work.is_empty());
+                debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
@@ -3183,17 +3183,7 @@ fn canonicalize_and_constrain<'a>(
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
 
     match canonicalized {
-        Ok(mut module_output) => {
-            // Add builtin defs (e.g. List.get) to the module's defs
-            let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
-            let references = &module_output.references;
-
-            for (symbol, def) in builtin_defs {
-                if references.contains(&symbol) {
-                    module_output.declarations.push(Declaration::Builtin(def));
-                }
-            }
-
+        Ok(module_output) => {
             let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
 
             let module = Module {

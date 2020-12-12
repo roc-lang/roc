@@ -425,14 +425,6 @@ impl<'a> Procs<'a> {
             .from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        if let Some(existing) = self.partial_procs.get(&symbol) {
-            // only assert that we're really adding the same thing
-            debug_assert_eq!(annotation, existing.annotation);
-            debug_assert_eq!(captured_symbols, existing.captured_symbols);
-            debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
-            return Ok(layout);
-        }
-
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
@@ -451,33 +443,38 @@ impl<'a> Procs<'a> {
                 if !already_specialized {
                     let pending = PendingSpecialization::from_var(env.subs, annotation);
 
-                    let pattern_symbols = pattern_symbols.into_bump_slice();
+                    let partial_proc;
+                    if let Some(existing) = self.partial_procs.get(&symbol) {
+                        // if we're adding the same partial proc twice, they must be the actual same!
+                        //
+                        // NOTE we can't skip extra work! we still need to make the specialization for this
+                        // invocation. The content of the `annotation` can be different, even if the variable
+                        // number is the same
+                        debug_assert_eq!(annotation, existing.annotation);
+                        debug_assert_eq!(captured_symbols, existing.captured_symbols);
+                        debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
+
+                        partial_proc = existing.clone();
+                    } else {
+                        let pattern_symbols = pattern_symbols.into_bump_slice();
+
+                        partial_proc = PartialProc {
+                            annotation,
+                            pattern_symbols,
+                            captured_symbols,
+                            body: body.value,
+                            is_self_recursive,
+                        };
+                    }
+
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout.clone(), pending);
 
-                            self.partial_procs.insert(
-                                symbol,
-                                PartialProc {
-                                    annotation,
-                                    pattern_symbols,
-                                    captured_symbols,
-                                    body: body.value,
-                                    is_self_recursive,
-                                },
-                            );
+                            self.partial_procs.insert(symbol, partial_proc);
                         }
                         None => {
-                            // TODO should pending_procs hold a Rc<Proc>?
-                            let partial_proc = PartialProc {
-                                annotation,
-                                pattern_symbols,
-                                captured_symbols,
-                                body: body.value,
-                                is_self_recursive,
-                            };
-
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
@@ -1245,6 +1242,10 @@ fn patterns_to_when<'a>(
     // patterns that are not yet in a when (e.g. in let or function arguments) must be irrefutable
     // to pass type checking. So the order in which we add them to the body does not matter: there
     // are only stores anyway, no branches.
+    //
+    // NOTE this fails if the pattern contains rigid variables,
+    // see https://github.com/rtfeldman/roc/issues/786
+    // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
         let mono_pattern = from_can_pattern(env, layout_cache, &pattern.value);
@@ -1404,7 +1405,7 @@ pub fn specialize_all<'a>(
         let partial_proc = match procs.partial_procs.get(&name) {
             Some(v) => v.clone(),
             None => {
-                unreachable!("now this is an error");
+                panic!("Cannot find a partial proc for {:?}", name);
             }
         };
 
@@ -1614,45 +1615,111 @@ fn specialize_external<'a>(
             ret_layout,
         } => {
             // unpack the closure symbols, if any
-            if let CapturedSymbols::Captured(captured) = captured_symbols {
-                let mut layouts = Vec::with_capacity_in(captured.len(), env.arena);
+            match (opt_closure_layout.clone(), captured_symbols) {
+                (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
+                    debug_assert!(!captured.is_empty());
 
-                for (_, variable) in captured.iter() {
-                    let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
-                    layouts.push(layout);
-                }
+                    let wrapped = closure_layout.get_wrapped();
 
-                let field_layouts = layouts.into_bump_slice();
+                    let internal_layout = closure_layout.internal_layout();
 
-                let wrapped = match &opt_closure_layout {
-                    Some(x) => x.get_wrapped(),
-                    None => unreachable!("symbols are captured, so this must be a closure"),
-                };
+                    match internal_layout {
+                        Layout::Union(_) => {
+                            // here we rely on the fact that a union in a closure would be stored in a one-element record
+                            // a closure layout that is a union must be a of the shape `Closure1 ... | Closure2 ...`
+                            let tag_layout = closure_layout.as_named_layout(proc_name);
 
-                for (index, (symbol, variable)) in captured.iter().enumerate() {
-                    // layout is cached anyway, re-using the one found above leads to
-                    // issues (combining by-ref and by-move in pattern match
-                    let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+                            match tag_layout {
+                                Layout::Struct(field_layouts) => {
+                                    // NOTE closure unions do not store the tag!
+                                    let field_layouts = &field_layouts[1..];
 
-                    // if the symbol has a layout that is dropped from data structures (e.g. `{}`)
-                    // then regenerate the symbol here. The value may not be present in the closure
-                    // data struct
-                    let expr = {
-                        if layout.is_dropped_because_empty() {
-                            Expr::Struct(&[])
-                        } else {
-                            Expr::AccessAtIndex {
-                                index: index as _,
-                                field_layouts,
-                                structure: Symbol::ARG_CLOSURE,
-                                wrapped,
+                                    // TODO check for field_layouts.len() == 1 and do a rename in that case?
+                                    for (index, (symbol, _variable)) in captured.iter().enumerate()
+                                    {
+                                        // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
+                                        let expr = Expr::AccessAtIndex {
+                                            index: index as _,
+                                            field_layouts,
+                                            structure: Symbol::ARG_CLOSURE,
+                                            wrapped,
+                                        };
+
+                                        let layout = field_layouts[index].clone();
+
+                                        specialized_body = Stmt::Let(
+                                            *symbol,
+                                            expr,
+                                            layout,
+                                            env.arena.alloc(specialized_body),
+                                        );
+                                    }
+                                }
+                                _ => unreachable!("closure tag must store a struct"),
                             }
                         }
-                    };
+                        Layout::Struct(field_layouts) => {
+                            debug_assert_eq!(
+                                captured.len(),
+                                field_layouts.len(),
+                                "{:?} captures {:?} but has layout {:?}",
+                                proc_name,
+                                &captured,
+                                &field_layouts
+                            );
 
-                    specialized_body =
-                        Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
+                            if field_layouts.len() > 1 {
+                                for (index, (symbol, _variable)) in captured.iter().enumerate() {
+                                    let expr = Expr::AccessAtIndex {
+                                        index: index as _,
+                                        field_layouts,
+                                        structure: Symbol::ARG_CLOSURE,
+                                        wrapped,
+                                    };
+
+                                    let layout = field_layouts[index].clone();
+
+                                    specialized_body = Stmt::Let(
+                                        *symbol,
+                                        expr,
+                                        layout,
+                                        env.arena.alloc(specialized_body),
+                                    );
+                                }
+                            } else {
+                                let symbol = captured[0].0;
+
+                                substitute_in_exprs(
+                                    env.arena,
+                                    &mut specialized_body,
+                                    symbol,
+                                    Symbol::ARG_CLOSURE,
+                                );
+                            }
+                        }
+                        _other => {
+                            // the closure argument is not a union or a record
+                            debug_assert_eq!(
+                                captured.len(),
+                                1,
+                                "mismatch {:?} captures {:?}",
+                                proc_name,
+                                &captured
+                            );
+
+                            let symbol = captured[0].0;
+
+                            substitute_in_exprs(
+                                env.arena,
+                                &mut specialized_body,
+                                symbol,
+                                Symbol::ARG_CLOSURE,
+                            );
+                        }
+                    }
                 }
+                (None, CapturedSymbols::None) => {}
+                _ => unreachable!("to closure or not to closure?"),
             }
 
             // reset subs, so we don't get type errors when specializing for a different signature
@@ -4682,10 +4749,33 @@ fn reuse_function_symbol<'a>(
 ) -> Stmt<'a> {
     match procs.partial_procs.get(&original) {
         None => {
-            // danger: a foreign symbol may not be specialized!
-            debug_assert!(
-                env.home == original.module_id() || original.module_id() == ModuleId::ATTR
-            );
+            let is_imported =
+                !(env.home == original.module_id() || original.module_id() == ModuleId::ATTR);
+
+            match arg_var {
+                Some(arg_var) if is_imported => {
+                    let layout = layout_cache
+                        .from_var(env.arena, arg_var, env.subs)
+                        .expect("creating layout does not fail");
+
+                    procs.insert_passed_by_name(
+                        env,
+                        arg_var,
+                        original,
+                        layout.clone(),
+                        layout_cache,
+                    );
+                }
+                _ => {
+                    // danger: a foreign symbol may not be specialized!
+                    debug_assert!(
+                        !is_imported,
+                        "symbol {:?} while processing module {:?}",
+                        original,
+                        (env.home, &arg_var),
+                    );
+                }
+            }
 
             result
         }

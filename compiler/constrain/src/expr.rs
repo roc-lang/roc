@@ -1363,7 +1363,9 @@ fn instantiate_rigids(
         }
     }
 
-    new_rigids.extend(introduced_vars.wildcards.iter().cloned());
+    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
+        ftv.insert(format!("*{}", i).into(), *wildcard);
+    }
 
     annotation
 }

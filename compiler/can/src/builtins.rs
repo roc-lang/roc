@@ -26,6 +26,95 @@ macro_rules! defs {
     };
 }
 
+macro_rules! macro_magic {
+    (@single $($x:tt)*) => (());
+    (@count $($rest:expr),*) => (<[()]>::len(&[$(matches!(@single $rest)),*]));
+
+    ($symbol:expr; $var_store:expr; $($key:ident => $func:expr,)+) => { macro_magic!($symbol; $var_store; $($key => $func),+) };
+    ($symbol:expr; $var_store:expr; $($key:ident => $func:expr),*) => {
+        {
+            match $symbol {
+            $(
+                Symbol::$key => Some($func(Symbol::$key, $var_store)),
+            )*
+                _ => None,
+            }
+        }
+    };
+}
+
+pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
+    debug_assert!(symbol.is_builtin());
+
+    macro_magic! { symbol; var_store;
+        BOOL_EQ => bool_eq,
+        BOOL_NEQ => bool_neq,
+        BOOL_AND => bool_and,
+        BOOL_OR => bool_or,
+        BOOL_NOT => bool_not,
+        STR_CONCAT => str_concat,
+        STR_SPLIT => str_split,
+        STR_IS_EMPTY => str_is_empty,
+        STR_STARTS_WITH => str_starts_with,
+        STR_ENDS_WITH => str_ends_with,
+        STR_COUNT_GRAPHEMES => str_count_graphemes,
+        STR_FROM_INT => str_from_int,
+        LIST_LEN => list_len,
+        LIST_GET => list_get,
+        LIST_SET => list_set,
+        LIST_APPEND => list_append,
+        LIST_FIRST => list_first,
+        LIST_IS_EMPTY => list_is_empty,
+        LIST_SINGLE => list_single,
+        LIST_REPEAT => list_repeat,
+        LIST_REVERSE => list_reverse,
+        LIST_CONCAT => list_concat,
+        LIST_CONTAINS => list_contains,
+        LIST_SUM => list_sum,
+        LIST_PREPEND => list_prepend,
+        LIST_JOIN => list_join,
+        LIST_MAP => list_map,
+        LIST_KEEP_IF => list_keep_if,
+        LIST_WALK => list_walk,
+        LIST_WALK_BACKWARDS => list_walk_backwards,
+        NUM_ADD => num_add,
+        NUM_ADD_CHECKED => num_add_checked,
+        NUM_ADD_WRAP => num_add_wrap,
+        NUM_SUB => num_sub,
+        NUM_MUL => num_mul,
+        NUM_GT => num_gt,
+        NUM_GTE => num_gte,
+        NUM_LT => num_lt,
+        NUM_LTE => num_lte,
+        NUM_COMPARE => num_compare,
+        NUM_SIN => num_sin,
+        NUM_COS => num_cos,
+        NUM_TAN => num_tan,
+        NUM_DIV_FLOAT => num_div_float,
+        NUM_DIV_INT => num_div_int,
+        NUM_ABS => num_abs,
+        NUM_NEG => num_neg,
+        NUM_REM => num_rem,
+        NUM_SQRT => num_sqrt,
+        NUM_ROUND => num_round,
+        NUM_IS_ODD => num_is_odd,
+        NUM_IS_EVEN => num_is_even,
+        NUM_IS_ZERO => num_is_zero,
+        NUM_IS_POSITIVE => num_is_positive,
+        NUM_IS_NEGATIVE => num_is_negative,
+        NUM_TO_FLOAT => num_to_float,
+        NUM_POW => num_pow,
+        NUM_CEILING => num_ceiling,
+        NUM_POW_INT => num_pow_int,
+        NUM_FLOOR => num_floor,
+        NUM_ATAN => num_atan,
+        NUM_ACOS => num_acos,
+        NUM_ASIN => num_asin,
+        NUM_MAX_INT => num_max_int,
+        NUM_MIN_INT => num_min_int,
+    }
+}
+
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
