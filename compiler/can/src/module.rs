@@ -1,11 +1,12 @@
 use crate::builtins;
-use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
+use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::env::Env;
-use crate::expr::Output;
+use crate::expr::{Expr, Output};
 use crate::operator::desugar_def;
+use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -242,6 +243,22 @@ pub fn canonicalize_module_defs<'a>(
             // no actual declaration with that name!
             for symbol in exposed_symbols {
                 env.problem(Problem::ExposedButNotDefined(symbol));
+
+                // In case this exposed value is referenced by other modules,
+                // create a decl for it whose implementation is a runtime error.
+                let mut pattern_vars = SendMap::default();
+                pattern_vars.insert(symbol, var_store.fresh());
+
+                let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
+                let def = Def {
+                    loc_pattern: Located::new(0, 0, 0, 0, Pattern::Identifier(symbol)),
+                    loc_expr: Located::new(0, 0, 0, 0, Expr::RuntimeError(runtime_error)),
+                    expr_var: var_store.fresh(),
+                    pattern_vars,
+                    annotation: None,
+                };
+
+                declarations.push(Declaration::Declare(def));
             }
 
             // Incorporate any remaining output.lookups entries into references.

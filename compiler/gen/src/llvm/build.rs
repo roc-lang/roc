@@ -36,6 +36,7 @@ use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutSet};
+use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
@@ -617,29 +618,66 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut arg_vals: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(arguments.len(), env.arena);
 
-            let mut arg_types = Vec::with_capacity_in(arguments.len(), env.arena);
+            let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
-            for arg in arguments.iter() {
-                let (value, layout) = load_symbol_and_layout(env, scope, arg);
-                arg_vals.push(value);
-                let arg_type =
-                    basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
-                arg_types.push(arg_type);
+            // crude approximation of the C calling convention
+            let pass_result_by_pointer = ret_layout.stack_size(env.ptr_bytes) > 2 * env.ptr_bytes;
+
+            if pass_result_by_pointer {
+                // the return value is too big to pass through a register, so the caller must
+                // allocate space for it on its stack, and provide a pointer to write the result into
+                let ret_type =
+                    basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+
+                let ret_ptr_type = get_ptr_type(&ret_type, AddressSpace::Generic);
+
+                let ret_ptr = env.builder.build_alloca(ret_type, "return_value");
+
+                arg_vals.push(ret_ptr.into());
+                arg_types.push(ret_ptr_type.into());
+
+                for arg in arguments.iter() {
+                    let (value, layout) = load_symbol_and_layout(env, scope, arg);
+                    arg_vals.push(value);
+                    let arg_type =
+                        basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+                    arg_types.push(arg_type);
+                }
+
+                let function_type = env.context.void_type().fn_type(&arg_types, false);
+                let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
+
+                let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+                // this is a foreign function, use c calling convention
+                call.set_call_convention(C_CALL_CONV);
+
+                call.try_as_basic_value();
+
+                env.builder.build_load(ret_ptr, "read_result")
+            } else {
+                for arg in arguments.iter() {
+                    let (value, layout) = load_symbol_and_layout(env, scope, arg);
+                    arg_vals.push(value);
+                    let arg_type =
+                        basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+                    arg_types.push(arg_type);
+                }
+
+                let ret_type =
+                    basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+                let function_type = get_fn_type(&ret_type, &arg_types);
+                let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
+
+                let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+                // this is a foreign function, use c calling convention
+                call.set_call_convention(C_CALL_CONV);
+
+                call.try_as_basic_value()
+                    .left()
+                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
             }
-
-            let ret_type =
-                basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
-            let function_type = get_fn_type(&ret_type, &arg_types);
-            let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
-
-            let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
-
-            // this is a foreign function, use c calling convention
-            call.set_call_convention(C_CALL_CONV);
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
         FunctionCall {
             call_type: ByName(name),
@@ -811,6 +849,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_layout: Layout::Union(fields),
             union_size,
             tag_id,
+            tag_name,
             ..
         } => {
             let tag_layout = Layout::Union(fields);
@@ -826,12 +865,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = fields[*tag_id as usize];
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, _val_layout) = load_symbol_and_layout(env, scope, field_symbol);
+            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
+                // closures ignore (and do not store) the discriminant
+                &fields[*tag_id as usize][1..]
+            } else {
+                &fields[*tag_id as usize]
+            };
 
-                // this check fails for recursive tag unions, but can be helpful while debugging
-                // debug_assert_eq!(tag_field_layout, val_layout);
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, val_layout) = load_symbol_and_layout(env, scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -852,6 +894,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                         field_vals.push(ptr);
                     } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        debug_assert_eq!(tag_field_layout, val_layout);
+
                         field_vals.push(val);
                     }
                 }
