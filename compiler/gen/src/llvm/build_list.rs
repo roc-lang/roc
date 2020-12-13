@@ -2067,7 +2067,7 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     inplace: InPlace,
     elem_layout: &Layout<'a>,
-    length: IntValue<'ctx>,
+    number_of_elements: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
     let builder = env.builder;
     let ctx = env.context;
@@ -2075,10 +2075,11 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let len_type = env.ptr_int();
     let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
     let bytes_per_element = len_type.const_int(elem_bytes, false);
-    let number_of_data_bytes = builder.build_int_mul(bytes_per_element, length, "data_length");
+    let number_of_data_bytes =
+        builder.build_int_mul(bytes_per_element, number_of_elements, "data_length");
 
     let rc1 = match inplace {
-        InPlace::InPlace => length,
+        InPlace::InPlace => number_of_elements,
         InPlace::Clone => {
             // the refcount of a new list is initially 1
             // we assume that the list is indeed used (dead variables are eliminated)
