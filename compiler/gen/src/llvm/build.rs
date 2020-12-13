@@ -477,17 +477,17 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             } else {
                 let ctx = env.context;
                 let builder = env.builder;
-                let len_u64 = str_literal.len() as u64;
+                let number_of_chars = str_literal.len() as u64;
                 let elem_bytes = CHAR_LAYOUT.stack_size(env.ptr_bytes) as u64;
                 let ptr_bytes = env.ptr_bytes;
 
                 let populate_str = |ptr| {
                     // Copy the elements from the list literal into the array
-                    for (index, char) in str_literal.as_bytes().iter().enumerate() {
+                    for (index, character) in str_literal.as_bytes().iter().enumerate() {
                         let val = env
                             .context
                             .i8_type()
-                            .const_int(*char as u64, false)
+                            .const_int(*character as u64, false)
                             .as_basic_value_enum();
                         let index_val = ctx.i64_type().const_int(index as u64, false);
                         let elem_ptr =
@@ -554,13 +554,13 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                         "small_str_array",
                     )
                 } else {
-                    let bytes_len = elem_bytes * len_u64;
-                    let len_type = env.ptr_int();
-                    let len = len_type.const_int(bytes_len, false);
+                    let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
 
                     // NOTE we rely on CHAR_LAYOUT turning into a `i8`
-                    let ptr = allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, len);
+                    let ptr = allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, number_of_elements);
                     let struct_type = collection(ctx, ptr_bytes);
+
+                    populate_str(ptr);
 
                     let mut struct_val;
 
@@ -576,10 +576,13 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 
                     // Store the length
                     struct_val = builder
-                        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                        .build_insert_value(
+                            struct_val,
+                            number_of_elements,
+                            Builtin::WRAPPER_LEN,
+                            "insert_len",
+                        )
                         .unwrap();
-
-                    populate_str(ptr);
 
                     builder.build_bitcast(
                         struct_val.into_struct_value(),
