@@ -95,54 +95,59 @@ suite =
             [ test "Add Child to a group" <|
                 \_ ->
                     modify (AddChild Vert t) End (treeRoot [])
-                        |> Expect.equal (treeRoot [ t ])
+                        |> Expect.equal ( treeRoot [ t ], Next 0 End )
             , test "Add Child to a Edge" <|
                 \_ ->
                     modify (AddChild Hori t) (Next 0 End) (treeRoot [ empty ])
-                        |> Expect.equal (treeRoot [ group Hori [ t ] ])
+                        |> Expect.equal ( treeRoot [ group Hori [ t ] ], Next 0 (Next 0 End) )
             , test "Add Sibiling to a root Token " <|
                 \_ ->
-                    modify (AddSibiling t) End empty
-                        |> Expect.equal (treeRoot [ empty, t ])
+                    modify (AddSibiling Vert t) End empty
+                        |> Expect.equal
+                            ( treeRoot [ empty, t ]
+                            , Next 1 End
+                            )
             , test "Add Sibiling to a root Group" <|
                 \_ ->
-                    modify (AddSibiling t) End (treeRoot [])
-                        |> Expect.equal (treeRoot [ treeRoot [], t ])
+                    modify (AddSibiling Vert t) End (treeRoot [])
+                        |> Expect.equal ( treeRoot [ treeRoot [], t ], Next 1 End )
             , test "Add Sibiling to a Child Atom " <|
                 \_ ->
-                    modify (AddSibiling t) (Next 1 End) (treeRoot [ empty, empty ])
-                        |> Expect.equal (treeRoot [ empty, empty, t ])
+                    modify (AddSibiling Vert t) (Next 1 End) (treeRoot [ empty, empty ])
+                        |> Expect.equal ( treeRoot [ empty, empty, t ], Next 2 End )
             , test "Add Sibiling to a Child Group " <|
                 \_ ->
-                    modify (AddSibiling t) (Next 0 End) (treeRoot [ empty, treeRoot [] ])
-                        |> Expect.equal (treeRoot [ empty, t, treeRoot [] ])
+                    modify (AddSibiling Vert t) (Next 0 End) (treeRoot [ empty, treeRoot [] ])
+                        |> Expect.equal ( treeRoot [ empty, t, treeRoot [] ], Next 1 End )
             , test "Add Sibiling to a deep group " <|
                 \_ ->
-                    modify (AddSibiling t)
+                    modify (AddSibiling Vert t)
                         (Next 1 (Next 1 End))
                         (treeRoot [ empty, treeRoot [ empty, a, b, c ] ])
                         |> Expect.equal
-                            (treeRoot [ empty, treeRoot [ empty, a, t, b, c ] ])
+                            ( treeRoot [ empty, treeRoot [ empty, a, t, b, c ] ]
+                            , Next 1 (Next 2 End)
+                            )
             , test "Replace Token with a token" <|
                 \_ ->
                     modify (Replace t) End (treeRoot [ empty ])
-                        |> Expect.equal t
+                        |> Expect.equal ( t, End )
             , test "Replace Token deep in tree" <|
                 \_ ->
                     modify (Replace t)
                         (Next 0 (Next 1 End))
                         (treeRoot [ group Vert [ a, b, c ] ])
-                        |> Expect.equal (treeRoot [ group Vert [ a, t, c ] ])
+                        |> Expect.equal ( treeRoot [ group Vert [ a, t, c ] ], Next 0 (Next 1 End) )
             , test "Cut token at root empties it" <|
                 \_ ->
                     modify Cut End (treeRoot [])
-                        |> Expect.equal empty
+                        |> Expect.equal ( empty, End )
             , test "Cut token at deeper path" <|
                 \_ ->
                     modify Cut
                         (Next 0 (Next 1 End))
                         (treeRoot [ group Vert [ a, b, c ] ])
-                        |> Expect.equal (treeRoot [ group Vert [ a, c ] ])
+                        |> Expect.equal ( treeRoot [ group Vert [ a, c ] ], Next 0 End )
             ]
         , let
             t =
@@ -229,12 +234,15 @@ suite =
             , tst "Press shift, lift up shift"
                 [ Shift, LiftUp ]
                 ( c, path, t )
-            , tst "Press some uppercase"
+            , tst "Press some uppercase symbol indicating type name"
                 [ Shift
                 , Char 's'
                 , LiftUp
                 ]
-                ( { c | after = "S" }, path, t )
+                ( { c | after = "S" }
+                , path
+                , token (TypeName "S")
+                )
             , tst "write a bit"
                 [ Shift
                 , Char 's'
@@ -244,7 +252,7 @@ suite =
                 , Char 't'
                 , Char 'e'
                 ]
-                ( { c | after = "State" }, path, t )
+                ( { c | after = "State" }, path, token (TypeName "State") )
             , tst "Change the tree structure"
                 [ Shift
                 , Char 's'
@@ -258,7 +266,28 @@ suite =
                 , Char ':'
                 , LiftUp
                 ]
-                ( c, Next 1 End, treeRoot [ group Hori [ token (TypeName "State"), syntax ":" ], token Empty ] )
+                ( c, Next 1 End, treeRoot [ group Hori [ token (TypeName "State "), syntax ":" ], token Empty ] )
+            , tst "Open structure"
+                [ Shift
+                , Char 's'
+                , LiftUp
+                , Char 't'
+                , Char 'a'
+                , Char 't'
+                , Char 'e'
+                , Char ' '
+                , Shift
+                , Char ':'
+                , LiftUp
+                , Char '{'
+                ]
+                ( c
+                , Next 1 (Next 0 End)
+                , treeRoot
+                    [ group Hori [ token (TypeName "State "), syntax ":" ]
+                    , group Vert [ syntax "{", token Empty ]
+                    ]
+                )
             ]
         ]
 

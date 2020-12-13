@@ -2,7 +2,7 @@ module Prototype exposing (..)
 
 import Browser
 import Browser.Events
-import Html as H exposing (Html, sub)
+import Html as H exposing (Html, p, sub)
 import Html.Attributes as A
 import Html.Events as Ev
 import Json.Decode as Json
@@ -29,7 +29,7 @@ type alias Caret =
     { before : String
     , after : String
     , shiftDown : Bool
-    , selecte : String
+    , selected : String
     }
 
 
@@ -38,17 +38,15 @@ type TokenPath
     | Next Int TokenPath
 
 
-type alias PathToParent =
-    TokenPath
-
-
 type Token
-    = Atom Kind
-    | Group Kind Layout (List Token)
+    = Token Kind Layout (List Token)
 
 
 type Kind
     = Empty
+    | TypeDeclaration String
+    | FnDeclaration String
+    | Module String
     | TypeName String
     | Syntax String
     | TagName String
@@ -83,7 +81,7 @@ move dir token_ path =
 
 
 moveStep : Direction -> Token -> TokenPath -> TokenPast -> TokenPath
-moveStep dir tok path { sibilings, current, layout } =
+moveStep dir ((Token _ l xs) as tok) path { sibilings, current, layout } =
     case path of
         End ->
             -- root case
@@ -91,32 +89,20 @@ moveStep dir tok path { sibilings, current, layout } =
                 |> Maybe.withDefault End
 
         Next n End ->
-            -- step case
-            case tok of
-                Group _ l xs ->
-                    ListE.getAt n xs
-                        |> Maybe.andThen
-                            (\t ->
-                                moves t path (selectable xs) n l (moveSteps ( dir, l ))
-                            )
-                        |> Maybe.withDefault End
-
-                _ ->
-                    End
+            ListE.getAt n xs
+                |> Maybe.andThen
+                    (\t ->
+                        moves t path (selectable xs) n l (moveSteps ( dir, l ))
+                    )
+                |> Maybe.withDefault End
 
         Next n sub ->
-            -- recursive step
-            case tok of
-                Group _ l xs ->
-                    ListE.getAt n xs
-                        |> Maybe.map
-                            (\t ->
-                                Next n (moveStep dir t sub { sibilings = selectable xs, current = n, layout = l })
-                            )
-                        |> Maybe.withDefault End
-
-                _ ->
-                    End
+            ListE.getAt n xs
+                |> Maybe.map
+                    (\t ->
+                        Next n (moveStep dir t sub { sibilings = selectable xs, current = n, layout = l })
+                    )
+                |> Maybe.withDefault End
 
 
 moveSteps : ( Direction, Layout ) -> List Move
@@ -203,7 +189,7 @@ type Direction
 moves : Token -> TokenPath -> List Int -> Int -> Layout -> List Move -> Maybe TokenPath
 moves tok path sibilings current layout mvs =
     case tok of
-        Group _ l toks ->
+        Token _ l toks ->
             mvs
                 |> List.map
                     (\m ->
@@ -222,25 +208,6 @@ moves tok path sibilings current layout mvs =
 
                             LastChild ->
                                 lastChild toks path
-                    )
-                |> orList
-
-        _ ->
-            mvs
-                |> List.map
-                    (\m ->
-                        case m of
-                            Parent ->
-                                parent current sibilings
-
-                            NextSibiling ->
-                                nextSibiling current sibilings
-
-                            PrevSibiling ->
-                                prevSibiling current sibilings
-
-                            _ ->
-                                Nothing
                     )
                 |> orList
 
@@ -287,20 +254,28 @@ parent n xs =
 
 
 getTokenAtPath : TokenPath -> Token -> Token
-getTokenAtPath p tok =
+getTokenAtPath p ((Token _ l xs) as tok) =
     case p of
         End ->
             tok
 
         Next n sub ->
-            case tok of
-                Group _ l xs ->
-                    ListE.getAt n xs
-                        |> Maybe.map (getTokenAtPath sub)
-                        |> Maybe.withDefault tok
+            ListE.getAt n xs
+                |> Maybe.map (getTokenAtPath sub)
+                |> Maybe.withDefault tok
 
-                _ ->
-                    tok
+
+parentOf : TokenPath -> TokenPath
+parentOf p =
+    case p of
+        End ->
+            End
+
+        Next n End ->
+            End
+
+        Next n sub ->
+            Next n (parentOf sub)
 
 
 selectable : List Token -> List Int
@@ -311,7 +286,7 @@ selectable ts =
 isSelectable : Token -> Bool
 isSelectable t =
     case t of
-        Atom (Syntax _) ->
+        Token (Syntax _) _ _ ->
             False
 
         _ ->
@@ -319,28 +294,33 @@ isSelectable t =
 
 
 token : Kind -> Token
-token =
-    Atom
+token k =
+    Token k Hori []
 
 
 tokenWith : Kind -> List Token -> Token
 tokenWith s xs =
-    Group s Hori xs
+    Token s Hori xs
 
 
 syntax : String -> Token
 syntax s =
-    Atom (Syntax s)
+    Token (Syntax s) Hori []
 
 
 group : Layout -> List Token -> Token
 group l xs =
-    Group Empty l xs
+    Token Empty l xs
 
 
 empty : Token
 empty =
     token Empty
+
+
+kind : Token -> Kind
+kind (Token k _ _) =
+    k
 
 
 init : () -> ( Model, Cmd Msg )
@@ -349,13 +329,18 @@ init _ =
             treeRoot
                 [ token Empty
                 ]
-      , keyboard = Editing (Caret "" "" False "") (Next 0 End)
+      , keyboard = Editing emptyCaret (Next 0 End)
       , shiftDown = False
       , actions = []
       , token = Nothing
       }
     , Cmd.none
     )
+
+
+emptyCaret : Caret
+emptyCaret =
+    Caret "" "" False ""
 
 
 treeRoot : List Token -> Token
@@ -393,13 +378,10 @@ viewToken mCaret selPath path token_ =
     let
         ( self, sty, xs ) =
             case token_ of
-                Group name lay xs_ ->
-                    ( H.text <| Debug.toString name, tokenStyles (isSel selPath) lay "name", xs_ )
-
-                Atom (Syntax s) ->
+                Token (Syntax s) _ [] ->
                     ( H.text s, noStyle, [] )
 
-                Atom k ->
+                Token k _ [] ->
                     case ( mCaret, selPath ) of
                         ( Just car, Just End ) ->
                             ( viewCaret car
@@ -409,6 +391,9 @@ viewToken mCaret selPath path token_ =
 
                         _ ->
                             ( H.text "var", tokenStyles (isSel selPath) Hori "var", [] )
+
+                Token name lay xs_ ->
+                    ( H.text <| Debug.toString name, tokenStyles (isSel selPath) lay "name", xs_ )
 
         viewSubtoken idx subtoken =
             viewToken mCaret
@@ -540,42 +525,109 @@ type alias Typing =
     ( Caret, TokenPath, Token )
 
 
+caretIsEmpty : Caret -> Bool
+caretIsEmpty { before, after, selected } =
+    0 == String.length before + String.length after + String.length selected
+
+
+caretValue : Caret -> String
+caretValue { before, after, selected } =
+    before ++ selected ++ after
+
+
 onKeyboardEvent : KeyboardEvent -> Typing -> Typing
-onKeyboardEvent ev ( c, path, tok ) =
+onKeyboardEvent ev ( c, path, tree ) =
+    let
+        cwt =
+            getTokenAtPath path tree
+    in
     case ev of
         Char char ->
-            ( { c
-                | after =
-                    String.append c.after
-                        (String.fromChar <|
-                            if c.shiftDown then
-                                Char.toUpper char
+            let
+                newChar =
+                    if c.shiftDown then
+                        Char.toUpper char
 
-                            else
-                                char
-                        )
-              }
-            , path
-            , tok
-            )
+                    else
+                        char
+
+                typeIn =
+                    { c | after = String.append c.after (String.fromChar newChar) }
+
+                ( writeIn, nsp ) =
+                    modify (Rename <| caretValue typeIn) path tree
+
+                standard =
+                    ( typeIn, nsp, writeIn )
+            in
+            if closingSyntax newChar then
+                let
+                    ( newTree, newPath ) =
+                        tree
+                            |> modify (AddSibiling Hori (syntax (String.fromChar newChar))) path
+                            |> Tuple.mapSecond parentOf
+                            |> (\( t, p ) -> modify (AddSibiling Vert empty) p t)
+                in
+                ( emptyCaret
+                , newPath
+                , newTree
+                )
+
+            else if oppeningSyntax newChar then
+                Debug.todo "open "
+
+            else if kind cwt == Empty then
+                let
+                    ( newTree, newPath ) =
+                        modify (Replace (token (resolveKind newChar))) path tree
+                in
+                ( typeIn
+                , newPath
+                , newTree
+                )
+
+            else
+                standard
 
         Shift ->
-            ( { c | shiftDown = True }, path, tok )
+            ( { c | shiftDown = True }, path, tree )
 
         LiftUp ->
-            ( { c | shiftDown = False }, path, tok )
+            ( { c | shiftDown = False }, path, tree )
 
         Esc ->
-            ( c, path, tok )
+            ( c, path, tree )
 
         Enter ->
-            ( c, path, tok )
+            ( c, path, tree )
 
         Spc ->
-            ( c, path, tok )
+            ( c, path, tree )
+
+        Backspace ->
+            ( c, path, tree )
 
         Arrow dir ->
-            ( c, path, tok )
+            ( c, path, tree )
+
+
+closingSyntax : Char -> Bool
+closingSyntax c =
+    List.member c [ ':', '=', ']', '}', ')', ',' ]
+
+
+oppeningSyntax : Char -> Bool
+oppeningSyntax c =
+    List.member c [ '\\', '[', '{', '(', '.' ]
+
+
+resolveKind : Char -> Kind
+resolveKind c =
+    if Char.isUpper c then
+        TypeName <| String.fromChar c
+
+    else
+        FnName <| String.fromChar c
 
 
 type KeyboardEvent
@@ -584,77 +636,151 @@ type KeyboardEvent
     | Esc
     | Enter
     | Spc
+    | Backspace
     | Arrow Direction
     | LiftUp
 
 
 type ModifyTree
     = AddChild Layout Token
-    | AddSibiling Token
+    | AddSibiling Layout Token
     | Replace Token
+    | Rename String
     | Cut
 
 
-modify : ModifyTree -> TokenPath -> Token -> Token
+modify : ModifyTree -> TokenPath -> Token -> ( Token, TokenPath )
 modify act path tok =
-    case ( act, path, tok ) of
-        ( AddChild l t, End, Atom k ) ->
-            Group k l [ t ]
+    case act of
+        AddChild cl t ->
+            case ( path, tok ) of
+                ( End, Token gt l xs ) ->
+                    ( Token gt l <| xs ++ [ t ]
+                    , Next (List.length xs) End
+                    )
 
-        ( AddChild _ t, End, Group gt l xs ) ->
-            Group gt l <| xs ++ [ t ]
+                ( Next n sub, Token k _ [] ) ->
+                    ( Token k cl [ t ], Next 0 End )
 
-        ( AddChild l t, Next n sub, Atom k ) ->
-            Group k l [ t ]
+                ( Next n sub, Token k l xs ) ->
+                    modifyGroup k l act sub n xs
 
-        ( AddChild _ t, Next n sub, Group k l xs ) ->
-            updateGroup k l (modify act sub) n xs
+        AddSibiling sl t ->
+            case ( path, tok ) of
+                ( End, _ ) ->
+                    ( Token Empty sl [ tok, t ], Next 1 End )
 
-        ( AddSibiling t, End, _ ) ->
-            treeRoot [ tok, t ]
+                ( Next n End, Token k l xs ) ->
+                    ( ListE.splitAt (n + 1) xs
+                        |> (\( a, b ) -> a ++ [ t ] ++ b)
+                        |> Token k l
+                    , Next (n+1) End
+                    )
 
-        ( AddSibiling t, Next n End, Group k l xs ) ->
-            ListE.splitAt (n + 1) xs
-                |> (\( a, b ) -> a ++ [ t ] ++ b)
-                |> Group k l
+                ( Next n sub, Token k _ [] ) ->
+                    ( Token Empty sl [ tok, t ], Next 1 End )
 
-        ( AddSibiling t, Next n sub, Atom k ) ->
-            treeRoot [ tok, t ]
+                ( Next n sub, Token k l xs ) ->
+                    modifyGroup k l act sub n xs
 
-        ( AddSibiling t, Next n sub, Group k l xs ) ->
-            updateGroup k l (modify act sub) n xs
+        Replace t ->
+            case ( path, tok ) of
+                ( End, _ ) ->
+                    ( t, End )
 
-        ( Replace t, End, _ ) ->
-            t
+                ( Next n sub, Token k _ [] ) ->
+                    ( t, End )
 
-        ( Replace t, Next n sub, Atom k ) ->
-            t
+                ( Next n sub, Token k l xs ) ->
+                    modifyGroup k l act sub n xs
 
-        ( Replace t, Next n sub, Group k l xs ) ->
-            updateGroup k l (modify act sub) n xs
+        Cut ->
+            case ( path, tok ) of
+                ( End, _ ) ->
+                    ( empty, End )
 
-        ( Cut, End, _ ) ->
-            empty
+                ( Next n End, Token _ _ [] ) ->
+                    ( tok, End )
 
-        ( Cut, Next n End, Atom _ ) ->
-            tok
+                ( Next n End, Token k l xs ) ->
+                    ( Token k l (ListE.removeAt n xs), End )
 
-        ( Cut, Next n End, Group k l xs ) ->
-            Group k l (ListE.removeAt n xs)
+                ( Next n sub, Token _ _ [] ) ->
+                    ( tok, End )
 
-        ( Cut, Next n sub, Atom _ ) ->
-            tok
+                ( Next n sub, Token k l xs ) ->
+                    modifyGroup k l act sub n xs
 
-        ( Cut, Next n sub, Group k l xs ) ->
-            updateGroup k l (modify act sub) n xs
+        Rename v ->
+            case ( path, tok ) of
+                ( End, Token k l xs ) ->
+                    ( Token (renameKindValue v k) l xs
+                    , End
+                    )
+
+                ( Next n sub, Token k l xs ) ->
+                    modifyGroup k l act sub n xs
 
 
-updateGroup k l fn n xs =
-    Group k l <| runAt fn n xs
+renameKindValue : String -> Kind -> Kind
+renameKindValue v k =
+    case k of
+        TypeName _ ->
+            TypeName v
+
+        Syntax _ ->
+            Syntax v
+
+        TagName _ ->
+            TagName v
+
+        FieldName _ ->
+            FieldName v
+
+        ParamName _ ->
+            ParamName v
+
+        FnName _ ->
+            FnName v
+
+        VarName _ ->
+            VarName v
+
+        StrVal _ ->
+            StrVal v
+
+        NumVal _ ->
+            NumVal v
+
+        TypeDeclaration _ ->
+            TypeDeclaration v
+
+        FnDeclaration _ ->
+            FnDeclaration v
+
+        Module _ ->
+            Module v
+
+        Empty ->
+            Empty
 
 
-runAt fn idx xs =
-    ListE.updateAt idx fn xs
+modifyGroup :
+    Kind
+    -> Layout
+    -> ModifyTree
+    -> TokenPath
+    -> Int
+    -> List Token
+    -> ( Token, TokenPath )
+modifyGroup k l act sub n xs =
+    ListE.getAt n xs
+        |> Maybe.map (modify act sub)
+        |> Maybe.Extra.unpack (\_ -> ( Token k l xs, End ))
+            (Tuple.mapBoth
+                (\t -> Token k l <| ListE.setAt n t xs)
+                (Next n)
+            )
 
 
 type MovePath
@@ -671,13 +797,10 @@ movePath moveCmd path tok =
         ( ToNextSibiling, End, _ ) ->
             Nothing
 
-        ( ToNextSibiling, _, Atom _ ) ->
-            Nothing
-
-        ( ToNextSibiling, Next n End, Group k l xs ) ->
+        ( ToNextSibiling, Next n End, Token k l xs ) ->
             nextSibiling n (selectable xs)
 
-        ( ToNextSibiling, Next n sub, Group k l xs ) ->
+        ( ToNextSibiling, Next n sub, Token k l xs ) ->
             ListE.getAt n xs
                 |> Maybe.andThen (movePath moveCmd sub)
                 |> Maybe.map (Next n)
@@ -685,13 +808,10 @@ movePath moveCmd path tok =
         ( ToPrevSibiling, End, _ ) ->
             Nothing
 
-        ( ToPrevSibiling, _, Atom _ ) ->
-            Nothing
-
-        ( ToPrevSibiling, Next n End, Group _ _ xs ) ->
+        ( ToPrevSibiling, Next n End, Token _ _ xs ) ->
             prevSibiling n (selectable xs)
 
-        ( ToPrevSibiling, Next n sub, Group _ _ xs ) ->
+        ( ToPrevSibiling, Next n sub, Token _ _ xs ) ->
             moveInGroup moveCmd n sub xs
 
         ( ToParent, End, _ ) ->
@@ -700,37 +820,23 @@ movePath moveCmd path tok =
         ( ToParent, Next _ End, _ ) ->
             Just End
 
-        ( ToParent, Next n sub, Atom _ ) ->
-            Nothing
-
-        ( ToParent, Next n sub, Group k l xs ) ->
+        ( ToParent, Next n sub, Token k l xs ) ->
             moveInGroup moveCmd n sub xs
 
-        ( ToFirstChild, End, Atom _ ) ->
-            Nothing
-
-        ( ToFirstChild, Next _ _, Atom _ ) ->
-            Nothing
-
-        ( ToFirstChild, End, Group _ _ xs ) ->
+        ( ToFirstChild, End, Token _ _ xs ) ->
             firstChild xs End
 
-        ( ToFirstChild, Next n sub, Group _ _ xs ) ->
+        ( ToFirstChild, Next n sub, Token _ _ xs ) ->
             moveInGroup moveCmd n sub xs
 
-        ( ToLastChild, End, Atom _ ) ->
-            Nothing
-
-        ( ToLastChild, Next _ _, Atom _ ) ->
-            Nothing
-
-        ( ToLastChild, End, Group _ _ xs ) ->
+        ( ToLastChild, End, Token _ _ xs ) ->
             lastChild xs End
 
-        ( ToLastChild, Next n sub, Group _ _ xs ) ->
+        ( ToLastChild, Next n sub, Token _ _ xs ) ->
             moveInGroup moveCmd n sub xs
 
 
+moveInGroup : MovePath -> Int -> TokenPath -> List Token -> Maybe TokenPath
 moveInGroup moveCmd n sub xs =
     ListE.getAt n xs
         |> Maybe.andThen (movePath moveCmd sub)
