@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
+use inkwell::values::IntValue;
 use inkwell::AddressSpace;
 use roc_mono::layout::Layout;
 

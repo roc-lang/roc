@@ -2173,15 +2173,24 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
             for (name, layout) in aliases {
                 match layout {
                     Layout::Closure(arguments, closure, result) => {
+                        // define closure size and return value size, e.g.
+                        //
+                        // * roc__mainForHost_1_Update_size() -> i64
+                        // * roc__mainForHost_1_Update_result_size() -> i64
                         build_closure_caller(env, &fn_name, *name, arguments, closure, result)
                     }
-                    Layout::FunctionPointer(_arguments, _result) => {
-                        // TODO should this be considered a closure of size 0?
-                        // or do we let the host call it directly?
-                        // then we have no RocCallResult wrapping though
+                    Layout::FunctionPointer(arguments, result) => {
+                        // define function size (equal to pointer size) and return value size, e.g.
+                        //
+                        // * roc__mainForHost_1_Update_size() -> i64
+                        // * roc__mainForHost_1_Update_result_size() -> i64
+                        build_function_caller(env, &fn_name, *name, arguments, result)
                     }
                     _ => {
-                        // TODO
+                        // for anything else we only define the size symbol, e.g.
+                        //
+                        // * roc__mainForHost_1_Model_size() -> i64
+                        build_host_exposed_alias_size(env, &fn_name, *name, layout)
                     }
                 }
             }
@@ -2301,22 +2310,186 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
 
-    let mut arguments = parameters;
-    arguments.push(closure_data);
+    let mut parameters = parameters;
+    parameters.push(closure_data);
 
-    let result = invoke_and_catch(env, function_value, function_ptr, &arguments, result_type);
+    let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
 
-    builder.build_store(output, result);
+    builder.build_store(output, call_result);
 
     builder.build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
-    let size_function_type = env.context.i64_type().fn_type(&[], false);
-    let size_function_name: String = format!(
-        "roc_{}_{}_size",
+    build_host_exposed_alias_size_help(
+        env,
+        def_name,
+        alias_symbol,
+        Some("result"),
+        roc_call_result_type.into(),
+    );
+
+    // STEP 4: build a {} -> u64 function that gives the size of the closure
+    let layout = Layout::Closure(arguments, closure.clone(), result);
+    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
+}
+
+pub fn build_function_caller<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    def_name: &str,
+    alias_symbol: Symbol,
+    arguments: &[Layout<'a>],
+    result: &Layout<'a>,
+) {
+    use inkwell::types::BasicType;
+
+    let arena = env.arena;
+    let context = &env.context;
+    let builder = env.builder;
+
+    // STEP 1: build function header
+
+    // e.g. `roc__main_1_Fx_caller`
+    let function_name = format!(
+        "roc_{}_{}_caller",
         def_name,
         alias_symbol.ident_string(&env.interns)
     );
+
+    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
+
+    for layout in arguments {
+        argument_types.push(basic_type_from_layout(
+            arena,
+            context,
+            layout,
+            env.ptr_bytes,
+        ));
+    }
+
+    let function_pointer_type = {
+        let mut args = Vec::new_in(env.arena);
+        args.extend(arguments.iter().cloned());
+
+        // pretend the closure layout is empty
+        args.push(Layout::Struct(&[]));
+
+        let function_layout = Layout::FunctionPointer(&args, result);
+
+        // this is already a (function) pointer type
+        basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
+    };
+    argument_types.push(function_pointer_type);
+
+    let closure_argument_type = {
+        let basic_type =
+            basic_type_from_layout(arena, context, &Layout::Struct(&[]), env.ptr_bytes);
+
+        basic_type.ptr_type(AddressSpace::Generic)
+    };
+    argument_types.push(closure_argument_type.into());
+
+    let result_type = basic_type_from_layout(arena, context, result, env.ptr_bytes);
+
+    let roc_call_result_type =
+        context.struct_type(&[context.i64_type().into(), result_type], false);
+
+    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
+    argument_types.push(output_type.into());
+
+    let function_type = context.void_type().fn_type(&argument_types, false);
+
+    let function_value = env.module.add_function(
+        function_name.as_str(),
+        function_type,
+        Some(Linkage::External),
+    );
+
+    function_value.set_call_conventions(C_CALL_CONV);
+
+    // STEP 2: build function body
+
+    let entry = context.append_basic_block(function_value, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut parameters = function_value.get_params();
+    let output = parameters.pop().unwrap().into_pointer_value();
+    let _closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
+    let function_ptr = parameters.pop().unwrap().into_pointer_value();
+
+    // let closure_data = context.struct_type(&[], false).const_zero().into();
+
+    let actual_function_type = basic_type_from_layout(
+        arena,
+        context,
+        &Layout::FunctionPointer(arguments, result),
+        env.ptr_bytes,
+    );
+
+    let function_ptr = builder
+        .build_bitcast(function_ptr, actual_function_type, "cast")
+        .into_pointer_value();
+
+    let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
+
+    builder.build_store(output, call_result);
+
+    builder.build_return(None);
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    build_host_exposed_alias_size_help(
+        env,
+        def_name,
+        alias_symbol,
+        Some("result"),
+        roc_call_result_type.into(),
+    );
+
+    // STEP 4: build a {} -> u64 function that gives the size of the function
+    let layout = Layout::FunctionPointer(arguments, result);
+    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
+}
+
+fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    def_name: &str,
+    alias_symbol: Symbol,
+    layout: &Layout<'a>,
+) {
+    build_host_exposed_alias_size_help(
+        env,
+        def_name,
+        alias_symbol,
+        None,
+        basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes),
+    )
+}
+
+fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    def_name: &str,
+    alias_symbol: Symbol,
+    opt_label: Option<&str>,
+    basic_type: BasicTypeEnum<'ctx>,
+) {
+    let builder = env.builder;
+    let context = env.context;
+
+    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_name: String = if let Some(label) = opt_label {
+        format!(
+            "roc_{}_{}_{}_size",
+            def_name,
+            alias_symbol.ident_string(&env.interns),
+            label
+        )
+    } else {
+        format!(
+            "roc_{}_{}_size",
+            def_name,
+            alias_symbol.ident_string(&env.interns)
+        )
+    };
 
     let size_function = env.module.add_function(
         size_function_name.as_str(),
@@ -2328,7 +2501,8 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let size: BasicValueEnum = roc_call_result_type.size_of().unwrap().into();
+    use inkwell::types::BasicType;
+    let size: BasicValueEnum = basic_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
 }
 
