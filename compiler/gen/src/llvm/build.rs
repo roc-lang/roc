@@ -2249,12 +2249,10 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
-        argument_types.push(basic_type_from_layout(
-            arena,
-            context,
-            layout,
-            env.ptr_bytes,
-        ));
+        let arg_type = basic_type_from_layout(arena, context, layout, env.ptr_bytes);
+        let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
+
+        argument_types.push(arg_ptr_type.into());
     }
 
     let function_pointer_type = {
@@ -2310,6 +2308,12 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
 
     let mut parameters = parameters;
+
+    for param in parameters.iter_mut() {
+        debug_assert!(param.is_pointer_value());
+        *param = builder.build_load(param.into_pointer_value(), "load_param");
+    }
+
     parameters.push(closure_data);
 
     let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
@@ -2357,12 +2361,10 @@ pub fn build_function_caller<'a, 'ctx, 'env>(
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
-        argument_types.push(basic_type_from_layout(
-            arena,
-            context,
-            layout,
-            env.ptr_bytes,
-        ));
+        let arg_type = basic_type_from_layout(arena, context, layout, env.ptr_bytes);
+        let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
+
+        argument_types.push(arg_ptr_type.into());
     }
 
     let function_pointer_type = {
@@ -2428,6 +2430,13 @@ pub fn build_function_caller<'a, 'ctx, 'env>(
     let function_ptr = builder
         .build_bitcast(function_ptr, actual_function_type, "cast")
         .into_pointer_value();
+
+    let mut parameters = parameters;
+
+    for param in parameters.iter_mut() {
+        debug_assert!(param.is_pointer_value());
+        *param = builder.build_load(param.into_pointer_value(), "load_param");
+    }
 
     let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
 
