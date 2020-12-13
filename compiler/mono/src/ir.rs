@@ -695,6 +695,10 @@ impl<'a, 'i> Env<'a, 'i> {
 
         Symbol::new(self.home, ident_id)
     }
+
+    pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
+        symbol.module_id() != self.home && !symbol.is_builtin()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
@@ -2129,6 +2133,96 @@ impl<'a> FunctionLayouts<'a> {
     }
 }
 
+fn specialize_naked_symbol<'a>(
+    env: &mut Env<'a, '_>,
+    variable: Variable,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+    symbol: Symbol,
+) -> Stmt<'a> {
+    if procs.module_thunks.contains(&symbol) {
+        let partial_proc = procs.partial_procs.get(&symbol).unwrap();
+        let fn_var = partial_proc.annotation;
+
+        // This is a top-level declaration, which will code gen to a 0-arity thunk.
+        let result = call_by_name(
+            env,
+            procs,
+            fn_var,
+            symbol,
+            std::vec::Vec::new(),
+            layout_cache,
+            assigned,
+            env.arena.alloc(Stmt::Ret(assigned)),
+        );
+
+        return result;
+    } else if env.is_imported_symbol(symbol) {
+        match layout_cache.from_var(env.arena, variable, env.subs) {
+            Err(e) => panic!("invalid layout {:?}", e),
+            Ok(layout @ Layout::FunctionPointer(_, _)) => {
+                add_needed_external(procs, env, variable, symbol);
+
+                match hole {
+                    Stmt::Jump(_, _) => todo!("not sure what to do in this case yet"),
+                    _ => {
+                        let expr = Expr::FunctionPointer(symbol, layout.clone());
+                        let new_symbol = env.unique_symbol();
+                        return Stmt::Let(
+                            new_symbol,
+                            expr,
+                            layout,
+                            env.arena.alloc(Stmt::Ret(new_symbol)),
+                        );
+                    }
+                }
+            }
+            Ok(_) => {
+                // this is a 0-arity thunk
+                let result = call_by_name(
+                    env,
+                    procs,
+                    variable,
+                    symbol,
+                    std::vec::Vec::new(),
+                    layout_cache,
+                    assigned,
+                    env.arena.alloc(Stmt::Ret(assigned)),
+                );
+                return result;
+            }
+        }
+    }
+
+    // A bit ugly, but it does the job
+    match hole {
+        Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
+        _ => {
+            let result = Stmt::Ret(symbol);
+            let original = symbol;
+
+            // we don't have a more accurate variable available, which means the variable
+            // from the partial_proc will be used. So far that has given the correct
+            // result, but I'm not sure this will continue to be the case in more complex
+            // examples.
+            let opt_fn_var = None;
+
+            // if this is a function symbol, ensure that it's properly specialized!
+            reuse_function_symbol(
+                env,
+                procs,
+                layout_cache,
+                opt_fn_var,
+                symbol,
+                result,
+                original,
+            )
+        }
+    }
+}
+
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -2387,85 +2481,7 @@ pub fn with_hole<'a>(
             )
         }
         Var(symbol) => {
-            if procs.module_thunks.contains(&symbol) {
-                let partial_proc = procs.partial_procs.get(&symbol).unwrap();
-                let fn_var = partial_proc.annotation;
-
-                // This is a top-level declaration, which will code gen to a 0-arity thunk.
-                let result = call_by_name(
-                    env,
-                    procs,
-                    fn_var,
-                    symbol,
-                    std::vec::Vec::new(),
-                    layout_cache,
-                    assigned,
-                    env.arena.alloc(Stmt::Ret(assigned)),
-                );
-
-                return result;
-            } else if symbol.module_id() != env.home && symbol.module_id() != ModuleId::ATTR {
-                match layout_cache.from_var(env.arena, variable, env.subs) {
-                    Err(e) => panic!("invalid layout {:?}", e),
-                    Ok(layout @ Layout::FunctionPointer(_, _)) => {
-                        add_needed_external(procs, env, variable, symbol);
-
-                        match hole {
-                            Stmt::Jump(_, _) => todo!("not sure what to do in this case yet"),
-                            _ => {
-                                let expr = Expr::FunctionPointer(symbol, layout.clone());
-                                let new_symbol = env.unique_symbol();
-                                return Stmt::Let(
-                                    new_symbol,
-                                    expr,
-                                    layout,
-                                    env.arena.alloc(Stmt::Ret(new_symbol)),
-                                );
-                            }
-                        }
-                    }
-                    Ok(_) => {
-                        // this is a 0-arity thunk
-                        let result = call_by_name(
-                            env,
-                            procs,
-                            variable,
-                            symbol,
-                            std::vec::Vec::new(),
-                            layout_cache,
-                            assigned,
-                            env.arena.alloc(Stmt::Ret(assigned)),
-                        );
-                        return result;
-                    }
-                }
-            }
-
-            // A bit ugly, but it does the job
-            match hole {
-                Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-                _ => {
-                    let result = Stmt::Ret(symbol);
-                    let original = symbol;
-
-                    // we don't have a more accurate variable available, which means the variable
-                    // from the partial_proc will be used. So far that has given the correct
-                    // result, but I'm not sure this will continue to be the case in more complex
-                    // examples.
-                    let opt_fn_var = None;
-
-                    // if this is a function symbol, ensure that it's properly specialized!
-                    reuse_function_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        opt_fn_var,
-                        symbol,
-                        result,
-                        original,
-                    )
-                }
-            }
+            specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         Tag {
             variant_var,
@@ -2636,17 +2652,27 @@ pub fn with_hole<'a>(
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
-            for (label, _, _) in sorted_fields.into_iter() {
+            enum Field {
+                Imported(Symbol, Variable),
+                NakedSymbol,
+                Field(roc_can::expr::Field),
+            }
+
+            for (label, variable, _) in sorted_fields.into_iter() {
                 // TODO how should function pointers be handled here?
                 match fields.remove(&label) {
                     Some(field) => match can_reuse_symbol(procs, &field.loc_expr.value) {
+                        Some(reusable) if env.is_imported_symbol(reusable) => {
+                            field_symbols.push(reusable);
+                            can_fields.push(Field::Imported(reusable, variable));
+                        }
                         Some(reusable) => {
                             field_symbols.push(reusable);
-                            can_fields.push(None);
+                            can_fields.push(Field::NakedSymbol);
                         }
                         None => {
                             field_symbols.push(env.unique_symbol());
-                            can_fields.push(Some(field));
+                            can_fields.push(Field::Field(field));
                         }
                     },
                     None => {
@@ -2666,16 +2692,30 @@ pub fn with_hole<'a>(
 
             for (opt_field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev())
             {
-                if let Some(field) = opt_field {
-                    stmt = with_hole(
-                        env,
-                        field.loc_expr.value,
-                        field.var,
-                        procs,
-                        layout_cache,
-                        *symbol,
-                        env.arena.alloc(stmt),
-                    );
+                match opt_field {
+                    Field::NakedSymbol => {}
+                    Field::Imported(symbol, variable) => {
+                        // make sure this symbol is specialized appropriately in its source module
+                        add_needed_external(procs, env, variable, symbol);
+
+                        let layout = layout_cache
+                            .from_var(env.arena, variable, env.subs)
+                            .expect("creating layout does not fail");
+                        let expr = Expr::FunctionPointer(symbol, layout.clone());
+
+                        stmt = Stmt::Let(symbol, expr, layout, env.arena.alloc(stmt));
+                    }
+                    Field::Field(field) => {
+                        stmt = with_hole(
+                            env,
+                            field.loc_expr.value,
+                            field.var,
+                            procs,
+                            layout_cache,
+                            *symbol,
+                            env.arena.alloc(stmt),
+                        )
+                    }
                 }
             }
 
