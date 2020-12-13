@@ -8,8 +8,8 @@ interface AStar
 Model position :
     { evaluated : Set position
     , openSet : Set position
-    , costs : Map.Map position F64
-    , cameFrom : Map.Map position position
+    , costs : Dict.Dict position F64
+    , cameFrom : Dict.Dict position position
     }
 
 
@@ -17,8 +17,8 @@ initialModel : position -> Model position
 initialModel = \start ->
     { evaluated : Set.empty
     , openSet : Set.singleton start
-    , costs : Map.singleton start 0.0
-    , cameFrom : Map.empty
+    , costs : Dict.singleton start 0.0
+    , cameFrom : Dict.empty
     }
 
 
@@ -26,7 +26,7 @@ cheapestOpen : (position -> F64), Model position -> Result position [ KeyNotFoun
 cheapestOpen = \costFunction, model ->
 
     folder = \position, resSmallestSoFar ->
-            when Map.get model.costs position is
+            when Dict.get model.costs position is
                 Err e ->
                     Err e
 
@@ -47,9 +47,9 @@ cheapestOpen = \costFunction, model ->
 
 
 
-reconstructPath : Map position position, position -> List position
+reconstructPath : Dict position position, position -> List position
 reconstructPath = \cameFrom, goal ->
-    when Map.get cameFrom goal is
+    when Dict.get cameFrom goal is
         Err KeyNotFound ->
             []
 
@@ -58,9 +58,9 @@ reconstructPath = \cameFrom, goal ->
 
 updateCost : position, position, Model position -> Model position
 updateCost = \current, neighbour, model ->
-    newCameFrom = Map.insert model.cameFrom neighbour current
+    newCameFrom = Dict.insert model.cameFrom neighbour current
 
-    newCosts = Map.insert model.costs neighbour distanceTo
+    newCosts = Dict.insert model.costs neighbour distanceTo
 
     distanceTo = reconstructPath newCameFrom neighbour
             |> List.len
@@ -68,7 +68,7 @@ updateCost = \current, neighbour, model ->
 
     newModel = { model & costs : newCosts , cameFrom : newCameFrom }
 
-    when Map.get model.costs neighbour is
+    when Dict.get model.costs neighbour is
         Err KeyNotFound ->
             newModel
 

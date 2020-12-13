@@ -835,13 +835,13 @@ define_builtins! {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
     }
-    6 MAP: "Map" => {
-        0 MAP_MAP: "Map" imported // the Map.Map type alias
-        1 MAP_AT_MAP: "@Map" // the Map.@Map private tag
-        2 MAP_EMPTY: "empty"
-        3 MAP_SINGLETON: "singleton"
-        4 MAP_GET: "get"
-        5 MAP_INSERT: "insert"
+    6 DICT: "Dict" => {
+        0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
+        1 DICT_AT_DICT: "@Dict" // the Dict.@Dict private tag
+        2 DICT_EMPTY: "empty"
+        3 DICT_SINGLETON: "singleton"
+        4 DICT_GET: "get"
+        5 DICT_INSERT: "insert"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias

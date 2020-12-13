@@ -400,7 +400,7 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
             }
             todo!();
         }
-        Map(key_layout, value_layout) => {
+        Dict(key_layout, value_layout) => {
             if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
                 // TODO decrement all values
             }
@@ -483,7 +483,7 @@ fn increment_refcount_builtin<'a, 'ctx, 'env>(
             }
             todo!();
         }
-        Map(key_layout, value_layout) => {
+        Dict(key_layout, value_layout) => {
             if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
                 // TODO decrement all values
             }
