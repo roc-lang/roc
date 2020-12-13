@@ -659,6 +659,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         decls: Vec<Declaration>,
         module_timing: ModuleTiming,
+        unused_imports: MutSet<ModuleId>,
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
@@ -870,6 +871,7 @@ enum BuildTask<'a> {
         constraint: Constraint,
         var_store: VarStore,
         declarations: Vec<Declaration>,
+        unused_imports: MutSet<ModuleId>,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -1607,6 +1609,7 @@ fn update<'a>(
             solved_subs,
             decls,
             mut module_timing,
+            mut unused_imports,
         } => {
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
@@ -1615,6 +1618,18 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
+
+            let existing = match state.module_cache.can_problems.entry(module_id) {
+                Vacant(entry) => entry.insert(std::vec::Vec::new()),
+                Occupied(entry) => entry.into_mut(),
+            };
+
+            for unused in unused_imports.drain() {
+                existing.push(roc_problem::can::Problem::UnusedImport(
+                    unused,
+                    Region::zero(),
+                ));
+            }
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
@@ -2742,14 +2757,6 @@ impl<'a> BuildTask<'a> {
             stdlib,
         );
 
-        if !unused_imports.is_empty() {
-            todo!(
-                "TODO gracefully handle unused import {:?} from module {:?}",
-                &unused_imports,
-                home,
-            );
-        }
-
         // Next, solve this module in the background.
         Self::Solve {
             module,
@@ -2759,6 +2766,7 @@ impl<'a> BuildTask<'a> {
             var_store,
             declarations,
             module_timing,
+            unused_imports,
         }
     }
 }
@@ -2772,6 +2780,7 @@ fn run_solve<'a>(
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
+    unused_imports: MutSet<ModuleId>,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
@@ -2819,6 +2828,7 @@ fn run_solve<'a>(
         decls,
         solved_module,
         module_timing,
+        unused_imports,
     }
 }
 
@@ -3615,6 +3625,7 @@ fn run_task<'a>(
             var_store,
             ident_ids,
             declarations,
+            unused_imports,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -3623,6 +3634,7 @@ fn run_task<'a>(
             constraint,
             var_store,
             declarations,
+            unused_imports,
         )),
         BuildPendingSpecializations {
             module_id,

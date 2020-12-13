@@ -28,15 +28,22 @@ pub fn can_problem<'b>(
                     .append(alloc.reflow(line)),
             ])
         }
-        Problem::UnusedImport(module_id, region) => alloc.concat(vec![
-            alloc.reflow("Nothing from "),
-            alloc.module(module_id),
-            alloc.reflow(" is used in this module."),
-            alloc.region(region),
-            alloc.reflow("Since "),
-            alloc.module(module_id),
-            alloc.reflow(" isn't used, you don't need to import it."),
-        ]),
+        Problem::UnusedImport(module_id, region) =>  {
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("Nothing from "),
+                    alloc.module(module_id),
+                    alloc.reflow(" is used in this module."),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Since "),
+                    alloc.module(module_id),
+                    alloc.reflow(" isn't used, you don't need to import it."),
+                ])
+            ])
+
+        }
         Problem::ExposedButNotDefined(symbol) => {
             alloc.stack(vec![
                 alloc
