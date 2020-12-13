@@ -1,6 +1,12 @@
 const std = @import("std");
-const str = @import("../../../compiler/builtins/bitcode/src/str.zig");
+const str = @import("str.zig");
+const RocStr = str.RocStr;
 const testing = std.testing;
+const expectEqual = testing.expectEqual;
+const expect = testing.expect;
+
+const mem = std.mem;
+const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed([*]u8) void;
 extern fn roc__mainForHost_1_size() i64;
@@ -59,26 +65,46 @@ fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) vo
     }
 }
 
-extern var errno: c_int;
+pub export fn roc_fx_putLine(rocPath: str.RocStr) i64 {
+    const stdout = std.io.getStdOut().writer();
 
-const FILE = extern struct {
-    unused: u8,
-};
+    const u8_ptr = rocPath.asU8ptr();
 
-extern fn fopen([*c]const u8, [*c]const u8) ?[*c]FILE;
-extern fn ftell([*c]FILE) c_long;
-extern fn fread([*c]u8, size_t, size_t, [*c]FILE) size_t;
-extern fn fclose([*c]FILE) c_int;
+    var i: usize = 0;
+    while (i < rocPath.len()) {
+        stdout.print("{c}", .{u8_ptr[i]}) catch unreachable;
+
+        i += 1;
+    }
+
+    stdout.print("\n", .{}) catch unreachable;
+
+    return 0;
+}
 
 pub const ReadResult = extern struct {
     bytes: RocStr, // TODO RocList<u8> once Roc supports U8
     errno: i64, // TODO i32 when Roc supports I32
 };
 
-pub fn roc_fx_readAllUtf8(rocPath: *RocStr) ReadResult {
+pub export fn roc_fx_readAllUtf8(rocPath: RocStr) callconv(.C) ReadResult {
+    var dir = std.fs.cwd();
+    var content = dir.readFileAlloc(testing.allocator, rocPath.asSlice(), 1024) catch unreachable;
+
+    var str_ptr = @ptrCast([*]u8, content);
+    var roc_str3 = RocStr.init(testing.allocator, str_ptr, content.len);
+
+    return ReadResult{ .bytes = roc_str3, .errno = 0 };
+}
+
+pub fn roc_fx_readAllUtf8_that_does_not_work(rocPath: *RocStr) ReadResult {
+    const allocator = std.heap.c_allocator;
+
     // fopen wants a C string, so stack-allocate one using rocPath's contents
-    const len = rocPath.len();
-    var path: [len + 1]u8 = undefined;
+    const len = rocPath.len() + 1;
+
+    var raw = allocator.alloc(u8, len) catch unreachable;
+    var path: [*:0]u8 = @ptrCast([*:0]u8, raw);
     rocPath.memcpy(path, len);
     path[len] = 0; // nul-terminate the path, since it's a C string
 
@@ -163,6 +189,26 @@ pub fn roc_fx_readAllUtf8(rocPath: *RocStr) ReadResult {
     return ReadResult{ .bytes = RocStr.init(buffer, totalBytes), .errno = 0 };
 }
 
-test "read empty file" {
-    std.debug.panic("hello!", .{});
-}
+// const c = @cImport({
+//     @cInclude("stdio.h");
+//     @cInclude("stdlib.h");
+// });
+//
+// extern var errno: c_int;
+//
+// const FILE = extern struct {
+//     unused: u8,
+// };
+
+// extern "c" fn fopen(filename: [*:0]const u8, modes: [*:0]const u8) ?*FILE;
+//extern "c" fn fopen(filename: [*:0]const u8, modes: [*:0]const u8) ?*FILE;
+//extern "c" fn fclose(stream: *FILE) c_int;
+//extern "c" fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
+
+// extern fn fopen([*:0]const u8, [*:0]const u8) ?*FILE;
+// extern fn fseek(*FILE, c_long, c_int) c_int;
+
+//extern fn fopen([*c]const u8, [*c]const u8) [*c]FILE;
+// extern fn ftell([*c]FILE) c_long;
+// extern fn fread([*c]u8, size_t, size_t, [*c]FILE) size_t;
+// extern fn fclose([*c]FILE) c_int;

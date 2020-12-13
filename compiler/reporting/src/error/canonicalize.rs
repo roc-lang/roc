@@ -626,6 +626,13 @@ fn pretty_runtime_error<'b>(
         RuntimeError::NonExhaustivePattern => {
             unreachable!("not currently reported (but can blow up at runtime)")
         }
+        RuntimeError::ExposedButNotDefined(symbol) => alloc.stack(vec![
+            alloc
+                .symbol_unqualified(symbol)
+                .append(alloc.reflow(" was listed as exposed in "))
+                .append(alloc.module(symbol.module_id()))
+                .append(alloc.reflow(", but it was not defined anywhere in that module.")),
+        ]),
     }
 }
 

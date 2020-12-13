@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, putLine, after, always, map, after, fail]
+    exposes [ Task, after, always, fail, map, putLine, getLine ]
     imports [ Effect ]
 
 Task a err : Effect.Effect (Result a err)
@@ -9,6 +9,9 @@ always = \x -> Effect.always (Ok x)
 
 fail : err -> Task * err
 fail = \x -> Effect.always (Err x)
+
+getLine : Task Str *
+getLine = Effect.after Effect.getLine always
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})

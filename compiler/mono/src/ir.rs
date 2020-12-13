@@ -425,14 +425,6 @@ impl<'a> Procs<'a> {
             .from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        if let Some(existing) = self.partial_procs.get(&symbol) {
-            // only assert that we're really adding the same thing
-            debug_assert_eq!(annotation, existing.annotation);
-            debug_assert_eq!(captured_symbols, existing.captured_symbols);
-            debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
-            return Ok(layout);
-        }
-
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
@@ -451,33 +443,38 @@ impl<'a> Procs<'a> {
                 if !already_specialized {
                     let pending = PendingSpecialization::from_var(env.subs, annotation);
 
-                    let pattern_symbols = pattern_symbols.into_bump_slice();
+                    let partial_proc;
+                    if let Some(existing) = self.partial_procs.get(&symbol) {
+                        // if we're adding the same partial proc twice, they must be the actual same!
+                        //
+                        // NOTE we can't skip extra work! we still need to make the specialization for this
+                        // invocation. The content of the `annotation` can be different, even if the variable
+                        // number is the same
+                        debug_assert_eq!(annotation, existing.annotation);
+                        debug_assert_eq!(captured_symbols, existing.captured_symbols);
+                        debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
+
+                        partial_proc = existing.clone();
+                    } else {
+                        let pattern_symbols = pattern_symbols.into_bump_slice();
+
+                        partial_proc = PartialProc {
+                            annotation,
+                            pattern_symbols,
+                            captured_symbols,
+                            body: body.value,
+                            is_self_recursive,
+                        };
+                    }
+
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout.clone(), pending);
 
-                            self.partial_procs.insert(
-                                symbol,
-                                PartialProc {
-                                    annotation,
-                                    pattern_symbols,
-                                    captured_symbols,
-                                    body: body.value,
-                                    is_self_recursive,
-                                },
-                            );
+                            self.partial_procs.insert(symbol, partial_proc);
                         }
                         None => {
-                            // TODO should pending_procs hold a Rc<Proc>?
-                            let partial_proc = PartialProc {
-                                annotation,
-                                pattern_symbols,
-                                captured_symbols,
-                                body: body.value,
-                                is_self_recursive,
-                            };
-
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
@@ -4752,10 +4749,40 @@ fn reuse_function_symbol<'a>(
 ) -> Stmt<'a> {
     match procs.partial_procs.get(&original) {
         None => {
-            // danger: a foreign symbol may not be specialized!
-            debug_assert!(
-                env.home == original.module_id() || original.module_id() == ModuleId::ATTR
-            );
+            let is_imported =
+                !(env.home == original.module_id() || original.module_id() == ModuleId::ATTR);
+
+            match arg_var {
+                Some(arg_var) if is_imported => {
+                    let layout = layout_cache
+                        .from_var(env.arena, arg_var, env.subs)
+                        .expect("creating layout does not fail");
+
+                    add_needed_external(procs, env, arg_var, original);
+
+                    procs.insert_passed_by_name(
+                        env,
+                        arg_var,
+                        original,
+                        layout.clone(),
+                        layout_cache,
+                    );
+
+                    // an imported symbol is always a function pointer:
+                    // either it's a function, or a top-level 0-argument thunk
+                    let expr = Expr::FunctionPointer(original, layout.clone());
+                    return Stmt::Let(original, expr, layout, env.arena.alloc(result));
+                }
+                _ => {
+                    // danger: a foreign symbol may not be specialized!
+                    debug_assert!(
+                        !is_imported,
+                        "symbol {:?} while processing module {:?}",
+                        original,
+                        (env.home, &arg_var),
+                    );
+                }
+            }
 
             result
         }
