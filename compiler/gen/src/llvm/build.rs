@@ -478,7 +478,6 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                 let ctx = env.context;
                 let builder = env.builder;
                 let number_of_chars = str_literal.len() as u64;
-                let elem_bytes = CHAR_LAYOUT.stack_size(env.ptr_bytes) as u64;
                 let ptr_bytes = env.ptr_bytes;
 
                 let populate_str = |ptr| {

@@ -12,8 +12,30 @@ platform folkertdev/foo
         }
 
 
-mainForHost : {init : ({} -> I64) as Init }
+mainForHost : 
+    {
+        init : ({} -> { model: I64, cmd : (Cmd.Cmd [ Line Str ]) as Fx }) as Init,
+        update : ([ Line Str ], I64 -> { model: I64, cmd : Cmd.Cmd [ Line Str ] } ) as Update
+    }
 mainForHost = 
-    { init : \{} -> 42 }
+    { 
+        init : \{} -> 
+            { 
+                model: 42,
+                cmd: 
+                    Cmd.after (Cmd.putLine "Type a thing, and I'll say it back") \{} -> 
+                        Cmd.getLine (\l -> Line l) 
+            },
+        update : \msg, model -> 
+            when msg is
+                Line line -> 
+                    cmd = 
+                        Cmd.after (Cmd.putLine "You said:") \{} ->                             
+                        Cmd.after (Cmd.putLine line) \{} ->                             
+                        Cmd.after (Cmd.putLine "Type another thing, and I'll say it back") \{} ->                             
+                        Cmd.getLine (\l -> Line l) 
+
+                    { model: model + 1, cmd }
+    }
 
 
