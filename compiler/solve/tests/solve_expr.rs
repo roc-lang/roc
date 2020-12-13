@@ -3102,10 +3102,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Map.insert
+                Dict.insert
                 "#
             ),
-            "Map a b, a, b -> Map a b",
+            "Dict a b, a, b -> Dict a b",
         );
     }
 
@@ -3186,9 +3186,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                reconstructPath : Map position position, position -> List position
+                reconstructPath : Dict position position, position -> List position
                 reconstructPath = \cameFrom, goal ->
-                    when Map.get cameFrom goal is
+                    when Dict.get cameFrom goal is
                         Err KeyNotFound ->
                             []
 
@@ -3198,7 +3198,7 @@ mod solve_expr {
                 reconstructPath
                 "#
             ),
-            "Map position position, position -> List position",
+            "Dict position position, position -> List position",
         );
     }
 
@@ -3695,22 +3695,22 @@ mod solve_expr {
                 # The color of a node. Leaves are considered Black.
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
 
                 # Create an empty dictionary.
-                empty : Dict k v
+                empty : RBTree k v
                 empty =
                     Empty
 
-                foo : Dict I64 I64
+                foo : RBTree I64 I64
                 foo = empty
 
-                main : Dict I64 I64
+                main : RBTree I64 I64
                 main =
                     foo
                 "#
             ),
-            "Dict I64 I64",
+            "RBTree I64 I64",
         );
     }
 
@@ -3725,21 +3725,21 @@ mod solve_expr {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                Dict k : [ Node k (Dict k), Empty ]
+                RBTree k : [ Node k (RBTree k), Empty ]
 
-                balance : Dict k -> Dict k
+                balance : RBTree  k -> RBTree k
                 balance = \left ->
                     when left is
                       Node _ Empty -> Empty
 
                       _ -> Empty
 
-                main : Dict {}
+                main : RBTree {}
                 main =
                     balance Empty
                 "#
             ),
-            "Dict {}",
+            "RBTree {}",
         );
     }
 
@@ -3752,9 +3752,9 @@ mod solve_expr {
 
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
 
-                moveRedLeft : Dict k v -> Dict k v
+                moveRedLeft : RBTree k v -> RBTree k v
                 moveRedLeft = \dict ->
                   when dict is
                     # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV ((Node Red rlK rlV rlL rlR) as rLeft) rRight) ->
@@ -3790,7 +3790,7 @@ mod solve_expr {
                     _ ->
                       dict
 
-                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
                 balance = \color, key, value, left, right ->
                   when right is
                     Node Red rK rV rLeft rRight ->
@@ -3822,7 +3822,7 @@ mod solve_expr {
 
                 Key k : Num k
 
-                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -3839,7 +3839,7 @@ mod solve_expr {
                     Empty ->
                       Empty
 
-                getMin : Dict k v -> Dict k v
+                getMin : RBTree k v -> RBTree k v
                 getMin = \dict ->
                   when dict is
                     # Node _ _ _ ((Node _ _ _ _ _) as left) _ ->
@@ -3852,7 +3852,7 @@ mod solve_expr {
                       dict
 
 
-                moveRedRight : Dict k v -> Dict k v
+                moveRedRight : RBTree k v -> RBTree k v
                 moveRedRight = \dict ->
                   when dict is
                     Node clr k v (Node lClr lK lV (Node Red llK llV llLeft llRight) lRight) (Node rClr rK rV rLeft rRight) ->
@@ -3885,7 +3885,7 @@ mod solve_expr {
                       dict
 
 
-                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+                removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
                 removeHelpPrepEQGT = \_, dict, color, key, value, left, right ->
                   when left is
                     Node Red lK lV lLeft lRight ->
@@ -3908,7 +3908,7 @@ mod solve_expr {
                           dict
 
 
-                removeMin : Dict k v -> Dict k v
+                removeMin : RBTree k v -> RBTree k v
                 removeMin = \dict ->
                   when dict is
                     Node color key value left right ->
@@ -3936,7 +3936,7 @@ mod solve_expr {
                     _ ->
                       Empty
 
-                removeHelp : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -3964,12 +3964,12 @@ mod solve_expr {
                         removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
 
 
-                main : Dict I64 I64
+                main : RBTree I64 I64
                 main =
                     removeHelp 1 Empty
                 "#
             ),
-            "Dict I64 I64",
+            "RBTree I64 I64",
         );
     }
 
@@ -3980,9 +3980,9 @@ mod solve_expr {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
 
-                removeHelp : Num k, Dict (Num k) -> Dict (Num k)
+                removeHelp : Num k, RBTree (Num k) -> RBTree (Num k)
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4004,12 +4004,12 @@ mod solve_expr {
                         Empty
 
 
-                main : Dict I64
+                main : RBTree I64
                 main =
                     removeHelp 1 Empty
                 "#
             ),
-            "Dict I64",
+            "RBTree I64",
         );
     }
 
@@ -4022,9 +4022,9 @@ mod solve_expr {
 
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
 
-                removeHelp : Num k, Dict (Num k) v -> Dict (Num k) v
+                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4053,13 +4053,13 @@ mod solve_expr {
 
                 Key k : Num k
 
-                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
 
-                moveRedLeft : Dict k v -> Dict k v
+                moveRedLeft : RBTree k v -> RBTree k v
 
-                removeHelpPrepEQGT : Key k, Dict (Key k) v, NodeColor, (Key k), v, Dict (Key k) v, Dict (Key k) v -> Dict (Key k) v
+                removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
 
-                removeHelpEQGT : Key k, Dict (Key k) v -> Dict (Key k) v
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -4076,16 +4076,16 @@ mod solve_expr {
                     Empty ->
                       Empty
 
-                getMin : Dict k v -> Dict k v
+                getMin : RBTree k v -> RBTree k v
 
-                removeMin : Dict k v -> Dict k v
+                removeMin : RBTree k v -> RBTree k v
 
-                main : Dict I64 I64
+                main : RBTree I64 I64
                 main =
                     removeHelp 1 Empty
                 "#
             ),
-            "Dict I64 I64",
+            "RBTree I64 I64",
         );
     }
 
@@ -4134,18 +4134,18 @@ mod solve_expr {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
 
-                balance : k, Dict k -> Dict k
+                balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
                     Node key left Empty
 
-                main : Dict I64
+                main : RBTree I64
                 main =
                     balance 0 Empty
                 "#
             ),
-            "Dict I64",
+            "RBTree I64",
         );
     }
 
@@ -4156,20 +4156,20 @@ mod solve_expr {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
 
                 node = \x,y,z -> Node x y z
 
-                balance : k, Dict k -> Dict k
+                balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
                     node key left Empty
 
-                main : Dict I64
+                main : RBTree I64
                 main =
                     balance 0 Empty
                 "#
             ),
-            "Dict I64",
+            "RBTree I64",
         );
     }
 
@@ -4182,9 +4182,9 @@ mod solve_expr {
 
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
 
-                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
                 balance = \color, key, value, left, right ->
                   when right is
                     Node Red rK rV rLeft rRight ->
@@ -4213,12 +4213,12 @@ mod solve_expr {
                         _ ->
                           Node color key value left right
 
-                main : Dict I64 I64
+                main : RBTree I64 I64
                 main =
                     balance Red 0 0 Empty Empty
                 "#
             ),
-            "Dict I64 I64",
+            "RBTree I64 I64",
         );
     }
 
@@ -4230,9 +4230,9 @@ mod solve_expr {
                 r#"
                 app Test provides [ main ] imports []
 
-                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
 
-                balance : k, Dict k -> Dict k
+                balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
                       when left is
                         Node _ _ lRight ->
@@ -4242,12 +4242,12 @@ mod solve_expr {
                             Empty
 
 
-                main : Dict I64
+                main : RBTree I64
                 main =
                     balance 0 Empty
                 "#
             ),
-            "Dict I64",
+            "RBTree I64",
         );
     }
 }

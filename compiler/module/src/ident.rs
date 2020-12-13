@@ -69,7 +69,7 @@ impl ModuleName {
     pub const STR: &'static str = "Str";
     pub const NUM: &'static str = "Num";
     pub const LIST: &'static str = "List";
-    pub const MAP: &'static str = "Map";
+    pub const DICT: &'static str = "Dict";
     pub const SET: &'static str = "Set";
     pub const RESULT: &'static str = "Result";
 

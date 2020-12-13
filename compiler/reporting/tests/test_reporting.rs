@@ -447,9 +447,9 @@ mod test_reporting {
                 these names seem close though:
 
                     baz
-                    Map
                     Str
                     main
+                    U8
                 "#
             ),
         )
@@ -3534,8 +3534,8 @@ mod test_reporting {
 
                     Bool
                     Num
-                    Map
                     Set
+                    Str
                 "#
             ),
         )
@@ -3928,10 +3928,10 @@ mod test_reporting {
                 # The color of a node. Leaves are considered Black.
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
 
                 # Create an empty dictionary.
-                empty : Dict k v
+                empty : RBTree k v
                 empty =
                     Empty
 

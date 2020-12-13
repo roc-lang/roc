@@ -242,15 +242,15 @@ mod test_load {
                 "RBTree",
                 indoc!(
                     r#"
-                        interface RBTree exposes [ Dict, empty ] imports []
+                        interface RBTree exposes [ RedBlackTree, empty ] imports []
 
                         # The color of a node. Leaves are considered Black.
                         NodeColor : [ Red, Black ]
 
-                        Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                        RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
 
                         # Create an empty dictionary.
-                        empty : Dict k v
+                        empty : RedBlackTree k v
                         empty =
                             Empty
                     "#
@@ -265,7 +265,7 @@ mod test_load {
                             imports [ RBTree ] 
                             provides [ main ] to blah
 
-                        empty : RBTree.Dict I64 I64
+                        empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
 
                         main = empty
@@ -424,7 +424,7 @@ mod test_load {
             hashmap! {
                 "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
                 "initialModel" => "position -> Model position",
-                "reconstructPath" => "Map position position, position -> List position",
+                "reconstructPath" => "Dict position position, position -> List position",
                 "updateCost" => "position, position, Model position -> Model position",
                 "cheapestOpen" => "(position -> F64), Model position -> Result position [ KeyNotFound ]*",
                 "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",

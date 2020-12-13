@@ -2397,24 +2397,24 @@ mod solve_uniq_expr {
 
     #[test]
     fn map_empty() {
-        infer_eq("Map.empty", "Attr * (Map * *)");
+        infer_eq("Dict.empty", "Attr * (Dict * *)");
     }
 
     #[test]
     fn map_singelton() {
-        infer_eq("Map.singleton", "Attr * (a, b -> Attr * (Map a b))");
+        infer_eq("Dict.singleton", "Attr * (a, b -> Attr * (Dict a b))");
     }
 
     #[test]
     fn map_get() {
-        infer_eq("Map.get", "Attr * (Attr (* | c) (Map (Attr * a) (Attr c b)), Attr * a -> Attr * (Result (Attr c b) (Attr * [ KeyNotFound ]*)))");
+        infer_eq("Dict.get", "Attr * (Attr (* | c) (Dict (Attr * a) (Attr c b)), Attr * a -> Attr * (Result (Attr c b) (Attr * [ KeyNotFound ]*)))");
     }
 
     #[test]
     fn map_insert() {
         infer_eq(
-            "Map.insert",
-            "Attr * (Attr * (Map a b), a, b -> Attr * (Map a b))",
+            "Dict.insert",
+            "Attr * (Attr * (Dict a b), a, b -> Attr * (Dict a b))",
         );
     }
 
@@ -2747,9 +2747,9 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                reconstructPath : Map position position, position -> List position
+                reconstructPath : Dict position position, position -> List position
                 reconstructPath = \cameFrom, goal ->
-                    when Map.get cameFrom goal is
+                    when Dict.get cameFrom goal is
                         Err KeyNotFound ->
                             []
 
@@ -2759,7 +2759,7 @@ mod solve_uniq_expr {
                 reconstructPath
                 "#
             ),
-            "Attr Shared (Attr Shared (Map (Attr * position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))"
+            "Attr Shared (Attr Shared (Dict (Attr * position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))"
         );
     }
 
@@ -2772,15 +2772,15 @@ mod solve_uniq_expr {
                 r#"
                 Model position : { evaluated : Set position
                     , openSet : Set  position
-                    , costs : Map.Map position F64
-                    , cameFrom : Map.Map position position
+                    , costs : Dict.Dict position F64
+                    , cameFrom : Dict.Dict position position
                     }
 
                 cheapestOpen : (position -> F64), Model position -> Result position [ KeyNotFound ]*
                 cheapestOpen = \costFunction, model ->
 
                     folder = \position, resSmallestSoFar ->
-                            when Map.get model.costs position is
+                            when Dict.get model.costs position is
                                 Err e ->
                                     Err e
 
@@ -2815,13 +2815,13 @@ mod solve_uniq_expr {
                 r#"
                 Model position : { evaluated : Set position
                     , openSet : Set  position
-                    , costs : Map.Map position F64
-                    , cameFrom : Map.Map position position
+                    , costs : Dict.Dict position F64
+                    , cameFrom : Dict.Dict position position
                     }
 
-                reconstructPath : Map position position, position -> List position
+                reconstructPath : Dict position position, position -> List position
                 reconstructPath = \cameFrom, goal ->
-                    when Map.get cameFrom goal is
+                    when Dict.get cameFrom goal is
                         Err KeyNotFound ->
                             []
 
@@ -2830,9 +2830,9 @@ mod solve_uniq_expr {
 
                 updateCost : position, position, Model position -> Model position
                 updateCost = \current, neighbour, model ->
-                    newCameFrom = Map.insert model.cameFrom neighbour current
+                    newCameFrom = Dict.insert model.cameFrom neighbour current
 
-                    newCosts = Map.insert model.costs neighbour distanceTo
+                    newCosts = Dict.insert model.costs neighbour distanceTo
 
                     distanceTo = reconstructPath newCameFrom neighbour
                             |> List.len
@@ -2840,7 +2840,7 @@ mod solve_uniq_expr {
 
                     newModel = { model & costs : newCosts , cameFrom : newCameFrom }
 
-                    when Map.get model.costs neighbour is
+                    when Dict.get model.costs neighbour is
                         Err KeyNotFound ->
                             newModel
 
@@ -2867,8 +2867,8 @@ mod solve_uniq_expr {
                 r#"
                     Model position : { evaluated : Set position
                         , openSet : Set  position
-                        , costs : Map.Map position F64
-                        , cameFrom : Map.Map position position
+                        , costs : Dict.Dict position F64
+                        , cameFrom : Dict.Dict position position
                         }
 
 
@@ -2876,8 +2876,8 @@ mod solve_uniq_expr {
                     initialModel = \start ->
                         { evaluated : Set.empty
                         , openSet : Set.singleton start
-                        , costs : Map.singleton start 0.0
-                        , cameFrom : Map.empty
+                        , costs : Dict.singleton start 0.0
+                        , cameFrom : Dict.empty
                         }
 
 
@@ -2885,7 +2885,7 @@ mod solve_uniq_expr {
                     cheapestOpen = \costFunction, model ->
 
                         folder = \position, resSmallestSoFar ->
-                            when Map.get model.costs position is
+                            when Dict.get model.costs position is
                                 Err e ->
                                     Err e
 
@@ -2906,9 +2906,9 @@ mod solve_uniq_expr {
                             |> Result.map (\x -> x.position)
 
 
-                    reconstructPath : Map position position, position -> List position
+                    reconstructPath : Dict position position, position -> List position
                     reconstructPath = \cameFrom, goal ->
-                        when Map.get cameFrom goal is
+                        when Dict.get cameFrom goal is
                             Err KeyNotFound ->
                                 []
 
@@ -2918,9 +2918,9 @@ mod solve_uniq_expr {
 
                     updateCost : position, position, Model position -> Model position
                     updateCost = \current, neighbour, model ->
-                        newCameFrom = Map.insert model.cameFrom neighbour current
+                        newCameFrom = Dict.insert model.cameFrom neighbour current
 
-                        newCosts = Map.insert model.costs neighbour distanceTo
+                        newCosts = Dict.insert model.costs neighbour distanceTo
 
                         distanceTo =
                             reconstructPath newCameFrom neighbour
@@ -2929,7 +2929,7 @@ mod solve_uniq_expr {
 
                         newModel = { model & costs : newCosts , cameFrom : newCameFrom }
 
-                        when Map.get model.costs neighbour is
+                        when Dict.get model.costs neighbour is
                             Err KeyNotFound ->
                                 newModel
 

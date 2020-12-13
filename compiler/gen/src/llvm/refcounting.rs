@@ -59,13 +59,10 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let builder = env.builder;
         // pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
+        let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
 
-        let ptr_as_usize_ptr = cast_basic_basic(
-            builder,
-            data_ptr.into(),
-            refcount_type.ptr_type(AddressSpace::Generic).into(),
-        )
-        .into_pointer_value();
+        let ptr_as_usize_ptr = cast_basic_basic(builder, data_ptr.into(), refcount_ptr_type.into())
+            .into_pointer_value();
 
         // get a pointer to index -1
         let index_intvalue = refcount_type.const_int((-1 as i64) as u64, false);
@@ -400,7 +397,7 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
             }
             todo!();
         }
-        Map(key_layout, value_layout) => {
+        Dict(key_layout, value_layout) => {
             if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
                 // TODO decrement all values
             }
@@ -430,6 +427,24 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
 
         RecursiveUnion(tags) => {
             build_inc_union(env, layout_ids, tags, value);
+        }
+        Closure(_, closure_layout, _) => {
+            if closure_layout.contains_refcounted() {
+                let wrapper_struct = value.into_struct_value();
+
+                let field_ptr = env
+                    .builder
+                    .build_extract_value(wrapper_struct, 1, "increment_closure_data")
+                    .unwrap();
+
+                increment_refcount_layout(
+                    env,
+                    parent,
+                    layout_ids,
+                    field_ptr,
+                    &closure_layout.as_block_of_memory_layout(),
+                )
+            }
         }
         _ => {}
     }
@@ -483,7 +498,7 @@ fn increment_refcount_builtin<'a, 'ctx, 'env>(
             }
             todo!();
         }
-        Map(key_layout, value_layout) => {
+        Dict(key_layout, value_layout) => {
             if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
                 // TODO decrement all values
             }

@@ -347,8 +347,8 @@ pub fn set_type(a: SolvedType) -> SolvedType {
 }
 
 #[inline(always)]
-pub fn map_type(key: SolvedType, value: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::MAP_MAP, vec![key, value])
+pub fn dict_type(key: SolvedType, value: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::DICT_DICT, vec![key, value])
 }
 
 fn single_private_tag(symbol: Symbol, type_arguments: Vec<SolvedType>) -> SolvedType {

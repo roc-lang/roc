@@ -1,7 +1,7 @@
 interface Defaults
     exposes []
     imports [
-        Map.{ Map },
+        Dict.{ Dict },
         Set.{ Set },
         Num.{ Num, Int, Float }
     ]

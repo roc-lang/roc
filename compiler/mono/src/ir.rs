@@ -587,7 +587,10 @@ impl<'a> Procs<'a> {
                 let symbol = name;
 
                 // TODO should pending_procs hold a Rc<Proc>?
-                let partial_proc = self.partial_procs.get(&symbol).unwrap().clone();
+                let partial_proc = match self.partial_procs.get(&symbol) {
+                    Some(p) => p.clone(),
+                    None => panic!("no partial_proc for {:?}", symbol),
+                };
 
                 // Mark this proc as in-progress, so if we're dealing with
                 // mutually recursive functions, we don't loop forever.
