@@ -742,51 +742,61 @@ define_builtins! {
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
-        2 NUM_I64: "I64" imported // the Num.I64 type alias
-        3 NUM_INTEGER: "Integer" imported // Int : Num Integer
-        4 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
-        5 NUM_F64: "F64" imported // the Num.F64 type alias
-        6 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
-        7 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
-        8 NUM_MAX_INT: "maxInt"
-        9 NUM_MIN_INT: "minInt"
-        10 NUM_MAX_FLOAT: "maxFloat"
-        11 NUM_MIN_FLOAT: "minFloat"
-        12 NUM_ABS: "abs"
-        13 NUM_NEG: "neg"
-        14 NUM_ADD: "add"
-        15 NUM_SUB: "sub"
-        16 NUM_MUL: "mul"
-        17 NUM_LT: "isLt"
-        18 NUM_LTE: "isLte"
-        19 NUM_GT: "isGt"
-        20 NUM_GTE: "isGte"
-        21 NUM_TO_FLOAT: "toFloat"
-        22 NUM_SIN: "sin"
-        23 NUM_COS: "cos"
-        24 NUM_TAN: "tan"
-        25 NUM_IS_ZERO: "isZero"
-        26 NUM_IS_EVEN: "isEven"
-        27 NUM_IS_ODD: "isOdd"
-        28 NUM_IS_POSITIVE: "isPositive"
-        29 NUM_IS_NEGATIVE: "isNegative"
-        30 NUM_REM: "rem"
-        31 NUM_DIV_FLOAT: "div"
-        32 NUM_DIV_INT: "divFloor"
-        33 NUM_MOD_INT: "modInt"
-        34 NUM_MOD_FLOAT: "modFloat"
-        35 NUM_SQRT: "sqrt"
-        36 NUM_ROUND: "round"
-        37 NUM_COMPARE: "compare"
-        38 NUM_POW: "pow"
-        39 NUM_CEILING: "ceiling"
-        40 NUM_POW_INT: "powInt"
-        41 NUM_FLOOR: "floor"
-        42 NUM_ADD_WRAP: "addWrap"
-        43 NUM_ADD_CHECKED: "addChecked"
-        44 NUM_ATAN: "atan"
-        45 NUM_ACOS: "acos"
-        46 NUM_ASIN: "asin"
+        2 NUM_I128: "I128" imported // the Num.I128 type alias
+        3 NUM_U128: "U128" imported // the Num.U128 type alias
+        4 NUM_I64: "I64" imported // the Num.I64 type alias
+        5 NUM_U64: "U64" imported // the Num.U64 type alias
+        6 NUM_I32: "I32" imported // the Num.I32 type alias
+        7 NUM_U32: "U32" imported // the Num.U32 type alias
+        8 NUM_I16: "I16" imported // the Num.I16 type alias
+        9 NUM_U16: "U16" imported // the Num.U16 type alias
+        10 NUM_I8: "I8" imported // the Num.I8 type alias
+        11 NUM_U8: "U8" imported // the Num.U8 type alias
+        12 NUM_INTEGER: "Integer" imported // Int : Num Integer
+        13 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
+        14 NUM_F64: "F64" imported // the Num.F64 type alias
+        15 NUM_F32: "F32" imported // the Num.F32 type alias
+        16 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
+        17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
+        18 NUM_MAX_INT: "maxInt"
+        19 NUM_MIN_INT: "minInt"
+        20 NUM_MAX_FLOAT: "maxFloat"
+        21 NUM_MIN_FLOAT: "minFloat"
+        22 NUM_ABS: "abs"
+        23 NUM_NEG: "neg"
+        24 NUM_ADD: "add"
+        25 NUM_SUB: "sub"
+        26 NUM_MUL: "mul"
+        27 NUM_LT: "isLt"
+        28 NUM_LTE: "isLte"
+        29 NUM_GT: "isGt"
+        30 NUM_GTE: "isGte"
+        31 NUM_TO_FLOAT: "toFloat"
+        32 NUM_SIN: "sin"
+        33 NUM_COS: "cos"
+        34 NUM_TAN: "tan"
+        35 NUM_IS_ZERO: "isZero"
+        36 NUM_IS_EVEN: "isEven"
+        37 NUM_IS_ODD: "isOdd"
+        38 NUM_IS_POSITIVE: "isPositive"
+        39 NUM_IS_NEGATIVE: "isNegative"
+        40 NUM_REM: "rem"
+        41 NUM_DIV_FLOAT: "div"
+        42 NUM_DIV_INT: "divFloor"
+        43 NUM_MOD_INT: "modInt"
+        44 NUM_MOD_FLOAT: "modFloat"
+        45 NUM_SQRT: "sqrt"
+        46 NUM_ROUND: "round"
+        47 NUM_COMPARE: "compare"
+        48 NUM_POW: "pow"
+        49 NUM_CEILING: "ceiling"
+        50 NUM_POW_INT: "powInt"
+        51 NUM_FLOOR: "floor"
+        52 NUM_ADD_WRAP: "addWrap"
+        53 NUM_ADD_CHECKED: "addChecked"
+        54 NUM_ATAN: "atan"
+        55 NUM_ACOS: "acos"
+        56 NUM_ASIN: "asin"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
