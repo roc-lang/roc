@@ -106,12 +106,12 @@ impl Dependencies {
         &mut self,
         module_id: ModuleId,
         opt_effect_module: Option<ModuleId>,
-        dependencies: &MutSet<ModuleId>,
+        dependencies: &MutMap<ModuleId, Region>,
         goal_phase: Phase,
     ) -> MutSet<(ModuleId, Phase)> {
         use Phase::*;
 
-        for dep in dependencies.iter().copied() {
+        for dep in dependencies.keys().copied() {
             // to parse and generate constraints, the headers of all dependencies must be loaded!
             // otherwise, we don't know whether an imported symbol is actually exposed
             self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
@@ -146,7 +146,7 @@ impl Dependencies {
         let mut output = MutSet::default();
 
         // all the dependencies can be loaded
-        for dep in dependencies {
+        for dep in dependencies.keys() {
             // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
 
             if Some(*dep) != opt_effect_module {
@@ -420,7 +420,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
 
                 let mut aliases = MutMap::default();
 
-                for imported in parsed.imported_modules.iter() {
+                for imported in parsed.imported_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
                         None => unreachable!(
                             r"imported module {:?} did not register its aliases, so {:?} cannot use them",
@@ -556,7 +556,7 @@ struct ModuleHeader<'a> {
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     packages: MutMap<&'a str, PackageOrPath<'a>>,
-    imported_modules: MutSet<ModuleId>,
+    imported_modules: MutMap<ModuleId, Region>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: &'a [u8],
@@ -574,7 +574,7 @@ enum HeaderFor<'a> {
 struct ConstrainedModule {
     module: Module,
     declarations: Vec<Declaration>,
-    imported_modules: MutSet<ModuleId>,
+    imported_modules: MutMap<ModuleId, Region>,
     constraint: Constraint,
     ident_ids: IdentIds,
     var_store: VarStore,
@@ -631,7 +631,7 @@ struct ParsedModule<'a> {
     src: &'a str,
     module_timing: ModuleTiming,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    imported_modules: MutSet<ModuleId>,
+    imported_modules: MutMap<ModuleId, Region>,
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parsed_defs: &'a [Located<roc_parse::ast::Def<'a>>],
@@ -659,7 +659,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         decls: Vec<Declaration>,
         module_timing: ModuleTiming,
-        unused_imports: MutSet<ModuleId>,
+        unused_imports: MutMap<ModuleId, Region>,
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
@@ -871,7 +871,7 @@ enum BuildTask<'a> {
         constraint: Constraint,
         var_store: VarStore,
         declarations: Vec<Declaration>,
-        unused_imports: MutSet<ModuleId>,
+        unused_imports: MutMap<ModuleId, Region>,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -1624,11 +1624,8 @@ fn update<'a>(
                 Occupied(entry) => entry.into_mut(),
             };
 
-            for unused in unused_imports.drain() {
-                existing.push(roc_problem::can::Problem::UnusedImport(
-                    unused,
-                    Region::zero(),
-                ));
+            for (unused, region) in unused_imports.drain() {
+                existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
             }
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
@@ -2365,7 +2362,7 @@ fn send_header<'a>(
 
     let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
         Vec::with_capacity(imports.len());
-    let mut imported_modules: MutSet<ModuleId> = MutSet::default();
+    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
     let mut scope_size = 0;
 
     for loc_entry in imports {
@@ -2425,7 +2422,7 @@ fn send_header<'a>(
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
-            imported_modules.insert(module_id);
+            imported_modules.insert(module_id, region);
 
             deps_by_name.insert(pq_module_name, module_id);
 
@@ -2549,7 +2546,7 @@ fn send_header_two<'a>(
 
     let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
         Vec::with_capacity(imports.len());
-    let mut imported_modules: MutSet<ModuleId> = MutSet::default();
+    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
 
     let num_exposes = provides.len();
     let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
@@ -2557,7 +2554,7 @@ fn send_header_two<'a>(
 
     // add standard imports
     // TODO add Effect by default
-    imported_modules.insert(app_module_id);
+    imported_modules.insert(app_module_id, Region::zero());
     deps_by_name.insert(
         PQModuleName::Unqualified(ModuleName::APP.into()),
         app_module_id,
@@ -2609,7 +2606,7 @@ fn send_header_two<'a>(
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
-            imported_modules.insert(module_id);
+            imported_modules.insert(module_id, region);
 
             deps_by_name.insert(pq_module_name, module_id);
 
@@ -2735,7 +2732,7 @@ impl<'a> BuildTask<'a> {
         module_timing: ModuleTiming,
         constraint: Constraint,
         var_store: VarStore,
-        imported_modules: MutSet<ModuleId>,
+        imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &mut SubsByModule,
         stdlib: &StdLib,
         declarations: Vec<Declaration>,
@@ -2780,7 +2777,7 @@ fn run_solve<'a>(
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
-    unused_imports: MutSet<ModuleId>,
+    unused_imports: MutMap<ModuleId, Region>,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
@@ -3081,7 +3078,7 @@ fn fabricate_effects_module<'a>(
         rigid_variables: module_output.rigid_variables,
     };
 
-    let imported_modules = MutSet::default();
+    let imported_modules = MutMap::default();
 
     // Should a effect module ever have a ModuleDocumentation?
     let module_docs = ModuleDocumentation {
