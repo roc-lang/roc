@@ -48,9 +48,99 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // Int : Num Integer
+    // I128 Num Integer
+    add_alias(
+        Symbol::NUM_I128,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // U128 : Num Integer
+    add_alias(
+        Symbol::NUM_U128,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // I64 Num Integer
     add_alias(
         Symbol::NUM_I64,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // U64 : Num Integer
+    add_alias(
+        Symbol::NUM_U64,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // I32 Num Integer
+    add_alias(
+        Symbol::NUM_I32,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // U32 : Num Integer
+    add_alias(
+        Symbol::NUM_U32,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // I16 Num Integer
+    add_alias(
+        Symbol::NUM_I16,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // U16 : Num Integer
+    add_alias(
+        Symbol::NUM_U16,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // I8 Num Integer
+    add_alias(
+        Symbol::NUM_I8,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(),
+        },
+    );
+
+    // U8 : Num Integer
+    add_alias(
+        Symbol::NUM_U8,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
@@ -68,9 +158,19 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // Float : Num FloatingPoint
+    // F64 : Num FloatingPoint
     add_alias(
         Symbol::NUM_F64,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: float_alias_content(),
+        },
+    );
+
+    // F32 : Num FloatingPoint
+    add_alias(
+        Symbol::NUM_F32,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),

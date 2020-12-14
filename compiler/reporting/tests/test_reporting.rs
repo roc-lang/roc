@@ -449,7 +449,7 @@ mod test_reporting {
                     baz
                     Str
                     main
-                    F64
+                    U8
                 "#
             ),
         )
@@ -623,7 +623,7 @@ mod test_reporting {
                     Num
                     Set
                     Result
-                    F64
+                    U8
                 "#
             ),
         );
@@ -1372,9 +1372,9 @@ mod test_reporting {
                 these names seem close though:
 
                     Bool
+                    U8
                     F64
                     Num
-                    Set
                 "#
             ),
         )
@@ -1827,10 +1827,10 @@ mod test_reporting {
 
                 these names seem close though:
 
+                    U8
                     f
+                    I8
                     F64
-                    Num
-                    Set
                "#
             ),
         )
