@@ -2653,24 +2653,25 @@ pub fn with_hole<'a>(
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
             enum Field {
-                Imported(Symbol, Variable),
-                NakedSymbol,
+                Function(Symbol, Variable),
+                ValueSymbol,
                 Field(roc_can::expr::Field),
             }
 
             for (label, variable, _) in sorted_fields.into_iter() {
                 // TODO how should function pointers be handled here?
+                use ReuseSymbol::*;
                 match fields.remove(&label) {
-                    Some(field) => match can_reuse_symbol(procs, &field.loc_expr.value) {
-                        Some(reusable) if env.is_imported_symbol(reusable) => {
-                            field_symbols.push(reusable);
-                            can_fields.push(Field::Imported(reusable, variable));
+                    Some(field) => match can_reuse_symbol(env, procs, &field.loc_expr.value) {
+                        Imported(symbol) | LocalFunction(symbol) => {
+                            field_symbols.push(symbol);
+                            can_fields.push(Field::Function(symbol, variable));
                         }
-                        Some(reusable) => {
+                        Value(reusable) => {
                             field_symbols.push(reusable);
-                            can_fields.push(Field::NakedSymbol);
+                            can_fields.push(Field::ValueSymbol);
                         }
-                        None => {
+                        NotASymbol => {
                             field_symbols.push(env.unique_symbol());
                             can_fields.push(Field::Field(field));
                         }
@@ -2693,17 +2694,19 @@ pub fn with_hole<'a>(
             for (opt_field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev())
             {
                 match opt_field {
-                    Field::NakedSymbol => {}
-                    Field::Imported(symbol, variable) => {
-                        // make sure this symbol is specialized appropriately in its source module
-                        add_needed_external(procs, env, variable, symbol);
-
-                        let layout = layout_cache
-                            .from_var(env.arena, variable, env.subs)
-                            .expect("creating layout does not fail");
-                        let expr = Expr::FunctionPointer(symbol, layout.clone());
-
-                        stmt = Stmt::Let(symbol, expr, layout, env.arena.alloc(stmt));
+                    Field::ValueSymbol => {
+                        // this symbol is already defined; nothing to do
+                    }
+                    Field::Function(symbol, variable) => {
+                        stmt = reuse_function_symbol(
+                            env,
+                            procs,
+                            layout_cache,
+                            Some(variable),
+                            symbol,
+                            stmt,
+                            symbol,
+                        );
                     }
                     Field::Field(field) => {
                         stmt = with_hole(
@@ -2714,7 +2717,7 @@ pub fn with_hole<'a>(
                             layout_cache,
                             *symbol,
                             env.arena.alloc(stmt),
-                        )
+                        );
                     }
                 }
             }
@@ -3382,8 +3385,15 @@ pub fn with_hole<'a>(
                     // if the function expression (loc_expr) is already a symbol,
                     // re-use that symbol, and don't define its value again
                     let mut result;
-                    match can_reuse_symbol(procs, &loc_expr.value) {
-                        Some(function_symbol) => {
+                    use ReuseSymbol::*;
+                    match can_reuse_symbol(env, procs, &loc_expr.value) {
+                        LocalFunction(_) => {
+                            unreachable!("if this was known to be a function, we would not be here")
+                        }
+                        Imported(_) => {
+                            unreachable!("an imported value is never an anonymous function")
+                        }
+                        Value(function_symbol) => {
                             if let Layout::Closure(_, closure_fields, _) = full_layout {
                                 // we're invoking a closure
                                 let closure_record_symbol = env.unique_symbol();
@@ -3476,7 +3486,7 @@ pub fn with_hole<'a>(
                                 );
                             }
                         }
-                        None => {
+                        NotASymbol => {
                             let function_symbol = env.unique_symbol();
 
                             result = Stmt::Let(
@@ -4717,15 +4727,33 @@ fn store_record_destruct<'a>(
 /// We want to re-use symbols that are not function symbols
 /// for any other expression, we create a new symbol, and will
 /// later make sure it gets assigned the correct value.
-fn can_reuse_symbol<'a>(procs: &Procs<'a>, expr: &roc_can::expr::Expr) -> Option<Symbol> {
+
+enum ReuseSymbol {
+    Imported(Symbol),
+    LocalFunction(Symbol),
+    Value(Symbol),
+    NotASymbol,
+}
+
+fn can_reuse_symbol<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &Procs<'a>,
+    expr: &roc_can::expr::Expr,
+) -> ReuseSymbol {
+    use ReuseSymbol::*;
+
     if let roc_can::expr::Expr::Var(symbol) = expr {
-        if procs.partial_procs.contains_key(&symbol) {
-            None
+        let symbol = *symbol;
+
+        if env.is_imported_symbol(symbol) {
+            Imported(symbol)
+        } else if procs.partial_procs.contains_key(&symbol) {
+            LocalFunction(symbol)
         } else {
-            Some(*symbol)
+            Value(symbol)
         }
     } else {
-        None
+        NotASymbol
     }
 }
 
@@ -4734,9 +4762,9 @@ fn possible_reuse_symbol<'a>(
     procs: &Procs<'a>,
     expr: &roc_can::expr::Expr,
 ) -> Symbol {
-    match can_reuse_symbol(procs, expr) {
-        Some(s) => s,
-        None => env.unique_symbol(),
+    match can_reuse_symbol(env, procs, expr) {
+        ReuseSymbol::Value(s) => s,
+        _ => env.unique_symbol(),
     }
 }
 
@@ -4792,8 +4820,7 @@ fn reuse_function_symbol<'a>(
 ) -> Stmt<'a> {
     match procs.partial_procs.get(&original) {
         None => {
-            let is_imported =
-                !(env.home == original.module_id() || original.module_id() == ModuleId::ATTR);
+            let is_imported = env.is_imported_symbol(original);
 
             match arg_var {
                 Some(arg_var) if is_imported => {
@@ -4814,7 +4841,7 @@ fn reuse_function_symbol<'a>(
                     // an imported symbol is always a function pointer:
                     // either it's a function, or a top-level 0-argument thunk
                     let expr = Expr::FunctionPointer(original, layout.clone());
-                    return Stmt::Let(original, expr, layout, env.arena.alloc(result));
+                    return Stmt::Let(symbol, expr, layout, env.arena.alloc(result));
                 }
                 _ => {
                     // danger: a foreign symbol may not be specialized!
@@ -4954,19 +4981,25 @@ fn assign_to_symbol<'a>(
     symbol: Symbol,
     result: Stmt<'a>,
 ) -> Stmt<'a> {
-    // if this argument is already a symbol, we don't need to re-define it
-    if let roc_can::expr::Expr::Var(original) = loc_arg.value {
-        reuse_function_symbol(
-            env,
-            procs,
-            layout_cache,
-            Some(arg_var),
-            symbol,
-            result,
-            original,
-        )
-    } else {
-        with_hole(
+    use ReuseSymbol::*;
+    match can_reuse_symbol(env, procs, &loc_arg.value) {
+        Imported(original) | LocalFunction(original) => {
+            // for functions we must make sure they are specialized correctly
+            reuse_function_symbol(
+                env,
+                procs,
+                layout_cache,
+                Some(arg_var),
+                symbol,
+                result,
+                original,
+            )
+        }
+        Value(_) => {
+            // symbol is already defined; nothing else to do here
+            result
+        }
+        NotASymbol => with_hole(
             env,
             loc_arg.value,
             arg_var,
@@ -4974,7 +5007,7 @@ fn assign_to_symbol<'a>(
             layout_cache,
             symbol,
             env.arena.alloc(result),
-        )
+        ),
     }
 }
 
