@@ -18,7 +18,7 @@ pub enum ExposedModuleTypes {
 }
 
 pub struct ConstrainedModule {
-    pub unused_imports: MutSet<ModuleId>,
+    pub unused_imports: MutMap<ModuleId, Region>,
     pub constraint: Constraint,
 }
 
@@ -132,7 +132,7 @@ pub fn constrain_imports(
 pub struct ConstrainableImports {
     pub imported_symbols: Vec<Import>,
     pub imported_aliases: MutMap<Symbol, Alias>,
-    pub unused_imports: MutSet<ModuleId>,
+    pub unused_imports: MutMap<ModuleId, Region>,
 }
 
 /// Run this before constraining imports.
@@ -143,7 +143,7 @@ pub struct ConstrainableImports {
 pub fn pre_constrain_imports(
     home: ModuleId,
     references: &MutSet<Symbol>,
-    imported_modules: MutSet<ModuleId>,
+    imported_modules: MutMap<ModuleId, Region>,
     exposed_types: &mut SubsByModule,
     stdlib: &StdLib,
 ) -> ConstrainableImports {

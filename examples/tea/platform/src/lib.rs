@@ -17,7 +17,12 @@ extern "C" {
     fn roc_main_size() -> i64;
 
     #[link_name = "roc__mainForHost_1_Init_caller"]
-    fn call_Init(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+    fn _call_Init(
+        flags: &(),
+        function_pointer: *const u8,
+        closure_data: *const u8,
+        output: *mut u8,
+    ) -> ();
 
     #[link_name = "roc__mainForHost_1_Init_size"]
     fn size_Init() -> i64;
@@ -27,8 +32,8 @@ extern "C" {
 
     #[link_name = "roc__mainForHost_1_Update_caller"]
     fn call_Update(
-        msg: Msg,
-        model: Model,
+        msg: &Msg,
+        model: &Model,
         function_pointer: *const u8,
         closure_data: *const u8,
         output: *mut u8,
@@ -41,7 +46,12 @@ extern "C" {
     fn size_Update_result() -> i64;
 
     #[link_name = "roc__mainForHost_1_Fx_caller"]
-    fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+    fn _call_Fx(
+        unit: &(),
+        function_pointer: *const u8,
+        closure_data: *const u8,
+        output: *mut u8,
+    ) -> ();
 
     #[link_name = "roc__mainForHost_1_Fx_size"]
     fn size_Fx() -> i64;
@@ -51,6 +61,17 @@ extern "C" {
 
     #[link_name = "roc__mainForHost_1_Model_size"]
     fn size_Model() -> i64;
+}
+
+unsafe fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> () {
+    // Fx (or Cmd on the roc side) is a thunk, so we know its first argument is a (pointer to) unit
+    _call_Fx(&(), function_pointer, closure_data, output)
+}
+
+unsafe fn call_Init(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> () {
+    // for now, we hardcode flags to be `()` (or `{}` on the roc side)
+    let flags = ();
+    _call_Init(&flags, function_pointer, closure_data, output)
 }
 
 #[no_mangle]
@@ -152,9 +173,11 @@ unsafe fn run_update(
         let buffer: *mut std::ffi::c_void = buffer;
         let buffer: *mut u8 = buffer as *mut u8;
 
+        println!("let's try update!");
+
         call_Update(
-            msg,
-            model,
+            &msg,
+            &model,
             function_pointer,
             closure_data_ptr,
             buffer as *mut u8,
