@@ -571,6 +571,12 @@ impl<'a> Procs<'a> {
             return;
         }
 
+        // If this is an imported symbol, let its home module make this specialization
+        if env.is_imported_symbol(name) {
+            add_needed_external(self, env, fn_var, name);
+            return;
+        }
+
         // We're done with that tuple, so move layout back out to avoid cloning it.
         let (name, layout) = tuple;
 
@@ -589,7 +595,7 @@ impl<'a> Procs<'a> {
                 // TODO should pending_procs hold a Rc<Proc>?
                 let partial_proc = match self.partial_procs.get(&symbol) {
                     Some(p) => p.clone(),
-                    None => panic!("no partial_proc for {:?}", symbol),
+                    None => panic!("no partial_proc for {:?} in module {:?}", symbol, env.home),
                 };
 
                 // Mark this proc as in-progress, so if we're dealing with
@@ -4830,8 +4836,6 @@ fn reuse_function_symbol<'a>(
                     let layout = layout_cache
                         .from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
-
-                    add_needed_external(procs, env, arg_var, original);
 
                     procs.insert_passed_by_name(
                         env,
