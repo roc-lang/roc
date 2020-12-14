@@ -149,7 +149,8 @@ pub fn gen_from_mono_module(
             // env.module.print_to_stderr();
             // NOTE: If this fails, uncomment the above println to debug.
             panic!(
-                "Non-main function failed LLVM verification. Uncomment the above println to debug!"
+                r"Non-main function {:?} failed LLVM verification. Uncomment the above println to debug!",
+                fn_val.get_name(),
             );
         }
     }
