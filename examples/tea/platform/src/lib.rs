@@ -183,6 +183,10 @@ unsafe fn run_update(
             buffer as *mut u8,
         );
 
+        // explicitly transfer ownership of the msg and model to the roc application
+        std::mem::forget(msg);
+        std::mem::forget(model);
+
         // cmd < model, so the command comes first
         let output = &*(buffer as *mut RocCallResult<()>);
 
