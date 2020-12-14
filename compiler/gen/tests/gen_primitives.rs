@@ -1206,11 +1206,11 @@ mod gen_primitives {
 
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
 
                 Key k : Num k
 
-                insert : Key k, v, Dict (Key k) v -> Dict (Key k) v
+                insert : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
                 insert = \key, value, dict ->
                     when insertHelp key value dict is
                         Node Red k v l r ->
@@ -1219,7 +1219,7 @@ mod gen_primitives {
                         x ->
                             x
 
-                insertHelp : (Key k), v, Dict (Key k) v -> Dict (Key k) v
+                insertHelp : (Key k), v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
                 insertHelp = \key, value, dict ->
                   when dict is
                     Empty ->
@@ -1238,7 +1238,7 @@ mod gen_primitives {
                         GT ->
                           balance nColor nKey nValue nLeft (insertHelp key value nRight)
 
-                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
                 balance = \color, key, value, left, right ->
                   when right is
                     Node Red rK rV rLeft rRight ->
@@ -1267,7 +1267,7 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : Dict I64 {}
+                main : RedBlackTree I64 {}
                 main =
                     insert 0 {} Empty
                 "#
@@ -1288,9 +1288,9 @@ mod gen_primitives {
 
                 NodeColor : [ Red, Black ]
 
-                Dict k : [ Node NodeColor k (Dict k)  (Dict k), Empty ]
+                RedBlackTree k : [ Node NodeColor k (RedBlackTree k)  (RedBlackTree k), Empty ]
 
-                # balance : NodeColor, k, Dict k,  Dict k -> Dict k
+                # balance : NodeColor, k, RedBlackTree k,  RedBlackTree k -> RedBlackTree k
                 balance = \color, key, left, right ->
                   when right is
                     Node Red rK rLeft rRight ->
@@ -1308,7 +1308,7 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : Dict I64
+                main : RedBlackTree I64
                 main =
                     balance Red 0 Empty Empty
                 "#
@@ -1325,13 +1325,13 @@ mod gen_primitives {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                Dict k : [ Node k (Dict k) (Dict k), Empty ]
+                RedBlackTree k : [ Node k (RedBlackTree k) (RedBlackTree k), Empty ]
 
-                balance : k, Dict k -> Dict k
+                balance : k, RedBlackTree k -> RedBlackTree k
                 balance = \key, left ->
                     Node key left Empty
 
-                main : Dict I64
+                main : RedBlackTree I64
                 main =
                     balance 0 Empty
                 "#
@@ -1357,9 +1357,9 @@ mod gen_primitives {
 
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
 
-                # balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                # balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
                 balance = \color, key, value, left, right ->
                   when right is
                     Node Red rK rV rLeft rRight ->
@@ -1378,7 +1378,7 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : Dict I64 I64
+                main : RedBlackTree I64 I64
                 main =
                     balance Red 0 0 Empty Empty
                 "#
@@ -1397,9 +1397,9 @@ mod gen_primitives {
 
                 NodeColor : [ Red, Black ]
 
-                Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
+                RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
 
-                balance : NodeColor, k, v, Dict k v, Dict k v -> Dict k v
+                balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
                 balance = \color, key, value, left, right ->
                   when right is
                     Node Red rK rV rLeft rRight ->
@@ -1428,7 +1428,7 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : Dict I64 I64
+                main : RedBlackTree I64 I64
                 main =
                     balance Red 0 0 Empty Empty
                 "#

@@ -150,7 +150,7 @@ pub enum Type {
         actual: Box<Type>,
     },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, Box<Type>),
-    /// Applying a type to some arguments (e.g. Map.Map String Int)
+    /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Type>),
     /// Boolean type used in uniqueness inference
     Boolean(boolean_algebra::Bool),

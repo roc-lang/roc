@@ -3,7 +3,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, float_type, int_type, list_type, map_type, num_type, ordering_type, result_type,
+    bool_type, dict_type, float_type, int_type, list_type, num_type, ordering_type, result_type,
     set_type, str_type,
 };
 use roc_types::solved_types::SolvedType;
@@ -30,7 +30,7 @@ pub fn standard_stdlib() -> StdLib {
         applies: vec![
             Symbol::LIST_LIST,
             Symbol::SET_SET,
-            Symbol::MAP_MAP,
+            Symbol::DICT_DICT,
             Symbol::STR_STR,
         ]
         .into_iter()
@@ -614,39 +614,43 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![list_type(flex(TVAR1))], Box::new(bool_type())),
     );
 
-    // Map module
+    // Dict module
 
-    // empty : Map k v
-    add_type(Symbol::MAP_EMPTY, map_type(flex(TVAR1), flex(TVAR2)));
+    // empty : Dict k v
+    add_type(Symbol::DICT_EMPTY, dict_type(flex(TVAR1), flex(TVAR2)));
 
-    // singleton : k, v -> Map k v
+    // singleton : k, v -> Dict k v
     add_type(
-        Symbol::MAP_SINGLETON,
+        Symbol::DICT_SINGLETON,
         top_level_function(
             vec![flex(TVAR1), flex(TVAR2)],
-            Box::new(map_type(flex(TVAR1), flex(TVAR2))),
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
         ),
     );
 
-    // get : Map k v, k -> Result v [ KeyNotFound ]*
+    // get : Dict k v, k -> Result v [ KeyNotFound ]*
     let key_not_found = SolvedType::TagUnion(
         vec![(TagName::Global("KeyNotFound".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
     add_type(
-        Symbol::MAP_GET,
+        Symbol::DICT_GET,
         top_level_function(
-            vec![map_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1)],
+            vec![dict_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1)],
             Box::new(result_type(flex(TVAR2), key_not_found)),
         ),
     );
 
     add_type(
-        Symbol::MAP_INSERT,
+        Symbol::DICT_INSERT,
         top_level_function(
-            vec![map_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1), flex(TVAR2)],
-            Box::new(map_type(flex(TVAR1), flex(TVAR2))),
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                flex(TVAR1),
+                flex(TVAR2),
+            ],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
         ),
     );
 

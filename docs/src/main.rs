@@ -48,7 +48,7 @@ fn main() {
     generate(
         vec![
             PathBuf::from(r"../compiler/builtins/docs/Bool.roc"),
-            PathBuf::from(r"../compiler/builtins/docs/Map.roc"),
+            PathBuf::from(r"../compiler/builtins/docs/Dict.roc"),
             // Not working
             // PathBuf::from(r"../compiler/builtins/docs/List.roc"),
             // Not working
