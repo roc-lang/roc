@@ -390,6 +390,7 @@ impl RocStr {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
         }
     }
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn as_str(&self) -> &str {
         let slice = self.as_slice();
 
