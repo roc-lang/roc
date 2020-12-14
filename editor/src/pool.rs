@@ -179,6 +179,42 @@ fn pool_str_size() {
     assert_eq!(size_of::<PoolStr>(), 8);
 }
 
+impl PoolStr {
+    pub fn new(string: &str, pool: &mut Pool) -> Self {
+        debug_assert!(string.len() <= u32::MAX as usize);
+
+        let chars_per_node = NODE_BYTES / size_of::<char>();
+
+        let number_of_nodes = f64::ceil(string.len() as f64 / chars_per_node as f64);
+
+        let len = string.len() as u32;
+
+        if len > 0 {
+            let first_node_id = pool.reserve(len);
+            let index = first_node_id.index as isize;
+            let mut next_node_ptr = unsafe { pool.nodes.offset(index) } as *mut c_void;
+
+            unsafe {
+                libc::memcpy(
+                    next_node_ptr,
+                    string.as_ptr() as *const c_void,
+                    string.len(),
+                );
+            }
+
+            PoolStr { first_node_id, len }
+        } else {
+            PoolStr {
+                first_node_id: NodeId {
+                    index: 0,
+                    _phantom: PhantomData::default(),
+                },
+                len: 0,
+            }
+        }
+    }
+}
+
 /// An array of at most 2^32 pool-allocated nodes.
 #[derive(Debug)]
 pub struct PoolVec<T> {
