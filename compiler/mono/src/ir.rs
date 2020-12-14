@@ -908,13 +908,16 @@ where
     D::Doc: Clone,
     A: Clone,
 {
+    use roc_module::ident::ModuleName;
+
     if PRETTY_PRINT_IR_SYMBOLS {
         alloc.text(format!("{:?}", symbol))
     } else {
         let text = format!("{}", symbol);
 
-        if text.starts_with('.') {
-            alloc.text("Test").append(text)
+        if text.starts_with(ModuleName::APP) {
+            let name: String = text.trim_start_matches(ModuleName::APP).into();
+            alloc.text("Test").append(name)
         } else {
             alloc.text(text)
         }
