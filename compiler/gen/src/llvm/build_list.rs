@@ -553,6 +553,8 @@ pub fn list_reverse<'a, 'ctx, 'env>(
 
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    parent: FunctionValue<'ctx>,
     list_layout: &Layout<'a>,
     elem_index: IntValue<'ctx>,
     wrapper_struct: StructValue<'ctx>,
@@ -572,7 +574,11 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
             let elem_ptr =
                 unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
 
-            builder.build_load(elem_ptr, "List.get")
+            let result = builder.build_load(elem_ptr, "List.get");
+
+            increment_refcount_layout(env, parent, layout_ids, result, elem_layout);
+
+            result
         }
         _ => {
             unreachable!(

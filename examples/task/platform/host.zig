@@ -10,8 +10,11 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed([*]u8) void;
 extern fn roc__mainForHost_1_size() i64;
-extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
+extern fn roc__mainForHost_1_Fx_caller(*const u8, *const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
+extern fn roc__mainForHost_1_Fx_result_size() i64;
+
+const Unit = extern struct {};
 
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
@@ -44,7 +47,7 @@ pub export fn main() u8 {
 }
 
 fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) void {
-    const size = roc__mainForHost_1_Fx_size();
+    const size = roc__mainForHost_1_Fx_result_size();
     const raw_output = std.heap.c_allocator.alloc(u8, @intCast(usize, size)) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
@@ -52,7 +55,9 @@ fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) vo
         std.heap.c_allocator.free(raw_output);
     }
 
-    roc__mainForHost_1_Fx_caller(function_pointer, closure_data_pointer, output);
+    const flags: u8 = 0;
+
+    roc__mainForHost_1_Fx_caller(&flags, function_pointer, closure_data_pointer, output);
 
     const elements = @ptrCast([*]u64, @alignCast(8, output));
 
