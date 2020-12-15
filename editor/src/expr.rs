@@ -19,11 +19,21 @@ pub struct Env<'a> {
 
 const ZERO: Region = Region::zero();
 
-pub fn from_parse_expr<'a>(
+pub fn to_expr_id<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
 ) -> (crate::ast::ExprId, Output) {
+    let (expr, output) = to_expr2(env, scope, parse_expr);
+
+    (env.pool.add(expr), output)
+}
+
+pub fn to_expr2<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    parse_expr: &'a roc_parse::ast::Expr<'a>,
+) -> (crate::ast::Expr2, Output) {
     use roc_parse::ast::Expr::*;
     match parse_expr {
         Float(string) => {
@@ -34,7 +44,7 @@ pub fn from_parse_expr<'a>(
                         var: env.var_store.fresh(),
                     };
 
-                    (env.pool.add(expr), Output::default())
+                    (expr, Output::default())
                 }
                 Err((_raw, _error)) => {
                     // emit runtime error
@@ -58,7 +68,7 @@ pub fn from_parse_expr<'a>(
                         text: PoolStr::new(string, &mut env.pool),
                     };
 
-                    (env.pool.add(expr), Output::default())
+                    (expr, Output::default())
                 }
                 Err((_raw, _error)) => {
                     // emit runtime error
@@ -86,7 +96,7 @@ pub fn from_parse_expr<'a>(
                         text: PoolStr::new(string, &mut env.pool),
                     };
 
-                    (env.pool.add(expr), Output::default())
+                    (expr, Output::default())
                 }
                 Err((_raw, _error)) => {
                     // emit runtime error
@@ -114,7 +124,7 @@ fn flatten_str_literal<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     literal: &StrLiteral<'a>,
-) -> (ExprId, Output) {
+) -> (Expr2, Output) {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -122,7 +132,7 @@ fn flatten_str_literal<'a>(
             // TODO use smallstr
             let expr = Expr2::Str(PoolStr::new(str_slice, &mut env.pool));
 
-            (env.pool.add(expr), Output::default())
+            (expr, Output::default())
         }
         Line(segments) => flatten_str_lines(env, scope, &[segments]),
         Block(lines) => flatten_str_lines(env, scope, lines),
@@ -130,7 +140,7 @@ fn flatten_str_literal<'a>(
 }
 
 enum StrSegment {
-    Interpolation(ExprId),
+    Interpolation(Expr2),
     Plaintext(PoolStr),
 }
 
@@ -138,7 +148,7 @@ fn flatten_str_lines<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     lines: &[&[roc_parse::ast::StrSegment<'a>]],
-) -> (ExprId, Output) {
+) -> (Expr2, Output) {
     use roc_parse::ast::StrSegment::*;
 
     let mut buf = String::new();
@@ -191,7 +201,7 @@ fn flatten_str_lines<'a>(
                             buf = String::new();
                         }
 
-                        let (loc_expr, new_output) = from_parse_expr(env, scope, loc_expr.value);
+                        let (loc_expr, new_output) = to_expr2(env, scope, loc_expr.value);
 
                         output.union(new_output);
 
@@ -220,45 +230,39 @@ fn flatten_str_lines<'a>(
 
 /// Resolve stirng interpolations by desugaring a sequence of StrSegments
 /// into nested calls to Str.concat
-fn desugar_str_segments<'a>(env: &mut Env<'a>, segments: Vec<StrSegment>) -> ExprId {
+fn desugar_str_segments<'a>(env: &mut Env<'a>, segments: Vec<StrSegment>) -> Expr2 {
     use StrSegment::*;
 
     let pool = &mut env.pool;
     let var_store = &mut env.var_store;
 
     let mut iter = segments.into_iter().rev();
-    let mut expr_id = match iter.next() {
-        Some(Plaintext(pool_str)) => {
-            let expr = Expr2::Str(pool_str);
-
-            pool.add(expr)
-        }
+    let mut expr = match iter.next() {
+        Some(Plaintext(pool_str)) => Expr2::Str(pool_str),
         Some(Interpolation(expr_id)) => expr_id,
         None => {
             // No segments? Empty string!
 
             let pool_str = PoolStr::new("", pool);
-            let expr = Expr2::Str(pool_str);
-
-            pool.add(expr)
+            Expr2::Str(pool_str)
         }
     };
 
     for seg in iter {
-        let new_expr_id = match seg {
-            Plaintext(string) => pool.add(Expr2::Str(string)),
+        let new_expr = match seg {
+            Plaintext(string) => Expr2::Str(string),
             Interpolation(expr_id) => expr_id,
         };
 
         let concat_expr_id = pool.add(Expr2::Var(Symbol::STR_CONCAT));
 
         let args = vec![
-            (var_store.fresh(), new_expr_id),
-            (var_store.fresh(), expr_id),
+            (var_store.fresh(), pool.add(new_expr)),
+            (var_store.fresh(), pool.add(expr)),
         ];
         let args = PoolVec::new(args.into_iter(), pool);
 
-        let expr = Expr2::Call {
+        let new_call = Expr2::Call {
             args,
             expr: concat_expr_id,
             expr_var: var_store.fresh(),
@@ -267,8 +271,8 @@ fn desugar_str_segments<'a>(env: &mut Env<'a>, segments: Vec<StrSegment>) -> Exp
             called_via: CalledVia::Space,
         };
 
-        expr_id = pool.add(expr);
+        expr = new_call
     }
 
-    expr_id
+    expr
 }
