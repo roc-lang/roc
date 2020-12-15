@@ -185,14 +185,12 @@ impl PoolStr {
 
         let chars_per_node = NODE_BYTES / size_of::<char>();
 
-        let number_of_nodes = f64::ceil(string.len() as f64 / chars_per_node as f64);
+        let number_of_nodes = f64::ceil(string.len() as f64 / chars_per_node as f64) as u32;
 
-        let len = string.len() as u32;
-
-        if len > 0 {
-            let first_node_id = pool.reserve(len);
+        if number_of_nodes > 0 {
+            let first_node_id = pool.reserve(number_of_nodes);
             let index = first_node_id.index as isize;
-            let mut next_node_ptr = unsafe { pool.nodes.offset(index) } as *mut c_void;
+            let next_node_ptr = unsafe { pool.nodes.offset(index) } as *mut c_void;
 
             unsafe {
                 libc::memcpy(
@@ -202,7 +200,10 @@ impl PoolStr {
                 );
             }
 
-            PoolStr { first_node_id, len }
+            PoolStr {
+                first_node_id,
+                len: number_of_nodes,
+            }
         } else {
             PoolStr {
                 first_node_id: NodeId {
