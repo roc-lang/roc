@@ -3064,7 +3064,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             let wrapper_struct = wrapper_struct.into_struct_value();
             let elem_index = load_symbol(env, scope, &args[1]).into_int_value();
 
-            list_get_unsafe(env, list_layout, elem_index, wrapper_struct)
+            list_get_unsafe(
+                env,
+                layout_ids,
+                parent,
+                list_layout,
+                elem_index,
+                wrapper_struct,
+            )
         }
         ListSetInPlace => {
             let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);

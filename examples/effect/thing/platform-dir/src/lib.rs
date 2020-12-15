@@ -14,10 +14,18 @@ extern "C" {
     fn roc_main_size() -> i64;
 
     #[link_name = "roc__mainForHost_1_Fx_caller"]
-    fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+    fn call_Fx(
+        flags: &(),
+        function_pointer: *const u8,
+        closure_data: *const u8,
+        output: *mut u8,
+    ) -> ();
 
     #[link_name = "roc__mainForHost_1_Fx_size"]
     fn size_Fx() -> i64;
+
+    #[link_name = "roc__mainForHost_1_Fx_result_size"]
+    fn size_Fx_result() -> i64;
 }
 
 #[no_mangle]
@@ -48,13 +56,14 @@ pub fn roc_fx_getLine() -> RocStr {
 }
 
 unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const u8) -> i64 {
-    let size = size_Fx() as usize;
+    let size = size_Fx_result() as usize;
 
     alloca::with_stack_bytes(size, |buffer| {
         let buffer: *mut std::ffi::c_void = buffer;
         let buffer: *mut u8 = buffer as *mut u8;
 
         call_Fx(
+            &(),
             function_pointer,
             closure_data_ptr as *const u8,
             buffer as *mut u8,
