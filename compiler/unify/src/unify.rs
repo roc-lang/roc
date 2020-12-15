@@ -1239,5 +1239,8 @@ fn gather_tags(
 }
 
 fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
-    matches!(subs.get_without_compacting(var).content, Content::RecursionVar { .. })
+    matches!(
+        subs.get_without_compacting(var).content,
+        Content::RecursionVar { .. }
+    )
 }
