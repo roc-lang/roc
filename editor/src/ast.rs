@@ -1,13 +1,12 @@
 use crate::pool::{NodeId, PoolStr, PoolVec};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::def::Annotation;
-use roc_can::expr::{Field, Recursive};
-use roc_module::ident::Lowercase;
+use roc_can::expr::Recursive;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
-use roc_types::types::Alias;
+use roc_types::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Problem {
@@ -100,12 +99,6 @@ pub enum Expr2 {
     // Lookups
     Var(Symbol), // 8B
 
-    /// Separate from List because BuckeList must be non-empty, and in this case
-    /// the list literal has no elements
-    EmptyList {
-        list_var: Variable, // 4B - required for uniqueness of the list
-        elem_var: Variable, // 4B
-    },
     List {
         list_var: Variable,    // 4B - required for uniqueness of the list
         elem_var: Variable,    // 4B
@@ -124,18 +117,19 @@ pub enum Expr2 {
         cond: NodeId<Expr2>,           // 4B
     },
     LetRec {
-        // TODO need to make this Alias type here page-friendly, which will be hard!
-        aliases: PoolVec<(Symbol, Alias)>, // 8B
-        defs: PoolVec<Def>,                // 8B
-        body_var: Variable,                // 8B
-        body_id: NodeId<Expr2>,            // 4B
+        defs: PoolVec<FunctionDef>, // 8B
+        body_var: Variable,         // 8B
+        body_id: NodeId<Expr2>,     // 4B
     },
-    LetNonRec {
-        // TODO need to make this Alias type here page-friendly, which will be hard!
-        aliases: PoolVec<(Symbol, Alias)>, // 8B
-        def_id: NodeId<Def>,               // 4B
-        body_id: NodeId<Expr2>,            // 4B
-        body_var: Variable,                // 4B
+    LetFunction {
+        def: NodeId<FunctionDef>, // 4B
+        body_var: Variable,       // 8B
+        body_id: NodeId<Expr2>,   // 4B
+    },
+    LetValue {
+        def_id: NodeId<ValueDef>, // 4B
+        body_id: NodeId<Expr2>,   // 4B
+        body_var: Variable,       // 4B
     },
     Call {
         args: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
@@ -151,12 +145,12 @@ pub enum Expr2 {
         ret_var: Variable,                        // 4B
     },
     Closure {
-        args: PoolVec<(Variable, NodeId<Pat2>)>, // 8B
-        name: Symbol,                            // 8B
-        body: NodeId<Expr2>,                     // 4B
-        function_type: Variable,                 // 4B
-        recursive: Recursive,                    // 1B
-        extra: NodeId<ClosureExtra>,             // 4B
+        args: PoolVec<(Variable, NodeId<Pattern2>)>, // 8B
+        name: Symbol,                                // 8B
+        body: NodeId<Expr2>,                         // 4B
+        function_type: Variable,                     // 4B
+        recursive: Recursive,                        // 1B
+        extra: NodeId<ClosureExtra>,                 // 4B
     },
     // Product Types
     Record {
@@ -184,10 +178,10 @@ pub enum Expr2 {
         field_var: Variable,    // 4B
     },
     Update {
-        symbol: Symbol,                       // 8B
-        updates: PoolVec<(Lowercase, Field)>, // 8B
-        record_var: Variable,                 // 4B
-        ext_var: Variable,                    // 4B
+        symbol: Symbol,                                // 8B
+        updates: PoolVec<(PoolStr, Variable, ExprId)>, // 8B
+        record_var: Variable,                          // 4B
+        ext_var: Variable,                             // 4B
     },
 
     // Sum Types
@@ -204,8 +198,8 @@ pub enum Expr2 {
 
 #[derive(Debug)]
 pub struct Def {
-    pub pattern: NodeId<Pat2>, // 3B
-    pub expr: NodeId<Expr2>,   // 3B
+    pub pattern: NodeId<Pattern2>, // 3B
+    pub expr: NodeId<Expr2>,       // 3B
     // TODO maybe need to combine these vars behind a pointer?
     pub expr_var: Variable,                        // 4B
     pub pattern_vars: PoolVec<(Symbol, Variable)>, // 4B
@@ -213,8 +207,30 @@ pub struct Def {
     pub annotation: Option<Annotation>, // ???
 }
 
+#[derive(Debug)]
+pub struct ValueDef {
+    pub pattern: PatternId,
+    pub expr_type: Option<Type>,
+    pub expr_var: Variable,
+}
+
+#[derive(Debug)]
+pub enum FunctionDef {
+    WithAnnotation {
+        name: Symbol,                                   // 8B
+        arguments: PoolVec<(Pattern2, Type, Variable)>, // 8B
+        return_type: Type,                              // ?
+        return_var: Variable,                           // 4B
+    },
+    NoAnnotation {
+        name: Symbol,
+        arguments: PoolVec<(Pattern2, Variable)>,
+        return_var: Variable,
+    },
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Pat2 {
+pub enum Pattern2 {
     Todo,
 }
 
@@ -222,33 +238,20 @@ pub enum Pat2 {
 /// more than 32B of total data
 #[derive(Debug)]
 pub struct ClosureExtra {
-    return_type: Variable,                         // 4B
-    captured_symbols: PoolVec<(Symbol, Variable)>, // 8B
-    closure_type: Variable,                        // 4B
-    closure_ext_var: Variable,                     // 4B
+    pub return_type: Variable,                         // 4B
+    pub captured_symbols: PoolVec<(Symbol, Variable)>, // 8B
+    pub closure_type: Variable,                        // 4B
+    pub closure_ext_var: Variable,                     // 4B
 }
 
 #[derive(Debug)]
 pub struct WhenBranch {
-    pub patterns: PoolVec<Pat2>,      // 4B
+    pub patterns: PoolVec<Pattern2>,  // 4B
     pub body: NodeId<Expr2>,          // 3B
     pub guard: Option<NodeId<Expr2>>, // 4B
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct PatternId {
-    /// TODO: PatternPoolId
-    page_id: ExprPoolId,
-    /// TODO: PatternPoolSlot
-    slot: ExprPoolSlot,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct PatId {
-    page_id: ExprPoolId, // TODO PatPoolId
-    slot: ExprPoolSlot,  // TODO PatPoolSlot
-}
-
+pub type PatternId = NodeId<Pattern2>;
 pub type ExprId = NodeId<Expr2>;
 
 // We have a maximum of 65K pages.
