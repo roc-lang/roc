@@ -228,7 +228,7 @@ fn pool_vec_size() {
 }
 
 impl<'a, T: 'a + Sized> PoolVec<T> {
-    pub fn new<I: ExactSizeIterator<Item = T>, S>(nodes: I, pool: &mut Pool) -> Self {
+    pub fn new<I: ExactSizeIterator<Item = T>>(nodes: I, pool: &mut Pool) -> Self {
         debug_assert!(nodes.len() <= u32::MAX as usize);
         debug_assert!(size_of::<T>() <= NODE_BYTES);
 

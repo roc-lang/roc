@@ -12,7 +12,7 @@ pub struct Region {
 }
 
 impl Region {
-    pub fn zero() -> Self {
+    pub const fn zero() -> Self {
         Region {
             start_line: 0,
             end_line: 0,

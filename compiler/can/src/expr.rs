@@ -1486,7 +1486,7 @@ fn flatten_str_literal<'a>(
     }
 }
 
-fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
+pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
     match expr {
         ast::Expr::Var { .. } => true,
         ast::Expr::Access(sub_expr, _) => is_valid_interpolation(sub_expr),

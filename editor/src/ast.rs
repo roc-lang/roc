@@ -24,6 +24,18 @@ pub enum IntStyle {
     Binary,
 }
 
+impl IntStyle {
+    pub fn from_base(base: roc_parse::ast::Base) -> Self {
+        use roc_parse::ast::Base;
+        match base {
+            Base::Decimal => Self::Decimal,
+            Base::Octal => Self::Octal,
+            Base::Hex => Self::Hex,
+            Base::Binary => Self::Binary,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum IntVal {
     I64(i64),
@@ -237,11 +249,7 @@ pub struct PatId {
     slot: ExprPoolSlot,  // TODO PatPoolSlot
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ExprId {
-    page_id: ExprPoolId,
-    slot: ExprPoolSlot,
-}
+pub type ExprId = NodeId<Expr2>;
 
 // We have a maximum of 65K pages.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

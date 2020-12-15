@@ -32,6 +32,7 @@ use winit::event_loop::ControlFlow;
 
 pub mod ast;
 mod buffer;
+pub mod expr;
 pub mod file;
 mod keyboard_input;
 pub mod pool;
