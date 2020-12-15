@@ -6,8 +6,7 @@ use roc_std::RocStr;
 use std::alloc::Layout;
 use std::time::SystemTime;
 
-type Msg = RocStr;
-type Model = i64;
+type Model = *const u8;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -32,8 +31,8 @@ extern "C" {
 
     #[link_name = "roc__mainForHost_1_Update_caller"]
     fn call_Update(
-        msg: &Msg,
-        model: &Model,
+        msg: Msg,
+        model: Model,
         function_pointer: *const u8,
         closure_data: *const u8,
         output: *mut u8,
@@ -84,9 +83,7 @@ pub fn roc_fx_putChar(foo: i64) -> () {
 
 #[no_mangle]
 pub fn roc_fx_putLine(line: RocStr) -> () {
-    let bytes = line.as_slice();
-    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
-    println!("{}", string);
+    println!("{}", unsafe { line.as_str() });
 
     ()
 }
@@ -104,115 +101,139 @@ pub fn roc_fx_getLine() -> RocStr {
 unsafe fn run_fx(function_pointer: *const u8, closure_data_ptr: *const u8) -> Msg {
     let size = size_Fx_result() as usize;
 
-    alloca::with_stack_bytes(size, |buffer| {
-        let buffer: *mut std::ffi::c_void = buffer;
-        let buffer: *mut u8 = buffer as *mut u8;
+    let layout = Layout::array::<u8>(size).unwrap();
+    let buffer = std::alloc::alloc(layout);
 
-        call_Fx(
-            function_pointer,
-            closure_data_ptr as *const u8,
-            buffer as *mut u8,
-        );
+    call_Fx(
+        function_pointer,
+        closure_data_ptr as *const u8,
+        buffer as *mut u8,
+    );
 
-        let output = &*(buffer as *mut RocCallResult<()>);
+    let output = &*(buffer as *mut RocCallResult<()>);
 
-        match output.into() {
-            Ok(()) => {
-                let mut bytes = *(buffer.add(8) as *const (u64, u64));
-                let msg = std::mem::transmute::<(u64, u64), RocStr>(bytes);
+    match output.into() {
+        Ok(()) => Msg { msg: buffer.add(8) },
 
-                msg
-            }
-
-            Err(e) => panic!("failed with {}", e),
-        }
-    })
+        Err(e) => panic!("failed with {}", e),
+    }
 }
 
-unsafe fn run_init(function_pointer: *const u8, closure_data_ptr: *const u8) -> (Model, Msg) {
+struct Msg {
+    msg: *mut u8,
+}
+
+impl Msg {
+    unsafe fn alloc(size: usize) -> Self {
+        let size = size_Fx_result() as usize;
+        let layout = Layout::array::<u8>(size).unwrap();
+        let msg = std::alloc::alloc(layout);
+
+        Self { msg }
+    }
+}
+
+impl Drop for Msg {
+    fn drop(&mut self) {
+        unsafe {
+            let size = size_Fx_result() as usize;
+            let layout = Layout::array::<u8>(size).unwrap();
+            std::alloc::dealloc(self.msg.offset(-8), layout);
+        }
+    }
+}
+
+struct ModelCmd {
+    buffer: *mut u8,
+    cmd_fn_ptr_ptr: *const u8,
+    cmd_closure_data_ptr: *const u8,
+    model: *const u8,
+}
+
+impl ModelCmd {
+    unsafe fn alloc() -> Self {
+        let size = 8 + size_Fx() as usize + size_Model() as usize;
+
+        let layout = Layout::array::<u8>(size).unwrap();
+        let buffer = std::alloc::alloc(layout);
+
+        let cmd_fn_ptr_ptr = buffer.add(8);
+        let cmd_closure_data_ptr = buffer.add(8 + 8);
+        let model = buffer.add(8 + size_Fx() as usize);
+
+        Self {
+            buffer,
+            cmd_fn_ptr_ptr,
+            cmd_closure_data_ptr,
+            model,
+        }
+    }
+}
+
+impl Drop for ModelCmd {
+    fn drop(&mut self) {
+        unsafe {
+            let size = 8 + size_Fx() as usize + size_Model() as usize;
+            let layout = Layout::array::<u8>(size).unwrap();
+            std::alloc::dealloc(self.buffer, layout);
+        }
+    }
+}
+
+unsafe fn run_init(
+    function_pointer: *const u8,
+    closure_data_ptr: *const u8,
+) -> Result<ModelCmd, String> {
+    debug_assert_eq!(size_Init_result(), 8 + size_Fx() + size_Model());
     let size = size_Init_result() as usize;
 
-    alloca::with_stack_bytes(size, |buffer| {
-        let buffer: *mut std::ffi::c_void = buffer;
-        let buffer: *mut u8 = buffer as *mut u8;
+    let model_cmd = ModelCmd::alloc();
+    let buffer = model_cmd.buffer;
 
-        call_Init(function_pointer, 0 as *const u8, buffer as *mut u8);
+    call_Init(function_pointer, 0 as *const u8, buffer as *mut u8);
 
-        // cmd < model, so the command comes first
-        let output = &*(buffer as *mut RocCallResult<()>);
+    // cmd < model, so the command comes first
+    let output = &*(buffer as *mut RocCallResult<()>);
 
-        match output.into() {
-            Ok(_) => {
-                let offset = 8 + size_Fx();
-                let model_ptr = buffer.add(offset as usize);
-                let model: i64 = *(model_ptr as *const i64);
-
-                let cmd_fn_ptr_ptr = buffer.add(8) as *const i64;
-                let cmd_fn_ptr = (*cmd_fn_ptr_ptr) as *const u8;
-                let cmd_closure_data_ptr = buffer.add(16);
-
-                let msg = run_fx(cmd_fn_ptr, cmd_closure_data_ptr);
-
-                (model, msg)
-            }
-
-            Err(e) => panic!("failed with {}", e),
-        }
-    })
+    match output.into() {
+        Ok(_) => Ok(model_cmd),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 unsafe fn run_update(
-    msg: RocStr,
+    msg: Msg,
     model: Model,
     function_pointer: *const u8,
     closure_data_ptr: *const u8,
-) -> (Model, Msg) {
+) -> Result<ModelCmd, String> {
+    debug_assert_eq!(size_Update_result(), 8 + size_Fx() + size_Model());
     let size = size_Update_result() as usize;
 
-    alloca::with_stack_bytes(size, |buffer| {
-        let buffer: *mut std::ffi::c_void = buffer;
-        let buffer: *mut u8 = buffer as *mut u8;
+    let model_cmd = ModelCmd::alloc();
+    let buffer = model_cmd.buffer;
 
-        println!("let's try update!");
+    call_Update(
+        msg,
+        model,
+        function_pointer,
+        closure_data_ptr,
+        buffer as *mut u8,
+    );
 
-        call_Update(
-            &msg,
-            &model,
-            function_pointer,
-            closure_data_ptr,
-            buffer as *mut u8,
-        );
+    // cmd < model, so the command comes first
+    let output = &*(buffer as *mut RocCallResult<()>);
 
-        // cmd < model, so the command comes first
-        let output = &*(buffer as *mut RocCallResult<()>);
-
-        match output.into() {
-            Ok(_) => {
-                let offset = 8 + size_Fx();
-                let model_ptr = buffer.add(offset as usize);
-                let model: i64 = *(model_ptr as *const i64);
-
-                let cmd_fn_ptr_ptr = buffer.add(8) as *const i64;
-                let cmd_fn_ptr = (*cmd_fn_ptr_ptr) as *const u8;
-                let cmd_closure_data_ptr = buffer.add(16);
-
-                let msg = run_fx(cmd_fn_ptr, cmd_closure_data_ptr);
-
-                (model, msg)
-            }
-
-            Err(e) => panic!("failed with {}", e),
-        }
-    })
+    match output.into() {
+        Ok(_) => Ok(model_cmd),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
-#[no_mangle]
-pub fn rust_main() -> isize {
-    let start_time = SystemTime::now();
-
+fn run_roc() -> Result<(), String> {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
-    let answer = unsafe {
+    unsafe {
         let buffer = std::alloc::alloc(layout);
 
         roc_main(buffer);
@@ -221,101 +242,62 @@ pub fn rust_main() -> isize {
 
         match output.into() {
             Ok((init_fn_ptr, update_fn_ptr)) => {
-                // let closure_data_ptr = buffer.offset(16);
+                //let closure_data_ptr = buffer.offset(16);
                 let closure_data_ptr = 0 as *const u8;
 
-                let (mut model, mut msg) =
-                    run_init(init_fn_ptr as *const u8, closure_data_ptr as *const u8);
+                let model_cmd =
+                    &mut run_init(init_fn_ptr as *const u8, closure_data_ptr as *const u8).unwrap();
 
                 for _ in 0..5 {
-                    let result = run_update(
+                    let model = model_cmd.model;
+                    let cmd_fn_ptr = *(model_cmd.cmd_fn_ptr_ptr as *const usize) as *const u8;
+                    let msg = run_fx(cmd_fn_ptr, model_cmd.cmd_closure_data_ptr);
+
+                    let mut result = run_update(
                         msg,
                         model,
                         update_fn_ptr as *const u8,
                         closure_data_ptr as *const u8,
-                    );
+                    )
+                    .unwrap();
 
-                    model = result.0;
-                    msg = result.1;
+                    std::mem::swap(model_cmd, &mut result);
+
+                    // implictly drops `result` and `msg`
                 }
 
                 std::alloc::dealloc(buffer, layout);
-
-                model
+                Ok(())
             }
             Err(msg) => {
                 std::alloc::dealloc(buffer, layout);
 
-                panic!("Roc failed with message: {}", msg);
+                Err(msg.to_string())
             }
         }
-    };
-    let end_time = SystemTime::now();
-    let duration = end_time.duration_since(start_time).unwrap();
-
-    println!(
-        "Roc closure took {:.4} ms to compute this answer: {:?}",
-        duration.as_secs_f64() * 1000.0,
-        // truncate the answer, so stdout is not swamped
-        answer
-    );
-
-    // Exit code
-    0
+    }
 }
 
-/*
 #[no_mangle]
-pub fn old_rust_main() -> isize {
-    println!("Running Roc closure");
+pub fn rust_main() -> isize {
     let start_time = SystemTime::now();
 
-    let size = unsafe { roc_main_size() } as usize;
-    let layout = Layout::array::<u8>(size).unwrap();
-    let answer = unsafe {
-        let buffer = std::alloc::alloc(layout);
-
-        roc_main(buffer);
-
-        let output = &*(buffer as *mut RocCallResult<()>);
-
-        match output.into() {
-            Ok(()) => {
-                let function_pointer = {
-                    // this is a pointer to the location where the function pointer is stored
-                    // we pass just the function pointer
-                    let temp = buffer.offset(8) as *const i64;
-
-                    (*temp) as *const u8
-                };
-
-                let closure_data_ptr = buffer.offset(16);
-
-                let result =
-                    call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8);
-
-                std::alloc::dealloc(buffer, layout);
-
-                result
-            }
-            Err(msg) => {
-                std::alloc::dealloc(buffer, layout);
-
-                panic!("Roc failed with message: {}", msg);
-            }
-        }
-    };
     let end_time = SystemTime::now();
     let duration = end_time.duration_since(start_time).unwrap();
 
-    println!(
-        "Roc closure took {:.4} ms to compute this answer: {:?}",
-        duration.as_secs_f64() * 1000.0,
-        // truncate the answer, so stdout is not swamped
-        answer
-    );
+    match run_roc() {
+        Ok(answer) => {
+            println!(
+                "Roc closure took {:.4} ms to compute this answer: {:?}",
+                duration.as_secs_f64() * 1000.0,
+                answer
+            );
+        }
+        Err(e) => {
+            eprintln!("Roc failed with message {:?}", e);
+        }
+    }
 
     // Exit code
     0
 }
-*/
