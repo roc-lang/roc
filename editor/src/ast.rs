@@ -1,3 +1,4 @@
+use crate::pattern::{Pattern2, PatternId};
 use crate::pool::{NodeId, PoolStr, PoolVec};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::def::Annotation;
@@ -227,11 +228,6 @@ pub enum FunctionDef {
         arguments: PoolVec<(Pattern2, Variable)>,
         return_var: Variable,
     },
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Pattern2 {
-    Todo,
 }
 
 /// This is overflow data from a Closure variant, which needs to store

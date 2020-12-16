@@ -306,11 +306,11 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn iter(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
+    pub fn iter(&self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
         self.pool_list_iter(pool)
     }
 
-    pub fn iter_mut(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a mut T> {
+    pub fn iter_mut(&mut self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a mut T> {
         self.pool_list_iter_mut(pool)
     }
 
