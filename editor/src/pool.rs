@@ -137,9 +137,25 @@ impl Pool {
 
     pub fn get<'a, T>(&'a self, node_id: NodeId<T>) -> &'a T {
         unsafe {
-            let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
+            let node_ptr = self.nodes.offset(node_id.index as isize) as *const T;
 
             &*node_ptr
+        }
+    }
+
+    fn get_mut<'a, T>(&'a mut self, node_id: NodeId<T>) -> &'a mut T {
+        unsafe {
+            let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
+
+            &mut *node_ptr
+        }
+    }
+
+    pub fn set<T>(&self, node_id: NodeId<T>, element: T) {
+        unsafe {
+            let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
+
+            *node_ptr = element;
         }
     }
 
@@ -153,6 +169,20 @@ impl Pool {
 
             *node_ptr == [0; NODE_BYTES]
         }
+    }
+}
+
+impl<T> std::ops::Index<NodeId<T>> for Pool {
+    type Output = T;
+
+    fn index(&self, node_id: NodeId<T>) -> &Self::Output {
+        self.get(node_id)
+    }
+}
+
+impl<T> std::ops::IndexMut<NodeId<T>> for Pool {
+    fn index_mut(&mut self, node_id: NodeId<T>) -> &mut Self::Output {
+        self.get_mut(node_id)
     }
 }
 
@@ -179,6 +209,43 @@ fn pool_str_size() {
     assert_eq!(size_of::<PoolStr>(), 8);
 }
 
+impl PoolStr {
+    pub fn new(string: &str, pool: &mut Pool) -> Self {
+        debug_assert!(string.len() <= u32::MAX as usize);
+
+        let chars_per_node = NODE_BYTES / size_of::<char>();
+
+        let number_of_nodes = f64::ceil(string.len() as f64 / chars_per_node as f64) as u32;
+
+        if number_of_nodes > 0 {
+            let first_node_id = pool.reserve(number_of_nodes);
+            let index = first_node_id.index as isize;
+            let next_node_ptr = unsafe { pool.nodes.offset(index) } as *mut c_void;
+
+            unsafe {
+                libc::memcpy(
+                    next_node_ptr,
+                    string.as_ptr() as *const c_void,
+                    string.len(),
+                );
+            }
+
+            PoolStr {
+                first_node_id,
+                len: number_of_nodes,
+            }
+        } else {
+            PoolStr {
+                first_node_id: NodeId {
+                    index: 0,
+                    _phantom: PhantomData::default(),
+                },
+                len: 0,
+            }
+        }
+    }
+}
+
 /// An array of at most 2^32 pool-allocated nodes.
 #[derive(Debug)]
 pub struct PoolVec<T> {
@@ -192,7 +259,23 @@ fn pool_vec_size() {
 }
 
 impl<'a, T: 'a + Sized> PoolVec<T> {
-    pub fn new<I: ExactSizeIterator<Item = T>, S>(nodes: I, pool: &mut Pool) -> Self {
+    pub fn empty(pool: &mut Pool) -> Self {
+        Self::new(std::iter::empty(), pool)
+    }
+
+    pub fn with_capacity(len: u32, pool: &mut Pool) -> Self {
+        debug_assert!(size_of::<T>() <= NODE_BYTES);
+
+        if len == 0 {
+            Self::empty(pool)
+        } else {
+            let first_node_id = pool.reserve(len);
+
+            PoolVec { first_node_id, len }
+        }
+    }
+
+    pub fn new<I: ExactSizeIterator<Item = T>>(nodes: I, pool: &mut Pool) -> Self {
         debug_assert!(nodes.len() <= u32::MAX as usize);
         debug_assert!(size_of::<T>() <= NODE_BYTES);
 
@@ -223,8 +306,16 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn iter<S>(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
+    pub fn iter(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
         self.pool_list_iter(pool)
+    }
+
+    pub fn iter_mut(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a mut T> {
+        self.pool_list_iter_mut(pool)
+    }
+
+    pub fn iter_node_ids(&self) -> impl ExactSizeIterator<Item = NodeId<T>> {
+        self.pool_list_iter_node_ids()
     }
 
     /// Private version of into_iter which exposes the implementation detail
@@ -235,6 +326,23 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     fn pool_list_iter(&self, pool: &'a Pool) -> PoolVecIter<'a, T> {
         PoolVecIter {
             pool,
+            current_node_id: self.first_node_id,
+            len_remaining: self.len,
+        }
+    }
+
+    #[inline(always)]
+    fn pool_list_iter_mut(&self, pool: &'a Pool) -> PoolVecIterMut<'a, T> {
+        PoolVecIterMut {
+            pool,
+            current_node_id: self.first_node_id,
+            len_remaining: self.len,
+        }
+    }
+
+    #[inline(always)]
+    fn pool_list_iter_node_ids(&self) -> PoolVecIterNodeIds<T> {
+        PoolVecIterNodeIds {
             current_node_id: self.first_node_id,
             len_remaining: self.len,
         }
@@ -303,6 +411,112 @@ where
                 let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *const T;
 
                 Some(unsafe { &*node_ptr })
+            }
+            Ordering::Less => {
+                // len_remaining was 0
+                None
+            }
+        }
+    }
+}
+
+struct PoolVecIterMut<'a, T> {
+    pool: &'a Pool,
+    current_node_id: NodeId<T>,
+    len_remaining: u32,
+}
+
+impl<'a, T> ExactSizeIterator for PoolVecIterMut<'a, T>
+where
+    T: 'a,
+{
+    fn len(&self) -> usize {
+        self.len_remaining as usize
+    }
+}
+
+impl<'a, T> Iterator for PoolVecIterMut<'a, T>
+where
+    T: 'a,
+{
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let len_remaining = self.len_remaining;
+
+        match len_remaining.cmp(&1) {
+            Ordering::Greater => {
+                // Get the current node
+                let index = self.current_node_id.index;
+                let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *mut T;
+
+                // Advance the node pointer to the next node in the current page
+                self.current_node_id = NodeId {
+                    index: index + 1,
+                    _phantom: PhantomData::default(),
+                };
+                self.len_remaining = len_remaining - 1;
+
+                Some(unsafe { &mut *node_ptr })
+            }
+            Ordering::Equal => {
+                self.len_remaining = 0;
+
+                // Don't advance the node pointer's node, because that might
+                // advance past the end of the page!
+
+                let index = self.current_node_id.index;
+                let node_ptr = unsafe { self.pool.nodes.offset(index as isize) } as *mut T;
+
+                Some(unsafe { &mut *node_ptr })
+            }
+            Ordering::Less => {
+                // len_remaining was 0
+                None
+            }
+        }
+    }
+}
+
+struct PoolVecIterNodeIds<T> {
+    current_node_id: NodeId<T>,
+    len_remaining: u32,
+}
+
+impl<T> ExactSizeIterator for PoolVecIterNodeIds<T> {
+    fn len(&self) -> usize {
+        self.len_remaining as usize
+    }
+}
+
+impl<T> Iterator for PoolVecIterNodeIds<T> {
+    type Item = NodeId<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let len_remaining = self.len_remaining;
+
+        match len_remaining.cmp(&1) {
+            Ordering::Greater => {
+                // Get the current node
+                let current = self.current_node_id;
+                let index = current.index;
+
+                // Advance the node pointer to the next node in the current page
+                self.current_node_id = NodeId {
+                    index: index + 1,
+                    _phantom: PhantomData::default(),
+                };
+                self.len_remaining = len_remaining - 1;
+
+                Some(current)
+            }
+            Ordering::Equal => {
+                self.len_remaining = 0;
+
+                // Don't advance the node pointer's node, because that might
+                // advance past the end of the page!
+
+                Some(self.current_node_id)
             }
             Ordering::Less => {
                 // len_remaining was 0
