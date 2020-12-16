@@ -2,9 +2,14 @@ use anyhow::*;
 use glob::glob;
 use std::fs::{read_to_string, write};
 use std::path::PathBuf;
+use rayon::prelude::*;
 
-// Build script for shaders used from:
-// https://sotrh.github.io/learn-wgpu/beginner/tutorial3-pipeline/#compiling-shaders-and-include-spirv
+// Adapted from https://github.com/sotrh/learn-wgpu
+// by Benjamin Hansen, licensed under the MIT license
+
+
+// Rename this file to build.rs and uncomment the build-dependencies in Cargo.toml to compile
+// the shaders into .spv files
 
 struct ShaderData {
     src: String,
@@ -41,17 +46,16 @@ impl ShaderData {
 
 fn main() -> Result<()> {
     // Collect all shaders recursively within /src/
-    let mut shader_paths = [
-        glob("./src/**/*.vert")?,
-        glob("./src/**/*.frag")?,
-        glob("./src/**/*.comp")?,
-    ];
+    let mut shader_paths = Vec::new();
+    shader_paths.extend(glob("./src/**/*.vert")?);
+    shader_paths.extend(glob("./src/**/*.frag")?);
+    shader_paths.extend(glob("./src/**/*.comp")?);
 
-    // This could be parallelized
-    let shaders = shader_paths
-        .iter_mut()
-        .flatten()
-        .map(|glob_result| ShaderData::load(glob_result?))
+
+    let shaders = shader_paths.into_par_iter()
+        .map(|glob_result| {
+            ShaderData::load(glob_result?)
+        })
         .collect::<Vec<Result<_>>>()
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
