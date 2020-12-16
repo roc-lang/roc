@@ -151,7 +151,7 @@ impl Pool {
         }
     }
 
-    pub fn set<T>(&self, node_id: NodeId<T>, element: T) {
+    pub fn set<T>(&mut self, node_id: NodeId<T>, element: T) {
         unsafe {
             let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
 

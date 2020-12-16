@@ -35,7 +35,7 @@ pub struct Env<'a> {
 impl<'a> Env<'a> {
     fn add<T>(&mut self, item: T, region: Region) -> NodeId<T> {
         let id = self.pool.add(item);
-        self.locate(id, region);
+        self.set_region(id, region);
 
         id
     }
@@ -44,7 +44,7 @@ impl<'a> Env<'a> {
         todo!();
     }
 
-    fn locate<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
+    fn set_region<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
         todo!();
     }
 
@@ -865,13 +865,13 @@ fn canonicalize_when_branch<'a>(
 
         output.union(new_output);
 
-        env.locate(node_id, loc_pattern.region);
+        env.set_region(node_id, loc_pattern.region);
         env.pool[node_id] = can_pattern;
     }
 
     let (value, mut branch_output) = to_expr2(env, &mut scope, &branch.value.value);
     let value_id = env.pool.add(value);
-    env.locate(value_id, branch.value.region);
+    env.set_region(value_id, branch.value.region);
 
     let guard = match &branch.guard {
         None => None,
@@ -879,7 +879,7 @@ fn canonicalize_when_branch<'a>(
             let (can_guard, guard_branch_output) = to_expr2(env, &mut scope, &loc_expr.value);
 
             let expr_id = env.pool.add(can_guard);
-            env.locate(expr_id, loc_expr.region);
+            env.set_region(expr_id, loc_expr.region);
 
             branch_output.union(guard_branch_output);
             Some(expr_id)
