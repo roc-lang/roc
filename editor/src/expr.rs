@@ -30,6 +30,7 @@ pub struct Env<'a> {
     pub dep_idents: MutMap<ModuleId, IdentIds>,
     pub module_ids: &'a ModuleIds,
     pub ident_ids: IdentIds,
+    pub exposed_ident_ids: IdentIds,
 
     pub closures: MutMap<Symbol, References>,
     /// Symbols which were referenced by qualified lookups.

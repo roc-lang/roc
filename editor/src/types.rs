@@ -148,7 +148,7 @@ fn shallow_dealias<'a>(env: &mut Env, rigids: Rigids<'a>, annotation: Type2) -> 
 }
 
 #[derive(Default)]
-struct Rigids<'a> {
+pub struct Rigids<'a> {
     named: MutMap<&'a str, Variable>,
     unnamed: MutSet<Variable>,
     hidden: MutSet<Variable>,
@@ -249,6 +249,149 @@ pub fn to_type2<'a>(
 
             Type2::Record(field_types, ext_type)
         }
+        TagUnion { tags, ext, .. } => {
+            let tag_types_vec = can_tags(env, scope, rigids, tags, region);
+
+            let tag_types = PoolVec::with_capacity(tag_types_vec.len() as u32, env.pool);
+
+            for (node_id, (label, field)) in tag_types.iter_node_ids().zip(tag_types_vec) {
+                let poolstr = PoolStr::new(label, env.pool);
+                env.pool[node_id] = (poolstr, field);
+            }
+
+            let ext_type = match ext {
+                Some(loc_ann) => to_type_id(env, scope, rigids, &loc_ann.value, region),
+                None => env.add(Type2::EmptyTagUnion, region),
+            };
+
+            Type2::TagUnion(tag_types, ext_type)
+        }
+        As(loc_inner, _spaces, loc_as) => {
+            // e.g. `{ x : Int, y : Int } as Point }`
+            match loc_as.value {
+                Apply(module_name, ident, loc_vars) if module_name.is_empty() => {
+                    let symbol = match scope.introduce(
+                        ident.into(),
+                        &env.exposed_ident_ids,
+                        &mut env.ident_ids,
+                        region,
+                    ) {
+                        Ok(symbol) => symbol,
+
+                        Err((original_region, shadow)) => {
+                            let problem = Problem::Shadowed(original_region, shadow.clone());
+
+                            env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                                original_region,
+                                shadow,
+                            });
+
+                            return Type2::Erroneous(problem);
+                        }
+                    };
+
+                    let inner_type = to_type2(env, scope, rigids, &loc_inner.value, region);
+                    let mut vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
+
+                    let mut lowercase_vars =
+                        PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
+
+                    // references.insert(symbol);
+
+                    for ((loc_var, named_id), var_id) in loc_vars
+                        .iter()
+                        .zip(lowercase_vars.iter_node_ids())
+                        .zip(vars.iter_node_ids())
+                    {
+                        match loc_var.value {
+                            BoundVariable(ident) => {
+                                let var_name = ident;
+
+                                if let Some(var) = rigids.named.get(&var_name) {
+                                    let poolstr = PoolStr::new(var_name, env.pool);
+
+                                    let type_id = env.pool.add(Type2::Variable(*var));
+                                    env.pool[var_id] = (poolstr.duplicate(), type_id);
+
+                                    env.pool[named_id] = (poolstr, *var);
+                                    env.set_region(named_id, loc_var.region);
+                                } else {
+                                    let var = env.var_store.fresh();
+
+                                    rigids.named.insert(var_name.clone(), var);
+                                    let poolstr = PoolStr::new(var_name, env.pool);
+
+                                    let type_id = env.pool.add(Type2::Variable(var));
+                                    env.pool[var_id] = (poolstr.duplicate(), type_id);
+
+                                    env.pool[named_id] = (poolstr, var);
+                                    env.set_region(named_id, loc_var.region);
+                                }
+                            }
+                            _ => {
+                                // If anything other than a lowercase identifier
+                                // appears here, the whole annotation is invalid.
+                                return Type2::Erroneous(Problem::CanonicalizationProblem);
+                            }
+                        }
+                    }
+
+                    let alias_actual = inner_type;
+                    //                    let alias_actual = if let Type2::TagUnion(tags, ext) = inner_type {
+                    //                        let rec_var = env.var_store.fresh();
+                    //
+                    //                        let mut new_tags = Vec::with_capacity(tags.len());
+                    //                        for (tag_name, args) in tags {
+                    //                            let mut new_args = Vec::with_capacity(args.len());
+                    //                            for arg in args {
+                    //                                let mut new_arg = arg.clone();
+                    //                                new_arg.substitute_alias(symbol, &Type2::Variable(rec_var));
+                    //                                new_args.push(new_arg);
+                    //                            }
+                    //                            new_tags.push((tag_name.clone(), new_args));
+                    //                        }
+                    //                        Type2::RecursiveTagUnion(rec_var, new_tags, ext)
+                    //                    } else {
+                    //                        inner_type
+                    //                    };
+
+                    let mut hidden_variables = MutSet::default();
+                    hidden_variables.extend(alias_actual.variables(env.pool));
+
+                    for (_, var) in lowercase_vars.iter(env.pool) {
+                        hidden_variables.remove(var);
+                    }
+
+                    let alias_actual_id = env.pool.add(alias_actual);
+                    scope.add_alias(env.pool, symbol, lowercase_vars, alias_actual_id);
+
+                    let alias = scope.lookup_alias(symbol).unwrap();
+                    // local_aliases.insert(symbol, alias.clone());
+
+                    // TODO host-exposed
+                    //                    if vars.is_empty() && env.home == symbol.module_id() {
+                    //                        let actual_var = env.var_store.fresh();
+                    //                        rigids.host_exposed.insert(symbol, actual_var);
+                    //                        Type::HostExposedAlias {
+                    //                            name: symbol,
+                    //                            arguments: vars,
+                    //                            actual: Box::new(alias.typ.clone()),
+                    //                            actual_var,
+                    //                        }
+                    //                    } else {
+                    //                        Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+                    //                    }
+                    Type2::Alias(symbol, vars, alias.actual)
+                }
+                _ => {
+                    // This is a syntactically invalid type alias.
+                    Type2::Erroneous(Problem::CanonicalizationProblem)
+                }
+            }
+        }
+        SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
+            to_type2(env, scope, rigids, nested, region)
+        }
     }
 }
 
@@ -340,6 +483,85 @@ fn can_assigned_fields<'a>(
     }
 
     field_types
+}
+
+fn can_tags<'a>(
+    env: &mut Env,
+    scope: &mut Scope,
+    rigids: &mut Rigids<'a>,
+    tags: &'a [Located<roc_parse::ast::Tag<'a>>],
+    region: Region,
+) -> Vec<(&'a str, PoolVec<Type2>)> {
+    use roc_parse::ast::Tag;
+    let mut tag_types = Vec::with_capacity(tags.len());
+
+    // tag names we've seen so far in this tag union
+    let mut seen = std::collections::HashMap::with_capacity(tags.len());
+
+    'outer: for loc_tag in tags.iter() {
+        let mut tag = &loc_tag.value;
+
+        // use this inner loop to unwrap the SpaceAfter/SpaceBefore
+        // when we find the name of this tag, break out of the loop
+        // with that value, so we can check whether the tag name is
+        // a duplicate
+        let new_name = 'inner: loop {
+            match tag {
+                Tag::Global { name, args } => {
+                    let arg_types = PoolVec::with_capacity(args.len() as u32, env.pool);
+
+                    for (type_id, loc_arg) in arg_types.iter_node_ids().zip(args.iter()) {
+                        as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
+                    }
+
+                    let tag_name = name.value;
+                    tag_types.push((tag_name, arg_types));
+
+                    break 'inner tag_name;
+                }
+                Tag::Private { name, args } => {
+                    //let ident_id = env.ident_ids.get_or_insert(&name.value.into());
+                    //let symbol = Symbol::new(env.home, ident_id);
+
+                    let arg_types = PoolVec::with_capacity(args.len() as u32, env.pool);
+
+                    for (type_id, loc_arg) in arg_types.iter_node_ids().zip(args.iter()) {
+                        as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
+                    }
+
+                    //let tag_name = TagName::Private(symbol);
+                    let tag_name = name.value;
+                    tag_types.push((tag_name, arg_types));
+
+                    break 'inner tag_name;
+                }
+                Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => {
+                    // check the nested tag instead
+                    tag = nested;
+                    continue 'inner;
+                }
+                Tag::Malformed(_) => {
+                    // TODO report this?
+                    // completely skip this element, advance to the next tag
+                    continue 'outer;
+                }
+            }
+        };
+
+        // ensure that the new name is not already in this tag union:
+        // note that the right-most tag wins when there are two with the same name
+        if let Some(replaced_region) = seen.insert(new_name.clone(), loc_tag.region) {
+            env.problem(roc_problem::can::Problem::DuplicateTag {
+                tag_region: loc_tag.region,
+                tag_union_region: region,
+                replaced_region,
+                // tag_name: new_name,
+                tag_name: todo!(),
+            });
+        }
+    }
+
+    tag_types
 }
 
 enum TypeApply {
