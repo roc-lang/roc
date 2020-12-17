@@ -4,9 +4,12 @@
 use crate::ast::{ExprId, FloatVal, IntVal};
 use crate::expr::Env;
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
-use roc_can::expr::Output;
+use roc_can::expr::{unescape_char, Output};
 use roc_can::scope::Scope;
 use roc_module::symbol::Symbol;
+use roc_parse::ast::{StrLiteral, StrSegment};
+use roc_parse::pattern::PatternType;
+use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::Region;
 use roc_types::subs::Variable;
 
@@ -20,10 +23,16 @@ pub enum Pattern2 {
     FloatLiteral(FloatVal),    // 16B
     StrLiteral(PoolStr),       // 8B
     Underscore,                // 0B
-    AppliedTag {
+    GlobalTag {
         whole_var: Variable,                       // 4B
         ext_var: Variable,                         // 4B
         tag_name: PoolStr,                         // 8B
+        arguments: PoolVec<(Variable, PatternId)>, // 8B
+    },
+    PrivateTag {
+        whole_var: Variable,                       // 4B
+        ext_var: Variable,                         // 4B
+        tag_name: Symbol,                          // 8B
         arguments: PoolVec<(Variable, PatternId)>, // 8B
     },
     RecordDestructure {
@@ -70,13 +79,66 @@ pub enum MalformedPatternProblem {
 }
 
 pub fn to_pattern2<'a>(
-    _env: &mut Env<'a>,
-    _scope: &mut Scope,
-    _pattern_type: roc_parse::pattern::PatternType,
-    _pattern: &roc_parse::ast::Pattern<'a>,
-    _region: Region,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    pattern_type: PatternType,
+    pattern: &roc_parse::ast::Pattern<'a>,
+    region: Region,
 ) -> (Output, Pattern2) {
-    todo!()
+    use roc_parse::ast::Pattern::*;
+    use PatternType::*;
+
+    let mut output = Output::default();
+    let can_pattern = match pattern {
+        Identifier(name) => match scope.introduce(
+            (*name).into(),
+            &env.exposed_ident_ids,
+            &mut env.ident_ids,
+            region,
+        ) {
+            Ok(symbol) => {
+                output.references.bound_symbols.insert(symbol);
+
+                Pattern2::Identifier(symbol)
+            }
+            Err((original_region, shadow)) => {
+                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                    original_region,
+                    shadow: shadow.clone(),
+                }));
+
+                let name: &str = shadow.value.as_ref();
+
+                Pattern2::Shadowed {
+                    shadowed_ident: PoolStr::new(name, env.pool),
+                    shadowed_at: region,
+                    definition: original_region,
+                }
+            }
+        },
+        GlobalTag(name) => {
+            // Canonicalize the tag's name.
+            Pattern2::GlobalTag {
+                whole_var: env.var_store.fresh(),
+                ext_var: env.var_store.fresh(),
+                tag_name: PoolStr::new(name, env.pool),
+                arguments: PoolVec::empty(env.pool),
+            }
+        }
+        PrivateTag(name) => {
+            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
+
+            // Canonicalize the tag's name.
+            Pattern2::PrivateTag {
+                whole_var: env.var_store.fresh(),
+                ext_var: env.var_store.fresh(),
+                tag_name: Symbol::new(env.home, ident_id),
+                arguments: PoolVec::empty(env.pool),
+            }
+        }
+    };
+
+    (output, can_pattern)
 }
 
 pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
@@ -90,7 +152,7 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
                 symbols.push(*symbol);
             }
 
-            AppliedTag { arguments, .. } => {
+            GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
                 for (_, pattern_id) in arguments.iter(pool) {
                     stack.push(pool.get(*pattern_id));
                 }
@@ -121,4 +183,51 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
     }
 
     symbols
+}
+
+/// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
+/// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
+fn unsupported_pattern<'a>(
+    env: &mut Env<'a>,
+    pattern_type: PatternType,
+    region: Region,
+) -> Pattern2 {
+    env.problem(Problem::UnsupportedPattern(pattern_type, region));
+
+    Pattern2::UnsupportedPattern(region)
+}
+
+fn flatten_str_literal(pool: &mut Pool, literal: &StrLiteral<'_>) -> Pattern2 {
+    use roc_parse::ast::StrLiteral::*;
+
+    match literal {
+        PlainLine(str_slice) => Pattern2::StrLiteral(PoolStr::new(str_slice, pool)),
+        Line(segments) => flatten_str_lines(pool, &[segments]),
+        Block(lines) => flatten_str_lines(pool, lines),
+    }
+}
+
+fn flatten_str_lines(pool: &mut Pool, lines: &[&[StrSegment<'_>]]) -> Pattern2 {
+    use StrSegment::*;
+
+    let mut buf = String::new();
+
+    for line in lines {
+        for segment in line.iter() {
+            match segment {
+                Plaintext(string) => {
+                    buf.push_str(string);
+                }
+                Unicode(loc_digits) => {
+                    todo!("parse unicode digits {:?}", loc_digits);
+                }
+                Interpolated(loc_expr) => {
+                    return Pattern2::UnsupportedPattern(loc_expr.region);
+                }
+                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
+            }
+        }
+    }
+
+    Pattern2::StrLiteral(PoolStr::new(&buf, pool))
 }
