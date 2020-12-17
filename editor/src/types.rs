@@ -80,75 +80,69 @@ pub fn to_annotation2<'a>(
     env: &mut Env,
     scope: &mut Scope,
     annotation: &'a roc_parse::ast::TypeAnnotation<'a>,
-    _region: Region,
+    region: Region,
 ) -> Annotation2<'a> {
-    use roc_parse::ast::TypeAnnotation::*;
-
     let mut rigids = Rigids::default();
-    let mut alias_stack = Vec::new();
-    // let mut as_alias_stack = Vec::new();
+
+    let annotation = to_type2(env, scope, &mut rigids, annotation, region);
 
     // we dealias until we hit a non-alias, then we either hit a function type (and produce a
     // function annotation) or anything else (and produce a value annotation)
     match annotation {
-        Function(argument_types, return_type) => {
-            //
-            let arguments = PoolVec::with_capacity(argument_types.len() as u32, env.pool);
-
-            for (type_id, loc_arg) in arguments.iter_node_ids().zip(argument_types.iter()) {
-                as_type_id(
-                    env,
-                    scope,
-                    &mut rigids,
-                    type_id,
-                    &loc_arg.value,
-                    loc_arg.region,
-                );
-            }
-
-            let return_type_id = to_type_id(
-                env,
-                scope,
-                &mut rigids,
-                &return_type.value,
-                return_type.region,
-            );
-
-            let closure_type = Type2::Variable(env.var_store.fresh());
-            let closure_type_id = env.pool.add(closure_type);
-
+        Type2::Function(arguments, closure_type_id, return_type_id) => {
             let Rigids { named, unnamed, .. } = rigids;
 
-            // if alias_stack.is_empty() && as_alias_stack.is_empty() {
-            if alias_stack.is_empty() {
-                Annotation2::Function {
-                    arguments,
-                    closure_type_id,
-                    return_type_id,
+            Annotation2::Function {
+                arguments,
+                closure_type_id,
+                return_type_id,
+                named_rigids: named,
+                unnamed_rigids: unnamed,
+            }
+        }
+        Type2::Alias(_, _, _) => {
+            // most of the time, the annotation is not an alias, so this case is comparatively
+            // less efficient
+            shallow_dealias(env, rigids, annotation)
+        }
+        _ => {
+            let Rigids { named, unnamed, .. } = rigids;
+
+            return Annotation2::Value {
+                annotation,
+                named_rigids: named,
+                unnamed_rigids: unnamed,
+            };
+        }
+    }
+}
+
+fn shallow_dealias<'a>(env: &mut Env, rigids: Rigids<'a>, annotation: Type2) -> Annotation2<'a> {
+    let Rigids { named, unnamed, .. } = rigids;
+    let mut inner = &annotation;
+
+    loop {
+        match inner {
+            Type2::Alias(_, _, actual) => {
+                inner = env.pool.get(*actual);
+            }
+            Type2::Function(arguments, closure_type_id, return_type_id) => {
+                return Annotation2::FunctionWithAliases {
+                    arguments: arguments.duplicate(),
+                    closure_type_id: *closure_type_id,
+                    return_type_id: *return_type_id,
                     named_rigids: named,
                     unnamed_rigids: unnamed,
-                }
-            } else {
-                let mut annotation =
-                    Type2::Function(arguments.duplicate(), closure_type_id, return_type_id);
-                for (name, targs) in alias_stack.into_iter().rev().peekable() {
-                    let type_id = env.pool.add(annotation);
-
-                    annotation = Type2::Alias(name, targs, type_id);
-                }
-
-                Annotation2::FunctionWithAliases {
                     annotation,
-                    arguments,
-                    closure_type_id,
-                    return_type_id,
+                };
+            }
+            _ => {
+                return Annotation2::Value {
+                    annotation,
                     named_rigids: named,
                     unnamed_rigids: unnamed,
                 }
             }
-        }
-        Apply(module_name, ident, targs) => {
-            todo!()
         }
     }
 }
@@ -167,7 +161,7 @@ pub fn to_type_id(
     annotation: &roc_parse::ast::TypeAnnotation,
     region: Region,
 ) -> TypeId {
-    let type2 = to_type2(env, scope, rigids, annotation);
+    let type2 = to_type2(env, scope, rigids, annotation, region);
 
     env.add(type2, region)
 }
@@ -180,7 +174,7 @@ pub fn as_type_id(
     annotation: &roc_parse::ast::TypeAnnotation,
     region: Region,
 ) {
-    let type2 = to_type2(env, scope, rigids, annotation);
+    let type2 = to_type2(env, scope, rigids, annotation, region);
 
     env.pool[type_id] = type2;
     env.set_region(type_id, region);
@@ -191,8 +185,34 @@ pub fn to_type2(
     scope: &mut Scope,
     rigids: &mut Rigids,
     annotation: &roc_parse::ast::TypeAnnotation,
+    region: Region,
 ) -> Type2 {
-    todo!()
+    use roc_parse::ast::TypeAnnotation::*;
+
+    match annotation {
+        Apply(module_name, ident, targs) => {
+            match to_type_apply(env, scope, rigids, module_name, ident, targs, region) {
+                TypeApply::Apply(symbol, args) => Type2::Apply(symbol, args),
+                TypeApply::Alias(symbol, args, actual) => Type2::Alias(symbol, args, actual),
+                TypeApply::Erroneous(problem) => Type2::Erroneous(problem),
+            }
+        }
+        Function(argument_types, return_type) => {
+            let arguments = PoolVec::with_capacity(argument_types.len() as u32, env.pool);
+
+            for (type_id, loc_arg) in arguments.iter_node_ids().zip(argument_types.iter()) {
+                as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
+            }
+
+            let return_type_id =
+                to_type_id(env, scope, rigids, &return_type.value, return_type.region);
+
+            let closure_type = Type2::Variable(env.var_store.fresh());
+            let closure_type_id = env.pool.add(closure_type);
+
+            Type2::Function(arguments, closure_type_id, return_type_id)
+        }
+    }
 }
 
 enum TypeApply {
@@ -201,6 +221,7 @@ enum TypeApply {
     Erroneous(roc_types::types::Problem),
 }
 
+#[inline(always)]
 fn to_type_apply(
     env: &mut Env,
     scope: &mut Scope,
