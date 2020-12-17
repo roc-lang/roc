@@ -2,7 +2,11 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::ast::{Expr2, ExprId, FloatVal, IntStyle, IntVal};
+use crate::pattern::to_pattern2;
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::types::{Type2, TypeId};
+use bumpalo::Bump;
+use inlinable_string::InlinableString;
 use roc_can::expr::Output;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
@@ -18,33 +22,37 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 
 pub struct Env<'a> {
-    home: ModuleId,
-    var_store: VarStore,
-    pool: &'a mut Pool,
+    pub home: ModuleId,
+    pub var_store: VarStore,
+    pub pool: &'a mut Pool,
+    pub arena: &'a Bump,
 
-    // module_ids: &'a ModuleIds,
-    ident_ids: IdentIds,
+    pub dep_idents: MutMap<ModuleId, IdentIds>,
+    pub module_ids: &'a ModuleIds,
+    pub ident_ids: IdentIds,
 
-    closures: MutMap<Symbol, References>,
+    pub closures: MutMap<Symbol, References>,
+    /// Symbols which were referenced by qualified lookups.
+    pub qualified_lookups: MutSet<Symbol>,
 
-    top_level_symbols: MutSet<Symbol>,
+    pub top_level_symbols: MutSet<Symbol>,
 
-    closure_name_symbol: Option<Symbol>,
+    pub closure_name_symbol: Option<Symbol>,
 }
 
 impl<'a> Env<'a> {
-    fn add<T>(&mut self, item: T, region: Region) -> NodeId<T> {
+    pub fn add<T>(&mut self, item: T, region: Region) -> NodeId<T> {
         let id = self.pool.add(item);
         self.set_region(id, region);
 
         id
     }
 
-    fn problem(&mut self, _problem: Problem) {
+    pub fn problem(&mut self, _problem: Problem) {
         todo!();
     }
 
-    fn set_region<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
+    pub fn set_region<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
         todo!();
     }
 
@@ -62,16 +70,80 @@ impl<'a> Env<'a> {
 
         Symbol::new(self.home, ident_id)
     }
-}
 
-pub fn to_pattern2<'a>(
-    _env: &mut Env<'a>,
-    _scope: &mut Scope,
-    _pattern_type: roc_parse::pattern::PatternType,
-    _pattern: &roc_parse::ast::Pattern<'a>,
-    _region: Region,
-) -> (Output, crate::ast::Pattern2) {
-    todo!()
+    /// Returns Err if the symbol resolved, but it was not exposed by the given module
+    pub fn qualified_lookup(
+        &mut self,
+        module_name: &str,
+        ident: &str,
+        region: Region,
+    ) -> Result<Symbol, RuntimeError> {
+        debug_assert!(
+            !module_name.is_empty(),
+            "Called env.qualified_lookup with an unqualified ident: {:?}",
+            ident
+        );
+
+        let module_name: InlinableString = module_name.into();
+
+        match self.module_ids.get_id(&module_name) {
+            Some(&module_id) => {
+                let ident: InlinableString = ident.into();
+
+                // You can do qualified lookups on your own module, e.g.
+                // if I'm in the Foo module, I can do a `Foo.bar` lookup.
+                if module_id == self.home {
+                    match self.ident_ids.get_id(&ident) {
+                        Some(ident_id) => {
+                            let symbol = Symbol::new(module_id, *ident_id);
+
+                            self.qualified_lookups.insert(symbol);
+
+                            Ok(symbol)
+                        }
+                        None => Err(RuntimeError::LookupNotInScope(
+                            Located {
+                                value: ident,
+                                region,
+                            },
+                            self.ident_ids
+                                .idents()
+                                .map(|(_, string)| string.as_ref().into())
+                                .collect(),
+                        )),
+                    }
+                } else {
+                    match self
+                        .dep_idents
+                        .get(&module_id)
+                        .and_then(|exposed_ids| exposed_ids.get_id(&ident))
+                    {
+                        Some(ident_id) => {
+                            let symbol = Symbol::new(module_id, *ident_id);
+
+                            self.qualified_lookups.insert(symbol);
+
+                            Ok(symbol)
+                        }
+                        None => Err(RuntimeError::ValueNotExposed {
+                            module_name,
+                            ident,
+                            region,
+                        }),
+                    }
+                }
+            }
+            None => Err(RuntimeError::ModuleNotImported {
+                module_name,
+                imported_modules: self
+                    .module_ids
+                    .available_modules()
+                    .map(|string| string.as_ref().into())
+                    .collect(),
+                region,
+            }),
+        }
+    }
 }
 
 const ZERO: Region = Region::zero();

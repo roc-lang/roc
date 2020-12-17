@@ -1,13 +1,13 @@
+use crate::ast::{ExprId, FloatVal, IntVal};
+use crate::expr::Env;
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
-use arraystring::{typenum::U30, ArrayString};
-use roc_can::def::Annotation;
-use roc_can::expr::Recursive;
-use roc_module::low_level::LowLevel;
-use roc_module::operator::CalledVia;
+use roc_can::expr::Output;
+use roc_can::scope::Scope;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::Region;
 use roc_types::subs::Variable;
-use roc_types::types::Type;
+
+pub type PatternId = NodeId<Pattern2>;
 
 #[derive(Debug)]
 pub enum Pattern2 {
@@ -64,6 +64,16 @@ pub enum MalformedPatternProblem {
     MalformedBase(roc_parse::ast::Base),
     Unknown,
     QualifiedIdentifier,
+}
+
+pub fn to_pattern2<'a>(
+    _env: &mut Env<'a>,
+    _scope: &mut Scope,
+    _pattern_type: roc_parse::pattern::PatternType,
+    _pattern: &roc_parse::ast::Pattern<'a>,
+    _region: Region,
+) -> (Output, Pattern2) {
+    todo!()
 }
 
 pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {

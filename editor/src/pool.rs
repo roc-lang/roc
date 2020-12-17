@@ -244,6 +244,15 @@ impl PoolStr {
             }
         }
     }
+
+    pub fn duplicate(&self) -> Self {
+        // Question: should this fully clone, or is a shallow copy
+        // (and the aliasing it entails) OK?
+        Self {
+            first_node_id: self.first_node_id,
+            len: self.len,
+        }
+    }
 }
 
 /// An array of at most 2^32 pool-allocated nodes.
@@ -273,6 +282,14 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
 
             PoolVec { first_node_id, len }
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub fn new<I: ExactSizeIterator<Item = T>>(nodes: I, pool: &mut Pool) -> Self {
@@ -345,6 +362,15 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         PoolVecIterNodeIds {
             current_node_id: self.first_node_id,
             len_remaining: self.len,
+        }
+    }
+
+    pub fn duplicate(&self) -> Self {
+        // Question: should this fully clone, or is a shallow copy
+        // (and the aliasing it entails) OK?
+        Self {
+            first_node_id: self.first_node_id,
+            len: self.len,
         }
     }
 
@@ -523,5 +549,39 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
                 None
             }
         }
+    }
+}
+
+/// TODO
+#[derive(Debug)]
+pub struct PoolMap<K, V> {
+    first_node_id: NodeId<(K, V)>,
+    len: u32,
+}
+
+#[test]
+fn pool_map_size() {
+    assert_eq!(size_of::<PoolMap<(), ()>>(), 8);
+}
+
+impl<K: Eq, V> PoolMap<K, V> {
+    pub fn empty(pool: &mut Pool) -> Self {
+        todo!()
+    }
+
+    pub fn with_capacity(pool: &mut Pool, size: u32) -> Self {
+        todo!()
+    }
+
+    pub fn insert(&mut self, pool: &mut Pool, k: K, v: V) -> Option<(K, V)> {
+        todo!()
+    }
+
+    pub fn remove(&mut self, pool: &mut Pool, k: &K) -> Option<(K, V)> {
+        todo!()
+    }
+
+    pub fn contains(&mut self, pool: &mut Pool, k: &K) -> bool {
+        todo!()
     }
 }

@@ -1,13 +1,12 @@
 use crate::pattern::{Pattern2, PatternId};
 use crate::pool::{NodeId, PoolStr, PoolVec};
+use crate::types::{Type2, TypeId};
 use arraystring::{typenum::U30, ArrayString};
-use roc_can::def::Annotation;
 use roc_can::expr::Recursive;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
-use roc_types::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Problem {
@@ -198,36 +197,31 @@ pub enum Expr2 {
 }
 
 #[derive(Debug)]
-pub struct Def {
-    pub pattern: NodeId<Pattern2>, // 3B
-    pub expr: NodeId<Expr2>,       // 3B
-    // TODO maybe need to combine these vars behind a pointer?
-    pub expr_var: Variable,                        // 4B
-    pub pattern_vars: PoolVec<(Symbol, Variable)>, // 4B
-    // TODO how big is an annotation? What about an Option<Annotation>?
-    pub annotation: Option<Annotation>, // ???
-}
-
-#[derive(Debug)]
 pub struct ValueDef {
-    pub pattern: PatternId,
-    pub expr_type: Option<Type>,
-    pub expr_var: Variable,
+    pattern: PatternId,                 // 4B
+    expr_type: Option<(Type2, Rigids)>, // ?
+    expr_var: Variable,                 // 4B
 }
 
 #[derive(Debug)]
 pub enum FunctionDef {
     WithAnnotation {
-        name: Symbol,                                   // 8B
-        arguments: PoolVec<(Pattern2, Type, Variable)>, // 8B
-        return_type: Type,                              // ?
-        return_var: Variable,                           // 4B
+        name: Symbol,                          // 8B
+        arguments: PoolVec<(Pattern2, Type2)>, // 8B
+        rigids: NodeId<Rigids>,                // 4B
+        return_type: TypeId,                   // 4B
     },
     NoAnnotation {
-        name: Symbol,
-        arguments: PoolVec<(Pattern2, Variable)>,
-        return_var: Variable,
+        name: Symbol,                             // 8B
+        arguments: PoolVec<(Pattern2, Variable)>, // 8B
+        return_var: Variable,                     // 4B
     },
+}
+
+#[derive(Debug)]
+pub struct Rigids {
+    named: PoolVec<(PoolStr, Variable)>, // 8B
+    unnamed: PoolVec<Variable>,          // 8B
 }
 
 /// This is overflow data from a Closure variant, which needs to store
@@ -247,16 +241,7 @@ pub struct WhenBranch {
     pub guard: Option<NodeId<Expr2>>, // 4B
 }
 
-pub type PatternId = NodeId<Pattern2>;
 pub type ExprId = NodeId<Expr2>;
-
-// We have a maximum of 65K pages.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ExprPoolId(u16);
-
-/// Each of these is the index of one 16B node inside a page's 4096B
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ExprPoolSlot(u8);
 
 #[test]
 fn size_of_expr() {
