@@ -154,11 +154,11 @@ struct Rigids<'a> {
     hidden: MutSet<Variable>,
 }
 
-pub fn to_type_id(
+pub fn to_type_id<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids,
-    annotation: &roc_parse::ast::TypeAnnotation,
+    rigids: &mut Rigids<'a>,
+    annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> TypeId {
     let type2 = to_type2(env, scope, rigids, annotation, region);
@@ -166,12 +166,12 @@ pub fn to_type_id(
     env.add(type2, region)
 }
 
-pub fn as_type_id(
+pub fn as_type_id<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids,
+    rigids: &mut Rigids<'a>,
     type_id: TypeId,
-    annotation: &roc_parse::ast::TypeAnnotation,
+    annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) {
     let type2 = to_type2(env, scope, rigids, annotation, region);
@@ -180,11 +180,11 @@ pub fn as_type_id(
     env.set_region(type_id, region);
 }
 
-pub fn to_type2(
+pub fn to_type2<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids,
-    annotation: &roc_parse::ast::TypeAnnotation,
+    rigids: &mut Rigids<'a>,
+    annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
     use roc_parse::ast::TypeAnnotation::*;
@@ -212,7 +212,134 @@ pub fn to_type2(
 
             Type2::Function(arguments, closure_type_id, return_type_id)
         }
+        BoundVariable(v) => {
+            // a rigid type variable
+            match rigids.named.get(v) {
+                Some(var) => Type2::Variable(*var),
+                None => {
+                    let var = env.var_store.fresh();
+
+                    rigids.named.insert(v, var);
+
+                    Type2::Variable(var)
+                }
+            }
+        }
+        Wildcard | Malformed(_) => {
+            let var = env.var_store.fresh();
+
+            rigids.unnamed.insert(var);
+
+            Type2::Variable(var)
+        }
+        Record { fields, ext, .. } => {
+            let field_types_map = can_assigned_fields(env, scope, rigids, fields, region);
+
+            let field_types = PoolVec::with_capacity(field_types_map.len() as u32, env.pool);
+
+            for (node_id, (label, field)) in field_types.iter_node_ids().zip(field_types_map) {
+                let poolstr = PoolStr::new(label, env.pool);
+                env.pool[node_id] = (poolstr, field);
+            }
+
+            let ext_type = match ext {
+                Some(loc_ann) => to_type_id(env, scope, rigids, &loc_ann.value, region),
+                None => env.add(Type2::EmptyRec, region),
+            };
+
+            Type2::Record(field_types, ext_type)
+        }
     }
+}
+
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
+fn can_assigned_fields<'a>(
+    env: &mut Env,
+    scope: &mut Scope,
+    rigids: &mut Rigids<'a>,
+    fields: &&[Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
+    region: Region,
+) -> MutMap<&'a str, RecordField<Type2>> {
+    use roc_parse::ast::AssignedField::*;
+    use roc_types::types::RecordField::*;
+
+    // SendMap doesn't have a `with_capacity`
+    let mut field_types = MutMap::default();
+
+    // field names we've seen so far in this record
+    let mut seen = std::collections::HashMap::with_capacity(fields.len());
+
+    'outer: for loc_field in fields.iter() {
+        let mut field = &loc_field.value;
+
+        // use this inner loop to unwrap the SpaceAfter/SpaceBefore
+        // when we find the name of this field, break out of the loop
+        // with that value, so we can check whether the field name is
+        // a duplicate
+        let new_name = 'inner: loop {
+            match field {
+                RequiredValue(field_name, _, annotation) => {
+                    let field_type =
+                        to_type2(env, scope, rigids, &annotation.value, annotation.region);
+
+                    let label = field_name.value;
+                    field_types.insert(label, Required(field_type));
+
+                    break 'inner label;
+                }
+                OptionalValue(field_name, _, annotation) => {
+                    let field_type =
+                        to_type2(env, scope, rigids, &annotation.value, annotation.region);
+
+                    let label = field_name.value;
+                    field_types.insert(label.clone(), Optional(field_type));
+
+                    break 'inner label;
+                }
+                LabelOnly(loc_field_name) => {
+                    // Interpret { a, b } as { a : a, b : b }
+                    let field_name = loc_field_name.value;
+                    let field_type = {
+                        if let Some(var) = rigids.named.get(&field_name) {
+                            Type2::Variable(*var)
+                        } else {
+                            let field_var = env.var_store.fresh();
+                            rigids.named.insert(field_name, field_var);
+                            Type2::Variable(field_var)
+                        }
+                    };
+
+                    field_types.insert(field_name.clone(), Required(field_type));
+
+                    break 'inner field_name;
+                }
+                SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
+                    // check the nested field instead
+                    field = nested;
+                    continue 'inner;
+                }
+                Malformed(_) => {
+                    // TODO report this?
+                    // completely skip this element, advance to the next tag
+                    continue 'outer;
+                }
+            }
+        };
+
+        // ensure that the new name is not already in this record:
+        // note that the right-most tag wins when there are two with the same name
+        if let Some(replaced_region) = seen.insert(new_name.clone(), loc_field.region) {
+            env.problem(roc_problem::can::Problem::DuplicateRecordFieldType {
+                field_name: new_name.into(),
+                record_region: region,
+                field_region: loc_field.region,
+                replaced_region,
+            });
+        }
+    }
+
+    field_types
 }
 
 enum TypeApply {
@@ -222,13 +349,13 @@ enum TypeApply {
 }
 
 #[inline(always)]
-fn to_type_apply(
+fn to_type_apply<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids,
+    rigids: &mut Rigids<'a>,
     module_name: &str,
     ident: &str,
-    type_arguments: &[Located<roc_parse::ast::TypeAnnotation>],
+    type_arguments: &[Located<roc_parse::ast::TypeAnnotation<'a>>],
     region: Region,
 ) -> TypeApply {
     let symbol = if module_name.is_empty() {
