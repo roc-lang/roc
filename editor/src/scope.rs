@@ -1,3 +1,6 @@
+#![allow(clippy::all)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
 use crate::pool::{Pool, PoolStr, PoolVec};
 use crate::types::{Alias, TypeId};
 use roc_collections::all::{MutMap, MutSet};
@@ -31,15 +34,16 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId, pool: &mut Pool, var_store: &mut VarStore) -> Scope {
+    pub fn new(home: ModuleId, pool: &mut Pool, _var_store: &mut VarStore) -> Scope {
         use roc_types::solved_types::{BuiltinAlias, FreeVars};
         let solved_aliases = roc_types::builtin_aliases::aliases();
         let mut aliases = MutMap::default();
 
         for (symbol, builtin_alias) in solved_aliases {
-            let BuiltinAlias { region, vars, typ } = builtin_alias;
+            // let BuiltinAlias { region, vars, typ } = builtin_alias;
+            let BuiltinAlias { vars, .. } = builtin_alias;
 
-            let mut free_vars = FreeVars::default();
+            let free_vars = FreeVars::default();
             let typ = solved_type_to_type_id();
             // roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
 
@@ -48,7 +52,7 @@ impl Scope {
             type_variables.sort();
 
             debug_assert_eq!(vars.len(), type_variables.len());
-            let mut variables = PoolVec::with_capacity(vars.len() as u32, pool);
+            let variables = PoolVec::with_capacity(vars.len() as u32, pool);
 
             let it = variables
                 .iter_node_ids()

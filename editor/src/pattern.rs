@@ -1,3 +1,6 @@
+#![allow(clippy::all)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
 use crate::ast::{ExprId, FloatVal, IntVal};
 use crate::expr::Env;
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};

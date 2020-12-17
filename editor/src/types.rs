@@ -1,9 +1,12 @@
+#![allow(clippy::all)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
 use crate::expr::Env;
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
 use crate::scope::Scope;
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::Ident;
+use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
@@ -16,6 +19,8 @@ pub enum Type2 {
     Variable(Variable),
 
     Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 20B = 8B + 8B + 4B
+    AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 20B = 8B + 8B + 4B
+
     HostExposedAlias {
         name: Symbol,                          // 8B
         arguments: PoolVec<(PoolStr, TypeId)>, // 8B
@@ -52,26 +57,29 @@ impl NodeId<Type2> {
 }
 
 /// A temporary data structure to return a bunch of values to Def construction
-pub enum Annotation2<'a> {
+pub enum Signature {
     FunctionWithAliases {
         annotation: Type2,
         arguments: PoolVec<Type2>,
         closure_type_id: TypeId,
         return_type_id: TypeId,
-        named_rigids: MutMap<&'a str, Variable>,
-        unnamed_rigids: MutSet<Variable>,
     },
     Function {
         arguments: PoolVec<Type2>,
         closure_type_id: TypeId,
         return_type_id: TypeId,
-        named_rigids: MutMap<&'a str, Variable>,
-        unnamed_rigids: MutSet<Variable>,
     },
     Value {
         annotation: Type2,
+    },
+}
+
+pub enum Annotation2<'a> {
+    Annotation {
         named_rigids: MutMap<&'a str, Variable>,
         unnamed_rigids: MutSet<Variable>,
+        symbols: MutSet<Symbol>,
+        signature: Signature,
     },
     Erroneous(roc_types::types::Problem),
 }
@@ -82,43 +90,70 @@ pub fn to_annotation2<'a>(
     annotation: &'a roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Annotation2<'a> {
-    let mut rigids = Rigids::default();
+    let mut references = References::default();
 
-    let annotation = to_type2(env, scope, &mut rigids, annotation, region);
+    let annotation = to_type2(env, scope, &mut references, annotation, region);
 
     // we dealias until we hit a non-alias, then we either hit a function type (and produce a
     // function annotation) or anything else (and produce a value annotation)
     match annotation {
         Type2::Function(arguments, closure_type_id, return_type_id) => {
-            let Rigids { named, unnamed, .. } = rigids;
+            let References {
+                named,
+                unnamed,
+                symbols,
+                ..
+            } = references;
 
-            Annotation2::Function {
+            let signature = Signature::Function {
                 arguments,
                 closure_type_id,
                 return_type_id,
+            };
+
+            Annotation2::Annotation {
                 named_rigids: named,
                 unnamed_rigids: unnamed,
+                symbols,
+                signature,
             }
         }
         Type2::Alias(_, _, _) => {
             // most of the time, the annotation is not an alias, so this case is comparatively
             // less efficient
-            shallow_dealias(env, rigids, annotation)
+            shallow_dealias(env, references, annotation)
         }
         _ => {
-            let Rigids { named, unnamed, .. } = rigids;
+            let References {
+                named,
+                unnamed,
+                symbols,
+                ..
+            } = references;
 
-            return Annotation2::Value {
-                annotation,
+            let signature = Signature::Value { annotation };
+
+            Annotation2::Annotation {
                 named_rigids: named,
                 unnamed_rigids: unnamed,
-            };
+                symbols,
+                signature,
+            }
         }
     }
 }
 
-fn shallow_dealias<'a>(env: &mut Env, rigids: Rigids<'a>, annotation: Type2) -> Annotation2<'a> {
-    let Rigids { named, unnamed, .. } = rigids;
+fn shallow_dealias<'a>(
+    env: &mut Env,
+    references: References<'a>,
+    annotation: Type2,
+) -> Annotation2<'a> {
+    let References {
+        named,
+        unnamed,
+        symbols,
+        ..
+    } = references;
     let mut inner = &annotation;
 
     loop {
@@ -127,37 +162,46 @@ fn shallow_dealias<'a>(env: &mut Env, rigids: Rigids<'a>, annotation: Type2) -> 
                 inner = env.pool.get(*actual);
             }
             Type2::Function(arguments, closure_type_id, return_type_id) => {
-                return Annotation2::FunctionWithAliases {
+                let signature = Signature::FunctionWithAliases {
                     arguments: arguments.duplicate(),
                     closure_type_id: *closure_type_id,
                     return_type_id: *return_type_id,
+                    annotation,
+                };
+
+                return Annotation2::Annotation {
                     named_rigids: named,
                     unnamed_rigids: unnamed,
-                    annotation,
+                    symbols,
+                    signature,
                 };
             }
             _ => {
-                return Annotation2::Value {
-                    annotation,
+                let signature = Signature::Value { annotation };
+
+                return Annotation2::Annotation {
                     named_rigids: named,
                     unnamed_rigids: unnamed,
-                }
+                    symbols,
+                    signature,
+                };
             }
         }
     }
 }
 
 #[derive(Default)]
-pub struct Rigids<'a> {
+pub struct References<'a> {
     named: MutMap<&'a str, Variable>,
     unnamed: MutSet<Variable>,
     hidden: MutSet<Variable>,
+    symbols: MutSet<Symbol>,
 }
 
 pub fn to_type_id<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids<'a>,
+    rigids: &mut References<'a>,
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> TypeId {
@@ -169,7 +213,7 @@ pub fn to_type_id<'a>(
 pub fn as_type_id<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids<'a>,
+    rigids: &mut References<'a>,
     type_id: TypeId,
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
@@ -183,7 +227,7 @@ pub fn as_type_id<'a>(
 pub fn to_type2<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids<'a>,
+    references: &mut References<'a>,
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
@@ -191,9 +235,15 @@ pub fn to_type2<'a>(
 
     match annotation {
         Apply(module_name, ident, targs) => {
-            match to_type_apply(env, scope, rigids, module_name, ident, targs, region) {
-                TypeApply::Apply(symbol, args) => Type2::Apply(symbol, args),
-                TypeApply::Alias(symbol, args, actual) => Type2::Alias(symbol, args, actual),
+            match to_type_apply(env, scope, references, module_name, ident, targs, region) {
+                TypeApply::Apply(symbol, args) => {
+                    references.symbols.insert(symbol);
+                    Type2::Apply(symbol, args)
+                }
+                TypeApply::Alias(symbol, args, actual) => {
+                    references.symbols.insert(symbol);
+                    Type2::Alias(symbol, args, actual)
+                }
                 TypeApply::Erroneous(problem) => Type2::Erroneous(problem),
             }
         }
@@ -201,11 +251,23 @@ pub fn to_type2<'a>(
             let arguments = PoolVec::with_capacity(argument_types.len() as u32, env.pool);
 
             for (type_id, loc_arg) in arguments.iter_node_ids().zip(argument_types.iter()) {
-                as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
+                as_type_id(
+                    env,
+                    scope,
+                    references,
+                    type_id,
+                    &loc_arg.value,
+                    loc_arg.region,
+                );
             }
 
-            let return_type_id =
-                to_type_id(env, scope, rigids, &return_type.value, return_type.region);
+            let return_type_id = to_type_id(
+                env,
+                scope,
+                references,
+                &return_type.value,
+                return_type.region,
+            );
 
             let closure_type = Type2::Variable(env.var_store.fresh());
             let closure_type_id = env.pool.add(closure_type);
@@ -214,12 +276,12 @@ pub fn to_type2<'a>(
         }
         BoundVariable(v) => {
             // a rigid type variable
-            match rigids.named.get(v) {
+            match references.named.get(v) {
                 Some(var) => Type2::Variable(*var),
                 None => {
                     let var = env.var_store.fresh();
 
-                    rigids.named.insert(v, var);
+                    references.named.insert(v, var);
 
                     Type2::Variable(var)
                 }
@@ -228,12 +290,12 @@ pub fn to_type2<'a>(
         Wildcard | Malformed(_) => {
             let var = env.var_store.fresh();
 
-            rigids.unnamed.insert(var);
+            references.unnamed.insert(var);
 
             Type2::Variable(var)
         }
         Record { fields, ext, .. } => {
-            let field_types_map = can_assigned_fields(env, scope, rigids, fields, region);
+            let field_types_map = can_assigned_fields(env, scope, references, fields, region);
 
             let field_types = PoolVec::with_capacity(field_types_map.len() as u32, env.pool);
 
@@ -243,14 +305,14 @@ pub fn to_type2<'a>(
             }
 
             let ext_type = match ext {
-                Some(loc_ann) => to_type_id(env, scope, rigids, &loc_ann.value, region),
+                Some(loc_ann) => to_type_id(env, scope, references, &loc_ann.value, region),
                 None => env.add(Type2::EmptyRec, region),
             };
 
             Type2::Record(field_types, ext_type)
         }
         TagUnion { tags, ext, .. } => {
-            let tag_types_vec = can_tags(env, scope, rigids, tags, region);
+            let tag_types_vec = can_tags(env, scope, references, tags, region);
 
             let tag_types = PoolVec::with_capacity(tag_types_vec.len() as u32, env.pool);
 
@@ -260,7 +322,7 @@ pub fn to_type2<'a>(
             }
 
             let ext_type = match ext {
-                Some(loc_ann) => to_type_id(env, scope, rigids, &loc_ann.value, region),
+                Some(loc_ann) => to_type_id(env, scope, references, &loc_ann.value, region),
                 None => env.add(Type2::EmptyTagUnion, region),
             };
 
@@ -290,13 +352,10 @@ pub fn to_type2<'a>(
                         }
                     };
 
-                    let inner_type = to_type2(env, scope, rigids, &loc_inner.value, region);
-                    let mut vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
+                    let inner_type = to_type2(env, scope, references, &loc_inner.value, region);
+                    let vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
 
-                    let mut lowercase_vars =
-                        PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
-
-                    // references.insert(symbol);
+                    let lowercase_vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
 
                     for ((loc_var, named_id), var_id) in loc_vars
                         .iter()
@@ -307,7 +366,7 @@ pub fn to_type2<'a>(
                             BoundVariable(ident) => {
                                 let var_name = ident;
 
-                                if let Some(var) = rigids.named.get(&var_name) {
+                                if let Some(var) = references.named.get(&var_name) {
                                     let poolstr = PoolStr::new(var_name, env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(*var));
@@ -318,7 +377,7 @@ pub fn to_type2<'a>(
                                 } else {
                                     let var = env.var_store.fresh();
 
-                                    rigids.named.insert(var_name.clone(), var);
+                                    references.named.insert(var_name.clone(), var);
                                     let poolstr = PoolStr::new(var_name, env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(var));
@@ -337,6 +396,7 @@ pub fn to_type2<'a>(
                     }
 
                     let alias_actual = inner_type;
+                    // TODO instantiate recursive tag union
                     //                    let alias_actual = if let Type2::TagUnion(tags, ext) = inner_type {
                     //                        let rec_var = env.var_store.fresh();
                     //
@@ -381,7 +441,7 @@ pub fn to_type2<'a>(
                     //                    } else {
                     //                        Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
                     //                    }
-                    Type2::Alias(symbol, vars, alias.actual)
+                    Type2::AsAlias(symbol, vars, alias.actual)
                 }
                 _ => {
                     // This is a syntactically invalid type alias.
@@ -390,7 +450,7 @@ pub fn to_type2<'a>(
             }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            to_type2(env, scope, rigids, nested, region)
+            to_type2(env, scope, references, nested, region)
         }
     }
 }
@@ -400,7 +460,7 @@ pub fn to_type2<'a>(
 fn can_assigned_fields<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids<'a>,
+    rigids: &mut References<'a>,
     fields: &&[Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
     region: Region,
 ) -> MutMap<&'a str, RecordField<Type2>> {
@@ -488,7 +548,7 @@ fn can_assigned_fields<'a>(
 fn can_tags<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids<'a>,
+    rigids: &mut References<'a>,
     tags: &'a [Located<roc_parse::ast::Tag<'a>>],
     region: Region,
 ) -> Vec<(&'a str, PoolVec<Type2>)> {
@@ -551,12 +611,12 @@ fn can_tags<'a>(
         // ensure that the new name is not already in this tag union:
         // note that the right-most tag wins when there are two with the same name
         if let Some(replaced_region) = seen.insert(new_name.clone(), loc_tag.region) {
+            let tag_name = TagName::Global(new_name.into());
             env.problem(roc_problem::can::Problem::DuplicateTag {
                 tag_region: loc_tag.region,
                 tag_union_region: region,
                 replaced_region,
-                // tag_name: new_name,
-                tag_name: todo!(),
+                tag_name,
             });
         }
     }
@@ -574,7 +634,7 @@ enum TypeApply {
 fn to_type_apply<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut Rigids<'a>,
+    rigids: &mut References<'a>,
     module_name: &str,
     ident: &str,
     type_arguments: &[Located<roc_parse::ast::TypeAnnotation<'a>>],

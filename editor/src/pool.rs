@@ -551,37 +551,3 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
         }
     }
 }
-
-/// TODO
-#[derive(Debug)]
-pub struct PoolMap<K, V> {
-    first_node_id: NodeId<(K, V)>,
-    len: u32,
-}
-
-#[test]
-fn pool_map_size() {
-    assert_eq!(size_of::<PoolMap<(), ()>>(), 8);
-}
-
-impl<K: Eq, V> PoolMap<K, V> {
-    pub fn empty(pool: &mut Pool) -> Self {
-        todo!()
-    }
-
-    pub fn with_capacity(pool: &mut Pool, size: u32) -> Self {
-        todo!()
-    }
-
-    pub fn insert(&mut self, pool: &mut Pool, k: K, v: V) -> Option<(K, V)> {
-        todo!()
-    }
-
-    pub fn remove(&mut self, pool: &mut Pool, k: &K) -> Option<(K, V)> {
-        todo!()
-    }
-
-    pub fn contains(&mut self, pool: &mut Pool, k: &K) -> bool {
-        todo!()
-    }
-}
