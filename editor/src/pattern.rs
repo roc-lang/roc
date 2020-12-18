@@ -24,16 +24,16 @@ pub enum Pattern2 {
     StrLiteral(PoolStr),       // 8B
     Underscore,                // 0B
     GlobalTag {
-        whole_var: Variable,                       // 4B
-        ext_var: Variable,                         // 4B
-        tag_name: PoolStr,                         // 8B
-        arguments: PoolVec<(Variable, PatternId)>, // 8B
+        whole_var: Variable,                      // 4B
+        ext_var: Variable,                        // 4B
+        tag_name: PoolStr,                        // 8B
+        arguments: PoolVec<(Variable, Pattern2)>, // 8B
     },
     PrivateTag {
-        whole_var: Variable,                       // 4B
-        ext_var: Variable,                         // 4B
-        tag_name: Symbol,                          // 8B
-        arguments: PoolVec<(Variable, PatternId)>, // 8B
+        whole_var: Variable,                      // 4B
+        ext_var: Variable,                        // 4B
+        tag_name: Symbol,                         // 8B
+        arguments: PoolVec<(Variable, Pattern2)>, // 8B
     },
     RecordDestructure {
         whole_var: Variable,                // 4B
@@ -76,6 +76,37 @@ pub enum MalformedPatternProblem {
     MalformedBase(roc_parse::ast::Base),
     Unknown,
     QualifiedIdentifier,
+}
+
+pub fn as_pattern_id<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    pattern_id: PatternId,
+    pattern_type: PatternType,
+    pattern: &roc_parse::ast::Pattern<'a>,
+    region: Region,
+) -> Output {
+    let (output, can_pattern) = to_pattern2(env, scope, pattern_type, pattern, region);
+
+    env.pool[pattern_id] = can_pattern;
+    env.set_region(pattern_id, region);
+
+    output
+}
+
+pub fn to_pattern_id<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    pattern_type: PatternType,
+    pattern: &roc_parse::ast::Pattern<'a>,
+    region: Region,
+) -> (Output, PatternId) {
+    let (output, can_pattern) = to_pattern2(env, scope, pattern_type, pattern, region);
+
+    let pattern_id = env.pool.add(can_pattern);
+    env.set_region(pattern_id, region);
+
+    (output, pattern_id)
 }
 
 pub fn to_pattern2<'a>(
@@ -136,6 +167,43 @@ pub fn to_pattern2<'a>(
                 arguments: PoolVec::empty(env.pool),
             }
         }
+
+        Apply(tag, patterns) => {
+            let can_patterns = PoolVec::with_capacity(patterns.len() as u32, env.pool);
+            for (loc_pattern, node_id) in (*patterns).iter().zip(can_patterns.iter_node_ids()) {
+                let (new_output, can_pattern) = to_pattern2(
+                    env,
+                    scope,
+                    pattern_type,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                );
+
+                output.union(new_output);
+
+                env.pool[node_id] = (env.var_store.fresh(), can_pattern);
+            }
+
+            match tag.value {
+                GlobalTag(name) => Pattern2::GlobalTag {
+                    whole_var: env.var_store.fresh(),
+                    ext_var: env.var_store.fresh(),
+                    tag_name: PoolStr::new(name, env.pool),
+                    arguments: can_patterns,
+                },
+                PrivateTag(name) => {
+                    let ident_id = env.ident_ids.get_or_insert(&name.into());
+
+                    Pattern2::PrivateTag {
+                        whole_var: env.var_store.fresh(),
+                        ext_var: env.var_store.fresh(),
+                        tag_name: Symbol::new(env.home, ident_id),
+                        arguments: can_patterns,
+                    }
+                }
+                _ => unreachable!("Other patterns cannot be applied"),
+            }
+        }
     };
 
     (output, can_pattern)
@@ -153,8 +221,8 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
             }
 
             GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
-                for (_, pattern_id) in arguments.iter(pool) {
-                    stack.push(pool.get(*pattern_id));
+                for (_, pat) in arguments.iter(pool) {
+                    stack.push(pat);
                 }
             }
 
