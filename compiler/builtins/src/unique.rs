@@ -1219,7 +1219,7 @@ fn float_type(u: VarId) -> SolvedType {
                 Vec::new(),
                 Box::new(builtin_aliases::num_type(SolvedType::Apply(
                     Symbol::ATTR_ATTR,
-                    vec![flex(u), builtin_aliases::floatingpoint_type()],
+                    vec![flex(u), builtin_aliases::float_type()],
                 ))),
             ),
         ],
@@ -1237,7 +1237,7 @@ fn int_type(u: VarId) -> SolvedType {
                 Vec::new(),
                 Box::new(builtin_aliases::num_type(SolvedType::Apply(
                     Symbol::ATTR_ATTR,
-                    vec![flex(u), builtin_aliases::integer_type()],
+                    vec![flex(u), builtin_aliases::int_type()],
                 ))),
             ),
         ],
