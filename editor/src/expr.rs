@@ -39,6 +39,7 @@ pub struct Env<'a> {
     pub top_level_symbols: MutSet<Symbol>,
 
     pub closure_name_symbol: Option<Symbol>,
+    pub tailcallable_symbol: Option<Symbol>,
 }
 
 impl<'a> Env<'a> {
@@ -149,20 +150,37 @@ impl<'a> Env<'a> {
 
 const ZERO: Region = Region::zero();
 
+pub fn as_expr_id<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    expr_id: ExprId,
+    parse_expr: &'a roc_parse::ast::Expr<'a>,
+    region: Region,
+) -> Output {
+    let (expr, output) = to_expr2(env, scope, parse_expr, region);
+
+    env.pool[expr_id] = expr;
+    env.set_region(expr_id, region);
+
+    output
+}
+
 pub fn to_expr_id<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
+    region: Region,
 ) -> (crate::ast::ExprId, Output) {
-    let (expr, output) = to_expr2(env, scope, parse_expr);
+    let (expr, output) = to_expr2(env, scope, parse_expr, region);
 
-    (env.pool.add(expr), output)
+    (env.add(expr, region), output)
 }
 
 pub fn to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
+    region: Region,
 ) -> (crate::ast::Expr2, Output) {
     use roc_parse::ast::Expr::*;
     match parse_expr {
@@ -254,7 +272,7 @@ pub fn to_expr2<'a>(
             let elems = PoolVec::with_capacity(elements.len() as u32, env.pool);
 
             for (node_id, element) in elems.iter_node_ids().zip(elements.iter()) {
-                let (expr, sub_output) = to_expr2(env, scope, &element.value);
+                let (expr, sub_output) = to_expr2(env, scope, &element.value, element.region);
 
                 output_ref.union(sub_output);
 
@@ -270,11 +288,25 @@ pub fn to_expr2<'a>(
             (expr, output)
         }
 
-        GlobalTag(tag) | PrivateTag(tag) => {
-            // a tag without any arguments
+        GlobalTag(tag) => {
+            // a global tag without any arguments
             (
-                Expr2::Tag {
+                Expr2::GlobalTag {
                     name: PoolStr::new(tag, env.pool),
+                    variant_var: env.var_store.fresh(),
+                    ext_var: env.var_store.fresh(),
+                    arguments: PoolVec::empty(env.pool),
+                },
+                Output::default(),
+            )
+        }
+        PrivateTag(name) => {
+            // a private tag without any arguments
+            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
+            let name = Symbol::new(env.home, ident_id);
+            (
+                Expr2::PrivateTag {
+                    name,
                     variant_var: env.var_store.fresh(),
                     ext_var: env.var_store.fresh(),
                     arguments: PoolVec::empty(env.pool),
@@ -288,7 +320,8 @@ pub fn to_expr2<'a>(
             update: Some(loc_update),
             final_comments: _,
         } => {
-            let (can_update, update_out) = to_expr2(env, scope, &loc_update.value);
+            let (can_update, update_out) =
+                to_expr2(env, scope, &loc_update.value, loc_update.region);
 
             if let Expr2::Var(symbol) = &can_update {
                 match canonicalize_fields(env, scope, fields) {
@@ -377,7 +410,9 @@ pub fn to_expr2<'a>(
         }
 
         Access(record_expr, field) => {
-            let (record_expr_id, output) = to_expr_id(env, scope, record_expr);
+            // TODO
+            let region = ZERO;
+            let (record_expr_id, output) = to_expr_id(env, scope, record_expr, region);
 
             (
                 Expr2::Access {
@@ -404,11 +439,13 @@ pub fn to_expr2<'a>(
         ),
 
         If(cond, then_branch, else_branch) => {
-            let (cond, mut output) = to_expr2(env, scope, &cond.value);
+            let (cond, mut output) = to_expr2(env, scope, &cond.value, cond.region);
 
-            let (then_expr, then_output) = to_expr2(env, scope, &then_branch.value);
+            let (then_expr, then_output) =
+                to_expr2(env, scope, &then_branch.value, then_branch.region);
 
-            let (else_expr, else_output) = to_expr2(env, scope, &else_branch.value);
+            let (else_expr, else_output) =
+                to_expr2(env, scope, &else_branch.value, else_branch.region);
 
             output.references = output.references.union(then_output.references);
             output.references = output.references.union(else_output.references);
@@ -426,7 +463,7 @@ pub fn to_expr2<'a>(
         When(loc_cond, branches) => {
             // Infer the condition expression's type.
             let cond_var = env.var_store.fresh();
-            let (can_cond, mut output) = to_expr2(env, scope, &loc_cond.value);
+            let (can_cond, mut output) = to_expr2(env, scope, &loc_cond.value, loc_cond.region);
 
             // the condition can never be a tail-call
             output.tail_call = None;
@@ -498,7 +535,8 @@ pub fn to_expr2<'a>(
                 env.pool[node_id] = (env.var_store.fresh(), pattern_id);
             }
 
-            let (body_expr, new_output) = to_expr2(env, &mut scope, &loc_body_expr.value);
+            let (body_expr, new_output) =
+                to_expr2(env, &mut scope, &loc_body_expr.value, loc_body_expr.region);
 
             let mut captured_symbols: MutSet<Symbol> =
                 new_output.references.lookups.iter().copied().collect();
@@ -582,6 +620,92 @@ pub fn to_expr2<'a>(
             )
         }
 
+        Apply(loc_fn, loc_args, application_style) => {
+            // The expression that evaluates to the function being called, e.g. `foo` in
+            // (foo) bar baz
+            let fn_region = loc_fn.region;
+
+            // Canonicalize the function expression and its arguments
+            let (fn_expr, mut output) = to_expr2(env, scope, &loc_fn.value, fn_region);
+
+            // The function's return type
+            let args = PoolVec::with_capacity(loc_args.len() as u32, env.pool);
+
+            for (node_id, loc_arg) in args.iter_node_ids().zip(loc_args.iter()) {
+                let (arg_expr_id, arg_out) = to_expr_id(env, scope, &loc_arg.value, loc_arg.region);
+
+                env.pool[node_id] = (env.var_store.fresh(), arg_expr_id);
+
+                output.references = output.references.union(arg_out.references);
+            }
+
+            // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
+            output.tail_call = None;
+
+            let expr = match fn_expr {
+                Expr2::Var(ref symbol) => {
+                    output.references.calls.insert(*symbol);
+
+                    // we're tail-calling a symbol by name, check if it's the tail-callable symbol
+                    output.tail_call = match &env.tailcallable_symbol {
+                        Some(tc_sym) if *tc_sym == *symbol => Some(*symbol),
+                        Some(_) | None => None,
+                    };
+
+                    // IDEA: Expr2::CallByName?
+                    let fn_expr_id = env.add(fn_expr, fn_region);
+                    Expr2::Call {
+                        args,
+                        expr: fn_expr_id,
+                        expr_var: env.var_store.fresh(),
+                        fn_var: env.var_store.fresh(),
+                        closure_var: env.var_store.fresh(),
+                        called_via: *application_style,
+                    }
+                }
+                Expr2::RuntimeError() => {
+                    // We can't call a runtime error; bail out by propagating it!
+                    return (fn_expr, output);
+                }
+                Expr2::GlobalTag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Expr2::GlobalTag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
+                Expr2::PrivateTag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Expr2::PrivateTag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
+                _ => {
+                    // This could be something like ((if True then fn1 else fn2) arg1 arg2).
+                    let fn_expr_id = env.add(fn_expr, fn_region);
+                    Expr2::Call {
+                        args,
+                        expr: fn_expr_id,
+                        expr_var: env.var_store.fresh(),
+                        fn_var: env.var_store.fresh(),
+                        closure_var: env.var_store.fresh(),
+                        called_via: *application_style,
+                    }
+                }
+            };
+
+            (expr, output)
+        }
+
         PrecedenceConflict(_whole_region, _binop1, _binop2, _expr) => {
             //            use roc_problem::can::RuntimeError::*;
             //
@@ -613,7 +737,7 @@ pub fn to_expr2<'a>(
             //            (RuntimeError(problem), Output::default())
             todo!()
         }
-        Nested(sub_expr) => to_expr2(env, scope, sub_expr),
+        Nested(sub_expr) => to_expr2(env, scope, sub_expr, region),
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
@@ -733,7 +857,8 @@ fn flatten_str_lines<'a>(
                             buf = String::new();
                         }
 
-                        let (loc_expr, new_output) = to_expr2(env, scope, loc_expr.value);
+                        let (loc_expr, new_output) =
+                            to_expr2(env, scope, loc_expr.value, loc_expr.region);
 
                         output.union(new_output);
 
@@ -889,7 +1014,7 @@ fn canonicalize_field<'a>(
         // Both a label and a value, e.g. `{ name: "blah" }`
         RequiredValue(label, _, loc_expr) => {
             let field_var = env.var_store.fresh();
-            let (loc_can_expr, output) = to_expr2(env, scope, &loc_expr.value);
+            let (loc_can_expr, output) = to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
             Ok((label.value, loc_can_expr, output, field_var))
         }
@@ -942,14 +1067,16 @@ fn canonicalize_when_branch<'a>(
         env.pool[node_id] = can_pattern;
     }
 
-    let (value, mut branch_output) = to_expr2(env, &mut scope, &branch.value.value);
+    let (value, mut branch_output) =
+        to_expr2(env, &mut scope, &branch.value.value, branch.value.region);
     let value_id = env.pool.add(value);
     env.set_region(value_id, branch.value.region);
 
     let guard = match &branch.guard {
         None => None,
         Some(loc_expr) => {
-            let (can_guard, guard_branch_output) = to_expr2(env, &mut scope, &loc_expr.value);
+            let (can_guard, guard_branch_output) =
+                to_expr2(env, &mut scope, &loc_expr.value, loc_expr.region);
 
             let expr_id = env.pool.add(can_guard);
             env.set_region(expr_id, loc_expr.region);

@@ -2,14 +2,15 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::ast::{ExprId, FloatVal, IntVal};
-use crate::expr::Env;
+use crate::expr::{to_expr_id, Env};
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
 use roc_can::expr::{unescape_char, Output};
+use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_can::scope::Scope;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::Region;
 use roc_types::subs::Variable;
 
@@ -67,15 +68,6 @@ pub enum DestructType {
     Required,
     Optional(Variable, ExprId), // 4B + 4B
     Guard(Variable, PatternId), // 4B + 4B
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MalformedPatternProblem {
-    MalformedInt,
-    MalformedFloat,
-    MalformedBase(roc_parse::ast::Base),
-    Unknown,
-    QualifiedIdentifier,
 }
 
 pub fn as_pattern_id<'a>(
@@ -147,6 +139,65 @@ pub fn to_pattern2<'a>(
                 }
             }
         },
+
+        QualifiedIdentifier { .. } => {
+            let problem = MalformedPatternProblem::QualifiedIdentifier;
+            malformed_pattern(env, problem, region)
+        }
+
+        Underscore(_) => match pattern_type {
+            WhenBranch | FunctionArg => Pattern2::Underscore,
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        FloatLiteral(ref string) => match pattern_type {
+            WhenBranch => match finish_parsing_float(string) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedFloat;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok(float) => Pattern2::FloatLiteral(FloatVal::F64(float)),
+            },
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        NumLiteral(string) => match pattern_type {
+            WhenBranch => match finish_parsing_int(string) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok(int) => Pattern2::NumLiteral(env.var_store.fresh(), int),
+            },
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        NonBase10Literal {
+            string,
+            base,
+            is_negative,
+        } => match pattern_type {
+            WhenBranch => match finish_parsing_base(string, *base, *is_negative) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedBase(*base);
+                    malformed_pattern(env, problem, region)
+                }
+                Ok(int) => {
+                    if *is_negative {
+                        Pattern2::IntLiteral(IntVal::I64(-int))
+                    } else {
+                        Pattern2::IntLiteral(IntVal::I64(int))
+                    }
+                }
+            },
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        StrLiteral(literal) => match pattern_type {
+            WhenBranch => flatten_str_literal(env.pool, literal),
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
         GlobalTag(name) => {
             // Canonicalize the tag's name.
             Pattern2::GlobalTag {
@@ -203,6 +254,157 @@ pub fn to_pattern2<'a>(
                 }
                 _ => unreachable!("Other patterns cannot be applied"),
             }
+        }
+
+        RecordDestructure(patterns) => {
+            let ext_var = env.var_store.fresh();
+            let whole_var = env.var_store.fresh();
+            let destructs = PoolVec::with_capacity(patterns.len() as u32, env.pool);
+            let opt_erroneous = None;
+
+            for (node_id, loc_pattern) in destructs.iter_node_ids().zip((*patterns).iter()) {
+                match loc_pattern.value {
+                    Identifier(label) => {
+                        match scope.introduce(
+                            label.into(),
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            region,
+                        ) {
+                            Ok(symbol) => {
+                                output.references.bound_symbols.insert(symbol);
+
+                                let destruct = RecordDestruct {
+                                    var: env.var_store.fresh(),
+                                    label: PoolStr::new(label, env.pool),
+                                    symbol,
+                                    typ: env.pool.add(DestructType::Required),
+                                };
+
+                                env.pool[node_id] = destruct;
+                                env.set_region(node_id, loc_pattern.region);
+                            }
+                            Err((original_region, shadow)) => {
+                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                                    original_region,
+                                    shadow: shadow.clone(),
+                                }));
+
+                                // let shadowed = Pattern2::Shadowed {
+                                // definition: original_region,
+                                // shadowed_at: loc_pattern.region,
+                                // shadowed_ident: shadow.value,
+                                // };
+
+                                // No matter what the other patterns
+                                // are, we're definitely shadowed and will
+                                // get a runtime exception as soon as we
+                                // encounter the first bad pattern.
+                                // opt_erroneous = Some();
+                                // env.pool[node_id] = sha;
+                                // env.set_region(node_id, loc_pattern.region);
+                                todo!("we must both report/store the problem, but also not lose any information")
+                            }
+                        };
+                    }
+
+                    RequiredField(label, loc_guard) => {
+                        // a guard does not introduce the label into scope!
+                        let symbol = scope.ignore(label.into(), &mut env.ident_ids);
+                        let (new_output, can_guard) = to_pattern_id(
+                            env,
+                            scope,
+                            pattern_type,
+                            &loc_guard.value,
+                            loc_guard.region,
+                        );
+
+                        let destruct = RecordDestruct {
+                            var: env.var_store.fresh(),
+                            label: PoolStr::new(label, env.pool),
+                            symbol,
+                            typ: env
+                                .pool
+                                .add(DestructType::Guard(env.var_store.fresh(), can_guard)),
+                        };
+
+                        output.union(new_output);
+
+                        env.pool[node_id] = destruct;
+                        env.set_region(node_id, loc_pattern.region);
+                    }
+                    OptionalField(label, loc_default) => {
+                        // an optional DOES introduce the label into scope!
+                        match scope.introduce(
+                            label.into(),
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            region,
+                        ) {
+                            Ok(symbol) => {
+                                let (can_default, expr_output) =
+                                    to_expr_id(env, scope, &loc_default.value, loc_default.region);
+
+                                // an optional field binds the symbol!
+                                output.references.bound_symbols.insert(symbol);
+
+                                output.union(expr_output);
+
+                                let destruct = RecordDestruct {
+                                    var: env.var_store.fresh(),
+                                    label: PoolStr::new(label, env.pool),
+                                    symbol,
+                                    typ: env.pool.add(DestructType::Optional(
+                                        env.var_store.fresh(),
+                                        can_default,
+                                    )),
+                                };
+
+                                env.pool[node_id] = destruct;
+                                env.set_region(node_id, loc_pattern.region);
+                            }
+                            Err((original_region, shadow)) => {
+                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                                    original_region,
+                                    shadow: shadow.clone(),
+                                }));
+
+                                // No matter what the other patterns
+                                // are, we're definitely shadowed and will
+                                // get a runtime exception as soon as we
+                                // encounter the first bad pattern.
+                                // opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                todo!("must report problem but also not loose any information")
+                            }
+                        };
+                    }
+                    _ => unreachable!("Any other pattern should have given a parse error"),
+                }
+            }
+
+            // If we encountered an erroneous pattern (e.g. one with shadowing),
+            // use the resulting RuntimeError. Otherwise, return a successful record destructure.
+            opt_erroneous.unwrap_or(Pattern2::RecordDestructure {
+                whole_var,
+                ext_var,
+                destructs,
+            })
+        }
+
+        RequiredField(_name, _loc_pattern) => {
+            unreachable!("should have been handled in RecordDestructure");
+        }
+        OptionalField(_name, _loc_pattern) => {
+            unreachable!("should have been handled in RecordDestructure");
+        }
+
+        Malformed(_str) => {
+            let problem = MalformedPatternProblem::Unknown;
+            malformed_pattern(env, problem, region)
+        }
+
+        SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
+            return to_pattern2(env, scope, pattern_type, sub_pattern, region)
         }
     };
 
@@ -298,4 +500,18 @@ fn flatten_str_lines(pool: &mut Pool, lines: &[&[StrSegment<'_>]]) -> Pattern2 {
     }
 
     Pattern2::StrLiteral(PoolStr::new(&buf, pool))
+}
+
+/// When we detect a malformed pattern like `3.X` or `0b5`,
+/// report it to Env and return an UnsupportedPattern runtime error pattern.
+fn malformed_pattern<'a>(
+    env: &mut Env<'a>,
+    problem: MalformedPatternProblem,
+    region: Region,
+) -> Pattern2 {
+    env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+        problem, region,
+    )));
+
+    Pattern2::MalformedPattern(problem, region)
 }
