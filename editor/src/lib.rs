@@ -25,9 +25,12 @@ pub mod expr;
 pub mod file;
 mod keyboard_input;
 mod ortho;
+mod pattern;
 pub mod pool;
 mod rect;
+mod scope;
 pub mod text;
+mod types;
 mod util;
 mod vertex;
 
