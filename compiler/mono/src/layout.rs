@@ -370,6 +370,10 @@ impl<'a> Layout<'a> {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
+            Alias(Symbol::NUM_F32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Float32))
+            }
             Alias(_, _, var) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
@@ -770,6 +774,10 @@ fn layout_from_flat_type<'a>(
                 Symbol::NUM_F64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
+                }
+                Symbol::NUM_F32 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Float32))
                 }
                 Symbol::NUM_NUM | Symbol::NUM_AT_NUM => {
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer

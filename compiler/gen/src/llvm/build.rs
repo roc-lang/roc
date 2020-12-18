@@ -477,13 +477,27 @@ fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
 
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'_>,
     literal: &roc_mono::ir::Literal<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::Literal::*;
 
     match literal {
-        Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
-        Float(num) => env.context.f64_type().const_float(*num).into(),
+        Int(int) => 
+            (match layout {
+                Layout::Builtin(Builtin::Int128) => env.context.i128_type(), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
+                Layout::Builtin(Builtin::Int64) => env.context.i64_type(),
+                Layout::Builtin(Builtin::Int32) => env.context.i32_type(),
+                Layout::Builtin(Builtin::Int16) => env.context.i16_type(),
+                Layout::Builtin(Builtin::Int8) => env.context.i8_type(),
+                _ => panic!("Invalid layout for int literal = {:?}", layout),
+            }).const_int(*int as u64, false).into(),
+        Float(num) =>
+            (match layout {
+                Layout::Builtin(Builtin::Float64) => env.context.f64_type(),
+                Layout::Builtin(Builtin::Float32) => env.context.f32_type(),
+                _ => panic!("Invalid layout for float literal = {:?}", layout),
+            }).const_float(*num).into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
@@ -622,7 +636,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     use roc_mono::ir::Expr::*;
 
     match expr {
-        Literal(literal) => build_exp_literal(env, literal),
+        Literal(literal) => build_exp_literal(env, layout, literal),
         RunLowLevel(op, symbols) => {
             run_low_level(env, layout_ids, scope, parent, layout, *op, symbols)
         }
@@ -1689,6 +1703,15 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
             builder
                 .build_bitcast(full_cond, env.context.i64_type(), "")
+                .into_int_value()
+        }
+        Layout::Builtin(Builtin::Float32) => {
+            // float matches are done on the bit pattern
+            cond_layout = Layout::Builtin(Builtin::Int32);
+            let full_cond = load_symbol(env, scope, cond_symbol);
+
+            builder
+                .build_bitcast(full_cond, env.context.i32_type(), "")
                 .into_int_value()
         }
         Layout::Union(_) => {
@@ -3622,6 +3645,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             int_abs_raise_on_overflow(env, arg, arg_layout)
         }
         NumToFloat => {
+            // TODO: Handle differnt sized numbers
             // This is an Int, so we need to convert it.
             bd.build_cast(
                 InstructionOpcode::SIToFP,
@@ -3748,6 +3772,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
+    // TODO: Handle differnt sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),

@@ -16,6 +16,63 @@ mod gen_num {
     use roc_std::RocOrder;
 
     #[test]
+    fn i128_signed_int_alias() {
+        assert_evals_to!("15 : I128", 15, i128);
+    }
+    #[test]
+    fn i64_signed_int_alias() {
+        assert_evals_to!("15 : I64", 15, i64);
+    }
+    #[test]
+    fn i32_signed_int_alias() {
+        assert_evals_to!("15 : I32", 15, i32);
+    }
+    #[test]
+    fn i16_signed_int_alias() {
+        assert_evals_to!("15 : I16", 15, i16);
+    }
+    #[test]
+    fn i8_signed_int_alias() {
+        assert_evals_to!("15 : I8", 15, i8);
+    }
+
+    #[test]
+    fn i8_signed_int_alias_overflow() {
+        // TODO: How/where do we handle overflow
+        assert_evals_to!("(127 + 1): I8", -128, i8);
+    }
+
+    #[test]
+    fn u128_unsigned_int_alias() {
+        assert_evals_to!("15 : U128", 15, u128);
+    }
+    #[test]
+    fn u64_unsigned_int_alias() {
+        assert_evals_to!("15 : U64", 15, u64);
+    }
+    #[test]
+    fn u32_unsigned_int_alias() {
+        assert_evals_to!("15 : U32", 15, u32);
+    }
+    #[test]
+    fn u16_unsigned_int_alias() {
+        assert_evals_to!("15 : U16", 15, u16);
+    }
+    #[test]
+    fn u8_unsigned_int_alias() {
+        assert_evals_to!("15 : u8", 15, u8);
+    }
+
+    #[test]
+    fn f64_float_alias() {
+        assert_evals_to!("3.6 : F64", 3.6, f64);
+    }
+    #[test]
+    fn f32_float_alias() {
+        assert_evals_to!("3.6 : F32", 3.6, f32);
+    }
+
+    #[test]
     fn f64_sqrt() {
         // FIXME this works with normal types, but fails when checking uniqueness types
         assert_evals_to!(
