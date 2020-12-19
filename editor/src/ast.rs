@@ -185,8 +185,14 @@ pub enum Expr2 {
     },
 
     // Sum Types
-    Tag {
+    GlobalTag {
         name: PoolStr,                                 // 4B
+        variant_var: Variable,                         // 4B
+        ext_var: Variable,                             // 4B
+        arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
+    },
+    PrivateTag {
+        name: Symbol,                                  // 8B
         variant_var: Variable,                         // 4B
         ext_var: Variable,                             // 4B
         arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
