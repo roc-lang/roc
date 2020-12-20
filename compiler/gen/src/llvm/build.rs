@@ -3618,22 +3618,9 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
         }
     };
 
-    // global storing the type info of a c++ int (equivalent to `i32` in llvm)
-    // we just need any valid such value, and arbitrarily use this one
-    let ztii = match module.get_global("_ZTIi") {
-        Some(gvalue) => gvalue.as_pointer_value(),
-        None => {
-            let ztii = module.add_global(u8_ptr, Some(AddressSpace::Generic), "_ZTIi");
-            ztii.set_linkage(Linkage::External);
-
-            ztii.as_pointer_value()
-        }
-    };
-
-    let type_info = builder.build_bitcast(ztii, u8_ptr, "cast");
     let null: BasicValueEnum = u8_ptr.const_zero().into();
 
-    let call = builder.build_call(function, &[info, type_info, null], "throw");
+    let call = builder.build_call(function, &[info, null, null], "throw");
     call.set_call_convention(C_CALL_CONV);
 }
 
