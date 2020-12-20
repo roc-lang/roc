@@ -54,6 +54,7 @@ pub enum LowLevel {
     NumAtan,
     NumAcos,
     NumAsin,
+    NumBitwiseAnd,
     Eq,
     NotEq,
     And,

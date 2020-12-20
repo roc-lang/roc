@@ -238,6 +238,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // bitwiseAnd : Int, Int -> Int
+    add_type(
+        Symbol::NUM_BITWISE_AND,
+        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
     // rem : Int, Int -> Result Int [ DivByZero ]*
     add_type(
         Symbol::NUM_REM,
