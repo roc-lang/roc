@@ -3003,6 +3003,22 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
         }
+        NumBitwiseAnd => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            build_int_binop(
+                env,
+                parent,
+                lhs_arg.into_int_value(),
+                lhs_layout,
+                rhs_arg.into_int_value(),
+                rhs_layout,
+                op,
+            )
+        }
         Eq => {
             debug_assert_eq!(args.len(), 2);
 
@@ -3213,6 +3229,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
         NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::NUM_POW_INT),
+        NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }

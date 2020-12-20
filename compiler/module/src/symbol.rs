@@ -797,6 +797,7 @@ define_builtins! {
         54 NUM_ATAN: "atan"
         55 NUM_ACOS: "acos"
         56 NUM_ASIN: "asin"
+        57 NUM_BITWISE_AND: "bitwiseAnd"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
