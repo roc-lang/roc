@@ -5853,6 +5853,11 @@ pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
             // Recurse on the second argument
             num_argument_to_int_or_float(subs, attr_args[1])
         }
+        Content::Alias(Symbol::NUM_F64, args, _) | Content::Alias(Symbol::NUM_F32, args, _) => {
+            debug_assert!(args.is_empty());
+
+            IntOrFloat::FloatType
+        }
         other => {
             panic!(
                 "Unrecognized Num type argument for var {:?} with Content: {:?}",

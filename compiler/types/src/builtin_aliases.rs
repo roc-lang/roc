@@ -367,7 +367,7 @@ pub fn binary64_type() -> SolvedType {
 }
 
 #[inline(always)]
-fn binary64_alias_content() -> SolvedType {
+pub fn binary64_alias_content() -> SolvedType {
     single_private_tag(Symbol::NUM_AT_BINARY64, vec![])
 }
 
@@ -597,7 +597,7 @@ pub fn dict_type(key: SolvedType, value: SolvedType) -> SolvedType {
     SolvedType::Apply(Symbol::DICT_DICT, vec![key, value])
 }
 
-fn single_private_tag(symbol: Symbol, type_arguments: Vec<SolvedType>) -> SolvedType {
+pub fn single_private_tag(symbol: Symbol, type_arguments: Vec<SolvedType>) -> SolvedType {
     SolvedType::TagUnion(
         vec![(TagName::Private(symbol), type_arguments)],
         Box::new(SolvedType::EmptyTagUnion),

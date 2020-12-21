@@ -174,17 +174,17 @@ fn constrain_pattern(
         }
 
         IntLiteral(_) => {
-            let (var1, var2, num_uvar, int_uvar, num_type) = unique_int(var_store);
+            let (num_uvar, num_type) = unique_int(var_store);
             state.constraints.push(exists(
-                vec![num_uvar, int_uvar, var1, var2],
+                vec![num_uvar],
                 Constraint::Pattern(pattern.region, PatternCategory::Int, num_type, expected),
             ));
         }
         FloatLiteral(_) => {
-            let (var1, var2, num_uvar, float_uvar, num_type) = unique_float(var_store);
+            let (num_uvar, num_type) = unique_float(var_store);
 
             state.constraints.push(exists(
-                vec![num_uvar, float_uvar, var1, var2],
+                vec![num_uvar],
                 Constraint::Pattern(pattern.region, PatternCategory::Float, num_type, expected),
             ));
         }
@@ -423,54 +423,49 @@ fn unique_unbound_num(
     (num_uvar, val_uvar, num_type, num_var)
 }
 
-fn unique_num(var_store: &mut VarStore, val_type: Type) -> (Variable, Variable, Type) {
-    let num_uvar = var_store.fresh();
-    let val_uvar = var_store.fresh();
-
-    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+fn unique_num(val_type: Type, uvar: Variable) -> Type {
+    let val_utype = attr_type(Bool::variable(uvar), val_type);
 
     let num_utype = num_num(val_utype);
-    let num_type = attr_type(Bool::variable(num_uvar), num_utype);
+    let num_type = attr_type(Bool::variable(uvar), num_utype);
 
-    (num_uvar, val_uvar, num_type)
+    num_type
 }
 
-fn unique_integer(var_store: &mut VarStore, val_type: Type) -> (Variable, Variable, Type) {
+fn unique_integer(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
     let num_uvar = var_store.fresh();
-    let val_uvar = var_store.fresh();
 
-    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+    let val_utype = attr_type(Bool::variable(num_uvar), val_type);
 
     let num_type = num_integer(val_utype);
 
-    (num_uvar, val_uvar, num_type)
+    (num_uvar, num_type)
 }
 
-fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Variable, Variable, Type) {
-    let (var1, var2, typ) = unique_integer(var_store, num_signed64());
+fn unique_int(var_store: &mut VarStore) -> (Variable, Type) {
+    let (var1, typ) = unique_integer(var_store, num_signed64());
 
-    let (var3, var4, typ) = unique_num(var_store, typ);
+    let typ = unique_num(typ, var1);
 
-    (var1, var2, var3, var4, typ)
+    (var1, typ)
 }
 
-fn unique_floatingpoint(var_store: &mut VarStore, val_type: Type) -> (Variable, Variable, Type) {
+fn unique_floatingpoint(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
     let num_uvar = var_store.fresh();
-    let val_uvar = var_store.fresh();
 
-    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+    let val_utype = attr_type(Bool::variable(num_uvar), val_type);
 
     let num_type = num_floatingpoint(val_utype);
 
-    (num_uvar, val_uvar, num_type)
+    (num_uvar, num_type)
 }
 
-fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Variable, Variable, Type) {
-    let (var1, var2, typ) = unique_floatingpoint(var_store, num_binary64());
+fn unique_float(var_store: &mut VarStore) -> (Variable, Type) {
+    let (var1, typ) = unique_floatingpoint(var_store, num_binary64());
 
-    let (var3, var4, typ) = unique_num(var_store, typ);
+    let typ = unique_num(typ, var1);
 
-    (var1, var2, var3, var4, typ)
+    (var1, typ)
 }
 
 pub fn constrain_expr(
@@ -503,10 +498,10 @@ pub fn constrain_expr(
             )
         }
         Int(var, _) => {
-            let (var1, var2, num_uvar, int_uvar, num_type) = unique_int(var_store);
+            let (num_uvar, num_type) = unique_int(var_store);
 
             exists(
-                vec![*var, num_uvar, int_uvar, var1, var2],
+                vec![*var, num_uvar],
                 And(vec![
                     Eq(
                         Type::Variable(*var),
@@ -519,10 +514,10 @@ pub fn constrain_expr(
             )
         }
         Float(var, _) => {
-            let (var1, var2, num_uvar, float_uvar, num_type) = unique_float(var_store);
+            let (num_uvar, num_type) = unique_float(var_store);
 
             exists(
-                vec![*var, num_uvar, float_uvar, var1, var2],
+                vec![*var, num_uvar],
                 And(vec![
                     Eq(
                         Type::Variable(*var),
