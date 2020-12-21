@@ -11,6 +11,7 @@
 use crate::buffer::create_rect_buffers;
 use crate::text::{build_glyph_brush, Text};
 use crate::vertex::Vertex;
+use crate::rect::{convert_rect};
 use ortho::{init_ortho, update_ortho_buffer, OrthoResources};
 use std::error::Error;
 use std::io;
@@ -18,6 +19,7 @@ use std::path::Path;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
+use wgpu_glyph::{ab_glyph};
 
 pub mod ast;
 mod buffer;
@@ -189,41 +191,57 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         label: Some("Redraw"),
                     });
 
-                let rect_buffers = create_rect_buffers(&gpu_device, &mut encoder);
-
-                let frame = swap_chain
+                    let frame = swap_chain
                     .get_current_frame()
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
 
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &frame.view,
-                        resolve_target: None,
-                        ops: wgpu::Operations::default(),
-                    }],
-                    depth_stencil_attachment: None,
-                });
-
-                if rect_buffers.num_rects > 0 {
-                    render_pass.set_pipeline(&rect_pipeline);
-                    render_pass.set_bind_group(0, &ortho.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-                    render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-                    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-                }
-
-                drop(render_pass);
-
-                draw_all_text(
-                    &gpu_device,
-                    &mut staging_belt,
-                    &mut encoder,
-                    &frame,
+                let text_bounds_rect_opt = queue_all_text(
                     &size,
                     &text_state,
                     &mut glyph_brush,
                 );
+
+                match text_bounds_rect_opt {
+                    Some(ab_bounds_rect) => {
+                            let rect_buffers = create_rect_buffers(
+                                &gpu_device,
+                                &mut encoder, 
+                                &[convert_rect(ab_bounds_rect, [255.0, 255.0, 255.0])],
+                            );
+
+                            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                                    attachment: &frame.view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations::default(),
+                                }],
+                                depth_stencil_attachment: None,
+                            });            
+
+                            render_pass.set_pipeline(&rect_pipeline);
+                            render_pass.set_bind_group(0, &ortho.bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+                            render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+
+                            drop(render_pass);
+                        },
+                    None =>
+                        (),
+                };
+
+                // draw all text
+                glyph_brush
+                .draw_queued(
+                    &gpu_device,
+                    &mut staging_belt,
+                    &mut encoder,
+                    &frame.view,
+                    size.width,
+                    size.height,
+                )
+                .expect("Draw queued");
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
@@ -308,20 +326,16 @@ fn create_render_pipeline(
     })
 }
 
-fn draw_all_text(
-    gpu_device: &wgpu::Device,
-    staging_belt: &mut wgpu::util::StagingBelt,
-    encoder: &mut wgpu::CommandEncoder,
-    frame: &wgpu::SwapChainTexture,
+fn queue_all_text(
     size: &winit::dpi::PhysicalSize<u32>,
     text_state: &str,
     glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
-) {
-    let bounds = (size.width as f32, size.height as f32).into();
+) -> Option<ab_glyph::Rect> {
+    let area_bounds = (size.width as f32, size.height as f32).into();
 
     let main_label = Text {
         position: (30.0, 30.0).into(),
-        bounds,
+        area_bounds,
         color: (0.4666, 0.2, 1.0, 1.0).into(),
         text: String::from("Enter some text:"),
         size: 40.0,
@@ -330,8 +344,8 @@ fn draw_all_text(
 
     let code_text = Text {
         position: (30.0, 90.0).into(),
-        bounds,
-        color: (1.0, 1.0, 1.0, 1.0).into(),
+        area_bounds,
+        color: (0.0, 0.05, 0.46, 1.0).into(),
         text: String::from(format!("{}|", text_state).as_str()),
         size: 40.0,
         ..Default::default()
@@ -339,18 +353,9 @@ fn draw_all_text(
 
     text::queue_text_draw(&main_label, glyph_brush);
 
-    text::queue_text_draw(&code_text, glyph_brush);
+    let code_bounds_rect_opt = text::queue_text_draw(&code_text, glyph_brush);
 
-    glyph_brush
-        .draw_queued(
-            gpu_device,
-            staging_belt,
-            encoder,
-            &frame.view,
-            size.width,
-            size.height,
-        )
-        .expect("Draw queued");
+    code_bounds_rect_opt
 }
 
 fn update_text_state(text_state: &mut String, received_char: &char) {
