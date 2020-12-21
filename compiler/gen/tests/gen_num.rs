@@ -613,19 +613,19 @@ mod gen_num {
         assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
     }
 
-    // #[test]
-    // #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
-    // fn int_overflow() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             9_223_372_036_854_775_807 + 1
-    //             "#
-    //         ),
-    //         0,
-    //         i64
-    //     );
-    // }
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+    fn int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                9_223_372_036_854_775_807 + 1
+                "#
+            ),
+            0,
+            i64
+        );
+    }
 
     #[test]
     fn int_add_checked() {
