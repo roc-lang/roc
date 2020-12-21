@@ -151,7 +151,7 @@ impl Pool {
         }
     }
 
-    pub fn set<T>(&self, node_id: NodeId<T>, element: T) {
+    pub fn set<T>(&mut self, node_id: NodeId<T>, element: T) {
         unsafe {
             let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
 
@@ -244,6 +244,15 @@ impl PoolStr {
             }
         }
     }
+
+    pub fn duplicate(&self) -> Self {
+        // Question: should this fully clone, or is a shallow copy
+        // (and the aliasing it entails) OK?
+        Self {
+            first_node_id: self.first_node_id,
+            len: self.len,
+        }
+    }
 }
 
 /// An array of at most 2^32 pool-allocated nodes.
@@ -273,6 +282,14 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
 
             PoolVec { first_node_id, len }
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub fn new<I: ExactSizeIterator<Item = T>>(nodes: I, pool: &mut Pool) -> Self {
@@ -306,11 +323,11 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn iter(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
+    pub fn iter(&self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
         self.pool_list_iter(pool)
     }
 
-    pub fn iter_mut(self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a mut T> {
+    pub fn iter_mut(&mut self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a mut T> {
         self.pool_list_iter_mut(pool)
     }
 
@@ -345,6 +362,15 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         PoolVecIterNodeIds {
             current_node_id: self.first_node_id,
             len_remaining: self.len,
+        }
+    }
+
+    pub fn duplicate(&self) -> Self {
+        // Question: should this fully clone, or is a shallow copy
+        // (and the aliasing it entails) OK?
+        Self {
+            first_node_id: self.first_node_id,
+            len: self.len,
         }
     }
 

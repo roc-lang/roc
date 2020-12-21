@@ -102,9 +102,19 @@ pub fn helper<'a>(
         for problem in can_problems.into_iter() {
             // Ignore "unused" problems
             match problem {
-                UnusedDef(_, _) | UnusedArgument(_, _, _) | UnusedImport(_, _) => {
-                    delayed_errors.push(problem);
-                    continue;
+                UnusedDef(_, _)
+                | UnusedArgument(_, _, _)
+                | UnusedImport(_, _)
+                | RuntimeError(_)
+                | ExposedButNotDefined(_) => {
+                    delayed_errors.push(problem.clone());
+
+                    let report = can_problem(&alloc, module_path.clone(), problem);
+                    let mut buf = String::new();
+
+                    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+                    lines.push(buf);
                 }
                 _ => {
                     let report = can_problem(&alloc, module_path.clone(), problem);
@@ -138,7 +148,11 @@ pub fn helper<'a>(
 
     if !lines.is_empty() {
         println!("{}", lines.join("\n"));
-        assert_eq!(0, 1, "Mistakes were made");
+
+        // only crash at this point if there were no delayed_errors
+        if delayed_errors.is_empty() {
+            assert_eq!(0, 1, "Mistakes were made");
+        }
     }
 
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
