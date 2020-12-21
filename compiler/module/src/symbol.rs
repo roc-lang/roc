@@ -841,6 +841,7 @@ define_builtins! {
         17 LIST_CONTAINS: "contains"
         18 LIST_SUM: "sum"
         19 LIST_WALK: "walk"
+        20 LIST_LAST: "last"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

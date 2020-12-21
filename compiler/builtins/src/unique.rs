@@ -451,14 +451,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![list_type(star1, a)], int_type(star2))
     });
 
+    fn list_was_empty() -> SolvedType {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("ListWasEmpty".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    }
+
     // List.first :
     //     Attr (* | u) (List (Attr u a)),
     //     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
-    let list_was_empty = SolvedType::TagUnion(
-        vec![(TagName::Global("ListWasEmpty".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
-
     add_type(Symbol::LIST_FIRST, {
         let_tvars! { a, u, star1, star2, star3 };
 
@@ -470,7 +472,25 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                     SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                 ],
             )],
-            result_type(star2, attr_type(u, a), lift(star3, list_was_empty)),
+            result_type(star2, attr_type(u, a), lift(star3, list_was_empty())),
+        )
+    });
+
+    // List.last :
+    //     Attr (* | u) (List (Attr u a)),
+    //     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+    add_type(Symbol::LIST_LAST, {
+        let_tvars! { a, u, star1, star2, star3 };
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    container(star1, vec![u]),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            )],
+            result_type(star2, attr_type(u, a), lift(star3, list_was_empty())),
         )
     });
 

@@ -64,6 +64,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_SET => list_set,
         LIST_APPEND => list_append,
         LIST_FIRST => list_first,
+        LIST_LAST => list_last,
         LIST_IS_EMPTY => list_is_empty,
         LIST_SINGLE => list_single,
         LIST_REPEAT => list_repeat,
@@ -152,6 +153,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_SET => list_set,
         Symbol::LIST_APPEND => list_append,
         Symbol::LIST_FIRST => list_first,
+        Symbol::LIST_LAST => list_last,
         Symbol::LIST_IS_EMPTY => list_is_empty,
         Symbol::LIST_SINGLE => list_single,
         Symbol::LIST_REPEAT => list_repeat,
@@ -1868,6 +1870,103 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
                             args: vec![(list_var, Var(Symbol::ARG_1)), (len_var, Int(zero_var, 0))],
+                            ret_var: list_elem_var,
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // list was empty
+            no_region(
+                // Err ListWasEmpty
+                tag(
+                    "Err",
+                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// List.last : List elem -> Result elem [ ListWasEmpty ]*
+///
+/// List.last :
+///     Attr (* | u) (List (Attr u a)),
+///     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let list_var = var_store.fresh();
+    let len_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let list_elem_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    // Perform a bounds check. If it passes, delegate to List.getUnsafe.
+    let body = If {
+        cond_var: bool_var,
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // List.len list != 0
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (len_var, Int(num_var, 0)),
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::ListLen,
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                ret_var: len_var,
+                            },
+                        ),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // list was not empty
+            no_region(
+                // Ok (List.#getUnsafe list 0)
+                tag(
+                    "Ok",
+                    vec![
+                        // List.#getUnsafe list 0
+                        RunLowLevel {
+                            op: LowLevel::ListGetUnsafe,
+                            args: vec![
+                                (list_var, Var(Symbol::ARG_1)),
+                                (
+                                    len_var,
+                                    RunLowLevel {
+                                        op: LowLevel::NumSub,
+                                        args: vec![
+                                            (
+                                                arg_var,
+                                                RunLowLevel {
+                                                    op: LowLevel::ListLen,
+                                                    args: vec![(list_var, Var(Symbol::ARG_1))],
+                                                    ret_var: len_var,
+                                                },
+                                            ),
+                                            (arg_var, Int(num_var, 1)),
+                                        ],
+                                        ret_var: len_var,
+                                    },
+                                ),
+                            ],
                             ret_var: list_elem_var,
                         },
                     ],
