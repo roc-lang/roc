@@ -253,6 +253,7 @@ fn link_linux(
                     .collect::<HashMap<String, String>>(),
             )
             .args(&[
+                "--eh-frame-hdr",
                 "-arch",
                 arch_str(target),
                 libcrt_path.join("crti.o").to_str().unwrap(),
