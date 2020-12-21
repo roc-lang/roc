@@ -2674,6 +2674,7 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
+ "ven_graph",
  "wgpu",
  "wgpu_glyph",
  "winit",
