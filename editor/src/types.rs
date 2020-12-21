@@ -742,3 +742,13 @@ pub struct Alias {
     /// hidden type variables, like the closure variable in `a -> b`
     pub hidden_variables: PoolVec<Variable>,
 }
+
+impl Alias {
+    pub fn duplicate(&self) -> Self {
+        Self {
+            targs: self.targs.duplicate(),
+            hidden_variables: self.hidden_variables.duplicate(),
+            actual: self.actual,
+        }
+    }
+}

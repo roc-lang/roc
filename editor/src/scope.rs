@@ -25,7 +25,6 @@ pub struct Scope {
     symbols: MutMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    /// Uses BTreeMap because HashMap requires elements are Clone
     aliases: MutMap<Symbol, Alias>,
 
     /// The current module being processed. This will be used to turn
@@ -34,6 +33,19 @@ pub struct Scope {
 }
 
 impl Scope {
+    pub fn duplicate(&self) -> Self {
+        Self {
+            idents: self.idents.clone(),
+            symbols: self.symbols.clone(),
+            aliases: self
+                .aliases
+                .iter()
+                .map(|(s, a)| (*s, a.duplicate()))
+                .collect(),
+            home: self.home,
+        }
+    }
+
     pub fn new(home: ModuleId, pool: &mut Pool, _var_store: &mut VarStore) -> Scope {
         use roc_types::solved_types::{BuiltinAlias, FreeVars};
         let solved_aliases = roc_types::builtin_aliases::aliases();

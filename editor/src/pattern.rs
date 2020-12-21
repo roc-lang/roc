@@ -4,9 +4,9 @@
 use crate::ast::{ExprId, FloatVal, IntVal};
 use crate::expr::{to_expr_id, Env};
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::scope::Scope;
 use roc_can::expr::{unescape_char, Output};
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
-use roc_can::scope::Scope;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
