@@ -46,8 +46,58 @@ impl Type2 {
         todo!()
     }
 
-    pub fn variables(&self, _pool: &mut Pool) -> MutSet<Variable> {
-        todo!()
+    pub fn variables(&self, pool: &mut Pool) -> MutSet<Variable> {
+        use Type2::*;
+
+        let mut stack = vec![self];
+        let mut result = MutSet::default();
+
+        while let Some(this) = stack.pop() {
+            match this {
+                Variable(v) => {
+                    result.insert(*v);
+                }
+                Alias(_, _, actual) | AsAlias(_, _, actual) => {
+                    stack.push(pool.get(*actual));
+                }
+                HostExposedAlias {
+                    actual_var, actual, ..
+                } => {
+                    result.insert(*actual_var);
+                    stack.push(pool.get(*actual));
+                }
+                EmptyTagUnion | EmptyRec | Erroneous(_) => {}
+                TagUnion(tags, ext) => {
+                    for (_, args) in tags.iter(pool) {
+                        stack.extend(args.iter(pool));
+                    }
+                    stack.push(pool.get(*ext));
+                }
+                RecursiveTagUnion(rec, tags, ext) => {
+                    for (_, args) in tags.iter(pool) {
+                        stack.extend(args.iter(pool));
+                    }
+                    stack.push(pool.get(*ext));
+                    result.insert(*rec);
+                }
+                Record(fields, ext) => {
+                    for (_, field) in fields.iter(pool) {
+                        stack.push(field.as_inner());
+                    }
+                    stack.push(pool.get(*ext));
+                }
+                Function(args, closure, result) => {
+                    stack.extend(args.iter(pool));
+                    stack.push(pool.get(*closure));
+                    stack.push(pool.get(*result));
+                }
+                Apply(_, args) => {
+                    stack.extend(args.iter(pool));
+                }
+            }
+        }
+
+        result
     }
 
     pub fn contains_symbol(&self, _pool: &mut Pool, _needle: Symbol) -> bool {
