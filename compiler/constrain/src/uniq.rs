@@ -427,9 +427,8 @@ fn unique_num(val_type: Type, uvar: Variable) -> Type {
     let val_utype = attr_type(Bool::variable(uvar), val_type);
 
     let num_utype = num_num(val_utype);
-    let num_type = attr_type(Bool::variable(uvar), num_utype);
 
-    num_type
+    attr_type(Bool::variable(uvar), num_utype)
 }
 
 fn unique_integer(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
