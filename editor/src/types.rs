@@ -45,7 +45,16 @@ impl Type2 {
     fn substitute(_pool: &mut Pool, _subs: &MutMap<Variable, TypeId>, _type_id: TypeId) {
         todo!()
     }
+
     pub fn variables(&self, _pool: &mut Pool) -> MutSet<Variable> {
+        todo!()
+    }
+
+    pub fn contains_symbol(&self, _pool: &mut Pool, _needle: Symbol) -> bool {
+        todo!()
+    }
+
+    pub fn substitute_alias(&self, _pool: &mut Pool, _needle: Symbol, actual: Self) {
         todo!()
     }
 }

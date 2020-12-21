@@ -296,6 +296,15 @@ fn canonicalize_pending_def<'a>(
                         let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
                         let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
 
+                        for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
+                            let poolstr = PoolStr::new(name, env.pool);
+                            env.pool[node_id] = (poolstr, variable);
+                        }
+
+                        for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
+                            env.pool[node_id] = rigid;
+                        }
+
                         Rigids { named, unnamed }
                     };
 
@@ -319,6 +328,98 @@ fn canonicalize_pending_def<'a>(
                     output
                 }
             }
+        }
+
+        PendingDef::Alias { name, ann, vars } => {
+            let symbol = name.value;
+
+            match to_annotation2(env, scope, &ann.value, ann.region) {
+                Annotation2::Erroneous(_) => todo!(),
+                Annotation2::Annotation {
+                    named_rigids,
+                    unnamed_rigids,
+                    symbols,
+                    signature,
+                } => {
+                    // Record all the annotation's references in output.references.lookups
+
+                    for symbol in symbols {
+                        output.references.lookups.insert(symbol);
+                        output.references.referenced_aliases.insert(symbol);
+                    }
+
+                    for loc_lowercase in vars {
+                        if !named_rigids.contains_key(loc_lowercase.value.as_str()) {
+                            env.problem(Problem::PhantomTypeArgument {
+                                alias: symbol,
+                                variable_region: loc_lowercase.region,
+                                variable_name: loc_lowercase.value.clone(),
+                            });
+                        }
+                    }
+
+                    let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
+                    let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
+
+                    for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
+                        let poolstr = PoolStr::new(name, env.pool);
+
+                        env.pool[node_id] = (poolstr, variable);
+                    }
+
+                    for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
+                        env.pool[node_id] = rigid;
+                    }
+
+                    let rigids = Rigids {
+                        named: named.shallow_clone(),
+                        unnamed,
+                    };
+
+                    let annotation = match signature {
+                        Signature::Value { annotation } => annotation,
+                        Signature::Function {
+                            arguments,
+                            closure_type_id,
+                            return_type_id,
+                        } => Type2::Function(arguments, closure_type_id, return_type_id),
+                        Signature::FunctionWithAliases { annotation, .. } => annotation,
+                    };
+
+                    if annotation.contains_symbol(env.pool, symbol) {
+                        // the alias is recursive. If it's a tag union, we attempt to fix this
+                        if let Type2::TagUnion(tags, ext) = annotation {
+                            // re-canonicalize the alias with the alias already in scope
+                            let rec_var = env.var_store.fresh();
+                            let rec_type_union = Type2::RecursiveTagUnion(rec_var, tags, ext);
+
+                            // NOTE this only looks at the symbol, and just assumes that the
+                            // recursion is not polymorphic
+                            rec_type_union.substitute_alias(
+                                env.pool,
+                                symbol,
+                                Type2::Variable(rec_var),
+                            );
+
+                            let annotation_id = env.add(rec_type_union, ann.region);
+                            scope.add_alias(env.pool, symbol, named, annotation_id);
+                        } else {
+                            env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
+                            return output;
+                        }
+                    } else {
+                        let annotation_id = env.add(annotation, ann.region);
+                        scope.add_alias(env.pool, symbol, named, annotation_id);
+                    }
+
+                    output
+                }
+            }
+        }
+
+        InvalidAlias => {
+            // invalid aliases (shadowed, incorrect patterns )
+            todo!()
         }
         _ => todo!(),
     }
