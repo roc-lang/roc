@@ -104,7 +104,7 @@ impl Type2 {
         todo!()
     }
 
-    pub fn substitute_alias(&self, _pool: &mut Pool, _needle: Symbol, actual: Self) {
+    pub fn substitute_alias(&self, _pool: &mut Pool, _needle: Symbol, _actual: Self) {
         todo!()
     }
 }
