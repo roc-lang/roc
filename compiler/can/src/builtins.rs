@@ -1939,22 +1939,24 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
             ),
             // list was not empty
             no_region(
-                // Ok (List.#getUnsafe list 0)
+                // Ok (List.getUnsafe list (Num.sub (List.len list) 1))
                 tag(
                     "Ok",
                     vec![
-                        // List.#getUnsafe list 0
+                        // List.getUnsafe list (Num.sub (List.len list) 1)
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
                             args: vec![
                                 (list_var, Var(Symbol::ARG_1)),
                                 (
                                     len_var,
+                                    // Num.sub (List.len list) 1
                                     RunLowLevel {
                                         op: LowLevel::NumSub,
                                         args: vec![
                                             (
                                                 arg_var,
+                                                // List.len list
                                                 RunLowLevel {
                                                     op: LowLevel::ListLen,
                                                     args: vec![(list_var, Var(Symbol::ARG_1))],
