@@ -1210,36 +1210,34 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 
 #[inline(always)]
 fn float_type(u: VarId) -> SolvedType {
+    let b_64 = builtin_aliases::binary64_type();
+    let attr_b_64 = lift(u, b_64);
+    let fp = builtin_aliases::floatingpoint_type(attr_b_64);
+    let attr_fb = lift(u, fp);
+    let num = builtin_aliases::num_type(attr_fb);
+
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(
-                Symbol::NUM_F64,
-                Vec::new(),
-                Box::new(builtin_aliases::num_type(SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![flex(u), builtin_aliases::float_type()],
-                ))),
-            ),
+            SolvedType::Alias(Symbol::NUM_F64, Vec::new(), Box::new(num)),
         ],
     )
 }
 
 #[inline(always)]
 fn int_type(u: VarId) -> SolvedType {
+    let signed_64 = builtin_aliases::signed64_type();
+    let attr_signed_64 = lift(u, signed_64);
+    let integer = builtin_aliases::integer_type(attr_signed_64);
+    let attr_fb = lift(u, integer);
+    let num = builtin_aliases::num_type(attr_fb);
+
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(
-                Symbol::NUM_I64,
-                Vec::new(),
-                Box::new(builtin_aliases::num_type(SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![flex(u), builtin_aliases::int_type()],
-                ))),
-            ),
+            SolvedType::Alias(Symbol::NUM_I64, Vec::new(), Box::new(num)),
         ],
     )
 }
