@@ -8,9 +8,14 @@
 // };
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
+use crate::ast::{FunctionDef, Rigids, ShallowClone, ValueDef};
 use crate::expr::Env;
-use crate::pattern::{to_pattern_id, Pattern2, PatternId};
+use crate::pattern::{
+    symbols_and_variables_from_pattern, symbols_from_pattern, to_pattern_id, Pattern2, PatternId,
+};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
 use crate::scope::Scope;
+use crate::types::{to_annotation2, Alias, Annotation2, References, Signature, Type2};
 use roc_can::expr::Output;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
@@ -20,10 +25,25 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
+
+#[derive(Debug)]
+enum Def {
+    AnnotationOnly {
+        rigids: crate::ast::Rigids,
+        annotation: Type2,
+    },
+    Value(ValueDef),
+    Function(FunctionDef),
+}
+
+impl ShallowClone for Def {
+    fn shallow_clone(&self) -> Self {
+        todo!()
+    }
+}
 
 /// A Def that has had patterns and type annnotations canonicalized,
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
@@ -226,4 +246,72 @@ fn pending_typed_body<'a>(
         output,
         PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr),
     )
+}
+
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
+fn canonicalize_pending_def<'a>(
+    env: &mut Env<'a>,
+    pending_def: PendingDef<'a>,
+    mut output: Output,
+    scope: &mut Scope,
+    can_defs_by_symbol: &mut MutMap<Symbol, Def>,
+    refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
+    aliases: &mut SendMap<Symbol, Alias>,
+) -> Output {
+    use PendingDef::*;
+
+    // Make types for the body expr, even if we won't end up having a body.
+    let expr_var = env.var_store.fresh();
+
+    match pending_def {
+        AnnotationOnly(_, loc_can_pattern, loc_ann) => {
+            // annotation sans body cannot introduce new rigids that are visible in other annotations
+            // but the rigids can show up in type error messages, so still register them
+
+            match to_annotation2(env, scope, &loc_ann.value, loc_ann.region) {
+                Annotation2::Erroneous(_) => todo!(),
+                Annotation2::Annotation {
+                    named_rigids,
+                    unnamed_rigids,
+                    symbols,
+                    signature,
+                } => {
+                    // Record all the annotation's references in output.references.lookups
+
+                    for symbol in symbols {
+                        output.references.lookups.insert(symbol);
+                        output.references.referenced_aliases.insert(symbol);
+                    }
+
+                    let rigids = {
+                        let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
+                        let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
+
+                        Rigids { named, unnamed }
+                    };
+
+                    let annotation = match signature {
+                        Signature::Value { annotation } => annotation,
+                        Signature::Function {
+                            arguments,
+                            closure_type_id,
+                            return_type_id,
+                        } => Type2::Function(arguments, closure_type_id, return_type_id),
+                        Signature::FunctionWithAliases { annotation, .. } => annotation,
+                    };
+
+                    let def = Def::AnnotationOnly { rigids, annotation };
+
+                    for symbol in symbols_from_pattern(env.pool, env.pool.get(loc_can_pattern)) {
+                        can_defs_by_symbol.insert(symbol, def.shallow_clone());
+                    }
+
+                    output
+                }
+            }
+        }
+        _ => todo!(),
+    }
 }

@@ -226,8 +226,8 @@ pub enum FunctionDef {
 
 #[derive(Debug)]
 pub struct Rigids {
-    named: PoolVec<(PoolStr, Variable)>, // 8B
-    unnamed: PoolVec<Variable>,          // 8B
+    pub named: PoolVec<(PoolStr, Variable)>, // 8B
+    pub unnamed: PoolVec<Variable>,          // 8B
 }
 
 /// This is overflow data from a Closure variant, which needs to store
@@ -252,4 +252,9 @@ pub type ExprId = NodeId<Expr2>;
 #[test]
 fn size_of_expr() {
     assert_eq!(std::mem::size_of::<Expr2>(), crate::pool::NODE_BYTES);
+}
+
+/// Clones the outer node, but does not clone any nodeids
+pub trait ShallowClone {
+    fn shallow_clone(&self) -> Self;
 }
