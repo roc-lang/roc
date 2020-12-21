@@ -12,6 +12,7 @@ use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::Bool;
+use roc_types::builtin_aliases;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
@@ -423,48 +424,30 @@ fn unique_unbound_num(
     (num_uvar, val_uvar, num_type, num_var)
 }
 
-fn unique_num(val_type: Type, uvar: Variable) -> Type {
-    let val_utype = attr_type(Bool::variable(uvar), val_type);
-
-    let num_utype = num_num(val_utype);
-
-    attr_type(Bool::variable(uvar), num_utype)
-}
-
-fn unique_integer(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
-    let num_uvar = var_store.fresh();
-
-    let val_utype = attr_type(Bool::variable(num_uvar), val_type);
-
-    let num_type = num_integer(val_utype);
-
-    (num_uvar, num_type)
-}
-
 fn unique_int(var_store: &mut VarStore) -> (Variable, Type) {
-    let (var1, typ) = unique_integer(var_store, num_signed64());
-
-    let typ = unique_num(typ, var1);
-
-    (var1, typ)
-}
-
-fn unique_floatingpoint(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
     let num_uvar = var_store.fresh();
 
-    let val_utype = attr_type(Bool::variable(num_uvar), val_type);
+    let signed_64 = num_signed64();
+    let attr_signed_64 = attr_type(Bool::variable(num_uvar), signed_64);
+    let integer = num_integer(attr_signed_64);
+    let attr_int = attr_type(Bool::variable(num_uvar), integer);
+    let num = num_num(attr_int);
+    let attr_num = attr_type(Bool::variable(num_uvar), num);
 
-    let num_type = num_floatingpoint(val_utype);
-
-    (num_uvar, num_type)
+    (num_uvar, attr_num)
 }
 
 fn unique_float(var_store: &mut VarStore) -> (Variable, Type) {
-    let (var1, typ) = unique_floatingpoint(var_store, num_binary64());
+    let num_uvar = var_store.fresh();
 
-    let typ = unique_num(typ, var1);
+    let binary_64 = num_binary64();
+    let attr_binary_64 = attr_type(Bool::variable(num_uvar), binary_64);
+    let fp = num_floatingpoint(attr_binary_64);
+    let attr_fp = attr_type(Bool::variable(num_uvar), fp);
+    let num = num_num(attr_fp);
+    let attr_num = attr_type(Bool::variable(num_uvar), num);
 
-    (var1, typ)
+    (num_uvar, attr_num)
 }
 
 pub fn constrain_expr(
