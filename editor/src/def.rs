@@ -1,3 +1,6 @@
+#![allow(clippy::all)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
 // use crate::annotation::canonicalize_annotation;
 // use crate::annotation::IntroducedVariables;
 // use crate::env::Env;
