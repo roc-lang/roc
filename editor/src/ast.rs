@@ -1,5 +1,5 @@
 use crate::pattern::{Pattern2, PatternId};
-use crate::pool::{NodeId, PoolStr, PoolVec};
+use crate::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
 use crate::types::{Type2, TypeId};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::expr::Recursive;
@@ -204,9 +204,22 @@ pub enum Expr2 {
 
 #[derive(Debug)]
 pub struct ValueDef {
-    pattern: PatternId,                 // 4B
-    expr_type: Option<(Type2, Rigids)>, // ?
-    expr_var: Variable,                 // 4B
+    pattern: PatternId,                  // 4B
+    expr_type: Option<(TypeId, Rigids)>, // ?
+    expr_var: Variable,                  // 4B
+}
+
+impl ShallowClone for ValueDef {
+    fn shallow_clone(&self) -> Self {
+        Self {
+            pattern: self.pattern,
+            expr_type: match &self.expr_type {
+                Some((id, rigids)) => Some((*id, rigids.shallow_clone())),
+                None => None,
+            },
+            expr_var: self.expr_var,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -222,6 +235,34 @@ pub enum FunctionDef {
         arguments: PoolVec<(Pattern2, Variable)>, // 8B
         return_var: Variable,                     // 4B
     },
+}
+
+impl ShallowClone for FunctionDef {
+    fn shallow_clone(&self) -> Self {
+        match self {
+            Self::WithAnnotation {
+                name,
+                arguments,
+                rigids,
+                return_type,
+            } => Self::WithAnnotation {
+                name: *name,
+                arguments: arguments.shallow_clone(),
+                rigids: *rigids,
+                return_type: *return_type,
+            },
+
+            Self::NoAnnotation {
+                name,
+                arguments,
+                return_var,
+            } => Self::NoAnnotation {
+                name: *name,
+                arguments: arguments.shallow_clone(),
+                return_var: *return_var,
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -254,7 +295,11 @@ fn size_of_expr() {
     assert_eq!(std::mem::size_of::<Expr2>(), crate::pool::NODE_BYTES);
 }
 
-/// Clones the outer node, but does not clone any nodeids
-pub trait ShallowClone {
-    fn shallow_clone(&self) -> Self;
+impl ShallowClone for Rigids {
+    fn shallow_clone(&self) -> Self {
+        Self {
+            named: self.named.shallow_clone(),
+            unnamed: self.unnamed.shallow_clone(),
+        }
+    }
 }

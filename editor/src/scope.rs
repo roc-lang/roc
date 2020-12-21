@@ -1,7 +1,7 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-use crate::pool::{Pool, PoolStr, PoolVec};
+use crate::pool::{Pool, PoolStr, PoolVec, ShallowClone};
 use crate::types::{Alias, TypeId};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
@@ -40,7 +40,7 @@ impl Scope {
             aliases: self
                 .aliases
                 .iter()
-                .map(|(s, a)| (*s, a.duplicate()))
+                .map(|(s, a)| (*s, a.shallow_clone()))
                 .collect(),
             home: self.home,
         }

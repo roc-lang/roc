@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::expr::Env;
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
@@ -163,7 +163,7 @@ fn shallow_dealias<'a>(
             }
             Type2::Function(arguments, closure_type_id, return_type_id) => {
                 let signature = Signature::FunctionWithAliases {
-                    arguments: arguments.duplicate(),
+                    arguments: arguments.shallow_clone(),
                     closure_type_id: *closure_type_id,
                     return_type_id: *return_type_id,
                     annotation,
@@ -370,7 +370,7 @@ pub fn to_type2<'a>(
                                     let poolstr = PoolStr::new(var_name, env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(*var));
-                                    env.pool[var_id] = (poolstr.duplicate(), type_id);
+                                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
 
                                     env.pool[named_id] = (poolstr, *var);
                                     env.set_region(named_id, loc_var.region);
@@ -381,7 +381,7 @@ pub fn to_type2<'a>(
                                     let poolstr = PoolStr::new(var_name, env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(var));
-                                    env.pool[var_id] = (poolstr.duplicate(), type_id);
+                                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
 
                                     env.pool[named_id] = (poolstr, var);
                                     env.set_region(named_id, loc_var.region);
@@ -700,7 +700,7 @@ fn to_type_apply<'a>(
 
             for (node_id, (type_id, loc_var_id)) in it {
                 let loc_var = &env.pool[loc_var_id];
-                let name = loc_var.0.duplicate();
+                let name = loc_var.0.shallow_clone();
                 let var = loc_var.1;
 
                 env.pool[node_id] = (name, type_id);
@@ -715,7 +715,7 @@ fn to_type_apply<'a>(
             if let Type2::RecursiveTagUnion(rvar, ref tags, ext) = &mut env.pool[actual] {
                 substitutions.insert(*rvar, fresh);
 
-                env.pool[actual] = Type2::RecursiveTagUnion(new, tags.duplicate(), *ext);
+                env.pool[actual] = Type2::RecursiveTagUnion(new, tags.shallow_clone(), *ext);
             }
 
             // make sure hidden variables are freshly instantiated
@@ -743,11 +743,11 @@ pub struct Alias {
     pub hidden_variables: PoolVec<Variable>,
 }
 
-impl Alias {
-    pub fn duplicate(&self) -> Self {
+impl ShallowClone for Alias {
+    fn shallow_clone(&self) -> Self {
         Self {
-            targs: self.targs.duplicate(),
-            hidden_variables: self.hidden_variables.duplicate(),
+            targs: self.targs.shallow_clone(),
+            hidden_variables: self.hidden_variables.shallow_clone(),
             actual: self.actual,
         }
     }

@@ -8,14 +8,14 @@
 // };
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
-use crate::ast::{FunctionDef, Rigids, ShallowClone, ValueDef};
+use crate::ast::{FunctionDef, Rigids, ValueDef};
 use crate::expr::Env;
 use crate::pattern::{
     symbols_and_variables_from_pattern, symbols_from_pattern, to_pattern_id, Pattern2, PatternId,
 };
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
-use crate::types::{to_annotation2, Alias, Annotation2, References, Signature, Type2};
+use crate::types::{to_annotation2, Alias, Annotation2, References, Signature, Type2, TypeId};
 use roc_can::expr::Output;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
@@ -33,7 +33,7 @@ use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 enum Def {
     AnnotationOnly {
         rigids: crate::ast::Rigids,
-        annotation: Type2,
+        annotation: TypeId,
     },
     Value(ValueDef),
     Function(FunctionDef),
@@ -41,7 +41,14 @@ enum Def {
 
 impl ShallowClone for Def {
     fn shallow_clone(&self) -> Self {
-        todo!()
+        match self {
+            Self::AnnotationOnly { rigids, annotation } => Self::AnnotationOnly {
+                rigids: rigids.shallow_clone(),
+                annotation: *annotation,
+            },
+            Self::Value(def) => Self::Value(def.shallow_clone()),
+            Self::Function(def) => Self::Function(def.shallow_clone()),
+        }
     }
 }
 
@@ -301,6 +308,7 @@ fn canonicalize_pending_def<'a>(
                         } => Type2::Function(arguments, closure_type_id, return_type_id),
                         Signature::FunctionWithAliases { annotation, .. } => annotation,
                     };
+                    let annotation = env.add(annotation, loc_ann.region);
 
                     let def = Def::AnnotationOnly { rigids, annotation };
 
