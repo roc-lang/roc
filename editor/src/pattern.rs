@@ -455,6 +455,54 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
     symbols
 }
 
+pub fn symbols_and_variables_from_pattern(
+    pool: &Pool,
+    initial: &Pattern2,
+    initial_var: Variable,
+) -> Vec<(Symbol, Variable)> {
+    use Pattern2::*;
+    let mut symbols = Vec::new();
+    let mut stack = vec![(initial_var, initial)];
+
+    while let Some((variable, pattern)) = stack.pop() {
+        match pattern {
+            Identifier(symbol) => {
+                symbols.push((*symbol, variable));
+            }
+
+            GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
+                for (var, pat) in arguments.iter(pool) {
+                    stack.push((*var, pat));
+                }
+            }
+
+            RecordDestructure { destructs, .. } => {
+                for destruct in destructs.iter(pool) {
+                    let destruct_type = pool.get(destruct.typ);
+
+                    if let DestructType::Guard(_, subpattern_id) = &destruct_type {
+                        let subpattern = pool.get(*subpattern_id);
+                        stack.push((destruct.var, subpattern));
+                    } else {
+                        symbols.push((destruct.symbol, destruct.var));
+                    }
+                }
+            }
+
+            NumLiteral(_, _)
+            | IntLiteral(_)
+            | FloatLiteral(_)
+            | StrLiteral(_)
+            | Underscore
+            | MalformedPattern(_, _)
+            | Shadowed { .. }
+            | UnsupportedPattern(_) => {}
+        }
+    }
+
+    symbols
+}
+
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
 fn unsupported_pattern<'a>(
