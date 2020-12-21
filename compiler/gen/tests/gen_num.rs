@@ -380,6 +380,13 @@ mod gen_num {
     }
 
     #[test]
+    fn bitwise_and() {
+        assert_evals_to!("Num.bitwiseAnd 20 20", 20, i64);
+        assert_evals_to!("Num.bitwiseAnd 25 10", 8, i64);
+        assert_evals_to!("Num.bitwiseAnd 200 0", 0, i64);
+    }
+
+    #[test]
     fn lt_i64() {
         assert_evals_to!("1 < 2", true, bool);
         assert_evals_to!("1 < 1", false, bool);

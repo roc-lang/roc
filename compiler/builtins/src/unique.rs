@@ -253,6 +253,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // bitwiseAnd : Attr * Int, Attr * Int -> Attr * Int
+    add_type(Symbol::NUM_BITWISE_AND, {
+        let_tvars! { star1, star2, star3 };
+        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
+    });
+
     // divFloat : Float, Float -> Float
     add_type(Symbol::NUM_DIV_FLOAT, {
         let_tvars! { star1, star2, star3, star4, star5};

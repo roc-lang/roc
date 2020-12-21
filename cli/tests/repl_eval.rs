@@ -252,6 +252,15 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_bitwise_and() {
+        expect_success("Num.bitwiseAnd 20 20", "20 : I64");
+
+        expect_success("Num.bitwiseAnd 25 10", "8 : I64");
+
+        expect_success("Num.bitwiseAnd 200 0", "0 : I64")
+    }
+
+    #[test]
     fn list_concat() {
         expect_success(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
