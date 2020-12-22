@@ -2,7 +2,7 @@ on: [pull_request]
 
 name: CI
 
-variables:
+env:
   RUSTC_WRAPPER: "./ci/sccache"
 
 jobs:
