@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::expr::Env;
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
@@ -45,7 +45,66 @@ impl Type2 {
     fn substitute(_pool: &mut Pool, _subs: &MutMap<Variable, TypeId>, _type_id: TypeId) {
         todo!()
     }
-    pub fn variables(&self, _pool: &mut Pool) -> MutSet<Variable> {
+
+    pub fn variables(&self, pool: &mut Pool) -> MutSet<Variable> {
+        use Type2::*;
+
+        let mut stack = vec![self];
+        let mut result = MutSet::default();
+
+        while let Some(this) = stack.pop() {
+            match this {
+                Variable(v) => {
+                    result.insert(*v);
+                }
+                Alias(_, _, actual) | AsAlias(_, _, actual) => {
+                    stack.push(pool.get(*actual));
+                }
+                HostExposedAlias {
+                    actual_var, actual, ..
+                } => {
+                    result.insert(*actual_var);
+                    stack.push(pool.get(*actual));
+                }
+                EmptyTagUnion | EmptyRec | Erroneous(_) => {}
+                TagUnion(tags, ext) => {
+                    for (_, args) in tags.iter(pool) {
+                        stack.extend(args.iter(pool));
+                    }
+                    stack.push(pool.get(*ext));
+                }
+                RecursiveTagUnion(rec, tags, ext) => {
+                    for (_, args) in tags.iter(pool) {
+                        stack.extend(args.iter(pool));
+                    }
+                    stack.push(pool.get(*ext));
+                    result.insert(*rec);
+                }
+                Record(fields, ext) => {
+                    for (_, field) in fields.iter(pool) {
+                        stack.push(field.as_inner());
+                    }
+                    stack.push(pool.get(*ext));
+                }
+                Function(args, closure, result) => {
+                    stack.extend(args.iter(pool));
+                    stack.push(pool.get(*closure));
+                    stack.push(pool.get(*result));
+                }
+                Apply(_, args) => {
+                    stack.extend(args.iter(pool));
+                }
+            }
+        }
+
+        result
+    }
+
+    pub fn contains_symbol(&self, _pool: &mut Pool, _needle: Symbol) -> bool {
+        todo!()
+    }
+
+    pub fn substitute_alias(&self, _pool: &mut Pool, _needle: Symbol, _actual: Self) {
         todo!()
     }
 }
@@ -163,7 +222,7 @@ fn shallow_dealias<'a>(
             }
             Type2::Function(arguments, closure_type_id, return_type_id) => {
                 let signature = Signature::FunctionWithAliases {
-                    arguments: arguments.duplicate(),
+                    arguments: arguments.shallow_clone(),
                     closure_type_id: *closure_type_id,
                     return_type_id: *return_type_id,
                     annotation,
@@ -370,7 +429,7 @@ pub fn to_type2<'a>(
                                     let poolstr = PoolStr::new(var_name, env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(*var));
-                                    env.pool[var_id] = (poolstr.duplicate(), type_id);
+                                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
 
                                     env.pool[named_id] = (poolstr, *var);
                                     env.set_region(named_id, loc_var.region);
@@ -381,7 +440,7 @@ pub fn to_type2<'a>(
                                     let poolstr = PoolStr::new(var_name, env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(var));
-                                    env.pool[var_id] = (poolstr.duplicate(), type_id);
+                                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
 
                                     env.pool[named_id] = (poolstr, var);
                                     env.set_region(named_id, loc_var.region);
@@ -700,7 +759,7 @@ fn to_type_apply<'a>(
 
             for (node_id, (type_id, loc_var_id)) in it {
                 let loc_var = &env.pool[loc_var_id];
-                let name = loc_var.0.duplicate();
+                let name = loc_var.0.shallow_clone();
                 let var = loc_var.1;
 
                 env.pool[node_id] = (name, type_id);
@@ -715,7 +774,7 @@ fn to_type_apply<'a>(
             if let Type2::RecursiveTagUnion(rvar, ref tags, ext) = &mut env.pool[actual] {
                 substitutions.insert(*rvar, fresh);
 
-                env.pool[actual] = Type2::RecursiveTagUnion(new, tags.duplicate(), *ext);
+                env.pool[actual] = Type2::RecursiveTagUnion(new, tags.shallow_clone(), *ext);
             }
 
             // make sure hidden variables are freshly instantiated
@@ -741,4 +800,14 @@ pub struct Alias {
 
     /// hidden type variables, like the closure variable in `a -> b`
     pub hidden_variables: PoolVec<Variable>,
+}
+
+impl ShallowClone for Alias {
+    fn shallow_clone(&self) -> Self {
+        Self {
+            targs: self.targs.shallow_clone(),
+            hidden_variables: self.hidden_variables.shallow_clone(),
+            actual: self.actual,
+        }
+    }
 }

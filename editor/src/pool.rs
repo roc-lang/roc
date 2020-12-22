@@ -244,8 +244,10 @@ impl PoolStr {
             }
         }
     }
+}
 
-    pub fn duplicate(&self) -> Self {
+impl ShallowClone for PoolStr {
+    fn shallow_clone(&self) -> Self {
         // Question: should this fully clone, or is a shallow copy
         // (and the aliasing it entails) OK?
         Self {
@@ -365,15 +367,6 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn duplicate(&self) -> Self {
-        // Question: should this fully clone, or is a shallow copy
-        // (and the aliasing it entails) OK?
-        Self {
-            first_node_id: self.first_node_id,
-            len: self.len,
-        }
-    }
-
     pub fn free<S>(self, pool: &'a mut Pool) {
         // zero out the memory
         unsafe {
@@ -385,6 +378,17 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
 
         // TODO insert it into the pool's free list
+    }
+}
+
+impl<T> ShallowClone for PoolVec<T> {
+    fn shallow_clone(&self) -> Self {
+        // Question: should this fully clone, or is a shallow copy
+        // (and the aliasing it entails) OK?
+        Self {
+            first_node_id: self.first_node_id,
+            len: self.len,
+        }
     }
 }
 
@@ -550,4 +554,9 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
             }
         }
     }
+}
+
+/// Clones the outer node, but does not clone any nodeids
+pub trait ShallowClone {
+    fn shallow_clone(&self) -> Self;
 }
