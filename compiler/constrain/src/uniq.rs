@@ -12,7 +12,6 @@ use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::Bool;
-use roc_types::builtin_aliases;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
@@ -167,9 +166,9 @@ fn constrain_pattern(
         }
 
         NumLiteral(inner_var, _) => {
-            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
+            let (num_var, num_type) = unique_unbound_num(*inner_var, var_store);
             state.constraints.push(exists(
-                vec![val_uvar, num_uvar, num_var, *inner_var],
+                vec![num_var, *inner_var],
                 Constraint::Pattern(pattern.region, PatternCategory::Num, num_type, expected),
             ));
         }
@@ -407,21 +406,16 @@ fn constrain_pattern(
     }
 }
 
-fn unique_unbound_num(
-    inner_var: Variable,
-    var_store: &mut VarStore,
-) -> (Variable, Variable, Type, Variable) {
+fn unique_unbound_num(inner_var: Variable, var_store: &mut VarStore) -> (Variable, Type) {
     let num_var = var_store.fresh();
-    let num_uvar = var_store.fresh();
-    let val_uvar = var_store.fresh();
 
     let val_type = Type::Variable(inner_var);
-    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+    let val_utype = attr_type(Bool::variable(num_var), val_type);
 
     let num_utype = num_num(val_utype);
-    let num_type = attr_type(Bool::variable(num_uvar), num_utype);
+    let num_type = attr_type(Bool::variable(num_var), num_utype);
 
-    (num_uvar, val_uvar, num_type, num_var)
+    (num_var, num_type)
 }
 
 fn unique_int(var_store: &mut VarStore) -> (Variable, Type) {
@@ -464,10 +458,10 @@ pub fn constrain_expr(
     match expr {
         Num(inner_var, _) => {
             let var = var_store.fresh();
-            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
+            let (num_var, num_type) = unique_unbound_num(*inner_var, var_store);
 
             exists(
-                vec![var, *inner_var, val_uvar, num_uvar, num_var],
+                vec![var, *inner_var, num_var],
                 And(vec![
                     Eq(
                         Type::Variable(var),

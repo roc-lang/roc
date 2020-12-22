@@ -1643,6 +1643,17 @@ fn to_diff<'b>(
                 ErrorType::Type(Symbol::NUM_F64, _) => true,
                 ErrorType::Alias(Symbol::NUM_F64, _, _) => true,
 
+                ErrorType::Type(Symbol::NUM_NUM, args) => match &args.get(0) {
+                    Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _)) => true,
+                    Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _)) => true,
+                    _ => false,
+                },
+                ErrorType::Alias(Symbol::NUM_NUM, args, _) => match &args.get(0) {
+                    Some((_, ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))) => true,
+                    Some((_, ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _))) => true,
+                    _ => false,
+                },
+
                 _ => false,
             };
 
