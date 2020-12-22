@@ -467,6 +467,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_FIRST,
         top_level_function(
             vec![list_type(flex(TVAR1))],
+            Box::new(result_type(flex(TVAR1), list_was_empty.clone())),
+        ),
+    );
+
+    // last : List elem -> Result elem [ ListWasEmpty ]*
+    add_type(
+        Symbol::LIST_LAST,
+        top_level_function(
+            vec![list_type(flex(TVAR1))],
             Box::new(result_type(flex(TVAR1), list_was_empty)),
         ),
     );
