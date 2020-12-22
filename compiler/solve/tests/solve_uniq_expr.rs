@@ -75,7 +75,7 @@ mod solve_uniq_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Attr * F64");
+        infer_eq("0.5", "Attr a F64");
     }
 
     #[test]
@@ -640,7 +640,7 @@ mod solve_uniq_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "Attr * F64",
+            "Attr a F64",
         );
     }
 
@@ -1118,7 +1118,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Num.Integer
+                    x : Num.Num (Num.Integer Num.Signed64)
                     x = 4
 
                     x
@@ -1211,7 +1211,7 @@ mod solve_uniq_expr {
                    { numIdentity, p, q }
                 "#
             ),
-        "Attr * { numIdentity : Attr Shared (Attr b (Num (Attr a p)) -> Attr b (Num (Attr a p))), p : Attr * (Num (Attr * p)), q : Attr * F64 }"
+        "Attr * { numIdentity : Attr Shared (Attr b (Num (Attr a p)) -> Attr b (Num (Attr a p))), p : Attr * (Num (Attr * p)), q : Attr c F64 }"
         );
     }
 
@@ -1368,7 +1368,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Num.Integer
+                    x : I64
                     x =
                         when 2 is
                             3 -> 4
@@ -1816,7 +1816,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    { x, y } : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    { x, y } : { x : Str.Str, y : F64 }
                     { x, y } = { x : "foo", y : 3.14 }
 
                     x
@@ -2662,7 +2662,7 @@ mod solve_uniq_expr {
                 f
                 "#
             ),
-            "Attr * (Attr a I64, Attr b I64 -> Attr c I64)",
+            "Attr * (Attr b I64, Attr c I64 -> Attr d I64)",
         );
     }
 
@@ -3150,10 +3150,22 @@ mod solve_uniq_expr {
             indoc!(
                 r#"
                 empty : List I64
-                empty = 
+                empty =
                     []
 
                 List.walkBackwards empty (\a, b -> a + b) 0
+                "#
+            ),
+            "Attr a I64",
+        );
+    }
+
+    #[test]
+    fn list_set_out_of_bounds() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [1] 1337 0.1
                 "#
             ),
             "Attr a I64",
