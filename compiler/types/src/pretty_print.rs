@@ -77,8 +77,6 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    dbg!(variable);
-
     while let Some((recursive, _chain)) = subs.occurs(variable) {
         let content = subs.get_without_compacting(recursive).content;
         match content {

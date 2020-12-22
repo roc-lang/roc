@@ -236,10 +236,10 @@ mod test_uniq_load {
                 "divisionFn" => "Attr Shared (Attr * F64, Attr * F64 -> Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*)))",
                 "divisionTest" =>  "Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*))",
                 "intTest" => "Attr * I64",
-                "x" => "Attr a F64",
+                "x" => "Attr * F64",
                 "constantNum" => "Attr * (Num (Attr * *))",
                 "divDep1ByDep2" => "Attr * (Result (Attr * F64) (Attr * [ DivByZero ]*))",
-                "fromDep2" => "Attr a F64",
+                "fromDep2" => "Attr * F64",
             },
         );
     }

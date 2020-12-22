@@ -166,25 +166,25 @@ fn constrain_pattern(
         }
 
         NumLiteral(inner_var, _) => {
-            let (num_var, num_type) = unique_unbound_num(*inner_var, var_store);
+            let (inner_uvar, num_var, num_type) = unique_unbound_num(*inner_var, var_store);
             state.constraints.push(exists(
-                vec![num_var, *inner_var],
+                vec![num_var, inner_uvar, *inner_var],
                 Constraint::Pattern(pattern.region, PatternCategory::Num, num_type, expected),
             ));
         }
 
         IntLiteral(_) => {
-            let (num_uvar, num_type) = unique_int(var_store);
+            let (a, b, c, num_type) = unique_int(var_store);
             state.constraints.push(exists(
-                vec![num_uvar],
+                vec![a, b, c],
                 Constraint::Pattern(pattern.region, PatternCategory::Int, num_type, expected),
             ));
         }
         FloatLiteral(_) => {
-            let (num_uvar, num_type) = unique_float(var_store);
+            let (a, b, c, num_type) = unique_float(var_store);
 
             state.constraints.push(exists(
-                vec![num_uvar],
+                vec![a, b, c],
                 Constraint::Pattern(pattern.region, PatternCategory::Float, num_type, expected),
             ));
         }
@@ -406,42 +406,47 @@ fn constrain_pattern(
     }
 }
 
-fn unique_unbound_num(inner_var: Variable, var_store: &mut VarStore) -> (Variable, Type) {
-    let num_var = var_store.fresh();
+fn unique_unbound_num(inner_var: Variable, var_store: &mut VarStore) -> (Variable, Variable, Type) {
+    let num_uvar = var_store.fresh();
+    let inner_uvar = var_store.fresh();
 
     let val_type = Type::Variable(inner_var);
-    let val_utype = attr_type(Bool::variable(num_var), val_type);
+    let val_utype = attr_type(Bool::variable(inner_uvar), val_type);
 
     let num_utype = num_num(val_utype);
-    let num_type = attr_type(Bool::variable(num_var), num_utype);
+    let num_type = attr_type(Bool::variable(num_uvar), num_utype);
 
-    (num_var, num_type)
+    (inner_uvar, num_uvar, num_type)
 }
 
-fn unique_int(var_store: &mut VarStore) -> (Variable, Type) {
-    let num_uvar = var_store.fresh();
+fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Variable, Type) {
+    let num_uvar1 = var_store.fresh();
+    let num_uvar2 = var_store.fresh();
+    let num_uvar3 = var_store.fresh();
 
     let signed_64 = num_signed64();
-    let attr_signed_64 = attr_type(Bool::variable(num_uvar), signed_64);
+    let attr_signed_64 = attr_type(Bool::variable(num_uvar1), signed_64);
     let integer = num_integer(attr_signed_64);
-    let attr_int = attr_type(Bool::variable(num_uvar), integer);
+    let attr_int = attr_type(Bool::variable(num_uvar2), integer);
     let num = num_num(attr_int);
-    let attr_num = attr_type(Bool::variable(num_uvar), num);
+    let attr_num = attr_type(Bool::variable(num_uvar3), num);
 
-    (num_uvar, attr_num)
+    (num_uvar1, num_uvar2, num_uvar3, attr_num)
 }
 
-fn unique_float(var_store: &mut VarStore) -> (Variable, Type) {
-    let num_uvar = var_store.fresh();
+fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Variable, Type) {
+    let num_uvar1 = var_store.fresh();
+    let num_uvar2 = var_store.fresh();
+    let num_uvar3 = var_store.fresh();
 
     let binary_64 = num_binary64();
-    let attr_binary_64 = attr_type(Bool::variable(num_uvar), binary_64);
+    let attr_binary_64 = attr_type(Bool::variable(num_uvar1), binary_64);
     let fp = num_floatingpoint(attr_binary_64);
-    let attr_fp = attr_type(Bool::variable(num_uvar), fp);
+    let attr_fp = attr_type(Bool::variable(num_uvar2), fp);
     let num = num_num(attr_fp);
-    let attr_num = attr_type(Bool::variable(num_uvar), num);
+    let attr_num = attr_type(Bool::variable(num_uvar3), num);
 
-    (num_uvar, attr_num)
+    (num_uvar1, num_uvar2, num_uvar3, attr_num)
 }
 
 pub fn constrain_expr(
@@ -458,10 +463,10 @@ pub fn constrain_expr(
     match expr {
         Num(inner_var, _) => {
             let var = var_store.fresh();
-            let (num_var, num_type) = unique_unbound_num(*inner_var, var_store);
+            let (inner_uvar, num_var, num_type) = unique_unbound_num(*inner_var, var_store);
 
             exists(
-                vec![var, *inner_var, num_var],
+                vec![var, *inner_var, inner_uvar, num_var],
                 And(vec![
                     Eq(
                         Type::Variable(var),
@@ -474,10 +479,10 @@ pub fn constrain_expr(
             )
         }
         Int(var, _) => {
-            let (num_uvar, num_type) = unique_int(var_store);
+            let (a, b, c, num_type) = unique_int(var_store);
 
             exists(
-                vec![*var, num_uvar],
+                vec![*var, a, b, c],
                 And(vec![
                     Eq(
                         Type::Variable(*var),
@@ -490,10 +495,10 @@ pub fn constrain_expr(
             )
         }
         Float(var, _) => {
-            let (num_uvar, num_type) = unique_float(var_store);
+            let (a, b, c, num_type) = unique_float(var_store);
 
             exists(
-                vec![*var, num_uvar],
+                vec![*var, a, b, c],
                 And(vec![
                     Eq(
                         Type::Variable(*var),

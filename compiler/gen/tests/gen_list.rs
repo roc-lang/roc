@@ -1136,7 +1136,7 @@ mod gen_list {
 
     #[test]
     fn set_unique_list_oob() {
-        assert_non_opt_evals_to!(
+        assert_evals_to!(
             "List.set [ 3, 17, 4.1 ] 1337 9.25",
             RocList::from_slice(&[3.0, 17.0, 4.1]),
             RocList<f64>

@@ -75,7 +75,7 @@ mod solve_uniq_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Attr a F64");
+        infer_eq("0.5", "Attr * F64");
     }
 
     #[test]
@@ -640,7 +640,7 @@ mod solve_uniq_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "Attr a F64",
+            "Attr * F64",
         );
     }
 
@@ -1211,7 +1211,7 @@ mod solve_uniq_expr {
                    { numIdentity, p, q }
                 "#
             ),
-        "Attr * { numIdentity : Attr Shared (Attr b (Num (Attr a p)) -> Attr b (Num (Attr a p))), p : Attr * (Num (Attr * p)), q : Attr c F64 }"
+        "Attr * { numIdentity : Attr Shared (Attr b (Num (Attr a p)) -> Attr b (Num (Attr a p))), p : Attr * (Num (Attr * p)), q : Attr * F64 }"
         );
     }
 
@@ -3180,7 +3180,7 @@ mod solve_uniq_expr {
                 List.set [0x2] 1337 0
                 "#
             ),
-            "Attr * (List (Attr a I64))",
+            "Attr * (List (Attr * I64))",
         );
     }
 
@@ -3192,7 +3192,7 @@ mod solve_uniq_expr {
                 List.set [0.2] 1337 0
                 "#
             ),
-            "Attr * (List (Attr a F64))",
+            "Attr * (List (Attr * F64))",
         );
     }
 
