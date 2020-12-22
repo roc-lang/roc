@@ -89,9 +89,11 @@ pub fn create_rect_buffers(
     encoder: &mut wgpu::CommandEncoder,
     rects: &[Rect]
 ) -> RectBuffers {
+    let nr_of_rects = rects.len() as u64;
+
     let vertex_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: Vertex::SIZE * 4 * 3,
+        size: Vertex::SIZE * 4 * nr_of_rects,
         usage: wgpu::BufferUsage::VERTEX | wgpu::BufferUsage::COPY_DST,
         mapped_at_creation: false,
     });
@@ -100,7 +102,7 @@ pub fn create_rect_buffers(
 
     let index_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: u32_size * 6 * 3,
+        size: u32_size * 6 * nr_of_rects,
         usage: wgpu::BufferUsage::INDEX | wgpu::BufferUsage::COPY_DST,
         mapped_at_creation: false,
     });

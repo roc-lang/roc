@@ -3,7 +3,8 @@
 
 use ab_glyph::{FontArc, InvalidFont};
 use cgmath::{Vector2, Vector4};
-use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
+use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section, SectionGlyphIter, SectionGlyph};
+use crate::rect::Rect;
 
 #[derive(Debug)]
 pub struct Text {
@@ -30,7 +31,7 @@ impl Default for Text {
     }
 }
 
-pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Option<ab_glyph::Rect>{
+pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Vec<Rect> {
     let layout = wgpu_glyph::Layout::default().h_align(if text.centered {
         wgpu_glyph::HorizontalAlign::Center
     } else {
@@ -50,7 +51,25 @@ pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Option<
 
     glyph_brush.queue(section.clone());
 
-    glyph_brush.glyph_bounds_custom_layout(section, &layout)
+    let glyph_section_iter = glyph_brush.glyphs_custom_layout(section, &layout);
+
+    let glyph_bound_rects = glyph_section_iter.map(|section_glyph|
+        {
+            let position = section_glyph.glyph.position;
+            let px_scale = section_glyph.glyph.scale;
+            let width = px_scale.x;
+            let height = px_scale.y;
+
+            Rect {
+                top_left_coords: [position.x - width, position.y - height].into(),
+                width,
+                height,
+                color: [1.0, 1.0, 1.0]
+            }
+        }
+    ).collect();
+
+    glyph_bound_rects
 }
 
 pub fn build_glyph_brush(
