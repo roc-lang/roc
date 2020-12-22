@@ -3161,14 +3161,53 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_set_out_of_bounds() {
+    fn list_set_out_of_bounds_num() {
         infer_eq(
             indoc!(
                 r#"
-                List.set [1] 1337 0.1
+                List.set [2] 1337 0
                 "#
             ),
-            "Attr a I64",
+            "Attr * (List (Attr * (Num (Attr * *))))",
+        );
+    }
+
+    #[test]
+    fn list_set_out_of_bounds_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [0x2] 1337 0
+                "#
+            ),
+            "Attr * (List (Attr a I64))",
+        );
+    }
+
+    #[test]
+    fn list_set_out_of_bounds_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [0.2] 1337 0
+                "#
+            ),
+            "Attr * (List (Attr a F64))",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn list_set_out_of_bounds_int_int() {
+        // the unification of an integer list with a new integer element is a problem
+        // same for floats, but it's fine with the unspecified Num
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [0x2] 1337 0x1
+                "#
+            ),
+            "Attr * (List (Attr a I64))",
         );
     }
 }
