@@ -431,14 +431,25 @@ fn unique_num(val_type: Type, uvar: Variable) -> Type {
     attr_type(Bool::variable(uvar), num_utype)
 }
 
-fn unique_integer(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
+fn unique_midlevel<F>(var_store: &mut VarStore, val_type: Type, transform: F) -> (Variable, Type)
+where
+    F: Fn(Type) -> Type,
+{
     let num_uvar = var_store.fresh();
 
     let val_utype = attr_type(Bool::variable(num_uvar), val_type);
 
-    let num_type = num_integer(val_utype);
+    let num_type = transform(val_utype);
 
     (num_uvar, num_type)
+}
+
+fn unique_integer(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
+    unique_midlevel(var_store, val_type, num_integer)
+}
+
+fn unique_floatingpoint(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
+    unique_midlevel(var_store, val_type, num_floatingpoint)
 }
 
 fn unique_int(var_store: &mut VarStore) -> (Variable, Type) {
@@ -447,16 +458,6 @@ fn unique_int(var_store: &mut VarStore) -> (Variable, Type) {
     let typ = unique_num(typ, var1);
 
     (var1, typ)
-}
-
-fn unique_floatingpoint(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
-    let num_uvar = var_store.fresh();
-
-    let val_utype = attr_type(Bool::variable(num_uvar), val_type);
-
-    let num_type = num_floatingpoint(val_utype);
-
-    (num_uvar, num_type)
 }
 
 fn unique_float(var_store: &mut VarStore) -> (Variable, Type) {
