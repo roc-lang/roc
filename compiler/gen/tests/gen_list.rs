@@ -1004,6 +1004,52 @@ mod gen_list {
     }
 
     #[test]
+    fn last_int_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.last [ 12, 9, 6, 3 ] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn last_wildcard_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.last [] is
+                        Ok _ -> 5
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn last_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.last [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
     fn get_empty_list() {
         assert_evals_to!(
             indoc!(

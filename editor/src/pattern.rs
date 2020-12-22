@@ -4,9 +4,9 @@
 use crate::ast::{ExprId, FloatVal, IntVal};
 use crate::expr::{to_expr_id, Env};
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::scope::Scope;
 use roc_can::expr::{unescape_char, Output};
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
-use roc_can::scope::Scope;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
@@ -437,6 +437,54 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
                         stack.push(subpattern);
                     } else {
                         symbols.push(destruct.symbol);
+                    }
+                }
+            }
+
+            NumLiteral(_, _)
+            | IntLiteral(_)
+            | FloatLiteral(_)
+            | StrLiteral(_)
+            | Underscore
+            | MalformedPattern(_, _)
+            | Shadowed { .. }
+            | UnsupportedPattern(_) => {}
+        }
+    }
+
+    symbols
+}
+
+pub fn symbols_and_variables_from_pattern(
+    pool: &Pool,
+    initial: &Pattern2,
+    initial_var: Variable,
+) -> Vec<(Symbol, Variable)> {
+    use Pattern2::*;
+    let mut symbols = Vec::new();
+    let mut stack = vec![(initial_var, initial)];
+
+    while let Some((variable, pattern)) = stack.pop() {
+        match pattern {
+            Identifier(symbol) => {
+                symbols.push((*symbol, variable));
+            }
+
+            GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
+                for (var, pat) in arguments.iter(pool) {
+                    stack.push((*var, pat));
+                }
+            }
+
+            RecordDestructure { destructs, .. } => {
+                for destruct in destructs.iter(pool) {
+                    let destruct_type = pool.get(destruct.typ);
+
+                    if let DestructType::Guard(_, subpattern_id) = &destruct_type {
+                        let subpattern = pool.get(*subpattern_id);
+                        stack.push((destruct.var, subpattern));
+                    } else {
+                        symbols.push((destruct.symbol, destruct.var));
                     }
                 }
             }

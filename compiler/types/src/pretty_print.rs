@@ -77,6 +77,8 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
+    dbg!(variable);
+
     while let Some((recursive, _chain)) = subs.occurs(variable) {
         let content = subs.get_without_compacting(recursive).content;
         match content {
@@ -753,10 +755,10 @@ fn write_apply(
 
             match &arg_content {
                 Content::Structure(FlatType::Apply(symbol, nested_args)) => match *symbol {
-                    Symbol::NUM_INTEGER if nested_args.is_empty() => {
+                    Symbol::NUM_INTEGER if nested_args.len() == 1 => {
                         buf.push_str("I64");
                     }
-                    Symbol::NUM_FLOATINGPOINT if nested_args.is_empty() => {
+                    Symbol::NUM_FLOATINGPOINT if nested_args.len() == 1 => {
                         buf.push_str("F64");
                     }
                     Symbol::ATTR_ATTR => match nested_args
@@ -767,10 +769,10 @@ fn write_apply(
                             double_nested_symbol,
                             double_nested_args,
                         ))) => match double_nested_symbol {
-                            Symbol::NUM_INTEGER if double_nested_args.is_empty() => {
+                            Symbol::NUM_INTEGER if double_nested_args.len() == 1 => {
                                 buf.push_str("I64");
                             }
-                            Symbol::NUM_FLOATINGPOINT if double_nested_args.is_empty() => {
+                            Symbol::NUM_FLOATINGPOINT if double_nested_args.len() == 1 => {
                                 buf.push_str("F64");
                             }
                             _ => default_case(subs, arg_content),

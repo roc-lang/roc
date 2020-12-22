@@ -166,9 +166,9 @@ fn constrain_pattern(
         }
 
         NumLiteral(inner_var, _) => {
-            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
+            let (num_var, num_type) = unique_unbound_num(*inner_var, var_store);
             state.constraints.push(exists(
-                vec![val_uvar, num_uvar, num_var, *inner_var],
+                vec![num_var, *inner_var],
                 Constraint::Pattern(pattern.region, PatternCategory::Num, num_type, expected),
             ));
         }
@@ -406,66 +406,42 @@ fn constrain_pattern(
     }
 }
 
-fn unique_unbound_num(
-    inner_var: Variable,
-    var_store: &mut VarStore,
-) -> (Variable, Variable, Type, Variable) {
+fn unique_unbound_num(inner_var: Variable, var_store: &mut VarStore) -> (Variable, Type) {
     let num_var = var_store.fresh();
-    let num_uvar = var_store.fresh();
-    let val_uvar = var_store.fresh();
 
     let val_type = Type::Variable(inner_var);
-    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+    let val_utype = attr_type(Bool::variable(num_var), val_type);
 
     let num_utype = num_num(val_utype);
-    let num_type = attr_type(Bool::variable(num_uvar), num_utype);
+    let num_type = attr_type(Bool::variable(num_var), num_utype);
 
-    (num_uvar, val_uvar, num_type, num_var)
-}
-
-fn unique_num(val_type: Type, uvar: Variable) -> Type {
-    let val_utype = attr_type(Bool::variable(uvar), val_type);
-
-    let num_utype = num_num(val_utype);
-
-    attr_type(Bool::variable(uvar), num_utype)
-}
-
-fn unique_midlevel<F>(var_store: &mut VarStore, val_type: Type, transform: F) -> (Variable, Type)
-where
-    F: Fn(Type) -> Type,
-{
-    let num_uvar = var_store.fresh();
-
-    let val_utype = attr_type(Bool::variable(num_uvar), val_type);
-
-    let num_type = transform(val_utype);
-
-    (num_uvar, num_type)
-}
-
-fn unique_integer(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
-    unique_midlevel(var_store, val_type, num_integer)
-}
-
-fn unique_floatingpoint(var_store: &mut VarStore, val_type: Type) -> (Variable, Type) {
-    unique_midlevel(var_store, val_type, num_floatingpoint)
+    (num_var, num_type)
 }
 
 fn unique_int(var_store: &mut VarStore) -> (Variable, Type) {
-    let (var1, typ) = unique_integer(var_store, num_signed64());
+    let num_uvar = var_store.fresh();
 
-    let typ = unique_num(typ, var1);
+    let signed_64 = num_signed64();
+    let attr_signed_64 = attr_type(Bool::variable(num_uvar), signed_64);
+    let integer = num_integer(attr_signed_64);
+    let attr_int = attr_type(Bool::variable(num_uvar), integer);
+    let num = num_num(attr_int);
+    let attr_num = attr_type(Bool::variable(num_uvar), num);
 
-    (var1, typ)
+    (num_uvar, attr_num)
 }
 
 fn unique_float(var_store: &mut VarStore) -> (Variable, Type) {
-    let (var1, typ) = unique_floatingpoint(var_store, num_binary64());
+    let num_uvar = var_store.fresh();
 
-    let typ = unique_num(typ, var1);
+    let binary_64 = num_binary64();
+    let attr_binary_64 = attr_type(Bool::variable(num_uvar), binary_64);
+    let fp = num_floatingpoint(attr_binary_64);
+    let attr_fp = attr_type(Bool::variable(num_uvar), fp);
+    let num = num_num(attr_fp);
+    let attr_num = attr_type(Bool::variable(num_uvar), num);
 
-    (var1, typ)
+    (num_uvar, attr_num)
 }
 
 pub fn constrain_expr(
@@ -482,10 +458,10 @@ pub fn constrain_expr(
     match expr {
         Num(inner_var, _) => {
             let var = var_store.fresh();
-            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
+            let (num_var, num_type) = unique_unbound_num(*inner_var, var_store);
 
             exists(
-                vec![var, *inner_var, val_uvar, num_uvar, num_var],
+                vec![var, *inner_var, num_var],
                 And(vec![
                     Eq(
                         Type::Variable(var),

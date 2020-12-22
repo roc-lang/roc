@@ -4,6 +4,7 @@
 use crate::ast::{Expr2, ExprId, FloatVal, IntStyle, IntVal};
 use crate::pattern::to_pattern2;
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::scope::Scope;
 use crate::types::{Type2, TypeId};
 use bumpalo::Bump;
 use inlinable_string::InlinableString;
@@ -11,7 +12,6 @@ use roc_can::expr::Output;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_can::procedure::References;
-use roc_can::scope::Scope;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
@@ -511,7 +511,7 @@ pub fn to_expr2<'a>(
             // Shadow `scope` to make sure we don't accidentally use the original one for the
             // rest of this block, but keep the original around for later diffing.
             let original_scope = scope;
-            let mut scope = original_scope.clone();
+            let mut scope = original_scope.duplicate();
             let can_args = PoolVec::with_capacity(loc_arg_patterns.len() as u32, env.pool);
             let mut output = Output::default();
 
@@ -569,16 +569,16 @@ pub fn to_expr2<'a>(
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
             for (sub_symbol, region) in scope.symbols() {
-                if !original_scope.contains_symbol(*sub_symbol) {
-                    if !output.references.has_lookup(*sub_symbol) {
+                if !original_scope.contains_symbol(sub_symbol) {
+                    if !output.references.has_lookup(sub_symbol) {
                         // The body never referenced this argument we declared. It's an unused argument!
-                        env.problem(Problem::UnusedArgument(symbol, *sub_symbol, *region));
+                        env.problem(Problem::UnusedArgument(symbol, sub_symbol, region));
                     }
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistant) local variable x!
-                    output.references.lookups.remove(sub_symbol);
+                    output.references.lookups.remove(&sub_symbol);
                 }
             }
 
@@ -1049,7 +1049,7 @@ fn canonicalize_when_branch<'a>(
     let patterns = PoolVec::with_capacity(branch.patterns.len() as u32, env.pool);
 
     let original_scope = scope;
-    let mut scope = original_scope.clone();
+    let mut scope = original_scope.duplicate();
 
     // TODO report symbols not bound in all patterns
     for (node_id, loc_pattern) in patterns.iter_node_ids().zip(branch.patterns.iter()) {
@@ -1089,13 +1089,13 @@ fn canonicalize_when_branch<'a>(
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
     for (symbol, region) in scope.symbols() {
-        let symbol = *symbol;
+        let symbol = symbol;
 
         if !output.references.has_lookup(symbol)
             && !branch_output.references.has_lookup(symbol)
             && !original_scope.contains_symbol(symbol)
         {
-            env.problem(Problem::UnusedDef(symbol, *region));
+            env.problem(Problem::UnusedDef(symbol, region));
         }
     }
 

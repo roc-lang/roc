@@ -21,6 +21,7 @@ use winit::event_loop::ControlFlow;
 
 pub mod ast;
 mod buffer;
+mod def;
 pub mod expr;
 pub mod file;
 mod keyboard_input;
