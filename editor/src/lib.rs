@@ -107,7 +107,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let mut text_state = String::new();
+    let mut text_state = "A".to_owned();
     let mut keyboard_modifiers = ModifiersState::empty();
 
     // Render loop
@@ -341,7 +341,7 @@ fn queue_all_text(
         position: (30.0, 90.0).into(),
         area_bounds,
         color: (0.0, 0.05, 0.46, 1.0).into(),
-        text: String::from(format!("{}|", text_state).as_str()),
+        text: String::from(text_state),
         size: 40.0,
         ..Default::default()
     };
