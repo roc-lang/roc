@@ -2,16 +2,15 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::ast::{Expr2, ExprId, FloatVal, IntStyle, IntVal};
+use crate::def::References;
 use crate::pattern::to_pattern2;
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
 use crate::scope::Scope;
 use crate::types::{Type2, TypeId};
 use bumpalo::Bump;
 use inlinable_string::InlinableString;
-use roc_can::expr::Output;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
-use roc_can::procedure::References;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
@@ -20,6 +19,27 @@ use roc_parse::ast::StrLiteral;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
+
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct Output {
+    pub references: crate::def::References,
+    pub tail_call: Option<Symbol>,
+    pub aliases: MutMap<Symbol, NodeId<crate::types::Alias>>,
+    pub non_closures: MutSet<Symbol>,
+}
+
+impl Output {
+    pub fn union(&mut self, other: Self) {
+        self.references.union_mut(other.references);
+
+        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
+            self.tail_call = Some(later);
+        }
+
+        self.aliases.extend(other.aliases);
+        self.non_closures.extend(other.non_closures);
+    }
+}
 
 pub struct Env<'a> {
     pub home: ModuleId,
@@ -181,7 +201,7 @@ pub fn to_expr2<'a>(
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
     region: Region,
-) -> (crate::ast::Expr2, Output) {
+) -> (crate::ast::Expr2, self::Output) {
     use roc_parse::ast::Expr::*;
     match parse_expr {
         Float(string) => {
@@ -326,7 +346,7 @@ pub fn to_expr2<'a>(
             if let Expr2::Var(symbol) = &can_update {
                 match canonicalize_fields(env, scope, fields) {
                     Ok((can_fields, mut output)) => {
-                        output.references = output.references.union(update_out.references);
+                        output.references.union_mut(update_out.references);
 
                         let answer = Expr2::Update {
                             record_var: env.var_store.fresh(),
@@ -447,8 +467,8 @@ pub fn to_expr2<'a>(
             let (else_expr, else_output) =
                 to_expr2(env, scope, &else_branch.value, else_branch.region);
 
-            output.references = output.references.union(then_output.references);
-            output.references = output.references.union(else_output.references);
+            output.references.union_mut(then_output.references);
+            output.references.union_mut(else_output.references);
 
             let expr = Expr2::If {
                 cond_var: env.var_store.fresh(),
@@ -474,7 +494,7 @@ pub fn to_expr2<'a>(
                 let (can_when_branch, branch_references) =
                     canonicalize_when_branch(env, scope, *branch, &mut output);
 
-                output.references = output.references.union(branch_references);
+                output.references.union_mut(branch_references);
 
                 env.pool[node_id] = can_when_branch;
             }
@@ -636,7 +656,7 @@ pub fn to_expr2<'a>(
 
                 env.pool[node_id] = (env.var_store.fresh(), arg_expr_id);
 
-                output.references = output.references.union(arg_out.references);
+                output.references.union_mut(arg_out.references);
             }
 
             // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
@@ -965,7 +985,7 @@ fn canonicalize_fields<'a>(
                     todo!()
                 }
 
-                output.references = output.references.union(field_out.references);
+                output.references.union_mut(field_out.references);
             }
             Err(CanonicalizeFieldProblem::InvalidOptionalValue {
                 field_name: _,

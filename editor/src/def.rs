@@ -12,15 +12,15 @@
 // };
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
-use crate::ast::{FunctionDef, Rigids, ValueDef};
-use crate::expr::Env;
+use crate::ast::{Expr2, FunctionDef, Rigids, ValueDef};
+use crate::expr::Output;
+use crate::expr::{to_expr2, to_expr_id, Env};
 use crate::pattern::{
     symbols_and_variables_from_pattern, symbols_from_pattern, to_pattern_id, Pattern2, PatternId,
 };
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
-use crate::types::{to_annotation2, Alias, Annotation2, References, Signature, Type2, TypeId};
-use roc_can::expr::Output;
+use crate::types::{to_annotation2, Alias, Annotation2, Signature, Type2, TypeId};
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -425,6 +425,346 @@ fn canonicalize_pending_def<'a>(
             // invalid aliases (shadowed, incorrect patterns )
             todo!()
         }
-        _ => todo!(),
+
+        TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
+            match to_annotation2(env, scope, &loc_ann.value, loc_ann.region) {
+                Annotation2::Erroneous(_) => todo!(),
+                Annotation2::Annotation {
+                    named_rigids,
+                    unnamed_rigids,
+                    symbols,
+                    signature,
+                } => {
+                    // Record all the annotation's references in output.references.lookups
+
+                    for symbol in symbols {
+                        output.references.lookups.insert(symbol);
+                        output.references.referenced_aliases.insert(symbol);
+                    }
+
+                    let rigids = {
+                        let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
+                        let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
+
+                        for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
+                            let poolstr = PoolStr::new(name, env.pool);
+                            env.pool[node_id] = (poolstr, variable);
+                        }
+
+                        for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
+                            env.pool[node_id] = rigid;
+                        }
+
+                        Rigids { named, unnamed }
+                    };
+
+                    // bookkeeping for tail-call detection. If we're assigning to an
+                    // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
+                    let outer_identifier = env.tailcallable_symbol;
+
+                    if let Pattern2::Identifier(ref defined_symbol) = env.pool[loc_can_pattern] {
+                        env.tailcallable_symbol = Some(*defined_symbol);
+                    };
+
+                    // regiser the name of this closure, to make sure the closure won't capture it's own name
+                    if let (Pattern2::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
+                        (&env.pool[loc_can_pattern], &loc_expr.value)
+                    {
+                        env.closure_name_symbol = Some(*defined_symbol);
+                    };
+
+                    let (loc_can_expr, can_output) =
+                        to_expr2(env, scope, &loc_expr.value, loc_expr.region);
+
+                    output.references.union_mut(can_output.references.clone());
+
+                    // reset the tailcallable_symbol
+                    env.tailcallable_symbol = outer_identifier;
+
+                    // First, make sure we are actually assigning an identifier instead of (for example) a tag.
+                    //
+                    // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+                    // which also implies it's not a self tail call!
+                    //
+                    // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
+                    match loc_can_expr {
+                        Expr2::Closure {
+                            args: closure_args,
+                            body,
+                            extra,
+                            name: closure_symbol,
+                            ..
+                        } => {
+                            let symbol = match env.pool[loc_can_pattern] {
+                                Pattern2::Identifier(ref s) => *s,
+                                _ => todo!(
+                                    r"this is an error; functions must be bound with an identifier pattern!"
+                                ),
+                            };
+
+                            // Since everywhere in the code it'll be referred to by its defined name,
+                            // remove its generated name from the closure map.
+                            let references =
+                                env.closures.remove(&closure_symbol).unwrap_or_else(|| {
+                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures) 
+                            });
+
+                            // TODO should we re-insert this function into env.closures?
+                            env.closures.insert(symbol, references);
+
+                            // Recursion doesn't count as referencing. (If it did, all recursive functions
+                            // would result in circular def errors!)
+                            refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
+                                refs.lookups.remove(&symbol);
+                            });
+
+                            // Functions' references don't count in defs.
+                            // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                            // parent commit for the bug this fixed!
+                            let refs = References::new();
+
+                            let arguments: PoolVec<(Pattern2, Type2)> =
+                                PoolVec::with_capacity(closure_args.len() as u32, env.pool);
+
+                            let return_type: TypeId;
+
+                            let annotation = match signature {
+                                Signature::Value { .. } => {
+                                    todo!("type annotation says 0 arguments, but it's a function")
+                                }
+                                Signature::Function {
+                                    arguments: type_arguments,
+                                    closure_type_id,
+                                    return_type_id,
+                                }
+                                | Signature::FunctionWithAliases {
+                                    arguments: type_arguments,
+                                    closure_type_id,
+                                    return_type_id,
+                                    ..
+                                } => {
+                                    if arguments.len() != type_arguments.len() {
+                                        panic!("argument number mismatch");
+                                    }
+
+                                    let it: Vec<_> = closure_args
+                                        .iter(env.pool)
+                                        .map(|(x, y)| (*x, *y))
+                                        .zip(
+                                            type_arguments
+                                                .iter(env.pool)
+                                                .map(|t| t.shallow_clone()),
+                                        )
+                                        .collect();
+
+                                    for (node_id, ((_, pattern_id), typ)) in
+                                        arguments.iter_node_ids().zip(it.into_iter())
+                                    {
+                                        let pattern = &env.pool[pattern_id];
+
+                                        env.pool[node_id] = (pattern.shallow_clone(), typ);
+                                    }
+
+                                    return_type = return_type_id;
+                                }
+                            };
+
+                            let function_def = FunctionDef::WithAnnotation {
+                                name: symbol,
+                                arguments,
+                                rigids: env.pool.add(rigids),
+                                return_type,
+                                body,
+                            };
+
+                            let def = Def::Function(function_def);
+
+                            can_defs_by_symbol.insert(symbol, def);
+
+                            output
+                        }
+
+                        _ => {
+                            let annotation = match signature {
+                                Signature::Value { annotation } => annotation,
+                                Signature::Function {
+                                    arguments,
+                                    closure_type_id,
+                                    return_type_id,
+                                } => Type2::Function(arguments, closure_type_id, return_type_id),
+                                Signature::FunctionWithAliases { annotation, .. } => annotation,
+                            };
+                            let annotation = env.add(annotation, loc_ann.region);
+
+                            let value_def = ValueDef {
+                                pattern: loc_can_pattern,
+                                expr_type: Some((annotation, rigids)),
+                                expr_var: env.var_store.fresh(),
+                            };
+
+                            let def = Def::Value(value_def);
+
+                            for symbol in
+                                symbols_from_pattern(env.pool, env.pool.get(loc_can_pattern))
+                            {
+                                can_defs_by_symbol.insert(symbol, def.shallow_clone());
+                            }
+
+                            for (_, (symbol, region)) in scope.idents() {
+                                // if !vars_by_symbol.contains_key(&symbol) {
+                                //     continue;
+                                // }
+                                let refs = can_output.references.clone();
+                                refs_by_symbol.insert(*symbol, (*region, refs));
+                            }
+
+                            output
+                        }
+                    }
+                }
+            }
+        }
+
+        Body(loc_pattern, loc_can_pattern, loc_expr) => {
+            // bookkeeping for tail-call detection. If we're assigning to an
+            // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
+            let outer_identifier = env.tailcallable_symbol;
+
+            if let Pattern2::Identifier(ref defined_symbol) = env.pool[loc_can_pattern] {
+                env.tailcallable_symbol = Some(*defined_symbol);
+            };
+
+            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            if let (Pattern2::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
+                (&env.pool[loc_can_pattern], &loc_expr.value)
+            {
+                env.closure_name_symbol = Some(*defined_symbol);
+            };
+
+            let (loc_can_expr, can_output) = to_expr2(env, scope, &loc_expr.value, loc_expr.region);
+
+            output.references.union_mut(can_output.references.clone());
+
+            // reset the tailcallable_symbol
+            env.tailcallable_symbol = outer_identifier;
+
+            // First, make sure we are actually assigning an identifier instead of (for example) a tag.
+            //
+            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+            // which also implies it's not a self tail call!
+            //
+            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
+            match loc_can_expr {
+                Expr2::Closure {
+                    args: closure_args,
+                    body,
+                    extra,
+                    name: closure_symbol,
+                    ..
+                } => {
+                    let symbol = match env.pool[loc_can_pattern] {
+                        Pattern2::Identifier(ref s) => *s,
+                        _ => todo!(
+                            r"this is an error; functions must be bound with an identifier pattern!"
+                        ),
+                    };
+
+                    // Since everywhere in the code it'll be referred to by its defined name,
+                    // remove its generated name from the closure map.
+                    let references =
+                        env.closures.remove(&closure_symbol).unwrap_or_else(|| {
+                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures) 
+                        });
+
+                    // TODO should we re-insert this function into env.closures?
+                    env.closures.insert(symbol, references);
+
+                    // Recursion doesn't count as referencing. (If it did, all recursive functions
+                    // would result in circular def errors!)
+                    refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
+                        refs.lookups.remove(&symbol);
+                    });
+
+                    // Functions' references don't count in defs.
+                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                    // parent commit for the bug this fixed!
+                    let refs = References::new();
+
+                    let arguments: PoolVec<(Pattern2, Variable)> =
+                        PoolVec::with_capacity(closure_args.len() as u32, env.pool);
+
+                    let it: Vec<_> = closure_args.iter(env.pool).map(|(x, y)| (*x, *y)).collect();
+
+                    for (node_id, (_, pattern_id)) in arguments.iter_node_ids().zip(it.into_iter())
+                    {
+                        let pattern = &env.pool[pattern_id];
+
+                        env.pool[node_id] = (pattern.shallow_clone(), env.var_store.fresh());
+                    }
+
+                    let function_def = FunctionDef::NoAnnotation {
+                        name: symbol,
+                        arguments,
+                        return_var: env.var_store.fresh(),
+                        body,
+                    };
+
+                    let def = Def::Function(function_def);
+
+                    can_defs_by_symbol.insert(symbol, def);
+
+                    output
+                }
+
+                _ => {
+                    let value_def = ValueDef {
+                        pattern: loc_can_pattern,
+                        expr_type: None,
+                        expr_var: env.var_store.fresh(),
+                    };
+
+                    let def = Def::Value(value_def);
+
+                    for symbol in symbols_from_pattern(env.pool, env.pool.get(loc_can_pattern)) {
+                        can_defs_by_symbol.insert(symbol, def.shallow_clone());
+                    }
+
+                    for (_, (symbol, region)) in scope.idents() {
+                        // if !vars_by_symbol.contains_key(&symbol) {
+                        //     continue;
+                        // }
+                        let refs = can_output.references.clone();
+                        refs_by_symbol.insert(*symbol, (*region, refs));
+                    }
+
+                    output
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct References {
+    pub bound_symbols: MutSet<Symbol>,
+    pub lookups: MutSet<Symbol>,
+    pub referenced_aliases: MutSet<Symbol>,
+    pub calls: MutSet<Symbol>,
+}
+
+impl References {
+    pub fn new() -> References {
+        Self::default()
+    }
+
+    pub fn union_mut(&mut self, other: References) {
+        self.lookups.extend(other.lookups);
+        self.calls.extend(other.calls);
+        self.bound_symbols.extend(other.bound_symbols);
+        self.referenced_aliases.extend(other.referenced_aliases);
+    }
+
+    pub fn has_lookup(&self, symbol: Symbol) -> bool {
+        self.lookups.contains(&symbol)
     }
 }
