@@ -47,12 +47,24 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - uses: actions-rs/cargo@v1
+        name: rustfmt version
+        with:
+          command: fmt
+          args: --version
+
+      - uses: actions-rs/cargo@v1
         name: cargo fmt --check
         with:
           command: fmt
           args: --all -- --check
 
       - run: rustup component add clippy
+
+      - uses: actions-rs/cargo@v1
+        name: clippy version
+        with:
+          command: clippy
+          args: -V
 
       - uses: actions-rs/cargo@v1
         name: cargo clippy
