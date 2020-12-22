@@ -2,6 +2,9 @@ on: [pull_request]
 
 name: CI
 
+variables:
+  RUSTC_WRAPPER: "./ci/sccache"
+
 jobs:
   test:
     name: fmt, clippy, test, test --release
@@ -27,24 +30,6 @@ jobs:
           override: true
 
       - run: rustup component add rustfmt
-
-      - name: Cache cargo registry
-        uses: actions/cache@v1
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v1
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache compiled valgrind
-        uses: actions/cache@v1
-        with:
-          path: ~/valgrind-3.6.1/
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - uses: actions-rs/cargo@v1
         name: rustfmt version
@@ -84,3 +69,5 @@ jobs:
         with:
           command: test
           args: --release
+
+      - run: ./ci/sccache --show-stats
