@@ -4,7 +4,7 @@
 use crate::ast::{Expr2, ExprId, FloatVal, IntStyle, IntVal};
 use crate::def::References;
 use crate::pattern::to_pattern2;
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
 use crate::types::{Type2, TypeId};
 use bumpalo::Bump;
@@ -531,7 +531,7 @@ pub fn to_expr2<'a>(
             // Shadow `scope` to make sure we don't accidentally use the original one for the
             // rest of this block, but keep the original around for later diffing.
             let original_scope = scope;
-            let mut scope = original_scope.duplicate();
+            let mut scope = original_scope.shallow_clone();
             let can_args = PoolVec::with_capacity(loc_arg_patterns.len() as u32, env.pool);
             let mut output = Output::default();
 
@@ -1069,7 +1069,7 @@ fn canonicalize_when_branch<'a>(
     let patterns = PoolVec::with_capacity(branch.patterns.len() as u32, env.pool);
 
     let original_scope = scope;
-    let mut scope = original_scope.duplicate();
+    let mut scope = original_scope.shallow_clone();
 
     // TODO report symbols not bound in all patterns
     for (node_id, loc_pattern) in patterns.iter_node_ids().zip(branch.patterns.iter()) {

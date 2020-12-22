@@ -33,19 +33,6 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn duplicate(&self) -> Self {
-        Self {
-            idents: self.idents.clone(),
-            symbols: self.symbols.clone(),
-            aliases: self
-                .aliases
-                .iter()
-                .map(|(s, a)| (*s, a.shallow_clone()))
-                .collect(),
-            home: self.home,
-        }
-    }
-
     pub fn new(home: ModuleId, pool: &mut Pool, _var_store: &mut VarStore) -> Scope {
         use roc_types::solved_types::{BuiltinAlias, FreeVars};
         let solved_aliases = roc_types::builtin_aliases::aliases();
@@ -233,5 +220,20 @@ impl Scope {
 
     pub fn contains_alias(&mut self, name: Symbol) -> bool {
         self.aliases.contains_key(&name)
+    }
+}
+
+impl ShallowClone for Scope {
+    fn shallow_clone(&self) -> Self {
+        Self {
+            idents: self.idents.clone(),
+            symbols: self.symbols.clone(),
+            aliases: self
+                .aliases
+                .iter()
+                .map(|(s, a)| (*s, a.shallow_clone()))
+                .collect(),
+            home: self.home,
+        }
     }
 }

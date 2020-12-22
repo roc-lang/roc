@@ -34,7 +34,7 @@ use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
 #[derive(Debug)]
-enum Def {
+pub enum Def {
     AnnotationOnly {
         rigids: crate::ast::Rigids,
         annotation: TypeId,
@@ -259,6 +259,96 @@ fn pending_typed_body<'a>(
     )
 }
 
+fn from_pending_alias<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    name: Located<Symbol>,
+    vars: Vec<Located<Lowercase>>,
+    ann: &'a Located<ast::TypeAnnotation<'a>>,
+    mut output: Output,
+) -> Output {
+    let symbol = name.value;
+
+    match to_annotation2(env, scope, &ann.value, ann.region) {
+        Annotation2::Erroneous(_) => todo!(),
+        Annotation2::Annotation {
+            named_rigids,
+            unnamed_rigids,
+            symbols,
+            signature,
+        } => {
+            // Record all the annotation's references in output.references.lookups
+
+            for symbol in symbols {
+                output.references.lookups.insert(symbol);
+                output.references.referenced_aliases.insert(symbol);
+            }
+
+            for loc_lowercase in vars {
+                if !named_rigids.contains_key(loc_lowercase.value.as_str()) {
+                    env.problem(Problem::PhantomTypeArgument {
+                        alias: symbol,
+                        variable_region: loc_lowercase.region,
+                        variable_name: loc_lowercase.value.clone(),
+                    });
+                }
+            }
+
+            let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
+            let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
+
+            for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
+                let poolstr = PoolStr::new(name, env.pool);
+
+                env.pool[node_id] = (poolstr, variable);
+            }
+
+            for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
+                env.pool[node_id] = rigid;
+            }
+
+            let rigids = Rigids {
+                named: named.shallow_clone(),
+                unnamed,
+            };
+
+            let annotation = match signature {
+                Signature::Value { annotation } => annotation,
+                Signature::Function {
+                    arguments,
+                    closure_type_id,
+                    return_type_id,
+                } => Type2::Function(arguments, closure_type_id, return_type_id),
+                Signature::FunctionWithAliases { annotation, .. } => annotation,
+            };
+
+            if annotation.contains_symbol(env.pool, symbol) {
+                // the alias is recursive. If it's a tag union, we attempt to fix this
+                if let Type2::TagUnion(tags, ext) = annotation {
+                    // re-canonicalize the alias with the alias already in scope
+                    let rec_var = env.var_store.fresh();
+                    let rec_type_union = Type2::RecursiveTagUnion(rec_var, tags, ext);
+
+                    // NOTE this only looks at the symbol, and just assumes that the
+                    // recursion is not polymorphic
+                    rec_type_union.substitute_alias(env.pool, symbol, Type2::Variable(rec_var));
+
+                    let annotation_id = env.add(rec_type_union, ann.region);
+                    scope.add_alias(env.pool, symbol, named, annotation_id);
+                } else {
+                    env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
+                    return output;
+                }
+            } else {
+                let annotation_id = env.add(annotation, ann.region);
+                scope.add_alias(env.pool, symbol, named, annotation_id);
+            }
+
+            output
+        }
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
@@ -269,7 +359,7 @@ fn canonicalize_pending_def<'a>(
     scope: &mut Scope,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
-    aliases: &mut SendMap<Symbol, Alias>,
+    aliases: &mut MutMap<Symbol, Alias>,
 ) -> Output {
     use PendingDef::*;
 
@@ -335,90 +425,7 @@ fn canonicalize_pending_def<'a>(
         }
 
         PendingDef::Alias { name, ann, vars } => {
-            let symbol = name.value;
-
-            match to_annotation2(env, scope, &ann.value, ann.region) {
-                Annotation2::Erroneous(_) => todo!(),
-                Annotation2::Annotation {
-                    named_rigids,
-                    unnamed_rigids,
-                    symbols,
-                    signature,
-                } => {
-                    // Record all the annotation's references in output.references.lookups
-
-                    for symbol in symbols {
-                        output.references.lookups.insert(symbol);
-                        output.references.referenced_aliases.insert(symbol);
-                    }
-
-                    for loc_lowercase in vars {
-                        if !named_rigids.contains_key(loc_lowercase.value.as_str()) {
-                            env.problem(Problem::PhantomTypeArgument {
-                                alias: symbol,
-                                variable_region: loc_lowercase.region,
-                                variable_name: loc_lowercase.value.clone(),
-                            });
-                        }
-                    }
-
-                    let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
-                    let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
-
-                    for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
-                        let poolstr = PoolStr::new(name, env.pool);
-
-                        env.pool[node_id] = (poolstr, variable);
-                    }
-
-                    for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
-                        env.pool[node_id] = rigid;
-                    }
-
-                    let rigids = Rigids {
-                        named: named.shallow_clone(),
-                        unnamed,
-                    };
-
-                    let annotation = match signature {
-                        Signature::Value { annotation } => annotation,
-                        Signature::Function {
-                            arguments,
-                            closure_type_id,
-                            return_type_id,
-                        } => Type2::Function(arguments, closure_type_id, return_type_id),
-                        Signature::FunctionWithAliases { annotation, .. } => annotation,
-                    };
-
-                    if annotation.contains_symbol(env.pool, symbol) {
-                        // the alias is recursive. If it's a tag union, we attempt to fix this
-                        if let Type2::TagUnion(tags, ext) = annotation {
-                            // re-canonicalize the alias with the alias already in scope
-                            let rec_var = env.var_store.fresh();
-                            let rec_type_union = Type2::RecursiveTagUnion(rec_var, tags, ext);
-
-                            // NOTE this only looks at the symbol, and just assumes that the
-                            // recursion is not polymorphic
-                            rec_type_union.substitute_alias(
-                                env.pool,
-                                symbol,
-                                Type2::Variable(rec_var),
-                            );
-
-                            let annotation_id = env.add(rec_type_union, ann.region);
-                            scope.add_alias(env.pool, symbol, named, annotation_id);
-                        } else {
-                            env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
-                            return output;
-                        }
-                    } else {
-                        let annotation_id = env.add(annotation, ann.region);
-                        scope.add_alias(env.pool, symbol, named, annotation_id);
-                    }
-
-                    output
-                }
-            }
+            from_pending_alias(env, scope, name, vars, ann, output)
         }
 
         InvalidAlias => {
@@ -767,4 +774,144 @@ impl References {
     pub fn has_lookup(&self, symbol: Symbol) -> bool {
         self.lookups.contains(&symbol)
     }
+}
+
+#[derive(Debug)]
+pub struct CanDefs {
+    pub refs_by_symbol: MutMap<Symbol, (Region, References)>,
+    pub can_defs_by_symbol: MutMap<Symbol, Def>,
+    pub aliases: MutMap<Symbol, Alias>,
+}
+
+#[inline(always)]
+pub fn canonicalize_defs<'a>(
+    env: &mut Env<'a>,
+    mut output: Output,
+    var_store: &mut VarStore,
+    original_scope: &Scope,
+    loc_defs: &'a [&'a Located<ast::Def<'a>>],
+    pattern_type: PatternType,
+) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
+    // Canonicalizing defs while detecting shadowing involves a multi-step process:
+    //
+    // 1. Go through each of the patterns.
+    // 2. For each identifier pattern, get the scope.symbol() for the ident. (That symbol will use the home module for its module.)
+    // 3. If that symbol is already in scope, then we're about to shadow it. Error!
+    // 4. Otherwise, add it to the scope immediately, so we can detect shadowing within the same
+    //    pattern (e.g. (Foo a a) = ...)
+    // 5. Add this canonicalized pattern and its corresponding ast::Expr to pending_exprs.
+    // 5. Once every pattern has been processed and added to scope, go back and canonicalize the exprs from
+    //    pending_exprs, this time building up a canonical def for each one.
+    //
+    // This way, whenever any expr is doing lookups, it knows everything that's in scope -
+    // even defs that appear after it in the source.
+    //
+    // This naturally handles recursion too, because a given expr which refers
+    // to itself won't be processed until after its def has been added to scope.
+
+    // Record both the original and final idents from the scope,
+    // so we can diff them while detecting unused defs.
+    let mut scope = original_scope.shallow_clone();
+    let num_defs = loc_defs.len();
+    let mut refs_by_symbol = MutMap::default();
+    let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
+    let mut pending = Vec::with_capacity(num_defs); // TODO bump allocate this!
+
+    // Canonicalize all the patterns, record shadowing problems, and store
+    // the ast::Expr values in pending_exprs for further canonicalization
+    // once we've finished assembling the entire scope.
+    for loc_def in loc_defs {
+        match to_pending_def(env, &loc_def.value, &mut scope, pattern_type) {
+            None => (),
+            Some((new_output, pending_def)) => {
+                // store the top-level defs, used to ensure that closures won't capture them
+                if let PatternType::TopLevelDef = pattern_type {
+                    match &pending_def {
+                        PendingDef::AnnotationOnly(_, loc_can_pattern, _)
+                        | PendingDef::Body(_, loc_can_pattern, _)
+                        | PendingDef::TypedBody(_, loc_can_pattern, _, _) => {
+                            env.top_level_symbols.extend(symbols_from_pattern(
+                                env.pool,
+                                env.pool.get(*loc_can_pattern),
+                            ))
+                        }
+                        PendingDef::Alias { .. } | PendingDef::InvalidAlias => {}
+                    }
+                }
+                // Record the ast::Expr for later. We'll do another pass through these
+                // once we have the entire scope assembled. If we were to canonicalize
+                // the exprs right now, they wouldn't have symbols in scope from defs
+                // that get would have gotten added later in the defs list!
+                pending.push(pending_def);
+                output.union(new_output);
+            }
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        env.home.register_debug_idents(&env.ident_ids);
+    }
+
+    // TODO what to do here? aliases are already in the scope!
+    let mut aliases = MutMap::default();
+    let mut value_defs = Vec::new();
+
+    for pending_def in pending.into_iter() {
+        match pending_def {
+            PendingDef::Alias { name, vars, ann } => {
+                output = from_pending_alias(env, &mut scope, name, vars, ann, output);
+            }
+            other => value_defs.push(other),
+        }
+    }
+
+    // TODO
+    // correct_mutual_recursive_type_alias(env, &mut aliases, var_store);
+
+    // Now that we have the scope completely assembled, and shadowing resolved,
+    // we're ready to canonicalize any body exprs.
+    for pending_def in value_defs.into_iter() {
+        output = canonicalize_pending_def(
+            env,
+            pending_def,
+            output,
+            &mut scope,
+            &mut can_defs_by_symbol,
+            &mut refs_by_symbol,
+            &mut aliases,
+        );
+
+        // TODO we should do something with these references; they include
+        // things like type annotations.
+    }
+
+    // Determine which idents we introduced in the course of this process.
+    let mut symbols_introduced = MutMap::default();
+
+    for (symbol, region) in scope.symbols() {
+        if !original_scope.contains_symbol(symbol) {
+            symbols_introduced.insert(symbol, region);
+        }
+    }
+
+    // This returns both the defs info as well as the new scope.
+    //
+    // We have to return the new scope because we added defs to it
+    // (and those lookups shouldn't fail later, e.g. when canonicalizing
+    // the return expr), but we didn't want to mutate the original scope
+    // directly because we wanted to keep a clone of it around to diff
+    // when looking for unused idents.
+    //
+    // We have to return the scope separately from the defs, because the
+    // defs need to get moved later.
+    (
+        CanDefs {
+            refs_by_symbol,
+            can_defs_by_symbol,
+            aliases,
+        },
+        scope,
+        output,
+        symbols_introduced,
+    )
 }
