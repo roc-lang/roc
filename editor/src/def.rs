@@ -21,7 +21,7 @@ use crate::pattern::{
 use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
 use crate::types::{to_annotation2, Alias, Annotation2, Signature, Type2, TypeId};
-use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -914,4 +914,549 @@ pub fn canonicalize_defs<'a>(
         output,
         symbols_introduced,
     )
+}
+
+// See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum Declaration {
+    Declare(Def),
+    DeclareRec(Vec<Def>),
+    Builtin(Def),
+    InvalidCycle(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
+}
+
+impl Declaration {
+    pub fn def_count(&self) -> usize {
+        use Declaration::*;
+        match self {
+            Declare(_) => 1,
+            DeclareRec(defs) => defs.len(),
+            InvalidCycle(_, _) => 0,
+            Builtin(_) => 0,
+        }
+    }
+}
+
+#[inline(always)]
+pub fn sort_can_defs(
+    env: &mut Env<'_>,
+    defs: CanDefs,
+    mut output: Output,
+) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
+    let CanDefs {
+        refs_by_symbol,
+        can_defs_by_symbol,
+        aliases,
+    } = defs;
+
+    // for (symbol, alias) in aliases.into_iter() {
+    //     output.aliases.insert(symbol, alias);
+    // }
+
+    // Determine the full set of references by traversing the graph.
+    let mut visited_symbols = MutSet::default();
+    let returned_lookups = MutSet::clone(&output.references.lookups);
+
+    // Start with the return expression's referenced locals. They're the only ones that count!
+    //
+    // If I have two defs which reference each other, but neither of them is referenced
+    // in the return expression, I don't want either of them (or their references) to end up
+    // in the final output.references. They were unused, and so were their references!
+    //
+    // The reason we need a graph here is so we don't overlook transitive dependencies.
+    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
+    // def as a whole references both `a` *and* `b`, even though it doesn't
+    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
+    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
+    for symbol in returned_lookups.into_iter() {
+        // We only care about local symbols in this analysis.
+        if symbol.module_id() == env.home {
+            // Traverse the graph and look up *all* the references for this local symbol.
+            let refs =
+                references_from_local(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
+
+            output.references.union_mut(refs);
+        }
+    }
+
+    for symbol in output.references.calls.clone() {
+        // Traverse the graph and look up *all* the references for this call.
+        // Reuse the same visited_symbols as before; if we already visited it,
+        // we won't learn anything new from visiting it again!
+        let refs =
+            references_from_call(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
+
+        output.references.union_mut(refs);
+    }
+
+    let mut defined_symbols: Vec<Symbol> = Vec::new();
+    let mut defined_symbols_set: MutSet<Symbol> = MutSet::default();
+
+    for symbol in can_defs_by_symbol.keys().into_iter() {
+        defined_symbols.push(*symbol);
+        defined_symbols_set.insert(*symbol);
+    }
+
+    // Use topological sort to reorder the defs based on their dependencies to one another.
+    // This way, during code gen, no def will refer to a value that hasn't been initialized yet.
+    // As a bonus, the topological sort also reveals any cycles between the defs, allowing
+    // us to give a CircularAssignment error for invalid (mutual) recursion, and a `DeclareRec` for mutually
+    // recursive definitions.
+
+    // All successors that occur in the body of a symbol.
+    let all_successors_without_self = |symbol: &Symbol| -> MutSet<Symbol> {
+        // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
+        //
+        // f = \z -> z
+        //
+        // (\x ->
+        //     a = f x
+        //     x
+        // )
+        //
+        // It's not part of the current defs (the one with `a = f x`); rather,
+        // it's in the enclosing scope. It's still referenced though, so successors
+        // will receive it as an argument!
+        match refs_by_symbol.get(symbol) {
+            Some((_, references)) => {
+                // We can only sort the symbols at the current level. That is safe because
+                // symbols defined at higher levels cannot refer to symbols at lower levels.
+                // Therefore they can never form a cycle!
+                //
+                // In the above example, `f` cannot reference `a`, and in the closure
+                // a call to `f` cannot cycle back to `a`.
+                let mut loc_succ = local_successors(&references, &env.closures);
+
+                // if the current symbol is a closure, peek into its body
+                if let Some(References { lookups, .. }) = env.closures.get(symbol) {
+                    let home = env.home;
+
+                    for lookup in lookups {
+                        if lookup != symbol && lookup.module_id() == home {
+                            // DO NOT register a self-call behind a lambda!
+                            //
+                            // We allow `boom = \_ -> boom {}`, but not `x = x`
+                            loc_succ.insert(*lookup);
+                        }
+                    }
+                }
+
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| defined_symbols_set.contains(key));
+
+                loc_succ
+            }
+            None => MutSet::default(),
+        }
+    };
+
+    // All successors that occur in the body of a symbol, including the symbol itself
+    // This is required to determine whether a symbol is recursive. Recursive symbols
+    // (that are not faulty) always need a DeclareRec, even if there is just one symbol in the
+    // group
+    let mut all_successors_with_self = |symbol: &Symbol| -> MutSet<Symbol> {
+        // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
+        //
+        // f = \z -> z
+        //
+        // (\x ->
+        //     a = f x
+        //     x
+        // )
+        //
+        // It's not part of the current defs (the one with `a = f x`); rather,
+        // it's in the enclosing scope. It's still referenced though, so successors
+        // will receive it as an argument!
+        match refs_by_symbol.get(symbol) {
+            Some((_, references)) => {
+                // We can only sort the symbols at the current level. That is safe because
+                // symbols defined at higher levels cannot refer to symbols at lower levels.
+                // Therefore they can never form a cycle!
+                //
+                // In the above example, `f` cannot reference `a`, and in the closure
+                // a call to `f` cannot cycle back to `a`.
+                let mut loc_succ = local_successors(&references, &env.closures);
+
+                // if the current symbol is a closure, peek into its body
+                if let Some(References { lookups, .. }) = env.closures.get(symbol) {
+                    for lookup in lookups {
+                        loc_succ.insert(*lookup);
+                    }
+                }
+
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| defined_symbols_set.contains(key));
+
+                loc_succ
+            }
+            None => MutSet::default(),
+        }
+    };
+
+    // If a symbol is a direct successor of itself, there is an invalid cycle.
+    // The difference with the function above is that this one does not look behind lambdas,
+    // but does consider direct self-recursion.
+    let direct_successors = |symbol: &Symbol| -> MutSet<Symbol> {
+        match refs_by_symbol.get(symbol) {
+            Some((_, references)) => {
+                let mut loc_succ = local_successors(&references, &env.closures);
+
+                // NOTE: if the symbol is a closure we DONT look into its body
+
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| defined_symbols_set.contains(key));
+
+                // NOTE: direct recursion does matter here: `x = x` is invalid recursion!
+
+                loc_succ
+            }
+            None => MutSet::default(),
+        }
+    };
+
+    // TODO also do the same `addDirects` check elm/compiler does, so we can
+    // report an error if a recursive definition can't possibly terminate!
+    match ven_graph::topological_sort_into_groups(
+        defined_symbols.as_slice(),
+        all_successors_without_self,
+    ) {
+        Ok(groups) => {
+            let mut declarations = Vec::new();
+
+            // groups are in reversed order
+            let mut can_defs_by_symbol = can_defs_by_symbol;
+            let cdbs = &mut can_defs_by_symbol;
+            for group in groups.into_iter().rev() {
+                group_to_declaration(
+                    &group,
+                    &env.closures,
+                    &mut all_successors_with_self,
+                    cdbs,
+                    &mut declarations,
+                );
+            }
+
+            (Ok(declarations), output)
+        }
+        Err((mut groups, nodes_in_cycle)) => {
+            let mut declarations = Vec::new();
+            let mut problems = Vec::new();
+
+            // nodes_in_cycle are symbols that form a syntactic cycle. That isn't always a problem,
+            // and in general it's impossible to decide whether it is. So we use a crude heuristic:
+            //
+            // Definitions where the cycle occurs behind a lambda are OK
+            //
+            // boom = \_ -> boom {}
+            //
+            // But otherwise we report an error, e.g.
+            //
+            // foo = if b then foo else bar
+
+            for cycle in strongly_connected_components(&nodes_in_cycle, all_successors_without_self)
+            {
+                // check whether the cycle is faulty, which is when it has
+                // a direct successor in the current cycle. This catches things like:
+                //
+                // x = x
+                //
+                // or
+                //
+                // p = q
+                // q = p
+                let is_invalid_cycle = match cycle.get(0) {
+                    Some(symbol) => {
+                        let mut succs = direct_successors(symbol);
+
+                        succs.retain(|key| cycle.contains(key));
+
+                        !succs.is_empty()
+                    }
+                    None => false,
+                };
+
+                if is_invalid_cycle {
+                    // We want to show the entire cycle in the error message, so expand it out.
+                    let mut loc_symbols = Vec::new();
+
+                    for symbol in cycle {
+                        match refs_by_symbol.get(&symbol) {
+                            None => unreachable!(
+                                r#"Symbol `{:?}` not found in refs_by_symbol! refs_by_symbol was: {:?}"#,
+                                symbol, refs_by_symbol
+                            ),
+                            Some((region, _)) => {
+                                loc_symbols.push(Located::at(*region, symbol));
+                            }
+                        }
+                    }
+
+                    // TODO we don't store those regions any more!
+                    let regions = Vec::with_capacity(can_defs_by_symbol.len());
+                    // for def in can_defs_by_symbol.values() {
+                    //     regions.push((def.loc_pattern.region, def.loc_expr.region));
+                    // }
+                    //
+                    // // Sort them by line number to make the report more helpful.
+                    // loc_symbols.sort();
+                    // regions.sort();
+
+                    let symbols_in_cycle: Vec<Symbol> =
+                        loc_symbols.into_iter().map(|s| s.value).collect();
+
+                    problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
+                        symbols_in_cycle.clone(),
+                        regions.clone(),
+                    )));
+
+                    declarations.push(Declaration::InvalidCycle(symbols_in_cycle, regions));
+                } else {
+                    // slightly inefficient, because we know this becomes exactly one DeclareRec already
+                    groups.push(cycle);
+                }
+            }
+
+            // now we have a collection of groups whose dependencies are not cyclic.
+            // They are however not yet topologically sorted. Here we have to get a bit
+            // creative to get all the definitions in the correct sorted order.
+
+            let mut group_ids = Vec::with_capacity(groups.len());
+            let mut symbol_to_group_index = MutMap::default();
+            for (i, group) in groups.iter().enumerate() {
+                for symbol in group {
+                    symbol_to_group_index.insert(*symbol, i);
+                }
+
+                group_ids.push(i);
+            }
+
+            let successors_of_group = |group_id: &usize| {
+                let mut result = MutSet::default();
+
+                // for each symbol in this group
+                for symbol in &groups[*group_id] {
+                    // find its successors
+                    for succ in all_successors_without_self(symbol) {
+                        // and add its group to the result
+                        result.insert(symbol_to_group_index[&succ]);
+                    }
+                }
+
+                // don't introduce any cycles to self
+                result.remove(group_id);
+
+                result
+            };
+
+            match ven_graph::topological_sort_into_groups(&group_ids, successors_of_group) {
+                Ok(sorted_group_ids) => {
+                    let mut can_defs_by_symbol = can_defs_by_symbol;
+                    let cdbs = &mut can_defs_by_symbol;
+                    for sorted_group in sorted_group_ids.iter().rev() {
+                        for group_id in sorted_group.iter().rev() {
+                            let group = &groups[*group_id];
+
+                            group_to_declaration(
+                                group,
+                                &env.closures,
+                                &mut all_successors_with_self,
+                                cdbs,
+                                &mut declarations,
+                            );
+                        }
+                    }
+                }
+                Err(_) => unreachable!("there should be no cycles now!"),
+            }
+
+            for problem in problems {
+                env.problem(problem);
+            }
+
+            (Ok(declarations), output)
+        }
+    }
+}
+
+pub fn references_from_local<'a, T>(
+    defined_symbol: Symbol,
+    visited: &'a mut MutSet<Symbol>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    closures: &'a MutMap<Symbol, References>,
+) -> References
+where
+    T: Debug,
+{
+    let mut answer: References = References::new();
+
+    match refs_by_def.get(&defined_symbol) {
+        Some((_, refs)) => {
+            visited.insert(defined_symbol);
+
+            for local in refs.lookups.iter() {
+                if !visited.contains(&local) {
+                    let other_refs: References =
+                        references_from_local(*local, visited, refs_by_def, closures);
+
+                    answer.union_mut(other_refs);
+                }
+
+                answer.lookups.insert(*local);
+            }
+
+            for call in refs.calls.iter() {
+                if !visited.contains(&call) {
+                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
+
+                    answer.union_mut(other_refs);
+                }
+
+                answer.calls.insert(*call);
+            }
+
+            answer
+        }
+        None => answer,
+    }
+}
+
+pub fn references_from_call<'a, T>(
+    call_symbol: Symbol,
+    visited: &'a mut MutSet<Symbol>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    closures: &'a MutMap<Symbol, References>,
+) -> References
+where
+    T: Debug,
+{
+    match closures.get(&call_symbol) {
+        Some(references) => {
+            let mut answer = references.clone();
+
+            visited.insert(call_symbol);
+
+            for closed_over_local in references.lookups.iter() {
+                if !visited.contains(&closed_over_local) {
+                    let other_refs =
+                        references_from_local(*closed_over_local, visited, refs_by_def, closures);
+
+                    answer.union_mut(other_refs);
+                }
+
+                answer.lookups.insert(*closed_over_local);
+            }
+
+            for call in references.calls.iter() {
+                if !visited.contains(&call) {
+                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
+
+                    answer.union_mut(other_refs);
+                }
+
+                answer.calls.insert(*call);
+            }
+
+            answer
+        }
+        None => {
+            // If the call symbol was not in the closure map, that means we're calling a non-function and
+            // will get a type mismatch later. For now, assume no references as a result of the "call."
+            References::new()
+        }
+    }
+}
+
+fn local_successors(
+    references: &References,
+    closures: &MutMap<Symbol, References>,
+) -> MutSet<Symbol> {
+    let mut answer = references.lookups.clone();
+
+    for call_symbol in references.calls.iter() {
+        answer.extend(call_successors(*call_symbol, closures));
+    }
+
+    answer
+}
+
+fn call_successors<'a>(
+    call_symbol: Symbol,
+    closures: &'a MutMap<Symbol, References>,
+) -> MutSet<Symbol> {
+    let mut answer = MutSet::default();
+    let mut seen = MutSet::default();
+    let mut queue = vec![call_symbol];
+
+    while let Some(symbol) = queue.pop() {
+        if seen.contains(&symbol) {
+            continue;
+        }
+
+        if let Some(references) = closures.get(&symbol) {
+            answer.extend(references.lookups.iter().copied());
+            queue.extend(references.calls.iter().copied());
+
+            seen.insert(symbol);
+        }
+    }
+
+    answer
+}
+
+fn group_to_declaration(
+    group: &[Symbol],
+    closures: &MutMap<Symbol, References>,
+    successors: &mut dyn FnMut(&Symbol) -> MutSet<Symbol>,
+    can_defs_by_symbol: &mut MutMap<Symbol, Def>,
+    declarations: &mut Vec<Declaration>,
+) {
+    use Declaration::*;
+
+    // We want only successors in the current group, otherwise definitions get duplicated
+    let filtered_successors = |symbol: &Symbol| -> MutSet<Symbol> {
+        let mut result = successors(symbol);
+
+        result.retain(|key| group.contains(key));
+        result
+    };
+
+    // TODO fix this
+    // Patterns like
+    //
+    // { x, y } = someDef
+    //
+    // Can bind multiple symbols. When not incorrectly recursive (which is guaranteed in this function),
+    // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
+    // for a definition, so every definition is only inserted (thus typechecked and emitted) once
+    // let mut seen_pattern_regions: MutSet<Region> = MutSet::default();
+
+    for cycle in strongly_connected_components(&group, filtered_successors) {
+        if cycle.len() == 1 {
+            let symbol = &cycle[0];
+
+            if let Some(can_def) = can_defs_by_symbol.remove(&symbol) {
+                // Determine recursivity of closures that are not tail-recursive
+
+                let is_recursive = successors(&symbol).contains(&symbol);
+
+                if is_recursive {
+                    declarations.push(DeclareRec(vec![can_def]));
+                } else {
+                    declarations.push(Declare(can_def));
+                }
+            }
+        } else {
+            let mut can_defs = Vec::new();
+
+            // Topological sort gives us the reverse of the sorting we want!
+            for symbol in cycle.into_iter().rev() {
+                if let Some(can_def) = can_defs_by_symbol.remove(&symbol) {
+                    can_defs.push(can_def);
+                }
+            }
+
+            declarations.push(DeclareRec(can_defs));
+        }
+    }
 }
