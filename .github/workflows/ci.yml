@@ -16,7 +16,7 @@ jobs:
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
 
-      - run: sccache -V
+      - run: /usr/local/bin/sccache -V
 
       - name: Run Zig tests
         run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
@@ -72,4 +72,4 @@ jobs:
           command: test
           args: --release
 
-      - run: sccache --show-stats
+      - run: /usr/local/bin/sccache --show-stats
