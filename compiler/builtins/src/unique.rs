@@ -197,6 +197,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
     });
 
+    // mulWrap : Int, Int -> Int
+    add_type(Symbol::NUM_MUL_WRAP, {
+        let_tvars! { u, v, w };
+        unique_function(vec![int_type(u), int_type(v)], int_type(w))
+    });
+
+    // mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(Symbol::NUM_MUL_CHECKED, {
+        let_tvars! { u, v, w, num, result, star };
+        unique_function(
+            vec![num_type(u, num), num_type(v, num)],
+            result_type(result, num_type(w, num), lift(star, overflow())),
+        )
+    });
+
     // abs : Num a -> Num a
     add_type(Symbol::NUM_ABS, {
         let_tvars! { u, v, num };
