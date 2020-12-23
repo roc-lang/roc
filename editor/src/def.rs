@@ -43,6 +43,23 @@ pub enum Def {
     Function(FunctionDef),
 }
 
+impl Def {
+    pub fn pattern_vars(&self, pool: &Pool) -> impl Iterator<(Symbol, Variable)> {
+        use Def::*;
+
+        match self {
+            AnnotationOnly { .. } => todo!("we lost pattern information!"),
+            Value(ValueDef { .. }) => symbols_and_variables_from_pattern(pool, pattern, var).iter(),
+            Function(FunctionDef::NoAnnotation { name, expr_var, .. }) => {
+                std::iter::once((name, expr_var))
+            }
+            Function(FunctionDef::WithAnnotation { name, expr_var, .. }) => {
+                std::iter::once((name, expr_var))
+            }
+        }
+    }
+}
+
 impl ShallowClone for Def {
     fn shallow_clone(&self) -> Self {
         match self {

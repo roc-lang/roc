@@ -43,7 +43,7 @@ impl Output {
 
 pub struct Env<'a> {
     pub home: ModuleId,
-    pub var_store: VarStore,
+    pub var_store: &'a mut VarStore,
     pub pool: &'a mut Pool,
     pub arena: &'a Bump,
 
@@ -63,6 +63,32 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
+    pub fn new(
+        home: ModuleId,
+        arena: &'a Bump,
+        pool: &'a mut Pool,
+        var_store: &'a mut VarStore,
+        dep_idents: MutMap<ModuleId, IdentIds>,
+        module_ids: &'a ModuleIds,
+        exposed_ident_ids: IdentIds,
+    ) -> Env<'a> {
+        Env {
+            home,
+            arena,
+            pool,
+            var_store,
+            dep_idents,
+            module_ids,
+            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
+            exposed_ident_ids,
+            closures: MutMap::default(),
+            qualified_lookups: MutSet::default(),
+            tailcallable_symbol: None,
+            closure_name_symbol: None,
+            top_level_symbols: MutSet::default(),
+        }
+    }
+
     pub fn add<T>(&mut self, item: T, region: Region) -> NodeId<T> {
         let id = self.pool.add(item);
         self.set_region(id, region);
