@@ -198,7 +198,7 @@ fn unify_alias(
 
                     problems
                 } else {
-                    mismatch!()
+                    mismatch!("{}", symbol)
                 }
             } else {
                 unify_pool(subs, pool, real_var, *other_real_var)

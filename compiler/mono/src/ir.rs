@@ -5832,7 +5832,9 @@ pub enum IntOrFloat {
 pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     match subs.get_without_compacting(var).content {
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
-            debug_assert!(args.is_empty());
+            debug_assert!(args.len() == 1);
+
+            // TODO: we probably need to match on the type of the arg
             IntOrFloat::IntType
         }
         Content::FlexVar(_) => {
@@ -5840,7 +5842,9 @@ pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
             IntOrFloat::IntType
         }
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
-            debug_assert!(args.is_empty());
+            debug_assert!(args.len() == 1);
+
+            // TODO: we probably need to match on the type of the arg
             IntOrFloat::FloatType
         }
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
@@ -5848,6 +5852,11 @@ pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
 
             // Recurse on the second argument
             num_argument_to_int_or_float(subs, attr_args[1])
+        }
+        Content::Alias(Symbol::NUM_F64, args, _) | Content::Alias(Symbol::NUM_F32, args, _) => {
+            debug_assert!(args.is_empty());
+
+            IntOrFloat::FloatType
         }
         other => {
             panic!(

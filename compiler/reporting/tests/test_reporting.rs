@@ -448,8 +448,8 @@ mod test_reporting {
 
                     baz
                     Str
-                    main
                     U8
+                    F64
                 "#
             ),
         )
@@ -620,9 +620,9 @@ mod test_reporting {
 
                 these names seem close though:
 
+                    Result
                     Num
                     Set
-                    Result
                     U8
                 "#
             ),
@@ -1374,7 +1374,7 @@ mod test_reporting {
                     Bool
                     U8
                     F64
-                    Num
+                    Str
                 "#
             ),
         )
@@ -2094,7 +2094,7 @@ mod test_reporting {
 
                 But `add` needs the 2nd argument to be:
 
-                    Num Integer
+                    Num (Integer Signed64)
                 "#
             ),
         )
@@ -2123,7 +2123,7 @@ mod test_reporting {
 
                 But `add` needs the 2nd argument to be:
 
-                    Num Integer
+                    Num (Integer Signed64)
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
