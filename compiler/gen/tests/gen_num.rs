@@ -778,7 +778,7 @@ mod gen_num {
             indoc!(
                 r#"
                     -1.7976931348623157e308 - 1.7976931348623157e308
-                    "#
+                "#
             ),
             0.0,
             f64
@@ -835,6 +835,62 @@ mod gen_num {
                 "#
             ),
             -1.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+    fn int_positive_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                9_223_372_036_854_775_807 * 2
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+    fn int_negative_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                (-9_223_372_036_854_775_808) * 2
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+    fn float_positive_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.7976931348623157e308 * 2
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+    fn float_negative_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    -1.7976931348623157e308 * 2
+                "#
+            ),
+            0.0,
             f64
         );
     }
