@@ -1,4 +1,4 @@
-app "effect-example"
+app "task-example"
     packages { base: "platform" }
     imports [ base.Task.{ Task, after }, base.File, base.Path ]
     provides [ main ] to base
