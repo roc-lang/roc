@@ -130,6 +130,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // mulWrap : Int, Int -> Int
+    add_type(
+        Symbol::NUM_MUL_WRAP,
+        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
+    // mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(
+        Symbol::NUM_MUL_CHECKED,
+        top_level_function(
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(result_type(num_type(flex(TVAR1)), overflow())),
+        ),
+    );
+
     // abs : Num a -> Num a
     add_type(
         Symbol::NUM_ABS,

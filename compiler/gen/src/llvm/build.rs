@@ -3010,7 +3010,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
         | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt | NumSubWrap
-        | NumSubChecked => {
+        | NumSubChecked | NumMulWrap | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -3295,7 +3295,8 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
             mul_result
         }
-        // NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumMulChecked => env.call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
@@ -3533,6 +3534,33 @@ fn build_float_binop<'a, 'ctx, 'env>(
 
             result.into()
         }
+        NumMulChecked => {
+            let context = env.context;
+
+            let result = bd.build_float_mul(lhs, rhs, "mul_float");
+
+            let is_finite =
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+            let is_infinite = bd.build_not(is_finite, "negate");
+
+            let struct_type = context.struct_type(
+                &[context.f64_type().into(), context.bool_type().into()],
+                false,
+            );
+
+            let struct_value = {
+                let v1 = struct_type.const_zero();
+                let v2 = bd.build_insert_value(v1, result, 0, "set_result").unwrap();
+                let v3 = bd
+                    .build_insert_value(v2, is_infinite, 1, "set_is_infinite")
+                    .unwrap();
+
+                v3.into_struct_value()
+            };
+
+            struct_value.into()
+        }
+        NumMulWrap => unreachable!("wrapping multiplication is not defined on floats"),
         NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
