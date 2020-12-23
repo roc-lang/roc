@@ -3,7 +3,7 @@ on: [pull_request]
 name: CI
 
 env:
-  RUSTC_WRAPPER: ./ci/sccache
+  RUSTC_WRAPPER: /usr/local/bin/sccache
 
 jobs:
   test:
@@ -13,10 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - run: ./ci/sccache -V
-
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
+
+      - run: sccache -V
 
       - name: Run Zig tests
         run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
@@ -72,4 +72,4 @@ jobs:
           command: test
           args: --release
 
-      - run: ./ci/sccache --show-stats
+      - run: sccache --show-stats
