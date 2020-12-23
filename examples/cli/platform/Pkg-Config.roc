@@ -1,10 +1,15 @@
-platform examples/quicksort
-    requires { quicksort : List I64 -> List I64 }
+platform rtfeldman/roc-cli
+    requires { main : Task {} [] }
     exposes []
     packages {}
-    imports []
+    imports [ Task.{ Task }, File ]
     provides [ mainForHost ]
-    effects Effect {}
+    effects Effect
+        {
+            #readAllUtf8 : Str -> Effect { errno : I32, bytes : List U8 },
+            putLine : Str -> Effect {},
+            getLine : Effect Str
+        }
 
-mainForHost : List I64 -> List I64 
-mainForHost = \list -> quicksort list
+mainForHost : Effect {} as Fx
+mainForHost = main
