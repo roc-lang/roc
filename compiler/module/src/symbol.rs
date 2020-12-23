@@ -824,6 +824,8 @@ define_builtins! {
         81 NUM_BITWISE_AND: "bitwiseAnd"
         82 NUM_SUB_WRAP: "subWrap"
         83 NUM_SUB_CHECKED: "subChecked"
+        84 NUM_MUL_WRAP: "mulWrap"
+        85 NUM_MUL_CHECKED: "mulChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
