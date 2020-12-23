@@ -80,5 +80,7 @@ wget -c https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz --no-
 tar -xf zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
 ln -s "$PWD/zig-linux-x86_64-0.6.0+0088efc4b/zig" /usr/local/bin/zig
 
-# create link to sccache to prevent current working dir problems
-ln -s ./ci/sccache /usr/local/bin/sccache
+# test sccache 
+./ci/sccache -V
+# copy sccache to prevent current working dir problems
+cp ./ci/sccache /usr/local/bin/sccache
