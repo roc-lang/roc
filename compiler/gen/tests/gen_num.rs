@@ -622,7 +622,7 @@ mod gen_num {
 
     #[test]
     #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
-    fn int_overflow() {
+    fn int_add_overflow() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -740,6 +740,33 @@ mod gen_num {
                 "#
             ),
             i64::MIN,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+    fn int_sub_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                -9_223_372_036_854_775_808 - 1
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_sub_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.subWrap -9_223_372_036_854_775_808 1
+                "#
+            ),
+            std::i64::MAX,
             i64
         );
     }
