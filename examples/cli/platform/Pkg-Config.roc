@@ -1,15 +1,16 @@
-platform rtfeldman/roc-cli
-    requires { main : Task {} [] }
-    exposes []
+platform folkertdev/foo
+    requires { main : ThisIsTotallyIgnoredApparently } # TODO FIXME
+    exposes [] # TODO FIXME actually expose modules
     packages {}
-    imports [ Task.{ Task }, File ]
+    imports [ Task ] # TODO FIXME Task.{ Task }
     provides [ mainForHost ]
     effects Effect
         {
-            #readAllUtf8 : Str -> Effect { errno : I32, bytes : List U8 },
+            putChar : I64 -> Effect {},
             putLine : Str -> Effect {},
             getLine : Effect Str
         }
 
-mainForHost : Effect {} as Fx
+
+mainForHost : Task.Task {} * as Fx # TODO FIXME Task.Task {} []
 mainForHost = main

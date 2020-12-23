@@ -29,6 +29,14 @@ extern "C" {
 }
 
 #[no_mangle]
+pub fn roc_fx_putChar(foo: i64) -> () {
+    let character = foo as u8 as char;
+    print!("{}", character);
+
+    ()
+}
+
+#[no_mangle]
 pub fn roc_fx_putLine(line: RocStr) -> () {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
@@ -78,7 +86,6 @@ pub fn rust_main() -> isize {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let answer = unsafe {
-        // TODO if this is 1024B or less, put it in a global scratch buffer
         let buffer = std::alloc::alloc(layout);
 
         roc_main(buffer);
