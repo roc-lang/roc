@@ -555,7 +555,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                    always42 : Num.Num Num.Integer -> Num.Num Num.Integer
+                    always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
                     always42 = \_ -> 42
 
                     always42 5

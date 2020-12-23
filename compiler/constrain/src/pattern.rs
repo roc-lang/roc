@@ -157,7 +157,7 @@ pub fn constrain_pattern(
         IntLiteral(_) => {
             state.constraints.push(Constraint::Pattern(
                 region,
-                PatternCategory::Float,
+                PatternCategory::Int,
                 builtins::num_int(),
                 expected,
             ));
