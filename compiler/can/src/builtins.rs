@@ -82,6 +82,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
         NUM_SUB => num_sub,
+        NUM_SUB_WRAP => num_sub_wrap,
         NUM_MUL => num_mul,
         NUM_GT => num_gt,
         NUM_GTE => num_gte,
@@ -470,6 +471,11 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.sub : Num a, Num a -> Num a
 fn num_sub(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumSub)
+}
+
+/// Num.subWrap : Num a, Num a -> Num a
+fn num_sub_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumSubWrap)
 }
 
 /// Num.mul : Num a, Num a -> Num a

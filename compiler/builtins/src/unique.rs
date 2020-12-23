@@ -174,6 +174,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
     });
 
+    // subWrap : Num a, Num a -> Num a
+    add_type(Symbol::NUM_SUB_WRAP, {
+        let_tvars! { u, v, w, num };
+        unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
+    });
+
     // mul or (*) : Num a, Num a -> Num a
     add_type(Symbol::NUM_MUL, {
         let_tvars! { u, v, w, num };

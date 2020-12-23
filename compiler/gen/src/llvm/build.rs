@@ -3002,7 +3002,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt => {
+        | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt | NumSubWrap => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -3256,6 +3256,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
             sub_result
         }
+        NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),

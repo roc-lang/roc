@@ -104,6 +104,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // subWrap : Int, Int -> Int
+    add_type(
+        Symbol::NUM_SUB_WRAP,
+        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
     // mul or (*) : Num a, Num a -> Num a
     add_type(
         Symbol::NUM_MUL,
