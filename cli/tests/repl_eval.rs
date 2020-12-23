@@ -261,6 +261,16 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_add_wrap() {
+        expect_success("Num.addWrap Num.maxInt 1", "-9223372036854775808 : I64");
+    }
+
+    #[test]
+    fn num_sub_wrap() {
+        expect_success("Num.subWrap Num.minInt 1", "9223372036854775807 : I64");
+    }
+
+    #[test]
     fn list_concat() {
         expect_success(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",

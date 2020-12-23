@@ -349,6 +349,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I64, {
+        let fields = [i64_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i64_type.into(), i64_type.into()], false)
+    });
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -362,6 +368,7 @@ static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 pub static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
+pub static LLVM_SSUB_WITH_OVERFLOW_I64: &str = "llvm.ssub.with.overflow.i64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -2995,7 +3002,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt => {
+        | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt | NumSubWrap
+        | NumSubChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -3220,7 +3228,37 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
-        NumSub => bd.build_int_sub(lhs, rhs, "sub_int").into(),
+        NumSub => {
+            let context = env.context;
+            let result = env
+                .call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
+                .into_struct_value();
+
+            let sub_result = bd.build_extract_value(result, 0, "sub_result").unwrap();
+            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
+
+            let condition = bd.build_int_compare(
+                IntPredicate::EQ,
+                has_overflowed.into_int_value(),
+                context.bool_type().const_zero(),
+                "has_not_overflowed",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            bd.build_conditional_branch(condition, then_block, throw_block);
+
+            bd.position_at_end(throw_block);
+
+            throw_exception(env, "integer subtraction overflowed!");
+
+            bd.position_at_end(then_block);
+
+            sub_result
+        }
+        NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
+        NumSubChecked => env.call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
@@ -3388,7 +3426,55 @@ fn build_float_binop<'a, 'ctx, 'env>(
             struct_value.into()
         }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
+        NumSub => {
+            let builder = env.builder;
+            let context = env.context;
+
+            let result = bd.build_float_sub(lhs, rhs, "sub_float");
+
+            let is_finite =
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            builder.build_conditional_branch(is_finite, then_block, throw_block);
+
+            builder.position_at_end(throw_block);
+
+            throw_exception(env, "float subtraction overflowed!");
+
+            builder.position_at_end(then_block);
+
+            result.into()
+        }
+        NumSubChecked => {
+            let context = env.context;
+
+            let result = bd.build_float_sub(lhs, rhs, "sub_float");
+
+            let is_finite =
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+            let is_infinite = bd.build_not(is_finite, "negate");
+
+            let struct_type = context.struct_type(
+                &[context.f64_type().into(), context.bool_type().into()],
+                false,
+            );
+
+            let struct_value = {
+                let v1 = struct_type.const_zero();
+                let v2 = bd.build_insert_value(v1, result, 0, "set_result").unwrap();
+                let v3 = bd
+                    .build_insert_value(v2, is_infinite, 1, "set_is_infinite")
+                    .unwrap();
+
+                v3.into_struct_value()
+            };
+
+            struct_value.into()
+        }
+        NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
         NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
         NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),

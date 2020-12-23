@@ -798,6 +798,8 @@ define_builtins! {
         55 NUM_ACOS: "acos"
         56 NUM_ASIN: "asin"
         57 NUM_BITWISE_AND: "bitwiseAnd"
+        58 NUM_SUB_WRAP: "subWrap"
+        59 NUM_SUB_CHECKED: "subChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

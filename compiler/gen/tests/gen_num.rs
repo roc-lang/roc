@@ -622,7 +622,7 @@ mod gen_num {
 
     #[test]
     #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
-    fn int_overflow() {
+    fn int_add_overflow() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -704,19 +704,19 @@ mod gen_num {
         );
     }
 
-    //     #[test]
-    //     #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
-    //     fn float_overflow() {
-    //         assert_evals_to!(
-    //             indoc!(
-    //                 r#"
-    //                 1.7976931348623157e308 + 1.7976931348623157e308
-    //                 "#
-    //             ),
-    //             0.0,
-    //             f64
-    //         );
-    //     }
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+    fn float_add_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.7976931348623157e308 + 1.7976931348623157e308
+                    "#
+            ),
+            0.0,
+            f64
+        );
+    }
 
     #[test]
     fn num_max_int() {
@@ -741,6 +741,101 @@ mod gen_num {
             ),
             i64::MIN,
             i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+    fn int_sub_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                -9_223_372_036_854_775_808 - 1
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_sub_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.subWrap -9_223_372_036_854_775_808 1
+                "#
+            ),
+            std::i64::MAX,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float subtraction overflowed!"#)]
+    fn float_sub_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    -1.7976931348623157e308 - 1.7976931348623157e308
+                    "#
+            ),
+            0.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn int_sub_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked 1 2 is
+                    Ok v -> v
+                    _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked Num.minInt 1 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_sub_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked 1.0 0.0 is
+                    Ok v -> v
+                    Err Overflow -> -1.0
+                "#
+            ),
+            1.0,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked -1.7976931348623157e308 1.7976931348623157e308 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1.0,
+            f64
         );
     }
 }
