@@ -31,6 +31,8 @@ pub enum LowLevel {
     NumAddWrap,
     NumAddChecked,
     NumSub,
+    NumSubWrap,
+    NumSubChecked,
     NumMul,
     NumGt,
     NumGte,

@@ -822,6 +822,8 @@ define_builtins! {
         79 NUM_AT_BINARY32: "@Binary32"
         80 NUM_BINARY32: "Binary32" imported
         81 NUM_BITWISE_AND: "bitwiseAnd"
+        82 NUM_SUB_WRAP: "subWrap"
+        83 NUM_SUB_CHECKED: "subChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
