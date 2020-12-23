@@ -18,10 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: Log CPU model
+        run: sudo cat /proc/cpuinfo | grep name | uniq
+
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
 
-      - run: /usr/local/bin/sccache -V
+      - name: sccache version
+        run: /usr/local/bin/sccache -V
 
       - name: Run Zig tests
         run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
@@ -77,4 +81,5 @@ jobs:
           command: test
           args: --release
 
-      - run: /usr/local/bin/sccache --show-stats
+      - name: sccache stats
+        run: /usr/local/bin/sccache --show-stats
