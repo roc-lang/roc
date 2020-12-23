@@ -790,12 +790,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when Num.subChecked 1 2 is
+                when Num.subChecked 5 2 is
                     Ok v -> v
                     _ -> -1
                 "#
             ),
-            -1,
+            3,
             i64
         );
 
