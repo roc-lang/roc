@@ -894,4 +894,71 @@ mod gen_num {
             f64
         );
     }
+
+    #[test]
+    fn int_mul_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.mulWrap Num.maxInt 2
+                "#
+            ),
+            -2,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_mul_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 20 2 is
+                    Ok v -> v
+                    _ -> -1
+                "#
+            ),
+            40,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked Num.maxInt 2 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_mul_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 20.0 2.0 is
+                    Ok v -> v
+                    Err Overflow -> -1.0
+                "#
+            ),
+            40.0,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 1.7976931348623157e308 2 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
 }

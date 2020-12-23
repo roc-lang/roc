@@ -271,6 +271,11 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_mul_wrap() {
+        expect_success("Num.mulWrap Num.maxInt 2", "-2 : I64");
+    }
+
+    #[test]
     fn list_concat() {
         expect_success(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
