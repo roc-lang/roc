@@ -812,6 +812,7 @@ mod gen_num {
         );
     }
 
+    #[test]
     fn float_sub_checked() {
         assert_evals_to!(
             indoc!(
