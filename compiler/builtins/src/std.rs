@@ -75,7 +75,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // addChecked : Num a, Num a -> Result (Num a) [ IntOverflow ]*
+    // addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
     let overflow = SolvedType::TagUnion(
         vec![(TagName::Global("Overflow".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -85,7 +85,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::NUM_ADD_CHECKED,
         top_level_function(
             vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
-            Box::new(result_type(num_type(flex(TVAR1)), overflow)),
+            Box::new(result_type(num_type(flex(TVAR1)), overflow.clone())),
         ),
     );
 
@@ -108,6 +108,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_SUB_WRAP,
         top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
+    // subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(
+        Symbol::NUM_SUB_CHECKED,
+        top_level_function(
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(result_type(num_type(flex(TVAR1)), overflow)),
+        ),
     );
 
     // mul or (*) : Num a, Num a -> Num a

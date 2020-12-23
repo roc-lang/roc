@@ -148,17 +148,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
     });
 
-    // addChecked : Num a, Num a -> Result (Num a) [ IntOverflow ]*
-    let overflow = SolvedType::TagUnion(
-        vec![(TagName::Global("Overflow".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
+    fn overflow() -> SolvedType {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("Overflow".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    }
 
+    // addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
     add_type(Symbol::NUM_ADD_CHECKED, {
         let_tvars! { u, v, w, num, result, star };
         unique_function(
             vec![num_type(u, num), num_type(v, num)],
-            result_type(result, num_type(w, num), lift(star, overflow)),
+            result_type(result, num_type(w, num), lift(star, overflow())),
         )
     });
 
@@ -178,6 +180,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(Symbol::NUM_SUB_WRAP, {
         let_tvars! { u, v, w, num };
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
+    });
+
+    // subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(Symbol::NUM_SUB_CHECKED, {
+        let_tvars! { u, v, w, num, result, star };
+        unique_function(
+            vec![num_type(u, num), num_type(v, num)],
+            result_type(result, num_type(w, num), lift(star, overflow())),
+        )
     });
 
     // mul or (*) : Num a, Num a -> Num a

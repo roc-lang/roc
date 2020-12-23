@@ -3002,7 +3002,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt | NumSubWrap => {
+        | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt | NumSubWrap
+        | NumSubChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -3257,6 +3258,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             sub_result
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
+        NumSubChecked => env.call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
@@ -3445,6 +3447,32 @@ fn build_float_binop<'a, 'ctx, 'env>(
             builder.position_at_end(then_block);
 
             result.into()
+        }
+        NumSubChecked => {
+            let context = env.context;
+
+            let result = bd.build_float_sub(lhs, rhs, "sub_float");
+
+            let is_finite =
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+            let is_infinite = bd.build_not(is_finite, "negate");
+
+            let struct_type = context.struct_type(
+                &[context.f64_type().into(), context.bool_type().into()],
+                false,
+            );
+
+            let struct_value = {
+                let v1 = struct_type.const_zero();
+                let v2 = bd.build_insert_value(v1, result, 0, "set_result").unwrap();
+                let v3 = bd
+                    .build_insert_value(v2, is_infinite, 1, "set_is_infinite")
+                    .unwrap();
+
+                v3.into_struct_value()
+            };
+
+            struct_value.into()
         }
         NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
         NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),

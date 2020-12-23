@@ -784,4 +784,57 @@ mod gen_num {
             f64
         );
     }
+
+    #[test]
+    fn int_sub_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked 1 2 is
+                    Ok v -> v
+                    _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked Num.minInt 1 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    fn float_sub_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked 1.0 0.0 is
+                    Ok v -> v
+                    Err Overflow -> -1.0
+                "#
+            ),
+            1.0,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.subChecked -1.7976931348623157e308 1.7976931348623157e308 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
 }
