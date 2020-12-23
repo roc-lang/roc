@@ -18,8 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - run: echo $SCCACHE_REGION
-
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
 
