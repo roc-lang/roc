@@ -1958,7 +1958,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                     len_var,
                                     // Num.sub (List.len list) 1
                                     RunLowLevel {
-                                        op: LowLevel::NumSub,
+                                        op: LowLevel::NumSubWrap,
                                         args: vec![
                                             (
                                                 arg_var,
