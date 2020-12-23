@@ -704,19 +704,19 @@ mod gen_num {
         );
     }
 
-    //     #[test]
-    //     #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
-    //     fn float_overflow() {
-    //         assert_evals_to!(
-    //             indoc!(
-    //                 r#"
-    //                 1.7976931348623157e308 + 1.7976931348623157e308
-    //                 "#
-    //             ),
-    //             0.0,
-    //             f64
-    //         );
-    //     }
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+    fn float_add_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.7976931348623157e308 + 1.7976931348623157e308
+                    "#
+            ),
+            0.0,
+            f64
+        );
+    }
 
     #[test]
     fn num_max_int() {
@@ -768,6 +768,20 @@ mod gen_num {
             ),
             std::i64::MAX,
             i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float subtraction overflowed!"#)]
+    fn float_sub_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    -1.7976931348623157e308 - 1.7976931348623157e308
+                    "#
+            ),
+            0.0,
+            f64
         );
     }
 }
