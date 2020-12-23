@@ -349,6 +349,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I64, {
+        let fields = [i64_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i64_type.into(), i64_type.into()], false)
+    });
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -362,6 +368,7 @@ static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 pub static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
+pub static LLVM_SSUB_WITH_OVERFLOW_I64: &str = "llvm.ssub.with.overflow.i64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -3220,7 +3227,35 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
-        NumSub => bd.build_int_sub(lhs, rhs, "sub_int").into(),
+        NumSub => {
+            let context = env.context;
+            let result = env
+                .call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
+                .into_struct_value();
+
+            let sub_result = bd.build_extract_value(result, 0, "sub_result").unwrap();
+            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
+
+            let condition = bd.build_int_compare(
+                IntPredicate::EQ,
+                has_overflowed.into_int_value(),
+                context.bool_type().const_zero(),
+                "has_not_overflowed",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            bd.build_conditional_branch(condition, then_block, throw_block);
+
+            bd.position_at_end(throw_block);
+
+            throw_exception(env, "integer subtraction overflowed!");
+
+            bd.position_at_end(then_block);
+
+            sub_result
+        }
         NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
