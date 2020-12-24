@@ -271,6 +271,41 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_mul_wrap() {
+        expect_success("Num.mulWrap Num.maxInt 2", "-2 : I64");
+    }
+
+    #[test]
+    fn num_add_checked() {
+        expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
+        expect_success(
+            "Num.addChecked Num.maxInt 1",
+            "Err (Overflow) : Result I64 [ Overflow ]*",
+        );
+    }
+
+    #[test]
+    fn num_sub_checked() {
+        expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
+        expect_success(
+            "Num.subChecked Num.minInt 1",
+            "Err (Overflow) : Result I64 [ Overflow ]*",
+        );
+    }
+
+    #[test]
+    fn num_mul_checked() {
+        expect_success(
+            "Num.mulChecked 20 2",
+            "Ok 40 : Result (Num *) [ Overflow ]*",
+        );
+        expect_success(
+            "Num.mulChecked Num.maxInt 2",
+            "Err (Overflow) : Result I64 [ Overflow ]*",
+        );
+    }
+
+    #[test]
     fn list_concat() {
         expect_success(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
