@@ -362,10 +362,51 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
+            // Ints
+            Alias(Symbol::NUM_I128, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int128))
+            }
             Alias(Symbol::NUM_I64, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Int64))
             }
+            Alias(Symbol::NUM_I32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int32))
+            }
+            Alias(Symbol::NUM_I16, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int16))
+            }
+            Alias(Symbol::NUM_I8, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int8))
+            }
+
+            // I think unsigned and signed use the same layout
+            Alias(Symbol::NUM_U128, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int128))
+            }
+            Alias(Symbol::NUM_U64, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int64))
+            }
+            Alias(Symbol::NUM_U32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int32))
+            }
+            Alias(Symbol::NUM_U16, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int16))
+            }
+            Alias(Symbol::NUM_U8, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int8))
+            }
+
+            // Floats
             Alias(Symbol::NUM_F64, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
@@ -374,6 +415,7 @@ impl<'a> Layout<'a> {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float32))
             }
+
             Alias(_, _, var) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
@@ -767,10 +809,51 @@ fn layout_from_flat_type<'a>(
     match flat_type {
         Apply(symbol, args) => {
             match symbol {
+                // Ints
+                Symbol::NUM_I128 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int128))
+                }
                 Symbol::NUM_I64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
+                Symbol::NUM_I32 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::NUM_I16 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::NUM_I8 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+
+                // I think unsigned and signed use the same layout
+                Symbol::NUM_U128 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int128))
+                }
+                Symbol::NUM_U64 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::NUM_U32 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::NUM_U16 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::NUM_U8 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+
+                // Floats
                 Symbol::NUM_F64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
@@ -779,6 +862,7 @@ fn layout_from_flat_type<'a>(
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float32))
                 }
+
                 Symbol::NUM_NUM | Symbol::NUM_AT_NUM => {
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
@@ -788,6 +872,7 @@ fn layout_from_flat_type<'a>(
 
                     layout_from_num_content(content)
                 }
+
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
                 Symbol::ATTR_ATTR => {
@@ -1271,8 +1356,26 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
             Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
         Structure(Apply(symbol, args)) => match symbol {
+            // Ints
             Symbol::NUM_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_I128 => Ok(Layout::Builtin(Builtin::Int128)),
+            Symbol::NUM_I64 => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_I32 => Ok(Layout::Builtin(Builtin::Int32)),
+            Symbol::NUM_I16 => Ok(Layout::Builtin(Builtin::Int16)),
+            Symbol::NUM_I8 => Ok(Layout::Builtin(Builtin::Int8)),
+
+            // I think unsigned and signed use the same layout
+            Symbol::NUM_U128 => Ok(Layout::Builtin(Builtin::Int128)),
+            Symbol::NUM_U64 => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_U32 => Ok(Layout::Builtin(Builtin::Int32)),
+            Symbol::NUM_U16 => Ok(Layout::Builtin(Builtin::Int16)),
+            Symbol::NUM_U8 => Ok(Layout::Builtin(Builtin::Int8)),
+
+            // Floats
             Symbol::NUM_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_F64 => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_F32 => Ok(Layout::Builtin(Builtin::Float32)),
+
             _ => {
                 panic!(
                     "Invalid Num.Num type application: {:?}",

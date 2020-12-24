@@ -65,11 +65,33 @@ mod gen_num {
 
     #[test]
     fn f64_float_alias() {
-        assert_evals_to!("3.6 : F64", 3.6, f64);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : F64
+                    f = 3.6
+
+                    f
+                "#
+            ),
+            3.6,
+            f64
+        );
     }
     #[test]
     fn f32_float_alias() {
-        assert_evals_to!("3.6 : F32", 3.6, f32);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : F32
+                    f = 3.6
+
+                    f
+                "#
+            ),
+            3.6,
+            f32
+        );
     }
 
     #[test]
