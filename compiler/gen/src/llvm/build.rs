@@ -9,7 +9,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
-    basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, collection, get_fn_type,
+    get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
@@ -3489,6 +3490,33 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
+fn int_type_signed_min<'ctx>(int_type: IntType<'ctx>) -> IntValue<'ctx> {
+    let width = int_type.get_bit_width();
+
+    debug_assert!(width <= 128);
+    let shift = 128 - width as usize;
+
+    if shift < 64 {
+        let min = i128::MIN >> shift;
+        let a = min as u64;
+        let b = (min >> 64) as u64;
+
+        int_type.const_int_arbitrary_precision(&[b, a])
+    } else {
+        int_type.const_int((i128::MIN >> shift) as u64, false)
+    }
+}
+
+fn builtin_to_int_type<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    builtin: &Builtin<'a>,
+) -> IntType<'ctx> {
+    let result = basic_type_from_builtin(env.arena, env.context, builtin, env.ptr_bytes);
+    debug_assert!(result.is_int_type());
+
+    result.into_int_type()
+}
+
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
@@ -3498,46 +3526,15 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     use roc_module::low_level::LowLevel::*;
 
     let bd = env.builder;
-    let ctx = env.context;
 
     match op {
-        NumNeg => bd.build_int_neg(arg, "negate_int").into(),
-        NumAbs => {
-            use Builtin::*;
+        NumNeg => {
             // integer abs overflows when applied to the minimum value of a signed type
-            match arg_layout {
-                Int128 => {
-                    let a = i128::MIN as u64;
-                    let b = (i128::MIN >> 64) as u64;
-
-                    int_abs_raise_on_overflow(
-                        env,
-                        arg,
-                        ctx.i128_type().const_int_arbitrary_precision(&[b, a]),
-                    )
-                }
-                Int64 => int_abs_raise_on_overflow(
-                    env,
-                    arg,
-                    ctx.i64_type().const_int(i64::MIN as u64, false),
-                ),
-                Int32 => int_abs_raise_on_overflow(
-                    env,
-                    arg,
-                    ctx.i32_type().const_int(i32::MIN as u64, false),
-                ),
-                Int16 => int_abs_raise_on_overflow(
-                    env,
-                    arg,
-                    ctx.i16_type().const_int(i16::MIN as u64, false),
-                ),
-                Int8 => int_abs_raise_on_overflow(
-                    env,
-                    arg,
-                    ctx.i8_type().const_int(i8::MIN as u64, false),
-                ),
-                _ => unreachable!("not an integer type"),
-            }
+            int_neg_raise_on_overflow(env, arg, arg_layout)
+        }
+        NumAbs => {
+            // integer abs overflows when applied to the minimum value of a signed type
+            int_abs_raise_on_overflow(env, arg, arg_layout)
         }
         NumToFloat => {
             // This is an Int, so we need to convert it.
@@ -3554,12 +3551,44 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     }
 }
 
+fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    arg: IntValue<'ctx>,
+    builtin: &Builtin<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let min_val = int_type_signed_min(builtin_to_int_type(env, builtin));
+    let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let parent = block.get_parent().expect("to be in a function");
+    let then_block = env.context.append_basic_block(parent, "then");
+    let else_block = env.context.append_basic_block(parent, "else");
+
+    env.builder
+        .build_conditional_branch(condition, then_block, else_block);
+
+    builder.position_at_end(then_block);
+
+    throw_exception(
+        env,
+        "integer negation overflowed because its argument is the minimum value",
+    );
+
+    builder.position_at_end(else_block);
+
+    builder.build_int_neg(arg, "negate_int").into()
+}
+
 fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    min_val: IntValue<'ctx>,
+    builtin: &Builtin<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
+
+    let min_val = int_type_signed_min(builtin_to_int_type(env, builtin));
     let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
 
     let block = env.builder.get_insert_block().expect("to be in a function");
@@ -3579,13 +3608,13 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
 
     builder.position_at_end(else_block);
 
-    int_abs_with_overflow(env, arg, Layout::Builtin(Builtin::Int64))
+    int_abs_with_overflow(env, arg, builtin)
 }
 
 fn int_abs_with_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    arg_layout: Layout<'a>,
+    arg_layout: &Builtin<'a>,
 ) -> BasicValueEnum<'ctx> {
     // This is how libc's abs() is implemented - it uses no branching!
     //
@@ -3602,7 +3631,7 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
         let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
         let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
         let alloca = bd.build_alloca(
-            basic_type_from_layout(env.arena, ctx, &arg_layout, env.ptr_bytes),
+            basic_type_from_builtin(env.arena, ctx, arg_layout, env.ptr_bytes),
             "#int_abs_help",
         );
 

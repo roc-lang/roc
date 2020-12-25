@@ -553,6 +553,24 @@ mod gen_num {
     #[test]
     fn int_negate() {
         assert_evals_to!("Num.neg 123", -123, i64);
+        assert_evals_to!("Num.neg Num.maxInt", -i64::MAX, i64);
+        assert_evals_to!("Num.neg (Num.minInt + 1)", i64::MAX, i64);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = r#"Roc failed with message: "integer negation overflowed because its argument is the minimum value"#
+    )]
+    fn neg_min_int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.neg Num.minInt
+                "#
+            ),
+            0,
+            i64
+        );
     }
 
     #[test]
