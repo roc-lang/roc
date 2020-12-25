@@ -26,7 +26,7 @@ jobs:
 
       - name: scope sccache to CPU model
         run: |
-          export SCCACHE_S3_KEY_PREFIX=`sudo cat /proc/cpuinfo | grep name | uniq | awk {'print $6_$7'}`
+          export SCCACHE_S3_KEY_PREFIX=`sudo cat /proc/cpuinfo | grep name | uniq | awk -F: {'print $2'} | awk -F@ {'print$1'} | xargs | sed -e 's/\s/_/g'
           echo "SCCACHE_S3_KEY_PREFIX=$SCCACHE_S3_KEY_PREFIX" >> $GITHUB_ENV
 
       - name: print SCCACHE_S3_KEY_PREFIX
