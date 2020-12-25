@@ -1296,11 +1296,17 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
             }
         },
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
-            debug_assert!(args.is_empty());
+            debug_assert!(args.len() == 1);
+
+            // TODO: we probably need to match on the type of the arg
+            // and return the correct builtin ex: Builtin::{Int32, Int16}
             Ok(Layout::Builtin(Builtin::Int64))
         }
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
-            debug_assert!(args.is_empty());
+            debug_assert!(args.len() == 1);
+
+            // TODO: we probably need to match on the type of the arg
+            // and return the correct builtin ex: Builtin::Float32
             Ok(Layout::Builtin(Builtin::Float64))
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
