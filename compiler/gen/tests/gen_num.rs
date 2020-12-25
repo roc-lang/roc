@@ -40,6 +40,8 @@ mod gen_num {
     fn f64_abs() {
         assert_evals_to!("Num.abs -4.7", 4.7, f64);
         assert_evals_to!("Num.abs 5.8", 5.8, f64);
+        //assert_evals_to!("Num.abs Num.maxFloat", f64::MAX, f64);
+        //assert_evals_to!("Num.abs Num.minFloat", -f64::MIN, f64);
     }
 
     #[test]
@@ -52,6 +54,24 @@ mod gen_num {
         assert_evals_to!("Num.abs 1", 1, i64);
         assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
         assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to!("Num.abs Num.maxInt", i64::MAX, i64);
+        assert_evals_to!("Num.abs (Num.minInt + 1)", -(i64::MIN + 1), i64);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
+    )]
+    fn abs_min_int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.abs Num.minInt
+                "#
+            ),
+            0,
+            i64
+        );
     }
 
     #[test]
