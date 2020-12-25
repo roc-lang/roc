@@ -3575,7 +3575,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn int_type_signed_min<'ctx>(int_type: IntType<'ctx>) -> IntValue<'ctx> {
+fn int_type_signed_min(int_type: IntType) -> IntValue {
     let width = int_type.get_bit_width();
 
     debug_assert!(width <= 128);
