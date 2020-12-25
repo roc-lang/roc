@@ -1732,4 +1732,20 @@ mod gen_primitives {
             |_| 0
         );
     }
+
+    #[test]
+    fn hof_conditional() {
+        // exposed issue with the if condition being just a symbol
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    passTrue = \f -> f True
+
+                    passTrue (\trueVal -> if trueVal then False else True)
+                "#
+            ),
+            0,
+            u8
+        );
+    }
 }

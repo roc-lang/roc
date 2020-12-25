@@ -3678,7 +3678,7 @@ pub fn from_can<'a>(
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = env.unique_symbol();
+                let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
                 stmt = Stmt::Cond {
@@ -3691,15 +3691,14 @@ pub fn from_can<'a>(
                     ret_layout: ret_layout.clone(),
                 };
 
-                // add condition
-                stmt = with_hole(
+                stmt = assign_to_symbol(
                     env,
-                    loc_cond.value,
-                    cond_var,
                     procs,
                     layout_cache,
+                    cond_var,
+                    loc_cond,
                     branching_symbol,
-                    env.arena.alloc(stmt),
+                    stmt,
                 );
             }
 
