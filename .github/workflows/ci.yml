@@ -25,7 +25,9 @@ jobs:
         run: sudo ./ci/install-ci-libraries.sh 10
 
       - name: scope sccache to CPU model
-        run: export SCCACHE_S3_KEY_PREFIX=`sudo cat /proc/cpuinfo | grep name | uniq | awk {'print $6'}`
+        run: |
+          export SCCACHE_S3_KEY_PREFIX=`sudo cat /proc/cpuinfo | grep name | uniq | awk {'print $6_$7'}`
+          echo "::set-env name=SCCACHE_S3_KEY_PREFIX::$SCCACHE_S3_KEY_PREFIX"
 
       - name: print SCCACHE_S3_KEY_PREFIX
         run: echo $SCCACHE_S3_KEY_PREFIX
