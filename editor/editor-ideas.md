@@ -73,8 +73,12 @@ These are potentially inspirational resources for the editor's design.
 * Voice input:
     * Good for accessibility.
     * https://www.youtube.com/watch?v=Ffa3cXM7bjc is interesting for inspiration.
-    * Describe actions instead of using complicated shortcuts.
     * Could be efficient way to communicate with smart assistant.
+    * Describe actions to execute them, examples:
+        * Add latest datetime package to dependencies.
+        * Generate unit test for this function.
+        * Show edit history for this function.
+    
 
 
 ## General Thoughts/Ideas

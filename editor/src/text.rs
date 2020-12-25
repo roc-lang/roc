@@ -1,10 +1,11 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
 
-use ab_glyph::{FontArc, InvalidFont};
+use ab_glyph::{FontArc, InvalidFont, Glyph};
 use cgmath::{Vector2, Vector4};
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 use crate::rect::Rect;
+use itertools::Itertools;
 
 #[derive(Debug)]
 pub struct Text {
@@ -31,7 +32,8 @@ impl Default for Text {
     }
 }
 
-pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Vec<Rect> {
+// returns bounding boxes for every glyph
+pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Vec<Vec<Rect>> {
     let layout = wgpu_glyph::Layout::default().h_align(if text.centered {
         wgpu_glyph::HorizontalAlign::Center
     } else {
@@ -57,17 +59,31 @@ pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Vec<Rec
         {
             let position = section_glyph.glyph.position;
             let px_scale = section_glyph.glyph.scale;
-            let width = px_scale.x * 0.5;
+            let width = glyph_width(&section_glyph.glyph);
             let height = px_scale.y;
+            let top_y = glyph_top_y(&section_glyph.glyph);
 
             Rect {
-                top_left_coords: [position.x, position.y - height * 0.75].into(),
+                top_left_coords: [position.x, top_y].into(),
                 width,
                 height,
                 color: [1.0, 1.0, 1.0]
             }
         }
-    ).collect()
+    ).group_by(|rect| rect.top_left_coords.y)
+    .into_iter()
+    .map(|(_y_coord, rect_group)| rect_group.collect())
+    .collect()
+}
+
+pub fn glyph_top_y(glyph: &Glyph) -> f32 {
+    let height = glyph.scale.y;
+    
+    glyph.position.y - height * 0.75
+}
+
+pub fn glyph_width(glyph: &Glyph) -> f32 {
+    glyph.scale.x * 0.5
 }
 
 pub fn build_glyph_brush(

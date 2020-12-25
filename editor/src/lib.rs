@@ -19,6 +19,8 @@ use std::path::Path;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
+use error::{OutOfBounds};
+use vec_result::{get_res};
 
 pub mod ast;
 mod buffer;
@@ -34,6 +36,9 @@ pub mod text;
 mod types;
 mod util;
 mod vertex;
+mod colors;
+pub mod error;
+mod vec_result;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -107,7 +112,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let mut text_state = "A".to_owned();
+    let mut text_state = "".to_owned();//String::new();
     let mut keyboard_modifiers = ModifiersState::empty();
 
     // Render loop
@@ -201,29 +206,35 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     &mut glyph_brush,
                 );
 
-                if !glyph_bounds_rects.is_empty() {
-                    let rect_buffers = create_rect_buffers(
-                        &gpu_device,
-                        &mut encoder, 
-                        &glyph_bounds_rects,
-                    );
+                let selection_rects_res = create_selection_rects(1, 10, 2, 10, &glyph_bounds_rects);
 
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                            attachment: &frame.view,
-                            resolve_target: None,
-                            ops: wgpu::Operations::default(),
-                        }],
-                        depth_stencil_attachment: None,
-                    });            
-
-                    render_pass.set_pipeline(&rect_pipeline);
-                    render_pass.set_bind_group(0, &ortho.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-                    render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-                    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-
-                    drop(render_pass);
+                match selection_rects_res {
+                    Ok(selection_rects) => 
+                        if !selection_rects.is_empty() {
+                            let rect_buffers = create_rect_buffers(
+                                &gpu_device,
+                                &mut encoder, 
+                                &selection_rects,
+                            );
+        
+                            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                                    attachment: &frame.view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations::default(),
+                                }],
+                                depth_stencil_attachment: None,
+                            });            
+        
+                            render_pass.set_pipeline(&rect_pipeline);
+                            render_pass.set_bind_group(0, &ortho.bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+                            render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+        
+                            drop(render_pass);
+                        },
+                    Err(e) => println!("{:?}", e) //TODO draw error text on screen
                 }
 
                 // draw all text
@@ -255,6 +266,83 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
             }
         }
     })
+}
+
+
+fn create_selection_rects(
+    start_line: usize,
+    pos_in_start_line: usize,
+    stop_line: usize,
+    pos_in_stop_line: usize,
+    glyph_bound_rects: &Vec<Vec<Rect>>
+)  -> Result<Vec<Rect>, OutOfBounds> {
+    //TODO assert start_line <= stop_line, if start_line == stop_line => pos_in_start_line <= pos_in_stop_line
+
+    let mut all_rects = Vec::new();
+
+    if start_line == stop_line {
+        let start_glyph_rect = 
+            get_res(
+                pos_in_start_line,
+                get_res(start_line, glyph_bound_rects)?
+            )?;
+
+        let stop_glyph_rect = 
+            get_res(
+                pos_in_stop_line,
+                get_res(stop_line, glyph_bound_rects)?
+            )?;
+
+        let top_left_coords =
+            start_glyph_rect.top_left_coords;
+
+        let height = start_glyph_rect.height;
+        let width = (stop_glyph_rect.top_left_coords.x - start_glyph_rect.top_left_coords.x) + stop_glyph_rect.width;
+
+        all_rects.push(
+            Rect {
+                top_left_coords,
+                width,
+                height,
+                color: colors::WHITE
+            }
+        );
+
+        Ok(all_rects)
+    } else {
+        let start_line = get_res(start_line, glyph_bound_rects)?;
+
+        let start_glyph_rect = 
+            get_res(
+                pos_in_start_line,
+                start_line
+            )?;
+
+        let stop_glyph_rect = 
+            get_res(
+                start_line.len() - 1,
+                start_line
+            )?;
+
+        let top_left_coords =
+            start_glyph_rect.top_left_coords;
+
+        let height = start_glyph_rect.height;
+        let width = (stop_glyph_rect.top_left_coords.x - start_glyph_rect.top_left_coords.x) + stop_glyph_rect.width;
+
+        all_rects.push(
+            Rect {
+                top_left_coords,
+                width,
+                height,
+                color: colors::WHITE
+            }
+        );
+
+        //TODO loop rects if necessary and stop line rect
+        
+        Ok(all_rects)
+    }
 }
 
 fn make_rect_pipeline(
@@ -321,11 +409,12 @@ fn create_render_pipeline(
     })
 }
 
+// returns bounding boxes for every glyph
 fn queue_all_text(
     size: &winit::dpi::PhysicalSize<u32>,
     text_state: &str,
     glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
-) -> Vec<Rect> {
+) -> Vec<Vec<Rect>> {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
     let main_label = Text {

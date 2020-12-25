@@ -2649,6 +2649,7 @@ dependencies = [
  "indoc",
  "inkwell",
  "inlinable_string",
+ "itertools",
  "libc",
  "log",
  "maplit",
