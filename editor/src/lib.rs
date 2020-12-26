@@ -12,6 +12,7 @@ use crate::buffer::create_rect_buffers;
 use crate::text::{build_glyph_brush, Text};
 use crate::vertex::Vertex;
 use crate::rect::{Rect};
+use crate::error::{EdResult, print_err};
 use ortho::{init_ortho, update_ortho_buffer, OrthoResources};
 use std::error::Error;
 use std::io;
@@ -19,7 +20,6 @@ use std::path::Path;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
-use error::{OutOfBounds};
 use vec_result::{get_res};
 
 pub mod ast;
@@ -234,7 +234,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
         
                             drop(render_pass);
                         },
-                    Err(e) => println!("{:?}", e) //TODO draw error text on screen
+                    Err(e) => print_err(&e) //TODO draw error text on screen
                 }
 
                 // draw all text
@@ -275,7 +275,7 @@ fn create_selection_rects(
     stop_line_indx: usize,
     pos_in_stop_line: usize,
     glyph_bound_rects: &Vec<Vec<Rect>>
-)  -> Result<Vec<Rect>, OutOfBounds> {
+)  -> EdResult<Vec<Rect>> {
     //TODO assert start_line <= stop_line, if start_line == stop_line => pos_in_start_line <= pos_in_stop_line
 
     let mut all_rects = Vec::new();
@@ -284,7 +284,7 @@ fn create_selection_rects(
         let start_glyph_rect = 
             get_res(
                 pos_in_start_line,
-                get_res(start_line_indx, glyph_bound_rects)?
+                get_res(start_line_indx, glyph_bound_rects)?,
             )?;
 
         let stop_glyph_rect = 

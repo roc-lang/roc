@@ -99,6 +99,7 @@ These are potentially inspirational resources for the editor's design.
 Thoughts and ideas possibly taken from above inspirations or separate.
 
 * ACCESSIBILITY!!!
+* Nice backtraces that highlight important information
 * Ability to show import connection within project visually
     * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
 * Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.
