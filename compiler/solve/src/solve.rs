@@ -138,24 +138,9 @@ pub fn run(
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let mut pools = Pools::default();
-    let state = State {
-        env: env.clone(),
-        mark: Mark::NONE.next(),
-    };
-    let rank = Rank::toplevel();
-    let state = solve(
-        env,
-        state,
-        rank,
-        &mut pools,
-        problems,
-        &mut MutMap::default(),
-        &mut subs,
-        constraint,
-    );
+    let env = run_in_place(env, problems, &mut subs, constraint);
 
-    (Solved(subs), state.env)
+    (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead
