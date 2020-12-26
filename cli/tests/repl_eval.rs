@@ -463,6 +463,13 @@ mod repl_eval {
     }
 
     #[test]
+    fn identity_lambda() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("\\x -> x", "<function> : a -> a");
+    }
+
+    #[test]
     fn type_problem() {
         expect_failure(
             "1 + \"\"",
