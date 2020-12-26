@@ -2797,8 +2797,15 @@ fn run_solve<'a>(
         ..
     } = module;
 
+    let exposed_symbols: MutSet<Symbol> = exposed_vars_by_symbol.iter().map(|(s, _)| *s).collect();
+
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
+
+    let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = exposed_symbols
+        .iter()
+        .map(|s| (*s, solved_env.vars_by_symbol[s]))
+        .collect();
 
     let solved_types =
         roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
