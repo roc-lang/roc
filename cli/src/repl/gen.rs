@@ -253,7 +253,7 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
 
         let lib = module_to_dylib(&env.module, &target, opt_level)
             .expect("Error loading compiled dylib for test");
-        let answer = unsafe {
+        let res_answer = unsafe {
             eval::jit_to_ast(
                 &arena,
                 lib,
@@ -268,7 +268,15 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         };
         let mut expr = bumpalo::collections::String::new_in(&arena);
 
-        answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
+        use eval::ToAstProblem::*;
+        match res_answer {
+            Ok(answer) => {
+                answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
+            }
+            Err(FunctionLayout) => {
+                expr.push_str("<function>");
+            }
+        }
 
         Ok(ReplOutput::NoProblems {
             expr: expr.into_bump_str().to_string(),
