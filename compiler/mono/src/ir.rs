@@ -1508,7 +1508,6 @@ pub fn specialize_all<'a>(
                         ));
 
                         procs.runtime_errors.insert(name, error_msg);
-                        panic!("failed to specialize {:?}", name);
                     }
                 }
             }

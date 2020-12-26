@@ -131,11 +131,15 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         let content = subs.get(main_fn_var).content;
         let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
 
-        let (_, main_fn_layout) = procedures
-            .keys()
-            .find(|(s, _)| *s == main_fn_symbol)
-            .unwrap()
-            .clone();
+        let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
+            Some(layout) => layout.clone(),
+            None => {
+                return Ok(ReplOutput::NoProblems {
+                    expr: "<function>".to_string(),
+                    expr_type: expr_type_str,
+                });
+            }
+        };
 
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
