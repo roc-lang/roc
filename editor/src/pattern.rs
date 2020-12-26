@@ -2,10 +2,10 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::ast::{ExprId, FloatVal, IntVal};
-use crate::expr::{to_expr_id, Env};
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::expr::{to_expr_id, Env, Output};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
-use roc_can::expr::{unescape_char, Output};
+use roc_can::expr::unescape_char;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{StrLiteral, StrSegment};
@@ -53,6 +53,12 @@ pub enum Pattern2 {
     UnsupportedPattern(Region),
     // parse error patterns
     MalformedPattern(MalformedPatternProblem, Region),
+}
+
+impl ShallowClone for Pattern2 {
+    fn shallow_clone(&self) -> Self {
+        todo!()
+    }
 }
 
 #[derive(Debug)]

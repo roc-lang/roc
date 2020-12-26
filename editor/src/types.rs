@@ -41,6 +41,12 @@ pub enum Type2 {
     Erroneous(roc_types::types::Problem),
 }
 
+impl ShallowClone for Type2 {
+    fn shallow_clone(&self) -> Self {
+        todo!()
+    }
+}
+
 impl Type2 {
     fn substitute(_pool: &mut Pool, _subs: &MutMap<Variable, TypeId>, _type_id: TypeId) {
         todo!()
