@@ -1,6 +1,6 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{ImMap, MutMap, SendMap};
+use roc_collections::all::{ImMap, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -73,7 +73,7 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    pub vars_by_symbol: SendMap<Symbol, Variable>,
+    pub vars_by_symbol: MutMap<Symbol, Variable>,
     pub aliases: MutMap<Symbol, Alias>,
 }
 

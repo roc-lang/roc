@@ -1,6 +1,6 @@
 use crate::solve;
 use roc_can::constraint::Constraint;
-use roc_collections::all::{MutMap, SendMap};
+use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_types::solved_types::{Solved, SolvedType};
@@ -22,7 +22,7 @@ pub fn run_solve(
     var_store: VarStore,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
     let env = solve::Env {
-        vars_by_symbol: SendMap::default(),
+        vars_by_symbol: MutMap::default(),
         aliases,
     };
 
