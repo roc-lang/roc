@@ -78,7 +78,20 @@ These are potentially inspirational resources for the editor's design.
         * Add latest datetime package to dependencies.
         * Generate unit test for this function.
         * Show edit history for this function.
+
+
+## Testing
     
+* From Google Docs' comments, adding tests in a similar manner, where they exists in the same "document" but parallel to the code being written
+    * Makes sense for unit tests, keeps the test close to the source
+    * Doesn't necessarily make sense for integration or e2e testing
+    * Maybe easier to manually trigger a test related to exactly what code you're writing
+* Ability to generate unit tests for a selected function in context menu
+    * A table should appear to enter input and expected output pairs quickly
+* Ability to "record" unit tests
+    * Select a function to record.
+    * Do a normal run, and save the input and output of the selected function.
+    * Generate a unit test with that input-output pair
 
 
 ## General Thoughts/Ideas
@@ -86,12 +99,6 @@ These are potentially inspirational resources for the editor's design.
 Thoughts and ideas possibly taken from above inspirations or separate.
 
 * ACCESSIBILITY!!!
-* From Google Docs' comments, adding tests in a similar manner, where they exists in the same "document" but parallel to the code being written
-    * Makes sense for unit tests, keeps the test close to the source
-    * Doesn't necessarily make sense for integration or e2e testing
-    * Maybe easier to manually trigger a test related to exactly what code you're writing
-* Ability to generate unit tests for a selected function in context menu
-    * A table should appear to enter input and expected output pairs quickly 
 * Ability to show import connection within project visually
     * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
 * Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.
