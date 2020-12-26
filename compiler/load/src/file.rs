@@ -663,7 +663,7 @@ enum Msg<'a> {
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
-        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        exposed_vars_by_symbol: MutMap<Symbol, Variable>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -1638,9 +1638,12 @@ fn update<'a>(
             };
 
             if is_host_exposed {
-                state
-                    .exposed_to_host
-                    .extend(solved_module.exposed_vars_by_symbol.iter().copied());
+                state.exposed_to_host.extend(
+                    solved_module
+                        .exposed_vars_by_symbol
+                        .iter()
+                        .map(|(k, v)| (*k, *v)),
+                );
             }
 
             if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
@@ -1904,7 +1907,7 @@ fn finish_specialization<'a>(
 fn finish<'a>(
     state: State<'a>,
     solved: Solved<Subs>,
-    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -2800,11 +2803,9 @@ fn run_solve<'a>(
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 
-    // solved_env.vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
-    let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = exposed_symbols
-        .iter()
-        .map(|s| (*s, solved_env.vars_by_symbol[s]))
-        .collect();
+    let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> =
+        solved_env.vars_by_symbol.iter().copied().collect();
+    exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
 
     let solved_types =
         roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
