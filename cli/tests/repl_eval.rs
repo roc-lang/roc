@@ -470,6 +470,13 @@ mod repl_eval {
     }
 
     #[test]
+    fn stdlib_function() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("Num.abs", "<function> : Num a -> Num a");
+    }
+
+    #[test]
     fn type_problem() {
         expect_failure(
             "1 + \"\"",
