@@ -2800,6 +2800,7 @@ fn run_solve<'a>(
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 
+    // solved_env.vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = exposed_symbols
         .iter()
         .map(|s| (*s, solved_env.vars_by_symbol[s]))
@@ -3006,8 +3007,8 @@ fn fabricate_effects_module<'a>(
 
     let mut declarations = Vec::new();
 
-    let exposed_vars_by_symbol = {
-        let mut exposed_vars_by_symbol = Vec::new();
+    let exposed_symbols: MutSet<Symbol> = {
+        let mut exposed_symbols = MutSet::default();
 
         {
             for (ident, ann) in effect_entries {
@@ -3040,7 +3041,7 @@ fn fabricate_effects_module<'a>(
                     annotation,
                 );
 
-                exposed_vars_by_symbol.push((symbol, def.expr_var));
+                exposed_symbols.insert(symbol);
 
                 declarations.push(Declaration::Declare(def));
             }
@@ -3052,11 +3053,11 @@ fn fabricate_effects_module<'a>(
             &mut scope,
             effect_symbol,
             &mut var_store,
-            &mut exposed_vars_by_symbol,
+            &mut exposed_symbols,
             &mut declarations,
         );
 
-        exposed_vars_by_symbol
+        exposed_symbols
     };
 
     use roc_can::module::ModuleOutput;
@@ -3068,7 +3069,6 @@ fn fabricate_effects_module<'a>(
         lookups: Vec::new(),
         problems: can_env.problems,
         ident_ids: can_env.ident_ids,
-        exposed_vars_by_symbol,
         references: MutSet::default(),
     };
 
@@ -3077,11 +3077,7 @@ fn fabricate_effects_module<'a>(
     let module = Module {
         module_id,
         exposed_imports: module_output.exposed_imports,
-        exposed_symbols: module_output
-            .exposed_vars_by_symbol
-            .iter()
-            .map(|t| t.0)
-            .collect(),
+        exposed_symbols,
         references: module_output.references,
         aliases: module_output.aliases,
         rigid_variables: module_output.rigid_variables,
@@ -3191,7 +3187,7 @@ fn canonicalize_and_constrain<'a>(
         dep_idents,
         aliases,
         exposed_imports,
-        exposed_symbols,
+        &exposed_symbols,
         &mut var_store,
     );
     let canonicalize_end = SystemTime::now();
@@ -3205,11 +3201,7 @@ fn canonicalize_and_constrain<'a>(
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
-                exposed_symbols: module_output
-                    .exposed_vars_by_symbol
-                    .iter()
-                    .map(|t| t.0)
-                    .collect(),
+                exposed_symbols,
                 references: module_output.references,
                 aliases: module_output.aliases,
                 rigid_variables: module_output.rigid_variables,
