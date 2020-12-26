@@ -204,9 +204,9 @@ pub enum Expr2 {
 
 #[derive(Debug)]
 pub struct ValueDef {
-    pattern: PatternId,                  // 4B
-    expr_type: Option<(TypeId, Rigids)>, // ?
-    expr_var: Variable,                  // 4B
+    pub pattern: PatternId,                  // 4B
+    pub expr_type: Option<(TypeId, Rigids)>, // ?
+    pub expr_var: Variable,                  // 4B
 }
 
 impl ShallowClone for ValueDef {
@@ -229,11 +229,13 @@ pub enum FunctionDef {
         arguments: PoolVec<(Pattern2, Type2)>, // 8B
         rigids: NodeId<Rigids>,                // 4B
         return_type: TypeId,                   // 4B
+        body: ExprId,                          // 4B
     },
     NoAnnotation {
         name: Symbol,                             // 8B
         arguments: PoolVec<(Pattern2, Variable)>, // 8B
         return_var: Variable,                     // 4B
+        body: ExprId,                             // 4B
     },
 }
 
@@ -245,21 +247,25 @@ impl ShallowClone for FunctionDef {
                 arguments,
                 rigids,
                 return_type,
+                body,
             } => Self::WithAnnotation {
                 name: *name,
                 arguments: arguments.shallow_clone(),
                 rigids: *rigids,
                 return_type: *return_type,
+                body: *body,
             },
 
             Self::NoAnnotation {
                 name,
                 arguments,
                 return_var,
+                body,
             } => Self::NoAnnotation {
                 name: *name,
                 arguments: arguments.shallow_clone(),
                 return_var: *return_var,
+                body: *body,
             },
         }
     }

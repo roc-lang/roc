@@ -42,7 +42,7 @@ pub const NODE_BYTES: usize = 32;
 //   On the plus side, we could be okay with higher memory usage early on,
 //   and then later use the Mesh strategy to reduce long-running memory usage.
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq)]
 pub struct NodeId<T> {
     index: u32,
     _phantom: PhantomData<T>,
@@ -54,6 +54,12 @@ impl<T> Clone for NodeId<T> {
             index: self.index,
             _phantom: PhantomData::default(),
         }
+    }
+}
+
+impl<T> PartialEq for NodeId<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
     }
 }
 
