@@ -2791,13 +2791,11 @@ fn run_solve<'a>(
     let module_id = module.module_id;
 
     let Module {
-        exposed_vars_by_symbol,
+        exposed_symbols,
         aliases,
         rigid_variables,
         ..
     } = module;
-
-    let exposed_symbols: MutSet<Symbol> = exposed_vars_by_symbol.iter().map(|(s, _)| *s).collect();
 
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
@@ -3079,7 +3077,11 @@ fn fabricate_effects_module<'a>(
     let module = Module {
         module_id,
         exposed_imports: module_output.exposed_imports,
-        exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+        exposed_symbols: module_output
+            .exposed_vars_by_symbol
+            .iter()
+            .map(|t| t.0)
+            .collect(),
         references: module_output.references,
         aliases: module_output.aliases,
         rigid_variables: module_output.rigid_variables,
@@ -3203,7 +3205,11 @@ fn canonicalize_and_constrain<'a>(
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
-                exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+                exposed_symbols: module_output
+                    .exposed_vars_by_symbol
+                    .iter()
+                    .map(|t| t.0)
+                    .collect(),
                 references: module_output.references,
                 aliases: module_output.aliases,
                 rigid_variables: module_output.rigid_variables,
