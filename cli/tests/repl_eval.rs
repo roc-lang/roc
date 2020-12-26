@@ -477,6 +477,26 @@ mod repl_eval {
     }
 
     #[test]
+    fn too_few_args() {
+        expect_failure(
+            "Num.add 2",
+            indoc!(
+                r#"
+                ── TOO FEW ARGS ────────────────────────────────────────────────────────────────
+
+                The add function expects 2 arguments, but it got only 1:
+
+                4│      Num.add 2
+                        ^^^^^^^
+
+                Roc does not allow functions to be partially applied. Use a closure to
+                make partial application explicit.
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn type_problem() {
         expect_failure(
             "1 + \"\"",

@@ -3548,9 +3548,29 @@ fn add_def_to_module<'a>(
                     // get specialized!
                     if is_exposed {
                         let annotation = def.expr_var;
-                        let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
-                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
-                                    );
+
+                        let layout = match layout_cache.from_var(
+                            mono_env.arena,
+                            annotation,
+                            mono_env.subs,
+                        ) {
+                            Ok(l) => l,
+                            Err(LayoutProblem::Erroneous) => {
+                                let message = "top level function has erroneous type";
+                                procs.runtime_errors.insert(symbol, message);
+                                return;
+                            }
+                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                return;
+                            }
+                        };
 
                         procs.insert_exposed(
                             symbol,
