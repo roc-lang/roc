@@ -19,6 +19,14 @@ pub enum EdError {
         vec_len: usize,
         backtrace: Backtrace 
     },
+    #[snafu(display(
+        "InvalidSelection: {}",
+        err_msg
+    ))]
+    InvalidSelection { 
+        err_msg: String,
+        backtrace: Backtrace 
+    },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;

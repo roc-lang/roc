@@ -12,7 +12,7 @@ use crate::buffer::create_rect_buffers;
 use crate::text::{build_glyph_brush, Text};
 use crate::vertex::Vertex;
 use crate::rect::{Rect};
-use crate::error::{EdResult, print_err};
+use crate::error::{print_err};
 use ortho::{init_ortho, update_ortho_buffer, OrthoResources};
 use std::error::Error;
 use std::io;
@@ -20,7 +20,7 @@ use std::path::Path;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
-use vec_result::{get_res};
+use selection::{create_selection_rects, RawSelection};
 
 pub mod ast;
 mod buffer;
@@ -39,6 +39,7 @@ mod vertex;
 mod colors;
 pub mod error;
 mod vec_result;
+mod selection;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -206,7 +207,14 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     &mut glyph_brush,
                 );
 
-                let selection_rects_res = create_selection_rects(1, 5, 4, 2, &glyph_bounds_rects);
+                let selection =
+                    RawSelection {
+                        start_line_indx: 1,
+                        pos_in_start_line: 3,
+                        stop_line_indx: 4,
+                        pos_in_stop_line: 5,
+                    };
+                let selection_rects_res = create_selection_rects(selection, &glyph_bounds_rects);
 
                 match selection_rects_res {
                     Ok(selection_rects) => 
@@ -268,146 +276,6 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     })
 }
 
-
-fn create_selection_rects(
-    start_line_indx: usize,
-    pos_in_start_line: usize,
-    stop_line_indx: usize,
-    pos_in_stop_line: usize,
-    glyph_bound_rects: &Vec<Vec<Rect>>
-)  -> EdResult<Vec<Rect>> {
-    //TODO assert start_line <= stop_line, if start_line == stop_line => pos_in_start_line <= pos_in_stop_line
-
-    let mut all_rects = Vec::new();
-
-    if start_line_indx == stop_line_indx {
-        let start_glyph_rect = 
-            get_res(
-                pos_in_start_line,
-                get_res(start_line_indx, glyph_bound_rects)?,
-            )?;
-
-        let stop_glyph_rect = 
-            get_res(
-                pos_in_stop_line,
-                get_res(stop_line_indx, glyph_bound_rects)?
-            )?;
-
-        let top_left_coords =
-            start_glyph_rect.top_left_coords;
-
-        let height = start_glyph_rect.height;
-        let width = (stop_glyph_rect.top_left_coords.x - start_glyph_rect.top_left_coords.x) + stop_glyph_rect.width;
-
-        all_rects.push(
-            Rect {
-                top_left_coords,
-                width,
-                height,
-                color: colors::WHITE
-            }
-        );
-
-        Ok(all_rects)
-    } else {
-        // first line
-        let start_line = get_res(start_line_indx, glyph_bound_rects)?;
-
-        let start_glyph_rect = 
-            get_res(
-                pos_in_start_line,
-                start_line
-            )?;
-
-        let start_line_last_glyph_rect = 
-            get_res(
-                start_line.len() - 1,
-                start_line
-            )?;
-
-        let top_left_coords =
-            start_glyph_rect.top_left_coords;
-
-        let height = start_glyph_rect.height;
-        let width = (start_line_last_glyph_rect.top_left_coords.x - start_glyph_rect.top_left_coords.x) + start_line_last_glyph_rect.width;
-
-        all_rects.push(
-            Rect {
-                top_left_coords,
-                width,
-                height,
-                color: colors::WHITE
-            }
-        );
-
-        //middle lines
-        let nr_mid_lines = (stop_line_indx - start_line_indx) - 1;
-        let first_mid_line = start_line_indx + 1;
-
-        for i in first_mid_line..(first_mid_line + nr_mid_lines)  {
-            let mid_line = get_res(i, glyph_bound_rects)?;
-
-            let mid_line_first_glyph_rect = 
-                get_res(
-                    0,
-                    mid_line
-                )?;
-
-            let mid_line_last_glyph_rect = 
-                get_res(
-                    mid_line.len() - 1,
-                    mid_line
-                )?;
-
-            let top_left_coords =
-                mid_line_first_glyph_rect.top_left_coords;
-
-            let height = mid_line_first_glyph_rect.height;
-            let width = (mid_line_last_glyph_rect.top_left_coords.x - mid_line_first_glyph_rect.top_left_coords.x) + mid_line_last_glyph_rect.width;
-
-            all_rects.push(
-                Rect {
-                    top_left_coords,
-                    width,
-                    height,
-                    color: colors::WHITE
-                }
-            );
-        }
-
-        //last line
-        let stop_line = get_res(stop_line_indx, glyph_bound_rects)?;
-
-        let stop_line_first_glyph_rect = 
-        get_res(
-            0,
-            stop_line
-        )?;
-
-        let stop_glyph_rect = 
-            get_res(
-                pos_in_stop_line,
-                stop_line
-            )?;
-
-        let top_left_coords =
-            stop_line_first_glyph_rect.top_left_coords;
-
-        let height = stop_glyph_rect.height;
-        let width = (stop_glyph_rect.top_left_coords.x - stop_line_first_glyph_rect.top_left_coords.x) + stop_glyph_rect.width;
-
-        all_rects.push(
-            Rect {
-                top_left_coords,
-                width,
-                height,
-                color: colors::WHITE
-            }
-        );
-        
-        Ok(all_rects)
-    }
-}
 
 fn make_rect_pipeline(
     gpu_device: &wgpu::Device,
