@@ -1,6 +1,5 @@
 use crate::solve;
 use roc_can::constraint::Constraint;
-use roc_can::module::Module;
 use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -14,33 +13,6 @@ pub struct SolvedModule {
     pub aliases: MutMap<Symbol, Alias>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub problems: Vec<solve::TypeError>,
-}
-
-pub fn solve_module(
-    module: Module,
-    constraint: Constraint,
-    var_store: VarStore,
-) -> (Solved<Subs>, SolvedModule) {
-    let Module {
-        exposed_vars_by_symbol,
-        aliases,
-        rigid_variables,
-        ..
-    } = module;
-
-    let (solved_subs, solved_env, problems) =
-        run_solve(aliases, rigid_variables, constraint, var_store);
-
-    let solved_types = make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
-
-    let solved_module = SolvedModule {
-        exposed_vars_by_symbol,
-        solved_types,
-        problems,
-        aliases: solved_env.aliases,
-    };
-
-    (solved_subs, solved_module)
 }
 
 pub fn run_solve(
