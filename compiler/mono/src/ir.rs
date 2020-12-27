@@ -1508,7 +1508,6 @@ pub fn specialize_all<'a>(
                         ));
 
                         procs.runtime_errors.insert(name, error_msg);
-                        panic!("failed to specialize {:?}", name);
                     }
                 }
             }
@@ -4869,9 +4868,7 @@ fn reuse_function_symbol<'a>(
             // this symbol is a function, that is used by-name (e.g. as an argument to another
             // function). Register it with the current variable, then create a function pointer
             // to it in the IR.
-            let layout = layout_cache
-                .from_var(env.arena, arg_var, env.subs)
-                .expect("creating layout does not fail");
+            let res_layout = layout_cache.from_var(env.arena, arg_var, env.subs);
 
             // we have three kinds of functions really. Plain functions, closures by capture,
             // and closures by unification. Here we record whether this function captures
@@ -4879,8 +4876,8 @@ fn reuse_function_symbol<'a>(
             let captures = partial_proc.captured_symbols.captures();
             let captured = partial_proc.captured_symbols.clone();
 
-            match layout {
-                Layout::Closure(argument_layouts, closure_layout, ret_layout) if captures => {
+            match res_layout {
+                Ok(Layout::Closure(argument_layouts, closure_layout, ret_layout)) if captures => {
                     // this is a closure by capture, meaning it itself captures local variables.
                     // we've defined the closure as a (function_ptr, closure_data) pair already
 
@@ -4958,7 +4955,7 @@ fn reuse_function_symbol<'a>(
 
                     stmt
                 }
-                _ => {
+                Ok(layout) => {
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
@@ -4973,6 +4970,17 @@ fn reuse_function_symbol<'a>(
                         layout,
                         env.arena.alloc(result),
                     )
+                }
+                Err(LayoutProblem::Erroneous) => {
+                    let message = format!("The {:?} symbol has an erroneous type", symbol);
+                    Stmt::RuntimeError(env.arena.alloc(message))
+                }
+                Err(LayoutProblem::UnresolvedTypeVar(v)) => {
+                    let message = format!(
+                        "The {:?} symbol contains a unresolved type var {:?}",
+                        symbol, v
+                    );
+                    Stmt::RuntimeError(env.arena.alloc(message))
                 }
             }
         }
