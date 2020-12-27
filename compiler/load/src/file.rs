@@ -20,7 +20,7 @@ use roc_module::symbol::{
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Attempting, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
@@ -663,7 +663,7 @@ enum Msg<'a> {
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
-        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        exposed_vars_by_symbol: MutMap<Symbol, Variable>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -1638,9 +1638,12 @@ fn update<'a>(
             };
 
             if is_host_exposed {
-                state
-                    .exposed_to_host
-                    .extend(solved_module.exposed_vars_by_symbol.iter().copied());
+                state.exposed_to_host.extend(
+                    solved_module
+                        .exposed_vars_by_symbol
+                        .iter()
+                        .map(|(k, v)| (*k, *v)),
+                );
             }
 
             if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
@@ -1904,7 +1907,7 @@ fn finish_specialization<'a>(
 fn finish<'a>(
     state: State<'a>,
     solved: Solved<Subs>,
-    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -2791,7 +2794,7 @@ fn run_solve<'a>(
     let module_id = module.module_id;
 
     let Module {
-        exposed_vars_by_symbol,
+        exposed_symbols,
         aliases,
         rigid_variables,
         ..
@@ -2799,6 +2802,9 @@ fn run_solve<'a>(
 
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
+
+    let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol.clone();
+    exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
 
     let solved_types =
         roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
@@ -3001,8 +3007,8 @@ fn fabricate_effects_module<'a>(
 
     let mut declarations = Vec::new();
 
-    let exposed_vars_by_symbol = {
-        let mut exposed_vars_by_symbol = Vec::new();
+    let exposed_symbols: MutSet<Symbol> = {
+        let mut exposed_symbols = MutSet::default();
 
         {
             for (ident, ann) in effect_entries {
@@ -3035,7 +3041,7 @@ fn fabricate_effects_module<'a>(
                     annotation,
                 );
 
-                exposed_vars_by_symbol.push((symbol, def.expr_var));
+                exposed_symbols.insert(symbol);
 
                 declarations.push(Declaration::Declare(def));
             }
@@ -3047,11 +3053,11 @@ fn fabricate_effects_module<'a>(
             &mut scope,
             effect_symbol,
             &mut var_store,
-            &mut exposed_vars_by_symbol,
+            &mut exposed_symbols,
             &mut declarations,
         );
 
-        exposed_vars_by_symbol
+        exposed_symbols
     };
 
     use roc_can::module::ModuleOutput;
@@ -3063,7 +3069,6 @@ fn fabricate_effects_module<'a>(
         lookups: Vec::new(),
         problems: can_env.problems,
         ident_ids: can_env.ident_ids,
-        exposed_vars_by_symbol,
         references: MutSet::default(),
     };
 
@@ -3072,7 +3077,7 @@ fn fabricate_effects_module<'a>(
     let module = Module {
         module_id,
         exposed_imports: module_output.exposed_imports,
-        exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+        exposed_symbols,
         references: module_output.references,
         aliases: module_output.aliases,
         rigid_variables: module_output.rigid_variables,
@@ -3182,7 +3187,7 @@ fn canonicalize_and_constrain<'a>(
         dep_idents,
         aliases,
         exposed_imports,
-        exposed_symbols,
+        &exposed_symbols,
         &mut var_store,
     );
     let canonicalize_end = SystemTime::now();
@@ -3196,7 +3201,7 @@ fn canonicalize_and_constrain<'a>(
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
-                exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+                exposed_symbols,
                 references: module_output.references,
                 aliases: module_output.aliases,
                 rigid_variables: module_output.rigid_variables,
@@ -3503,9 +3508,20 @@ fn add_def_to_module<'a>(
                             mono_env.subs,
                         ) {
                             Ok(l) => l,
-                            Err(err) => {
-                                // a host-exposed function is not monomorphized
-                                todo!("The host-exposed function {:?} does not have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", symbol, err)
+                            Err(LayoutProblem::Erroneous) => {
+                                let message = "top level function has erroneous type";
+                                procs.runtime_errors.insert(symbol, message);
+                                return;
+                            }
+                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                return;
                             }
                         };
 
@@ -3537,9 +3553,29 @@ fn add_def_to_module<'a>(
                     // get specialized!
                     if is_exposed {
                         let annotation = def.expr_var;
-                        let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
-                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
-                                    );
+
+                        let layout = match layout_cache.from_var(
+                            mono_env.arena,
+                            annotation,
+                            mono_env.subs,
+                        ) {
+                            Ok(l) => l,
+                            Err(LayoutProblem::Erroneous) => {
+                                let message = "top level function has erroneous type";
+                                procs.runtime_errors.insert(symbol, message);
+                                return;
+                            }
+                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                return;
+                            }
+                        };
 
                         procs.insert_exposed(
                             symbol,

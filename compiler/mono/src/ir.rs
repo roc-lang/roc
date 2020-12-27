@@ -1508,7 +1508,6 @@ pub fn specialize_all<'a>(
                         ));
 
                         procs.runtime_errors.insert(name, error_msg);
-                        panic!("failed to specialize {:?}", name);
                     }
                 }
             }
@@ -2585,13 +2584,23 @@ pub fn with_hole<'a>(
 
                     let mut field_symbols_temp = Vec::with_capacity_in(args.len(), env.arena);
 
-                    for (var, arg) in args.drain(..) {
+                    for (var, mut arg) in args.drain(..) {
                         // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
-                        let layout = layout_cache
-                            .from_var(env.arena, var, env.subs)
-                            .unwrap_or_else(|err| {
-                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                            });
+                        let layout = match layout_cache.from_var(env.arena, var, env.subs) {
+                            Ok(cached) => cached,
+                            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                                // this argument has type `forall a. a`, which is isomorphic to
+                                // the empty type (Void, Never, the empty tag union `[]`)
+                                use roc_can::expr::Expr;
+                                use roc_problem::can::RuntimeError;
+                                arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
+                                Layout::Struct(&[])
+                            }
+                            Err(LayoutProblem::Erroneous) => {
+                                // something went very wrong
+                                panic!("TODO turn fn_var into a RuntimeError")
+                            }
+                        };
 
                         let alignment = layout.alignment_bytes(8);
 
@@ -3575,9 +3584,23 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = layout_cache
-                .from_var(env.arena, ret_var, env.subs)
-                .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let layout = match layout_cache.from_var(env.arena, ret_var, env.subs) {
+                Ok(cached) => cached,
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    return Stmt::RuntimeError(env.arena.alloc(format!(
+                        "UnresolvedTypeVar {} line {}",
+                        file!(),
+                        line!()
+                    )));
+                }
+                Err(LayoutProblem::Erroneous) => {
+                    return Stmt::RuntimeError(env.arena.alloc(format!(
+                        "Erroneous {} line {}",
+                        file!(),
+                        line!()
+                    )));
+                }
+            };
 
             let result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
 
@@ -3654,7 +3677,7 @@ pub fn from_can<'a>(
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = env.unique_symbol();
+                let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
                 stmt = Stmt::Cond {
@@ -3667,15 +3690,14 @@ pub fn from_can<'a>(
                     ret_layout: ret_layout.clone(),
                 };
 
-                // add condition
-                stmt = with_hole(
+                stmt = assign_to_symbol(
                     env,
-                    loc_cond.value,
-                    cond_var,
                     procs,
                     layout_cache,
+                    cond_var,
+                    loc_cond,
                     branching_symbol,
-                    env.arena.alloc(stmt),
+                    stmt,
                 );
             }
 
@@ -4869,9 +4891,7 @@ fn reuse_function_symbol<'a>(
             // this symbol is a function, that is used by-name (e.g. as an argument to another
             // function). Register it with the current variable, then create a function pointer
             // to it in the IR.
-            let layout = layout_cache
-                .from_var(env.arena, arg_var, env.subs)
-                .expect("creating layout does not fail");
+            let res_layout = layout_cache.from_var(env.arena, arg_var, env.subs);
 
             // we have three kinds of functions really. Plain functions, closures by capture,
             // and closures by unification. Here we record whether this function captures
@@ -4879,8 +4899,8 @@ fn reuse_function_symbol<'a>(
             let captures = partial_proc.captured_symbols.captures();
             let captured = partial_proc.captured_symbols.clone();
 
-            match layout {
-                Layout::Closure(argument_layouts, closure_layout, ret_layout) if captures => {
+            match res_layout {
+                Ok(Layout::Closure(argument_layouts, closure_layout, ret_layout)) if captures => {
                     // this is a closure by capture, meaning it itself captures local variables.
                     // we've defined the closure as a (function_ptr, closure_data) pair already
 
@@ -4958,7 +4978,7 @@ fn reuse_function_symbol<'a>(
 
                     stmt
                 }
-                _ => {
+                Ok(layout) => {
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
@@ -4973,6 +4993,17 @@ fn reuse_function_symbol<'a>(
                         layout,
                         env.arena.alloc(result),
                     )
+                }
+                Err(LayoutProblem::Erroneous) => {
+                    let message = format!("The {:?} symbol has an erroneous type", symbol);
+                    Stmt::RuntimeError(env.arena.alloc(message))
+                }
+                Err(LayoutProblem::UnresolvedTypeVar(v)) => {
+                    let message = format!(
+                        "The {:?} symbol contains a unresolved type var {:?}",
+                        symbol, v
+                    );
+                    Stmt::RuntimeError(env.arena.alloc(message))
                 }
             }
         }
@@ -5832,7 +5863,9 @@ pub enum IntOrFloat {
 pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     match subs.get_without_compacting(var).content {
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
-            debug_assert!(args.is_empty());
+            debug_assert!(args.len() == 1);
+
+            // TODO: we probably need to match on the type of the arg
             IntOrFloat::IntType
         }
         Content::FlexVar(_) => {
@@ -5840,7 +5873,9 @@ pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
             IntOrFloat::IntType
         }
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
-            debug_assert!(args.is_empty());
+            debug_assert!(args.len() == 1);
+
+            // TODO: we probably need to match on the type of the arg
             IntOrFloat::FloatType
         }
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
@@ -5848,6 +5883,11 @@ pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
 
             // Recurse on the second argument
             num_argument_to_int_or_float(subs, attr_args[1])
+        }
+        Content::Alias(Symbol::NUM_F64, args, _) | Content::Alias(Symbol::NUM_F32, args, _) => {
+            debug_assert!(args.is_empty());
+
+            IntOrFloat::FloatType
         }
         other => {
             panic!(

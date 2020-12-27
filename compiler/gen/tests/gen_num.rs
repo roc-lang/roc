@@ -40,6 +40,8 @@ mod gen_num {
     fn f64_abs() {
         assert_evals_to!("Num.abs -4.7", 4.7, f64);
         assert_evals_to!("Num.abs 5.8", 5.8, f64);
+        //assert_evals_to!("Num.abs Num.maxFloat", f64::MAX, f64);
+        //assert_evals_to!("Num.abs Num.minFloat", -f64::MIN, f64);
     }
 
     #[test]
@@ -52,6 +54,24 @@ mod gen_num {
         assert_evals_to!("Num.abs 1", 1, i64);
         assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
         assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to!("Num.abs Num.maxInt", i64::MAX, i64);
+        assert_evals_to!("Num.abs (Num.minInt + 1)", -(i64::MIN + 1), i64);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
+    )]
+    fn abs_min_int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.abs Num.minInt
+                "#
+            ),
+            0,
+            i64
+        );
     }
 
     #[test]
@@ -533,6 +553,24 @@ mod gen_num {
     #[test]
     fn int_negate() {
         assert_evals_to!("Num.neg 123", -123, i64);
+        assert_evals_to!("Num.neg Num.maxInt", -i64::MAX, i64);
+        assert_evals_to!("Num.neg (Num.minInt + 1)", i64::MAX, i64);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = r#"Roc failed with message: "integer negation overflowed because its argument is the minimum value"#
+    )]
+    fn neg_min_int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.neg Num.minInt
+                "#
+            ),
+            0,
+            i64
+        );
     }
 
     #[test]
@@ -555,7 +593,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                    always42 : Num.Num Num.Integer -> Num.Num Num.Integer
+                    always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
                     always42 = \_ -> 42
 
                     always42 5
@@ -778,7 +816,7 @@ mod gen_num {
             indoc!(
                 r#"
                     -1.7976931348623157e308 - 1.7976931348623157e308
-                    "#
+                "#
             ),
             0.0,
             f64
@@ -790,12 +828,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when Num.subChecked 1 2 is
+                when Num.subChecked 5 2 is
                     Ok v -> v
                     _ -> -1
                 "#
             ),
-            -1,
+            3,
             i64
         );
 
@@ -830,6 +868,129 @@ mod gen_num {
             indoc!(
                 r#"
                 when Num.subChecked -1.7976931348623157e308 1.7976931348623157e308 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+    fn int_positive_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                9_223_372_036_854_775_807 * 2
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+    fn int_negative_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                (-9_223_372_036_854_775_808) * 2
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+    fn float_positive_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.7976931348623157e308 * 2
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+    fn float_negative_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    -1.7976931348623157e308 * 2
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn int_mul_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.mulWrap Num.maxInt 2
+                "#
+            ),
+            -2,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_mul_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 20 2 is
+                    Ok v -> v
+                    _ -> -1
+                "#
+            ),
+            40,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked Num.maxInt 2 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_mul_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 20.0 2.0 is
+                    Ok v -> v
+                    Err Overflow -> -1.0
+                "#
+            ),
+            40.0,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 1.7976931348623157e308 2 is
                     Err Overflow -> -1
                     Ok v -> v
                 "#
