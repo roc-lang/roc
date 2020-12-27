@@ -12,5 +12,5 @@ platform folkertdev/foo
         }
 
 
-mainForHost : Task.Task {} F64 as Fx
+mainForHost : Task.Task {} [] as Fx
 mainForHost = main
