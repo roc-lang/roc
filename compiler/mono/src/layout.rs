@@ -1196,39 +1196,40 @@ pub fn layout_from_tag_union<'a>(
 
     let tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
 
-    if tags_vec[0].0 != TagName::Private(Symbol::NUM_AT_NUM) {
-        let opt_rec_var = None;
-        let variant = union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs);
+    match tags_vec.get(0) {
+        Some((tag_name, arguments)) if *tag_name == TagName::Private(Symbol::NUM_AT_NUM) => {
+            debug_assert_eq!(arguments.len(), 1);
 
-        match variant {
-            Never => panic!("TODO gracefully handle trying to instantiate Never"),
-            Unit | UnitWithArguments => Layout::Struct(&[]),
-            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
-            ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-            Unwrapped(mut field_layouts) => {
-                if field_layouts.len() == 1 {
-                    field_layouts.pop().unwrap()
-                } else {
-                    Layout::Struct(field_layouts.into_bump_slice())
-                }
-            }
-            Wrapped(tags) => {
-                let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+            let var = arguments.iter().next().unwrap();
 
-                for (_, tag_layout) in tags {
-                    tag_layouts.push(tag_layout);
+            unwrap_num_tag(subs, *var).expect("invalid Num argument")
+        }
+        _ => {
+            let opt_rec_var = None;
+            let variant = union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs);
+
+            match variant {
+                Never => Layout::Union(&[]),
+                Unit | UnitWithArguments => Layout::Struct(&[]),
+                BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
+                ByteUnion(_) => Layout::Builtin(Builtin::Int8),
+                Unwrapped(mut field_layouts) => {
+                    if field_layouts.len() == 1 {
+                        field_layouts.pop().unwrap()
+                    } else {
+                        Layout::Struct(field_layouts.into_bump_slice())
+                    }
                 }
-                Layout::Union(tag_layouts.into_bump_slice())
+                Wrapped(tags) => {
+                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+
+                    for (_, tag_layout) in tags {
+                        tag_layouts.push(tag_layout);
+                    }
+                    Layout::Union(tag_layouts.into_bump_slice())
+                }
             }
         }
-    } else {
-        let arguments = &tags_vec[0].1;
-
-        debug_assert_eq!(arguments.len(), 1);
-
-        let var = arguments.iter().next().unwrap();
-
-        unwrap_num_tag(subs, *var).expect("invalid Num argument")
     }
 }
 
