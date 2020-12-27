@@ -327,12 +327,15 @@ mod repl_eval {
         expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : F64");
     }
 
-    // TODO add test cases for empty lists once error messages in the repl are correct
     #[test]
     fn list_first() {
         expect_success(
             "List.first [ 12, 9, 6, 3 ]",
             "Ok 12 : Result (Num *) [ ListWasEmpty ]*",
+        );
+        expect_success(
+            "List.first []",
+            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
         );
     }
 
@@ -341,6 +344,11 @@ mod repl_eval {
         expect_success(
             "List.last [ 12, 9, 6, 3 ]",
             "Ok 3 : Result (Num *) [ ListWasEmpty ]*",
+        );
+
+        expect_success(
+            "List.last []",
+            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
         );
     }
 

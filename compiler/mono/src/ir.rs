@@ -2584,13 +2584,23 @@ pub fn with_hole<'a>(
 
                     let mut field_symbols_temp = Vec::with_capacity_in(args.len(), env.arena);
 
-                    for (var, arg) in args.drain(..) {
+                    for (var, mut arg) in args.drain(..) {
                         // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
-                        let layout = layout_cache
-                            .from_var(env.arena, var, env.subs)
-                            .unwrap_or_else(|err| {
-                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                            });
+                        let layout = match layout_cache.from_var(env.arena, var, env.subs) {
+                            Ok(cached) => cached,
+                            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                                // this argument has type `forall a. a`, which is isomorphic to
+                                // the empty type (Void, Never, the empty tag union `[]`)
+                                use roc_can::expr::Expr;
+                                use roc_problem::can::RuntimeError;
+                                arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
+                                Layout::Struct(&[])
+                            }
+                            Err(LayoutProblem::Erroneous) => {
+                                // something went very wrong
+                                panic!("TODO turn fn_var into a RuntimeError")
+                            }
+                        };
 
                         let alignment = layout.alignment_bytes(8);
 
@@ -3574,9 +3584,23 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = layout_cache
-                .from_var(env.arena, ret_var, env.subs)
-                .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let layout = match layout_cache.from_var(env.arena, ret_var, env.subs) {
+                Ok(cached) => cached,
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    return Stmt::RuntimeError(env.arena.alloc(format!(
+                        "UnresolvedTypeVar {} line {}",
+                        file!(),
+                        line!()
+                    )));
+                }
+                Err(LayoutProblem::Erroneous) => {
+                    return Stmt::RuntimeError(env.arena.alloc(format!(
+                        "Erroneous {} line {}",
+                        file!(),
+                        line!()
+                    )));
+                }
+            };
 
             let result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
 
@@ -3653,7 +3677,7 @@ pub fn from_can<'a>(
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = env.unique_symbol();
+                let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
                 stmt = Stmt::Cond {
@@ -3666,15 +3690,14 @@ pub fn from_can<'a>(
                     ret_layout: ret_layout.clone(),
                 };
 
-                // add condition
-                stmt = with_hole(
+                stmt = assign_to_symbol(
                     env,
-                    loc_cond.value,
-                    cond_var,
                     procs,
                     layout_cache,
+                    cond_var,
+                    loc_cond,
                     branching_symbol,
-                    env.arena.alloc(stmt),
+                    stmt,
                 );
             }
 
