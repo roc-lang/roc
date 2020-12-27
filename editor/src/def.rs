@@ -44,19 +44,24 @@ pub enum Def {
 }
 
 impl Def {
-    pub fn pattern_vars(&self, pool: &Pool) -> impl Iterator<(Symbol, Variable)> {
-        use Def::*;
+    pub fn symbols(&self, pool: &Pool) -> MutSet<Symbol> {
+        let mut output = MutSet::default();
 
         match self {
-            AnnotationOnly { .. } => todo!("we lost pattern information!"),
-            Value(ValueDef { .. }) => symbols_and_variables_from_pattern(pool, pattern, var).iter(),
-            Function(FunctionDef::NoAnnotation { name, expr_var, .. }) => {
-                std::iter::once((name, expr_var))
+            Def::AnnotationOnly { .. } => todo!("lost pattern information here ... "),
+            Def::Value(ValueDef { pattern, .. }) => {
+                let pattern2 = &pool[*pattern];
+                output.extend(symbols_from_pattern(pool, pattern2));
             }
-            Function(FunctionDef::WithAnnotation { name, expr_var, .. }) => {
-                std::iter::once((name, expr_var))
-            }
+            Def::Function(function_def) => match function_def {
+                FunctionDef::NoAnnotation { name, .. }
+                | FunctionDef::WithAnnotation { name, .. } => {
+                    output.insert(*name);
+                }
+            },
         }
+
+        output
     }
 }
 
@@ -804,7 +809,6 @@ pub struct CanDefs {
 pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
-    var_store: &mut VarStore,
     original_scope: &Scope,
     loc_defs: &'a [&'a Located<ast::Def<'a>>],
     pattern_type: PatternType,

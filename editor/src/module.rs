@@ -2,11 +2,14 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
-use crate::def::{canonicalize_defs, sort_can_defs};
+use crate::ast::{FunctionDef, ValueDef};
+use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::expr::Env;
 use crate::expr::Output;
-use crate::pool::{Pool, PoolStr, PoolVec};
+use crate::pattern::Pattern2;
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
 use crate::scope::Scope;
+use crate::types::Alias;
 use bumpalo::Bump;
 use roc_can::operator::desugar_def;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
@@ -18,9 +21,17 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Type};
 
-pub struct ModuleOutput {}
+pub struct ModuleOutput {
+    pub aliases: MutMap<Symbol, NodeId<Alias>>,
+    pub rigid_variables: MutMap<Variable, Lowercase>,
+    pub declarations: Vec<Declaration>,
+    pub exposed_imports: MutMap<Symbol, Variable>,
+    pub lookups: Vec<(Symbol, Variable, Region)>,
+    pub problems: Vec<Problem>,
+    pub ident_ids: IdentIds,
+    pub references: MutSet<Symbol>,
+}
 
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
@@ -74,13 +85,13 @@ pub fn canonicalize_module_defs<'a>(
         home,
         arena,
         &mut pool,
-        &mut var_store,
+        var_store,
         dep_idents,
         module_ids,
         exposed_ident_ids,
     );
     let mut lookups = Vec::with_capacity(num_deps);
-    let mut rigid_variables = MutMap::default();
+    let rigid_variables = MutMap::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
@@ -98,7 +109,7 @@ pub fn canonicalize_module_defs<'a>(
 
         if first_char.is_lowercase() {
             // this is a value definition
-            let expr_var = var_store.fresh();
+            let expr_var = env.var_store.fresh();
 
             match scope.import(ident, symbol, region) {
                 Ok(()) => {
@@ -127,7 +138,6 @@ pub fn canonicalize_module_defs<'a>(
     let (defs, _scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
-        var_store,
         &scope,
         &desugared,
         PatternType::TopLevelDef,
@@ -170,41 +180,30 @@ pub fn canonicalize_module_defs<'a>(
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
-            // Record the variables for all exposed symbols.
-            let mut exposed_vars_by_symbol = Vec::with_capacity(exposed_symbols.len());
-
             for decl in declarations.iter() {
                 match decl {
                     Declare(def) => {
-                        for (symbol, variable) in def.pattern_vars(env.pool) {
-                            if exposed_symbols.contains(symbol) {
-                                // This is one of our exposed symbols;
-                                // record the corresponding variable!
-                                exposed_vars_by_symbol.push((*symbol, *variable));
-
+                        for symbol in def.symbols(env.pool) {
+                            if exposed_symbols.contains(&symbol) {
                                 // Remove this from exposed_symbols,
                                 // so that at the end of the process,
                                 // we can see if there were any
                                 // exposed symbols which did not have
                                 // corresponding defs.
-                                exposed_symbols.remove(symbol);
+                                exposed_symbols.remove(&symbol);
                             }
                         }
                     }
                     DeclareRec(defs) => {
                         for def in defs {
-                            for (symbol, variable) in def.pattern_vars(env.pool) {
-                                if exposed_symbols.contains(symbol) {
-                                    // This is one of our exposed symbols;
-                                    // record the corresponding variable!
-                                    exposed_vars_by_symbol.push((*symbol, *variable));
-
+                            for symbol in def.symbols(env.pool) {
+                                if exposed_symbols.contains(&symbol) {
                                     // Remove this from exposed_symbols,
                                     // so that at the end of the process,
                                     // we can see if there were any
                                     // exposed symbols which did not have
                                     // corresponding defs.
-                                    exposed_symbols.remove(symbol);
+                                    exposed_symbols.remove(&symbol);
                                 }
                             }
                         }
@@ -217,9 +216,9 @@ pub fn canonicalize_module_defs<'a>(
                         // Builtins cannot be exposed in module declarations.
                         // This should never happen!
                         debug_assert!(def
-                            .pattern_vars
+                            .symbols(env.pool)
                             .iter()
-                            .all(|(symbol, _)| !exposed_symbols.contains(symbol)));
+                            .all(|symbol| !exposed_symbols.contains(symbol)));
                     }
                 }
             }
@@ -247,16 +246,20 @@ pub fn canonicalize_module_defs<'a>(
                 // In case this exposed value is referenced by other modules,
                 // create a decl for it whose implementation is a runtime error.
                 let mut pattern_vars = SendMap::default();
-                pattern_vars.insert(symbol, var_store.fresh());
+                pattern_vars.insert(symbol, env.var_store.fresh());
 
                 let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
-                let def = Def {
-                    loc_pattern: Located::new(0, 0, 0, 0, Pattern::Identifier(symbol)),
-                    loc_expr: Located::new(0, 0, 0, 0, Expr::RuntimeError(runtime_error)),
-                    expr_var: var_store.fresh(),
-                    pattern_vars,
-                    annotation: None,
+
+                let value_def = {
+                    let pattern = env.pool.add(Pattern2::Identifier(symbol));
+                    ValueDef {
+                        pattern,
+                        expr_type: None,
+                        expr_var: env.var_store.fresh(),
+                    }
                 };
+
+                let def = Def::Value(value_def);
 
                 declarations.push(Declaration::Declare(def));
             }
@@ -276,26 +279,29 @@ pub fn canonicalize_module_defs<'a>(
                 references.insert(*symbol);
             }
 
-            for declaration in declarations.iter_mut() {
-                match declaration {
-                    Declare(def) => fix_values_captured_in_closure_def(def, &mut MutSet::default()),
-                    DeclareRec(defs) => {
-                        fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
-                    }
-                    InvalidCycle(_, _) | Builtin(_) => {}
-                }
-            }
+            // TODO find captured variables
+            // for declaration in declarations.iter_mut() {
+            //     match declaration {
+            //         Declare(def) => fix_values_captured_in_closure_def(def, &mut MutSet::default()),
+            //         DeclareRec(defs) => {
+            //             fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
+            //         }
+            //         InvalidCycle(_, _) | Builtin(_) => {}
+            //     }
+            // }
 
             // TODO this loops over all symbols in the module, we can speed it up by having an
             // iterator over all builtin symbols
-            for symbol in references.iter() {
-                if symbol.is_builtin() {
-                    // this can fail when the symbol is for builtin types, or has no implementation yet
-                    if let Some(def) = builtins::builtin_defs_map(*symbol, var_store) {
-                        declarations.push(Declaration::Builtin(def));
-                    }
-                }
-            }
+
+            // TODO move over the builtins
+            // for symbol in references.iter() {
+            //     if symbol.is_builtin() {
+            //         // this can fail when the symbol is for builtin types, or has no implementation yet
+            //         if let Some(def) = builtins::builtin_defs_map(*symbol, var_store) {
+            //             declarations.push(Declaration::Builtin(def));
+            //         }
+            //     }
+            // }
 
             Ok(ModuleOutput {
                 aliases,
@@ -303,9 +309,8 @@ pub fn canonicalize_module_defs<'a>(
                 declarations,
                 references,
                 exposed_imports: can_exposed_imports,
-                problems: env.problems,
+                problems: vec![], // TODO env.problems,
                 lookups,
-                exposed_vars_by_symbol,
                 ident_ids: env.ident_ids,
             })
         }
