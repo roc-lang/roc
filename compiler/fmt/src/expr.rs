@@ -415,7 +415,7 @@ pub fn fmt_list<'a>(
             for item in loc_items.iter() {
                 match &item.value {
                     // TODO?? These SpaceAfter/SpaceBefore litany seems overcomplicated
-                    // Can we simplify this?
+                    // Can we simplify this? Or at least move this in a separate function.
                     Expr::SpaceBefore(expr_below, spaces_above_expr) => {
                         newline(buf, item_indent);
                         fmt_comments_only(

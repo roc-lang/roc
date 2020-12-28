@@ -2452,22 +2452,54 @@ mod test_fmt {
         ));
     }
 
-    // TODO This raises a parse error:
-    // NotYetImplemented("TODO the : in this declaration seems outdented")
-    // #[test]
-    // fn multiline_tag_union_annotation() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         b :
-    //             [
-    //                 True,
-    //                 False,
-    //             ]
+    #[test]
+    fn multiline_tag_union_annotation() {
+        expr_formats_same(indoc!(
+            r#"
+            b :
+                [
+                    True,
+                    False,
+                ]
 
-    //         b
-    //         "#
-    //     ));
-    // }
+            b
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_tag_union_annotation_with_final_comment() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            b :
+                [
+                    True,
+                    # comment 1
+                    False # comment 2
+                    ,
+                    # comment 3
+                ]
+
+            b
+            "#
+            ),
+            indoc!(
+                r#"
+                b :
+                    [
+                        True,
+                        # comment 1
+                        False,
+                        # comment 2
+                        # comment 3
+                    ]
+    
+                b
+                "#
+            ),
+        );
+    }
 
     #[test]
     fn tag_union() {
