@@ -7,7 +7,7 @@ use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::expr::Env;
 use crate::expr::Output;
 use crate::pattern::Pattern2;
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::scope::Scope;
 use crate::types::Alias;
 use bumpalo::Bump;
@@ -52,17 +52,15 @@ pub fn canonicalize_module_defs<'a>(
     let mut scope = Scope::new(home, &mut pool, var_store);
     let num_deps = dep_idents.len();
 
-    //    for (name, alias) in aliases.into_iter() {
-    //        let vars = PoolVec::with_capacity(alias.vars.len() as u32, &mut pool);
-    //
-    //        for (node_id, (lowercase, var)) in vars.iter_node_ids().zip(alias.vars) {
-    //            let poolstr = PoolStr::new(lowercase.as_str(), &mut pool);
-    //
-    //            pool[node_id] = (poolstr, var);
-    //        }
-    //
-    //        scope.add_alias(&mut pool, name, vars, alias.typ);
-    //    }
+    for (name, alias) in aliases.into_iter() {
+        let vars = PoolVec::with_capacity(alias.targs.len() as u32, &mut pool);
+
+        for (node_id, targ_id) in vars.iter_node_ids().zip(alias.targs.iter_node_ids()) {
+            let (poolstr, var) = &pool[targ_id];
+            pool[node_id] = (poolstr.shallow_clone(), *var);
+        }
+        scope.add_alias(&mut pool, name, vars, alias.actual);
+    }
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
