@@ -1017,8 +1017,10 @@ mod test_parse {
     #[test]
     fn empty_list() {
         let arena = Bump::new();
-        let elems = &[];
-        let expected = List(elems);
+        let expected = List {
+            items: &[],
+            final_comments: &[],
+        };
         let actual = parse_expr_with(&arena, "[]");
 
         assert_eq!(Ok(expected), actual);
@@ -1028,8 +1030,10 @@ mod test_parse {
     fn spaces_inside_empty_list() {
         // This is a regression test!
         let arena = Bump::new();
-        let elems = &[];
-        let expected = List(elems);
+        let expected = List {
+            items: &[],
+            final_comments: &[],
+        };
         let actual = parse_expr_with(&arena, "[  ]");
 
         assert_eq!(Ok(expected), actual);
@@ -1038,8 +1042,11 @@ mod test_parse {
     #[test]
     fn packed_singleton_list() {
         let arena = Bump::new();
-        let elems = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
-        let expected = List(elems);
+        let items = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
+        let expected = List {
+            items,
+            final_comments: &[],
+        };
         let actual = parse_expr_with(&arena, "[1]");
 
         assert_eq!(Ok(expected), actual);
@@ -1048,8 +1055,11 @@ mod test_parse {
     #[test]
     fn spaced_singleton_list() {
         let arena = Bump::new();
-        let elems = &[&*arena.alloc(Located::new(0, 0, 2, 3, Num("1")))];
-        let expected = List(elems);
+        let items = &[&*arena.alloc(Located::new(0, 0, 2, 3, Num("1")))];
+        let expected = List {
+            items,
+            final_comments: &[],
+        };
         let actual = parse_expr_with(&arena, "[ 1 ]");
 
         assert_eq!(Ok(expected), actual);
