@@ -15,7 +15,8 @@ use crate::rect::{Rect};
 use crate::error::{print_err};
 use crate::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
 use crate::selection::{create_selection_rects};
-use crate::tea::model;
+use crate::tea::{model, update};
+use model::Position;
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -208,6 +209,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 let glyph_bounds_rects = queue_all_text(
                     &size,
                     &ed_model.lines,
+                    ed_model.caret_pos,
                     &mut glyph_brush,
                 );
 
@@ -344,6 +346,7 @@ fn create_render_pipeline(
 fn queue_all_text(
     size: &winit::dpi::PhysicalSize<u32>,
     lines: &[String],
+    caret_pos: Position,
     glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
 ) -> Vec<Vec<Rect>> {
     let area_bounds = (size.width as f32, size.height as f32).into();
@@ -366,12 +369,25 @@ fn queue_all_text(
         ..Default::default()
     };
 
+    let caret_pos_label = Text {
+        position: (30.0, 530.0).into(),
+        area_bounds,
+        color: (0.4666, 0.2, 1.0, 1.0).into(),
+        text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
+        size: 30.0,
+        ..Default::default()
+    };
+
     text::queue_text_draw(&main_label, glyph_brush);
+
+    text::queue_text_draw(&caret_pos_label, glyph_brush);
 
     text::queue_text_draw(&code_text, glyph_brush)
 }
 
 fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
+    ed_model.selection_opt = None;
+
     match received_char {
         '\u{8}' | '\u{7f}' => {
             // In Linux, we get a '\u{8}' when you press backspace,
@@ -382,6 +398,7 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
                 } else if ed_model.lines.len() > 1 {
                     ed_model.lines.pop();
                 }
+                ed_model.caret_pos = update::move_caret_left(ed_model.caret_pos, None, false, &ed_model.lines).0;
             }
         }
         '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
@@ -393,10 +410,21 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
                 last_line.push(*received_char)
             }
             ed_model.lines.push(String::new());
+            ed_model.caret_pos =
+                Position {
+                    line: ed_model.caret_pos.line + 1,
+                    column: 0
+                }
         }
         _ => {
             if let Some(last_line) = ed_model.lines.last_mut() {
                 last_line.push(*received_char);
+
+                ed_model.caret_pos =
+                Position {
+                    line: ed_model.caret_pos.line,
+                    column: ed_model.caret_pos.column + 1 
+                }
             }
         }
     }

@@ -1,11 +1,11 @@
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
-use crate::tea::model::{Model, Position};
-use std::cmp::{max, min};
+use crate::tea::model::{Model};
+use crate::tea::update::{move_caret_left};
 
 pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
-    _modifiers: ModifiersState,
+    modifiers: ModifiersState,
     model: &mut Model,
 ) {
     use winit::event::VirtualKeyCode::*;
@@ -16,7 +16,9 @@ pub fn handle_keydown(
 
     match virtual_keycode {
         Left => {
-            todo!("arrow left");
+            let (new_caret_pos, new_selection_opt) = move_caret_left(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
+            model.caret_pos = new_caret_pos;
+            model.selection_opt = new_selection_opt;
         },
         Up => {
             todo!("arrow up");
