@@ -402,94 +402,84 @@ fn fmt_bin_op<'a>(
 pub fn fmt_list<'a>(
     buf: &mut String<'a>,
     loc_items: &[&Located<Expr<'a>>],
-    _final_comments: &'a [CommentOrNewline<'a>],
+    final_comments: &'a [CommentOrNewline<'a>],
     indent: u16,
 ) {
-    buf.push('[');
-
-    let mut iter = loc_items.iter().peekable();
-
-    let is_multiline = loc_items.iter().any(|item| (&item.value).is_multiline());
-
-    let item_indent = if is_multiline {
-        indent + INDENT
+    if loc_items.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
+        buf.push_str("[]");
     } else {
-        indent
-    };
-
-    while let Some(item) = iter.next() {
+        buf.push('[');
+        let is_multiline = loc_items.iter().any(|item| (&item.value).is_multiline());
         if is_multiline {
-            match &item.value {
-                Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                    newline(buf, item_indent);
-                    fmt_comments_only(
-                        buf,
-                        spaces_above_expr.iter(),
-                        NewlineAt::Bottom,
-                        item_indent,
-                    );
+            let item_indent = indent + INDENT;
+            for item in loc_items.iter() {
+                match &item.value {
+                    // TODO?? These SpaceAfter/SpaceBefore litany seems overcomplicated
+                    // Can we simplify this?
+                    Expr::SpaceBefore(expr_below, spaces_above_expr) => {
+                        newline(buf, item_indent);
+                        fmt_comments_only(
+                            buf,
+                            spaces_above_expr.iter(),
+                            NewlineAt::Bottom,
+                            item_indent,
+                        );
 
-                    match &expr_below {
-                        Expr::SpaceAfter(expr_above, spaces_below_expr) => {
-                            expr_above.format(buf, item_indent);
-
-                            if iter.peek().is_some() {
+                        match &expr_below {
+                            Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                                expr_above.format(buf, item_indent);
                                 buf.push(',');
-                            }
 
-                            fmt_comments_only(
-                                buf,
-                                spaces_below_expr.iter(),
-                                NewlineAt::Top,
-                                item_indent,
-                            );
-                        }
-                        _ => {
-                            expr_below.format(buf, item_indent);
-                            if iter.peek().is_some() {
+                                fmt_comments_only(
+                                    buf,
+                                    spaces_below_expr.iter(),
+                                    NewlineAt::Top,
+                                    item_indent,
+                                );
+                            }
+                            _ => {
+                                expr_below.format(buf, item_indent);
                                 buf.push(',');
                             }
                         }
                     }
-                }
 
-                Expr::SpaceAfter(sub_expr, spaces) => {
-                    newline(buf, item_indent);
+                    Expr::SpaceAfter(sub_expr, spaces) => {
+                        newline(buf, item_indent);
 
-                    sub_expr.format(buf, item_indent);
-
-                    if iter.peek().is_some() {
+                        sub_expr.format(buf, item_indent);
                         buf.push(',');
+
+                        fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, item_indent);
                     }
 
-                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, item_indent);
-                }
-
-                _ => {
-                    newline(buf, item_indent);
-                    item.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, item_indent);
-                    if iter.peek().is_some() {
+                    _ => {
+                        newline(buf, item_indent);
+                        item.format_with_options(
+                            buf,
+                            Parens::NotNeeded,
+                            Newlines::Yes,
+                            item_indent,
+                        );
                         buf.push(',');
                     }
                 }
             }
+            newline(buf, indent);
+            buf.push(']');
         } else {
-            buf.push(' ');
-            item.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, item_indent);
-            if iter.peek().is_some() {
-                buf.push(',');
+            // is_multiline == false
+            let mut iter = loc_items.iter().peekable();
+            while let Some(item) = iter.next() {
+                buf.push(' ');
+                item.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                if iter.peek().is_some() {
+                    buf.push(',');
+                }
             }
+            buf.push_str(" ]");
         }
     }
-
-    if is_multiline {
-        newline(buf, indent);
-    }
-
-    if !loc_items.is_empty() && !is_multiline {
-        buf.push(' ');
-    }
-    buf.push(']');
 }
 
 pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
