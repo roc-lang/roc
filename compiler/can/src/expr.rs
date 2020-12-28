@@ -285,7 +285,9 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
-        ast::Expr::List(loc_elems) => {
+        ast::Expr::List {
+            items: loc_elems, ..
+        } => {
             if loc_elems.is_empty() {
                 (
                     List {
