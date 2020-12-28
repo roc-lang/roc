@@ -1197,7 +1197,31 @@ mod test_fmt {
             ),
         );
     }
-
+    #[test]
+    fn ending_comments_in_list() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                [ # Top 49
+                 49
+                # Bottom 49
+                ,
+                # 49!
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    # Top 49
+                    49,
+                    # Bottom 49
+                    # 49!
+                ]
+                "#
+            ),
+        );
+    }
     #[test]
     fn multi_line_list_def() {
         // expr_formats_same(indoc!(

@@ -465,6 +465,7 @@ pub fn fmt_list<'a>(
                     }
                 }
             }
+            fmt_comments_only(buf, final_comments.iter(), NewlineAt::Top, item_indent);
             newline(buf, indent);
             buf.push(']');
         } else {
