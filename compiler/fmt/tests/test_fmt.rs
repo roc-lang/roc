@@ -1272,6 +1272,27 @@ mod test_fmt {
     }
 
     #[test]
+    fn empty_record_with_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            {
+                # comment
+            }"#
+        ));
+    }
+
+    #[test]
+    fn empty_record_with_newline() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {    
+            }"#
+            ),
+            "{}",
+        );
+    }
+    #[test]
     fn one_field() {
         expr_formats_same("{ x: 4 }");
     }

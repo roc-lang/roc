@@ -300,6 +300,15 @@ impl<'a> CommentOrNewline<'a> {
             DocComment(_) => true,
         }
     }
+
+    pub fn is_newline(&self) -> bool {
+        use CommentOrNewline::*;
+        match self {
+            Newline => true,
+            LineComment(_) => false,
+            DocComment(_) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

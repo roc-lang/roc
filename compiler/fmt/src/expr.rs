@@ -809,7 +809,7 @@ pub fn fmt_record<'a>(
     final_comments: &'a [CommentOrNewline<'a>],
     indent: u16,
 ) {
-    if loc_fields.is_empty() {
+    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("{}");
     } else {
         buf.push('{');
