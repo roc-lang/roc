@@ -379,7 +379,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
 
             match pattern {
                 // TODO use guard!
-                Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
+                Identifier(_) | Underscore | UnsupportedPattern(_) => {
                     if let Guard::Guard { symbol, id, stmt } = guard {
                         all_tests.push(Guarded {
                             opt_test: None,
@@ -531,7 +531,7 @@ fn to_relevant_branch_help<'a>(
     use Test::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch.clone()),
+        Identifier(_) | Underscore | UnsupportedPattern(_) => Some(branch.clone()),
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
@@ -742,7 +742,7 @@ fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
     use Pattern::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => false,
+        Identifier(_) | Underscore | UnsupportedPattern(_) => false,
 
         RecordDestructure(_, _)
         | AppliedTag { .. }

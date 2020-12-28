@@ -4,7 +4,7 @@ use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
-use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -1264,7 +1264,22 @@ fn patterns_to_when<'a>(
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
-        let mono_pattern = from_can_pattern(env, layout_cache, &pattern.value);
+        let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
+            Ok(v) => v,
+            Err(runtime_error) => {
+                // Even if the body was Ok, replace it with this Err.
+                // If it was already an Err, leave it at that Err, so the first
+                // RuntimeError we encountered remains the first.
+                body = body.and({
+                    Err(Located {
+                        region: pattern.region,
+                        value: runtime_error,
+                    })
+                });
+
+                continue;
+            }
+        };
 
         match crate::exhaustive::check(
             pattern.region,
@@ -2392,7 +2407,14 @@ pub fn with_hole<'a>(
                 }
             } else {
                 // this may be a destructure pattern
-                let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
+                let mono_pattern = match from_can_pattern(env, layout_cache, &def.loc_pattern.value)
+                {
+                    Ok(v) => v,
+                    Err(_runtime_error) => {
+                        // todo
+                        panic!();
+                    }
+                };
 
                 let context = crate::exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
@@ -3923,7 +3945,10 @@ pub fn from_can<'a>(
             }
 
             // this may be a destructure pattern
-            let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
+            let mono_pattern = match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
+                Ok(v) => v,
+                Err(_) => todo!(),
+            };
 
             if let Pattern::Identifier(symbol) = mono_pattern {
                 let hole =
@@ -4015,19 +4040,34 @@ fn to_opt_branches<'a>(
         };
 
         for loc_pattern in when_branch.patterns {
-            let mono_pattern = from_can_pattern(env, layout_cache, &loc_pattern.value);
+            match from_can_pattern(env, layout_cache, &loc_pattern.value) {
+                Ok(mono_pattern) => {
+                    loc_branches.push((
+                        Located::at(loc_pattern.region, mono_pattern.clone()),
+                        exhaustive_guard.clone(),
+                    ));
 
-            loc_branches.push((
-                Located::at(loc_pattern.region, mono_pattern.clone()),
-                exhaustive_guard.clone(),
-            ));
+                    // TODO remove clone?
+                    opt_branches.push((
+                        mono_pattern,
+                        when_branch.guard.clone(),
+                        when_branch.value.value.clone(),
+                    ));
+                }
+                Err(runtime_error) => {
+                    loc_branches.push((
+                        Located::at(loc_pattern.region, Pattern::Underscore),
+                        exhaustive_guard.clone(),
+                    ));
 
-            // TODO remove clone?
-            opt_branches.push((
-                mono_pattern,
-                when_branch.guard.clone(),
-                when_branch.value.value.clone(),
-            ));
+                    // TODO remove clone?
+                    opt_branches.push((
+                        Pattern::Underscore,
+                        when_branch.guard.clone(),
+                        roc_can::expr::Expr::RuntimeError(runtime_error),
+                    ));
+                }
+            }
         }
     }
 
@@ -4657,10 +4697,6 @@ fn store_pattern<'a>(
 
         RecordDestructure(_, _) => {
             unreachable!("a record destructure must always occur on a struct layout");
-        }
-
-        Shadowed(_region, _ident) => {
-            return Err(&"shadowed");
         }
 
         UnsupportedPattern(_region) => {
@@ -5431,7 +5467,7 @@ pub enum Pattern<'a> {
     },
 
     // Runtime Exceptions
-    Shadowed(Region, Located<Ident>),
+    // Shadowed(Region, Located<Ident>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
 }
@@ -5463,23 +5499,26 @@ pub fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
-) -> Pattern<'a> {
+) -> Result<Pattern<'a>, RuntimeError> {
     use roc_can::pattern::Pattern::*;
     match can_pattern {
-        Underscore => Pattern::Underscore,
-        Identifier(symbol) => Pattern::Identifier(*symbol),
-        IntLiteral(v) => Pattern::IntLiteral(*v),
-        FloatLiteral(v) => Pattern::FloatLiteral(f64::to_bits(*v)),
-        StrLiteral(v) => Pattern::StrLiteral(v.clone()),
-        Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
-        UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
+        Underscore => Ok(Pattern::Underscore),
+        Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
+        IntLiteral(v) => Ok(Pattern::IntLiteral(*v)),
+        FloatLiteral(v) => Ok(Pattern::FloatLiteral(f64::to_bits(*v))),
+        StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
+        Shadowed(region, ident) => Err(RuntimeError::Shadowing {
+            original_region: *region,
+            shadow: ident.clone(),
+        }),
+        UnsupportedPattern(region) => Ok(Pattern::UnsupportedPattern(*region)),
         MalformedPattern(_problem, region) => {
             // TODO preserve malformed problem information here?
-            Pattern::UnsupportedPattern(*region)
+            Ok(Pattern::UnsupportedPattern(*region))
         }
         NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
-            IntOrFloat::IntType => Pattern::IntLiteral(*num),
-            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
+            IntOrFloat::IntType => Ok(Pattern::IntLiteral(*num)),
+            IntOrFloat::FloatType => Ok(Pattern::FloatLiteral(*num as u64)),
         },
 
         AppliedTag {
@@ -5493,7 +5532,7 @@ pub fn from_can_pattern<'a>(
 
             let variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
 
-            match variant {
+            let result = match variant {
                 Never => unreachable!(
                     "there is no pattern of type `[]`, union var {:?}",
                     *whole_var
@@ -5582,7 +5621,7 @@ pub fn from_can_pattern<'a>(
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
                         mono_args.push((
-                            from_can_pattern(env, layout_cache, &loc_pat.value),
+                            from_can_pattern(env, layout_cache, &loc_pat.value)?,
                             layout.clone(),
                         ));
                     }
@@ -5642,7 +5681,7 @@ pub fn from_can_pattern<'a>(
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((
-                            from_can_pattern(env, layout_cache, &loc_pat.value),
+                            from_can_pattern(env, layout_cache, &loc_pat.value)?,
                             layout.clone(),
                         ));
                     }
@@ -5664,7 +5703,9 @@ pub fn from_can_pattern<'a>(
                         layout,
                     }
                 }
-            }
+            };
+
+            Ok(result)
         }
 
         RecordDestructure {
@@ -5704,7 +5745,7 @@ pub fn from_can_pattern<'a>(
                                     layout_cache,
                                     &destruct.value,
                                     field_layout.clone(),
-                                ));
+                                )?);
                             }
                             None => {
                                 // this field is not destructured by the pattern
@@ -5783,10 +5824,10 @@ pub fn from_can_pattern<'a>(
                 }
             }
 
-            Pattern::RecordDestructure(
+            Ok(Pattern::RecordDestructure(
                 mono_destructs,
                 Layout::Struct(field_layouts.into_bump_slice()),
-            )
+            ))
         }
     }
 }
@@ -5796,8 +5837,8 @@ fn from_can_record_destruct<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_rd: &roc_can::pattern::RecordDestruct,
     field_layout: Layout<'a>,
-) -> RecordDestruct<'a> {
-    RecordDestruct {
+) -> Result<RecordDestruct<'a>, RuntimeError> {
+    Ok(RecordDestruct {
         label: can_rd.label.clone(),
         symbol: can_rd.symbol,
         variable: can_rd.var,
@@ -5810,10 +5851,10 @@ fn from_can_record_destruct<'a>(
                 DestructType::Required
             }
             roc_can::pattern::DestructType::Guard(_, loc_pattern) => {
-                DestructType::Guard(from_can_pattern(env, layout_cache, &loc_pattern.value))
+                DestructType::Guard(from_can_pattern(env, layout_cache, &loc_pattern.value)?)
             }
         },
-    }
+    })
 }
 
 /// Potentially translate LowLevel operations into more efficient ones based on

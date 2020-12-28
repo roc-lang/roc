@@ -1750,7 +1750,9 @@ mod gen_primitives {
     }
 
     #[test]
-    #[should_panic(expected = "shadowed")]
+    #[should_panic(
+        expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident(\\\"x\\\") }\""
+    )]
     fn pattern_shadowing() {
         assert_evals_to!(
             indoc!(
@@ -1768,7 +1770,7 @@ mod gen_primitives {
 
     #[test]
     #[ignore]
-    #[should_panic(expected = "shadowed")]
+    #[should_panic(expected = "foo")]
     fn unsupported_pattern_tag() {
         assert_evals_to!(
             indoc!(
