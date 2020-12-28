@@ -754,7 +754,7 @@ fn annotate_usage_pattern(pattern: &Pattern, usage: &mut VarUsage) {
         Identifier(_)
         | IntLiteral(_)
         | NumLiteral(_, _)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | Shadowed(_, _)
@@ -785,8 +785,8 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
     match expr {
         RuntimeError(_)
         | Num(_, _)
-        | Int(_, _)
-        | Float(_, _)
+        | Int(_, _, _)
+        | Float(_, _, _)
         | Str { .. }
         | EmptyRecord
         | Accessor { .. }

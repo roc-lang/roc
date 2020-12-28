@@ -1380,7 +1380,7 @@ fn pattern_to_when<'a>(
             (symbol, Located::at_zero(wrapped_body))
         }
 
-        IntLiteral(_) | NumLiteral(_, _) | FloatLiteral(_) | StrLiteral(_) => {
+        IntLiteral(_) | NumLiteral(_, _) | FloatLiteral(_, _) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -2245,14 +2245,14 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, num) => Stmt::Let(
+        Int(_, _, num) => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Int(num)),
             Layout::Builtin(Builtin::Int64),
             hole,
         ),
 
-        Float(_, num) => Stmt::Let(
+        Float(_, _, num) => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Float(num)),
             Layout::Builtin(Builtin::Float64),
@@ -4583,7 +4583,7 @@ fn store_pattern<'a>(
             // do nothing
         }
         IntLiteral(_)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | EnumLiteral { .. }
         | BitLiteral { .. }
         | StrLiteral(_) => {}
@@ -4623,7 +4623,7 @@ fn store_pattern<'a>(
                         // ignore
                     }
                     IntLiteral(_)
-                    | FloatLiteral(_)
+                    | FloatLiteral(_, _)
                     | EnumLiteral { .. }
                     | BitLiteral { .. }
                     | StrLiteral(_) => {}
@@ -4737,7 +4737,7 @@ fn store_record_destruct<'a>(
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
             IntLiteral(_)
-            | FloatLiteral(_)
+            | FloatLiteral(_, _)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5408,7 +5408,7 @@ pub enum Pattern<'a> {
     Underscore,
 
     IntLiteral(i64),
-    FloatLiteral(u64),
+    FloatLiteral(Variable, u64),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -5469,7 +5469,7 @@ pub fn from_can_pattern<'a>(
         Underscore => Pattern::Underscore,
         Identifier(symbol) => Pattern::Identifier(*symbol),
         IntLiteral(v) => Pattern::IntLiteral(*v),
-        FloatLiteral(v) => Pattern::FloatLiteral(f64::to_bits(*v)),
+        FloatLiteral(var, float) => Pattern::FloatLiteral(*var, f64::to_bits(*float)),
         StrLiteral(v) => Pattern::StrLiteral(v.clone()),
         Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
         UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
@@ -5479,7 +5479,7 @@ pub fn from_can_pattern<'a>(
         }
         NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
             IntOrFloat::IntType => Pattern::IntLiteral(*num),
-            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
+            IntOrFloat::FloatType => Pattern::FloatLiteral(*var, *num as u64),
         },
 
         AppliedTag {

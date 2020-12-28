@@ -736,7 +736,7 @@ fn pattern_to_vars_by_symbol(
 
         NumLiteral(_, _)
         | IntLiteral(_)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)

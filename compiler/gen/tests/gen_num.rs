@@ -16,6 +16,22 @@ mod gen_num {
     use roc_std::RocOrder;
 
     #[test]
+    fn i32_to_hex() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I32
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i32
+        );
+    }
+
+    #[test]
     fn i128_signed_int_alias() {
         assert_evals_to!("15 : I128", 15, i128);
     }

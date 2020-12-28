@@ -180,7 +180,7 @@ fn constrain_pattern(
                 Constraint::Pattern(pattern.region, PatternCategory::Int, num_type, expected),
             ));
         }
-        FloatLiteral(_) => {
+        FloatLiteral(_, _) => {
             let (a, b, c, num_type) = unique_float(var_store);
 
             state.constraints.push(exists(
@@ -423,10 +423,9 @@ fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Variable, Type) 
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
+    let num_uvar4 = var_store.fresh();
 
-    let signed_64 = num_signed64();
-    let attr_signed_64 = attr_type(Bool::variable(num_uvar1), signed_64);
-    let integer = num_integer(attr_signed_64);
+    let integer = num_integer(Type::Variable(num_uvar4));
     let attr_int = attr_type(Bool::variable(num_uvar2), integer);
     let num = num_num(attr_int);
     let attr_num = attr_type(Bool::variable(num_uvar3), num);
@@ -438,10 +437,9 @@ fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Variable, Type
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
+    let num_uvar4 = var_store.fresh();
 
-    let binary_64 = num_binary64();
-    let attr_binary_64 = attr_type(Bool::variable(num_uvar1), binary_64);
-    let fp = num_floatingpoint(attr_binary_64);
+    let fp = num_floatingpoint(Type::Variable(num_uvar4));
     let attr_fp = attr_type(Bool::variable(num_uvar2), fp);
     let num = num_num(attr_fp);
     let attr_num = attr_type(Bool::variable(num_uvar3), num);
@@ -478,7 +476,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Int(var, _) => {
+        Int(var, _, _) => {
             let (a, b, c, num_type) = unique_int(var_store);
 
             exists(
@@ -494,7 +492,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Float(var, _) => {
+        Float(var, _, _) => {
             let (a, b, c, num_type) = unique_float(var_store);
 
             exists(

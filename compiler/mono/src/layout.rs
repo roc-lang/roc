@@ -652,7 +652,9 @@ impl<'a> LayoutCache<'a> {
                     seen: MutSet::default(),
                 };
 
+                dbg!(&var);
                 let result = Layout::from_var(&mut env, var);
+                dbg!(&result);
 
                 // Don't actually cache. The layout cache is very hard to get right in the presence
                 // of specialization, it's turned of for now so an invalid cache is never the cause

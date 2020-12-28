@@ -3552,6 +3552,7 @@ fn add_def_to_module<'a>(
                     // never gets called by Roc code, it will never
                     // get specialized!
                     if is_exposed {
+                        dbg!("A");
                         let annotation = def.expr_var;
 
                         let layout = match layout_cache.from_var(
