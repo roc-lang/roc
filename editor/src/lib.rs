@@ -13,14 +13,16 @@ use crate::text::{build_glyph_brush, Text};
 use crate::vertex::Vertex;
 use crate::rect::{Rect};
 use crate::error::{print_err};
-use ortho::{init_ortho, update_ortho_buffer, OrthoResources};
+use crate::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
+use crate::selection::{create_selection_rects};
+use crate::model::{RawSelection, Position};
 use std::error::Error;
 use std::io;
 use std::path::Path;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
-use selection::{create_selection_rects, RawSelection};
+
 
 pub mod ast;
 mod buffer;
@@ -40,6 +42,7 @@ mod colors;
 pub mod error;
 mod vec_result;
 mod selection;
+mod model;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -209,10 +212,8 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 let selection =
                     RawSelection {
-                        start_line_indx: 1,
-                        pos_in_start_line: 3,
-                        stop_line_indx: 4,
-                        pos_in_stop_line: 5,
+                        start_pos: Position {line: 1, column: 3},
+                        end_pos: Position {line: 4, column: 2}
                     };
                 let selection_rects_res = create_selection_rects(selection, &glyph_bounds_rects);
 

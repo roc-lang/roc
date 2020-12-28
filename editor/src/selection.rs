@@ -3,14 +3,8 @@ use crate::rect::{Rect};
 use crate::vec_result::{get_res};
 use crate::error::{EdResult, InvalidSelection};
 use crate::colors;
+use crate::model::{RawSelection};
 use snafu::ensure;
-
-pub struct RawSelection {
-    pub start_line_indx: usize,
-    pub pos_in_start_line: usize,
-    pub stop_line_indx: usize,
-    pub pos_in_stop_line: usize,
-}
 
 //using the "parse don't validate" pattern
 struct ValidSelection {
@@ -18,33 +12,33 @@ struct ValidSelection {
 }
 
 fn validate_selection( selection: RawSelection) -> EdResult<ValidSelection> {
-    let RawSelection {start_line_indx, pos_in_start_line, stop_line_indx, pos_in_stop_line} = selection;
+    let RawSelection {start_pos, end_pos} = selection;
 
     ensure!(
-        start_line_indx <= stop_line_indx,
+        start_pos.line <= end_pos.line,
         InvalidSelection { err_msg: 
             format!(
-                "start_line_indx ({}) should be smaller than or equal to stop_line_indx ({})",
-                start_line_indx,
-                stop_line_indx 
+                "start_pos.line ({}) should be smaller than or equal to end_pos.line ({})",
+                start_pos.line,
+                end_pos.line
             )
         }
     );
 
     ensure!(
-        !(start_line_indx == stop_line_indx && pos_in_start_line > pos_in_stop_line),
+        !(start_pos.line == end_pos.line && start_pos.column > end_pos.column),
         InvalidSelection { err_msg: 
             format!(
-                "pos_in_start_line ({}) should be smaller than or equal to pos_in_stop_line ({}) when start_line_indx equals stop_line_indx",
-                pos_in_start_line,
-                pos_in_stop_line
+                "start_pos.column ({}) should be smaller than or equal to end_pos.column ({}) when start_pos.line equals end_pos.line",
+                start_pos.column,
+                end_pos.column
             )
         }
     );
 
     Ok(
         ValidSelection {
-            selection
+            selection: RawSelection {start_pos, end_pos}
         }
     )
 }
@@ -55,21 +49,21 @@ pub fn create_selection_rects(
     glyph_bound_rects: &Vec<Vec<Rect>>
 )  -> EdResult<Vec<Rect>> {
     let valid_sel = validate_selection(raw_sel)?;
-    let RawSelection {start_line_indx, pos_in_start_line, stop_line_indx, pos_in_stop_line} = valid_sel.selection;
+    let RawSelection {start_pos, end_pos} = valid_sel.selection;
 
     let mut all_rects = Vec::new();
 
-    if start_line_indx == stop_line_indx {
+    if start_pos.line == end_pos.line {
         let start_glyph_rect = 
             get_res(
-                pos_in_start_line,
-                get_res(start_line_indx, glyph_bound_rects)?,
+                start_pos.column,
+                get_res(start_pos.line, glyph_bound_rects)?,
             )?;
 
         let stop_glyph_rect = 
             get_res(
-                pos_in_stop_line,
-                get_res(stop_line_indx, glyph_bound_rects)?
+                end_pos.column,
+                get_res(end_pos.line, glyph_bound_rects)?
             )?;
 
         let top_left_coords =
@@ -90,11 +84,11 @@ pub fn create_selection_rects(
         Ok(all_rects)
     } else {
         // first line
-        let start_line = get_res(start_line_indx, glyph_bound_rects)?;
+        let start_line = get_res(start_pos.line, glyph_bound_rects)?;
 
         let start_glyph_rect = 
             get_res(
-                pos_in_start_line,
+                start_pos.column,
                 start_line
             )?;
 
@@ -120,8 +114,8 @@ pub fn create_selection_rects(
         );
 
         //middle lines
-        let nr_mid_lines = (stop_line_indx - start_line_indx) - 1;
-        let first_mid_line = start_line_indx + 1;
+        let nr_mid_lines = (end_pos.line - start_pos.line) - 1;
+        let first_mid_line = start_pos.line + 1;
 
         for i in first_mid_line..(first_mid_line + nr_mid_lines)  {
             let mid_line = get_res(i, glyph_bound_rects)?;
@@ -155,7 +149,7 @@ pub fn create_selection_rects(
         }
 
         //last line
-        let stop_line = get_res(stop_line_indx, glyph_bound_rects)?;
+        let stop_line = get_res(end_pos.line, glyph_bound_rects)?;
 
         let stop_line_first_glyph_rect = 
         get_res(
@@ -165,7 +159,7 @@ pub fn create_selection_rects(
 
         let stop_glyph_rect = 
             get_res(
-                pos_in_stop_line,
+                end_pos.column,
                 stop_line
             )?;
 
