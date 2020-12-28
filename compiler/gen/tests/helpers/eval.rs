@@ -64,11 +64,14 @@ pub fn helper<'a>(
     debug_assert_eq!(exposed_to_host.len(), 1);
     let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
 
-    let (_, main_fn_layout) = procedures
-        .keys()
-        .find(|(s, _)| *s == main_fn_symbol)
-        .unwrap()
-        .clone();
+    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
+        Some(found) => found.clone(),
+        None => panic!(
+            "The main function symbol {:?} does not have a procedure in {:?}",
+            main_fn_symbol,
+            &procedures.keys()
+        ),
+    };
 
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;

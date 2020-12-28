@@ -4699,10 +4699,6 @@ fn store_pattern<'a>(
         RecordDestructure(_, _) => {
             unreachable!("a record destructure must always occur on a struct layout");
         }
-
-        UnsupportedPattern(_region) => {
-            return Err(&"unsupported pattern");
-        }
     }
 
     Ok(stmt)
@@ -5466,11 +5462,6 @@ pub enum Pattern<'a> {
         layout: Layout<'a>,
         union: crate::exhaustive::Union,
     },
-
-    // Runtime Exceptions
-    // Shadowed(Region, Located<Ident>),
-    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-    UnsupportedPattern(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -5512,10 +5503,11 @@ pub fn from_can_pattern<'a>(
             original_region: *region,
             shadow: ident.clone(),
         }),
-        UnsupportedPattern(region) => Ok(Pattern::UnsupportedPattern(*region)),
+        UnsupportedPattern(region) => Err(RuntimeError::UnsupportedPattern(*region)),
+
         MalformedPattern(_problem, region) => {
             // TODO preserve malformed problem information here?
-            Ok(Pattern::UnsupportedPattern(*region))
+            Err(RuntimeError::UnsupportedPattern(*region))
         }
         NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
             IntOrFloat::IntType => Ok(Pattern::IntLiteral(*num)),

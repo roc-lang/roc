@@ -84,12 +84,6 @@ fn simplify<'a>(pattern: &crate::ir::Pattern<'a>) -> Pattern {
             Ctor(union, tag_id, patterns)
         }
 
-        UnsupportedPattern(_region) => {
-            // Treat as an Anything
-            // code-gen will make a runtime error out of the branch
-            Anything
-        }
-
         AppliedTag {
             tag_id,
             arguments,

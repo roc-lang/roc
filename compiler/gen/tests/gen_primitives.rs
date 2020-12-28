@@ -1786,4 +1786,21 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    #[ignore]
+    #[should_panic(expected = "")]
+    fn unsupported_pattern_str_interp() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x: 4 } = { x : 4 }
+
+                x
+                "#
+            ),
+            0,
+            i64
+        );
+    }
 }
