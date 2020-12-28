@@ -1,9 +1,12 @@
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
+use crate::tea::model::{Model, Position};
+use std::cmp::{max, min};
 
 pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
     _modifiers: ModifiersState,
+    model: &mut Model,
 ) {
     use winit::event::VirtualKeyCode::*;
 
@@ -12,6 +15,18 @@ pub fn handle_keydown(
     }
 
     match virtual_keycode {
+        Left => {
+            todo!("arrow left");
+        },
+        Up => {
+            todo!("arrow up");
+        },
+        Right => {
+            todo!("arrow right");
+        },
+        Down => {
+            todo!("arrow down");
+        },
         Copy => {
             todo!("copy");
         }

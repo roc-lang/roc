@@ -1,14 +1,14 @@
 #[derive(Debug)]
 pub struct Model {
-    pub file_text: String,
+    pub lines: Vec<String>,
     pub caret_pos: Position,
     pub selection_opt: Option<RawSelection>
 }
 
 pub fn init_model() -> Model {
     Model {
-        file_text:
-            String::new(),
+        lines:
+            vec![String::new()],
         caret_pos:
             Position {
                 line: 0, column: 0

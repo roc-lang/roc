@@ -181,6 +181,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         input.state,
                         virtual_keycode,
                         keyboard_modifiers,
+                        &mut ed_model
                     );
                 }
             }
@@ -206,7 +207,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 let glyph_bounds_rects = queue_all_text(
                     &size,
-                    &ed_model.file_text,
+                    &ed_model.lines,
                     &mut glyph_brush,
                 );
 
@@ -342,7 +343,7 @@ fn create_render_pipeline(
 // returns bounding boxes for every glyph
 fn queue_all_text(
     size: &winit::dpi::PhysicalSize<u32>,
-    text_state: &str,
+    lines: &[String],
     glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
 ) -> Vec<Vec<Rect>> {
     let area_bounds = (size.width as f32, size.height as f32).into();
@@ -360,7 +361,7 @@ fn queue_all_text(
         position: (30.0, 90.0).into(),
         area_bounds,
         color: (0.0, 0.05, 0.46, 1.0).into(),
-        text: String::from(text_state),
+        text: lines.join(""),
         size: 40.0,
         ..Default::default()
     };
@@ -375,14 +376,28 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
         '\u{8}' | '\u{7f}' => {
             // In Linux, we get a '\u{8}' when you press backspace,
             // but in macOS we get '\u{7f}'.
-            ed_model.file_text.pop();
+            if let Some(last_line) = ed_model.lines.last_mut() {
+                if !last_line.is_empty() {
+                    last_line.pop();
+                } else if ed_model.lines.len() > 1 {
+                    ed_model.lines.pop();
+                }
+            }
         }
         '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
             // These are private use characters; ignore them.
             // See http://www.unicode.org/faq/private_use.html
         }
+        '\u{d}' => {
+            if let Some(last_line) = ed_model.lines.last_mut() {
+                last_line.push(*received_char)
+            }
+            ed_model.lines.push(String::new());
+        }
         _ => {
-            ed_model.file_text.push(*received_char);
+            if let Some(last_line) = ed_model.lines.last_mut() {
+                last_line.push(*received_char);
+            }
         }
     }
 }
