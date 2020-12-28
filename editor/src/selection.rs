@@ -3,7 +3,7 @@ use crate::rect::{Rect};
 use crate::vec_result::{get_res};
 use crate::error::{EdResult, InvalidSelection};
 use crate::colors;
-use crate::model::{RawSelection};
+use crate::tea::model::{RawSelection};
 use snafu::ensure;
 
 //using the "parse don't validate" pattern

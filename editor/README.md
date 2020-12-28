@@ -15,5 +15,5 @@ If you encounter an error like `gfx_backend_vulkan ... Failed to detect any vali
 We thank the following open source projects in particular for inspiring us when designing the Roc editor:
 - [learn-wgpu](https://github.com/sotrh/learn-wgpu)
 - [rgx](https://github.com/cloudhead/rgx)
-- [Elm](https://github.com/elm/compiler)
 - [elm-editor](https://github.com/jxxcarlson/elm-editor)
+- [iced](https://github.com/hecrj/iced)

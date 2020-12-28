@@ -15,7 +15,7 @@ use crate::rect::{Rect};
 use crate::error::{print_err};
 use crate::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
 use crate::selection::{create_selection_rects};
-use crate::model::{RawSelection, Position};
+use crate::tea::model;
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -42,7 +42,7 @@ mod colors;
 pub mod error;
 mod vec_result;
 mod selection;
-mod model;
+mod tea;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -116,7 +116,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let mut text_state = "aaaaaaaaa\nbbbbbbbbbb\ncccccccccc\ndddddddddd\neeeeeee\nffffffff\ngggggggg".to_owned();//String::new();
+    let mut ed_model = model::init_model();
     let mut keyboard_modifiers = ModifiersState::empty();
 
     // Render loop
@@ -169,7 +169,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                update_text_state(&mut text_state, &ch);
+                update_text_state(&mut ed_model, &ch);
             }
             //Keyboard Input
             Event::WindowEvent {
@@ -206,44 +206,41 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 let glyph_bounds_rects = queue_all_text(
                     &size,
-                    &text_state,
+                    &ed_model.file_text,
                     &mut glyph_brush,
                 );
 
-                let selection =
-                    RawSelection {
-                        start_pos: Position {line: 1, column: 3},
-                        end_pos: Position {line: 4, column: 2}
-                    };
-                let selection_rects_res = create_selection_rects(selection, &glyph_bounds_rects);
+                if let Some(selection) = ed_model.selection_opt {
+                    let selection_rects_res = create_selection_rects(selection, &glyph_bounds_rects);
 
-                match selection_rects_res {
-                    Ok(selection_rects) => 
-                        if !selection_rects.is_empty() {
-                            let rect_buffers = create_rect_buffers(
-                                &gpu_device,
-                                &mut encoder, 
-                                &selection_rects,
-                            );
-        
-                            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                                    attachment: &frame.view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations::default(),
-                                }],
-                                depth_stencil_attachment: None,
-                            });            
-        
-                            render_pass.set_pipeline(&rect_pipeline);
-                            render_pass.set_bind_group(0, &ortho.bind_group, &[]);
-                            render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-                            render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-                            render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-        
-                            drop(render_pass);
-                        },
-                    Err(e) => print_err(&e) //TODO draw error text on screen
+                    match selection_rects_res {
+                        Ok(selection_rects) => 
+                            if !selection_rects.is_empty() {
+                                let rect_buffers = create_rect_buffers(
+                                    &gpu_device,
+                                    &mut encoder, 
+                                    &selection_rects,
+                                );
+            
+                                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                                        attachment: &frame.view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations::default(),
+                                    }],
+                                    depth_stencil_attachment: None,
+                                });            
+            
+                                render_pass.set_pipeline(&rect_pipeline);
+                                render_pass.set_bind_group(0, &ortho.bind_group, &[]);
+                                render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+                                render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+            
+                                drop(render_pass);
+                            },
+                        Err(e) => print_err(&e) //TODO draw error text on screen
+                    }
                 }
 
                 // draw all text
@@ -373,19 +370,19 @@ fn queue_all_text(
     text::queue_text_draw(&code_text, glyph_brush)
 }
 
-fn update_text_state(text_state: &mut String, received_char: &char) {
+fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
     match received_char {
         '\u{8}' | '\u{7f}' => {
             // In Linux, we get a '\u{8}' when you press backspace,
             // but in macOS we get '\u{7f}'.
-            text_state.pop();
+            ed_model.file_text.pop();
         }
         '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
             // These are private use characters; ignore them.
             // See http://www.unicode.org/faq/private_use.html
         }
         _ => {
-            text_state.push(*received_char);
+            ed_model.file_text.push(*received_char);
         }
     }
 }

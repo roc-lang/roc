@@ -51,9 +51,15 @@ These are potentially inspirational resources for the editor's design.
     * [Blueprints](https://docs.unrealengine.com/en-US/Engine/Blueprints/index.html) visual scripting (not suggesting visual scripting for Roc)
 
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
+
+### Productivity features
+
 * When refactoring; 
     - cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
     - When renaming a function for example, references in comments should be brought to the user's attention.
+* Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
+    - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
+
 
 ### Non-Code Related Inspiration
 
