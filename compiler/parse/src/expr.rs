@@ -1871,7 +1871,7 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
             Expr::List {
                 items: allocated.into_bump_slice(),
-                final_comments: final_comments,
+                final_comments,
             }
         }),
     )
