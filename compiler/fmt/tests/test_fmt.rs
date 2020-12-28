@@ -2513,6 +2513,28 @@ mod test_fmt {
         ));
     }
 
+    // TODO: the current formatting seems a bit odd for multiline function annotations
+    // (beside weird indentation, note the trailing space after the "->")
+    // #[test]
+    // fn multiline_tag_union_function_annotation() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         f :
+    //             [
+    //                 True,
+    //                 False,
+    //             ] ->
+    //             [
+    //                 True,
+    //                 False,
+    //             ]
+    //         f = \x -> x
+
+    //         a
+    //         "#
+    //     ));
+    // }
+
     #[test]
     fn recursive_tag_union() {
         expr_formats_same(indoc!(
