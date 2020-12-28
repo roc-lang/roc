@@ -1769,9 +1769,8 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
-    #[should_panic(expected = "foo")]
-    fn unsupported_pattern_tag() {
+    #[should_panic(expected = "TODO non-exhaustive pattern")]
+    fn non_exhaustive_pattern_let() {
         assert_evals_to!(
             indoc!(
                 r#"

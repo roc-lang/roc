@@ -3979,8 +3979,9 @@ pub fn from_can<'a>(
                         for error in errors {
                             env.problems.push(MonoProblem::PatternProblem(error))
                         }
-                    } // TODO make all variables bound in the pattern evaluate to a runtime error
-                      // return Stmt::RuntimeError("TODO non-exhaustive pattern");
+
+                        return Stmt::RuntimeError("TODO non-exhaustive pattern");
+                    }
                 }
 
                 // convert the continuation
