@@ -1748,4 +1748,41 @@ mod gen_primitives {
             u8
         );
     }
+
+    #[test]
+    #[should_panic(expected = "shadowed")]
+    fn pattern_shadowing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = 4
+
+                when 4 is
+                    x -> x
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    #[should_panic(expected = "shadowed")]
+    fn unsupported_pattern_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : Result I64 F64
+                x = Ok 4
+
+                (Ok y) = x
+
+                y
+                "#
+            ),
+            0,
+            i64
+        );
+    }
 }

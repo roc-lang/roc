@@ -106,6 +106,7 @@ pub fn helper<'a>(
                 | UnusedArgument(_, _, _)
                 | UnusedImport(_, _)
                 | RuntimeError(_)
+                | UnsupportedPattern(_, _)
                 | ExposedButNotDefined(_) => {
                     delayed_errors.push(problem.clone());
 
