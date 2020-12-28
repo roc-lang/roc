@@ -93,7 +93,10 @@ pub enum Expr<'a> {
     AccessorFunction(&'a str),
 
     // Collection Literals
-    List(&'a [&'a Loc<Expr<'a>>]),
+    List {
+        items: &'a [&'a Loc<Expr<'a>>],
+        final_comments: &'a [CommentOrNewline<'a>],
+    },
 
     Record {
         update: Option<&'a Loc<Expr<'a>>>,
