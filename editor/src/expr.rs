@@ -2,16 +2,15 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::ast::{Expr2, ExprId, FloatVal, IntStyle, IntVal};
+use crate::def::References;
 use crate::pattern::to_pattern2;
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec};
+use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
+use crate::scope::Scope;
 use crate::types::{Type2, TypeId};
 use bumpalo::Bump;
 use inlinable_string::InlinableString;
-use roc_can::expr::Output;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
-use roc_can::procedure::References;
-use roc_can::scope::Scope;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
@@ -20,6 +19,27 @@ use roc_parse::ast::StrLiteral;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
+
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct Output {
+    pub references: crate::def::References,
+    pub tail_call: Option<Symbol>,
+    pub aliases: MutMap<Symbol, NodeId<crate::types::Alias>>,
+    pub non_closures: MutSet<Symbol>,
+}
+
+impl Output {
+    pub fn union(&mut self, other: Self) {
+        self.references.union_mut(other.references);
+
+        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
+            self.tail_call = Some(later);
+        }
+
+        self.aliases.extend(other.aliases);
+        self.non_closures.extend(other.non_closures);
+    }
+}
 
 pub struct Env<'a> {
     pub home: ModuleId,
@@ -181,7 +201,7 @@ pub fn to_expr2<'a>(
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
     region: Region,
-) -> (crate::ast::Expr2, Output) {
+) -> (crate::ast::Expr2, self::Output) {
     use roc_parse::ast::Expr::*;
     match parse_expr {
         Float(string) => {
@@ -326,7 +346,7 @@ pub fn to_expr2<'a>(
             if let Expr2::Var(symbol) = &can_update {
                 match canonicalize_fields(env, scope, fields) {
                     Ok((can_fields, mut output)) => {
-                        output.references = output.references.union(update_out.references);
+                        output.references.union_mut(update_out.references);
 
                         let answer = Expr2::Update {
                             record_var: env.var_store.fresh(),
@@ -447,8 +467,8 @@ pub fn to_expr2<'a>(
             let (else_expr, else_output) =
                 to_expr2(env, scope, &else_branch.value, else_branch.region);
 
-            output.references = output.references.union(then_output.references);
-            output.references = output.references.union(else_output.references);
+            output.references.union_mut(then_output.references);
+            output.references.union_mut(else_output.references);
 
             let expr = Expr2::If {
                 cond_var: env.var_store.fresh(),
@@ -474,7 +494,7 @@ pub fn to_expr2<'a>(
                 let (can_when_branch, branch_references) =
                     canonicalize_when_branch(env, scope, *branch, &mut output);
 
-                output.references = output.references.union(branch_references);
+                output.references.union_mut(branch_references);
 
                 env.pool[node_id] = can_when_branch;
             }
@@ -511,7 +531,7 @@ pub fn to_expr2<'a>(
             // Shadow `scope` to make sure we don't accidentally use the original one for the
             // rest of this block, but keep the original around for later diffing.
             let original_scope = scope;
-            let mut scope = original_scope.clone();
+            let mut scope = original_scope.shallow_clone();
             let can_args = PoolVec::with_capacity(loc_arg_patterns.len() as u32, env.pool);
             let mut output = Output::default();
 
@@ -569,16 +589,16 @@ pub fn to_expr2<'a>(
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
             for (sub_symbol, region) in scope.symbols() {
-                if !original_scope.contains_symbol(*sub_symbol) {
-                    if !output.references.has_lookup(*sub_symbol) {
+                if !original_scope.contains_symbol(sub_symbol) {
+                    if !output.references.has_lookup(sub_symbol) {
                         // The body never referenced this argument we declared. It's an unused argument!
-                        env.problem(Problem::UnusedArgument(symbol, *sub_symbol, *region));
+                        env.problem(Problem::UnusedArgument(symbol, sub_symbol, region));
                     }
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistant) local variable x!
-                    output.references.lookups.remove(sub_symbol);
+                    output.references.lookups.remove(&sub_symbol);
                 }
             }
 
@@ -636,7 +656,7 @@ pub fn to_expr2<'a>(
 
                 env.pool[node_id] = (env.var_store.fresh(), arg_expr_id);
 
-                output.references = output.references.union(arg_out.references);
+                output.references.union_mut(arg_out.references);
             }
 
             // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
@@ -965,7 +985,7 @@ fn canonicalize_fields<'a>(
                     todo!()
                 }
 
-                output.references = output.references.union(field_out.references);
+                output.references.union_mut(field_out.references);
             }
             Err(CanonicalizeFieldProblem::InvalidOptionalValue {
                 field_name: _,
@@ -1049,7 +1069,7 @@ fn canonicalize_when_branch<'a>(
     let patterns = PoolVec::with_capacity(branch.patterns.len() as u32, env.pool);
 
     let original_scope = scope;
-    let mut scope = original_scope.clone();
+    let mut scope = original_scope.shallow_clone();
 
     // TODO report symbols not bound in all patterns
     for (node_id, loc_pattern) in patterns.iter_node_ids().zip(branch.patterns.iter()) {
@@ -1089,13 +1109,13 @@ fn canonicalize_when_branch<'a>(
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
     for (symbol, region) in scope.symbols() {
-        let symbol = *symbol;
+        let symbol = symbol;
 
         if !output.references.has_lookup(symbol)
             && !branch_output.references.has_lookup(symbol)
             && !original_scope.contains_symbol(symbol)
         {
-            env.problem(Problem::UnusedDef(symbol, *region));
+            env.problem(Problem::UnusedDef(symbol, region));
         }
     }
 

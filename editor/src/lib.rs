@@ -28,6 +28,7 @@ use winit::event_loop::ControlFlow;
 pub mod ast;
 mod buffer;
 mod colors;
+mod def;
 pub mod error;
 pub mod expr;
 pub mod file;

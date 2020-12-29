@@ -8,7 +8,7 @@ use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
 use roc_can::scope::Scope;
-use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
+use roc_collections::all::{ImMap, ImSet, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::ident::Ident;
@@ -37,7 +37,7 @@ pub fn infer_expr(
 ) -> (Content, Subs) {
     let env = solve::Env {
         aliases: MutMap::default(),
-        vars_by_symbol: SendMap::default(),
+        vars_by_symbol: MutMap::default(),
     };
     let (solved, _) = solve::run(&env, problems, subs, constraint);
 

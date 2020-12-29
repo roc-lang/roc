@@ -75,17 +75,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // addChecked : Num a, Num a -> Result (Num a) [ IntOverflow ]*
-    let overflow = SolvedType::TagUnion(
-        vec![(TagName::Global("Overflow".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
+    fn overflow() -> SolvedType {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("Overflow".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    }
 
+    // addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
     add_type(
         Symbol::NUM_ADD_CHECKED,
         top_level_function(
             vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
-            Box::new(result_type(num_type(flex(TVAR1)), overflow)),
+            Box::new(result_type(num_type(flex(TVAR1)), overflow())),
         ),
     );
 
@@ -104,12 +106,42 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // subWrap : Int, Int -> Int
+    add_type(
+        Symbol::NUM_SUB_WRAP,
+        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
+    // subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(
+        Symbol::NUM_SUB_CHECKED,
+        top_level_function(
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(result_type(num_type(flex(TVAR1)), overflow())),
+        ),
+    );
+
     // mul or (*) : Num a, Num a -> Num a
     add_type(
         Symbol::NUM_MUL,
         top_level_function(
             vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(num_type(flex(TVAR1))),
+        ),
+    );
+
+    // mulWrap : Int, Int -> Int
+    add_type(
+        Symbol::NUM_MUL_WRAP,
+        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
+    // mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(
+        Symbol::NUM_MUL_CHECKED,
+        top_level_function(
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(result_type(num_type(flex(TVAR1)), overflow())),
         ),
     );
 
@@ -465,6 +497,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     add_type(
         Symbol::LIST_FIRST,
+        top_level_function(
+            vec![list_type(flex(TVAR1))],
+            Box::new(result_type(flex(TVAR1), list_was_empty.clone())),
+        ),
+    );
+
+    // last : List elem -> Result elem [ ListWasEmpty ]*
+    add_type(
+        Symbol::LIST_LAST,
         top_level_function(
             vec![list_type(flex(TVAR1))],
             Box::new(result_type(flex(TVAR1), list_was_empty)),

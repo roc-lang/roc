@@ -76,33 +76,71 @@ pub fn num_float() -> Type {
     Type::Alias(
         Symbol::NUM_F64,
         vec![],
-        Box::new(num_num(num_floatingpoint())),
+        Box::new(num_num(num_floatingpoint(num_binary64()))),
     )
 }
 
 #[inline(always)]
-pub fn num_floatingpoint() -> Type {
+pub fn num_floatingpoint(range: Type) -> Type {
     let alias_content = Type::TagUnion(
-        vec![(TagName::Private(Symbol::NUM_AT_FLOATINGPOINT), vec![])],
+        vec![(
+            TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
+            vec![range.clone()],
+        )],
         Box::new(Type::EmptyTagUnion),
     );
 
-    Type::Alias(Symbol::NUM_FLOATINGPOINT, vec![], Box::new(alias_content))
+    Type::Alias(
+        Symbol::NUM_FLOATINGPOINT,
+        vec![("range".into(), range)],
+        Box::new(alias_content),
+    )
+}
+
+#[inline(always)]
+pub fn num_binary64() -> Type {
+    let alias_content = Type::TagUnion(
+        vec![(TagName::Private(Symbol::NUM_AT_BINARY64), vec![])],
+        Box::new(Type::EmptyTagUnion),
+    );
+
+    Type::Alias(Symbol::NUM_BINARY64, vec![], Box::new(alias_content))
 }
 
 #[inline(always)]
 pub fn num_int() -> Type {
-    Type::Alias(Symbol::NUM_I64, vec![], Box::new(num_num(num_integer())))
+    Type::Alias(
+        Symbol::NUM_I64,
+        vec![],
+        Box::new(num_num(num_integer(num_signed64()))),
+    )
 }
 
 #[inline(always)]
-pub fn num_integer() -> Type {
+pub fn num_signed64() -> Type {
     let alias_content = Type::TagUnion(
-        vec![(TagName::Private(Symbol::NUM_AT_INTEGER), vec![])],
+        vec![(TagName::Private(Symbol::NUM_AT_SIGNED64), vec![])],
         Box::new(Type::EmptyTagUnion),
     );
 
-    Type::Alias(Symbol::NUM_INTEGER, vec![], Box::new(alias_content))
+    Type::Alias(Symbol::NUM_SIGNED64, vec![], Box::new(alias_content))
+}
+
+#[inline(always)]
+pub fn num_integer(range: Type) -> Type {
+    let alias_content = Type::TagUnion(
+        vec![(
+            TagName::Private(Symbol::NUM_AT_INTEGER),
+            vec![range.clone()],
+        )],
+        Box::new(Type::EmptyTagUnion),
+    );
+
+    Type::Alias(
+        Symbol::NUM_INTEGER,
+        vec![("range".into(), range)],
+        Box::new(alias_content),
+    )
 }
 
 #[inline(always)]

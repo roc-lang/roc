@@ -148,17 +148,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
     });
 
-    // addChecked : Num a, Num a -> Result (Num a) [ IntOverflow ]*
-    let overflow = SolvedType::TagUnion(
-        vec![(TagName::Global("Overflow".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
+    fn overflow() -> SolvedType {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("Overflow".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    }
 
+    // addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
     add_type(Symbol::NUM_ADD_CHECKED, {
         let_tvars! { u, v, w, num, result, star };
         unique_function(
             vec![num_type(u, num), num_type(v, num)],
-            result_type(result, num_type(w, num), lift(star, overflow)),
+            result_type(result, num_type(w, num), lift(star, overflow())),
         )
     });
 
@@ -174,10 +176,40 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
     });
 
+    // subWrap : Int, Int -> Int
+    add_type(Symbol::NUM_SUB_WRAP, {
+        let_tvars! { u, v, w, num };
+        unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
+    });
+
+    // subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(Symbol::NUM_SUB_CHECKED, {
+        let_tvars! { u, v, w, num, result, star };
+        unique_function(
+            vec![num_type(u, num), num_type(v, num)],
+            result_type(result, num_type(w, num), lift(star, overflow())),
+        )
+    });
+
     // mul or (*) : Num a, Num a -> Num a
     add_type(Symbol::NUM_MUL, {
         let_tvars! { u, v, w, num };
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
+    });
+
+    // mulWrap : Int, Int -> Int
+    add_type(Symbol::NUM_MUL_WRAP, {
+        let_tvars! { u, v, w };
+        unique_function(vec![int_type(u), int_type(v)], int_type(w))
+    });
+
+    // mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+    add_type(Symbol::NUM_MUL_CHECKED, {
+        let_tvars! { u, v, w, num, result, star };
+        unique_function(
+            vec![num_type(u, num), num_type(v, num)],
+            result_type(result, num_type(w, num), lift(star, overflow())),
+        )
     });
 
     // abs : Num a -> Num a
@@ -451,14 +483,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![list_type(star1, a)], int_type(star2))
     });
 
+    fn list_was_empty() -> SolvedType {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("ListWasEmpty".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    }
+
     // List.first :
     //     Attr (* | u) (List (Attr u a)),
     //     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
-    let list_was_empty = SolvedType::TagUnion(
-        vec![(TagName::Global("ListWasEmpty".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
-
     add_type(Symbol::LIST_FIRST, {
         let_tvars! { a, u, star1, star2, star3 };
 
@@ -470,7 +504,25 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                     SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                 ],
             )],
-            result_type(star2, attr_type(u, a), lift(star3, list_was_empty)),
+            result_type(star2, attr_type(u, a), lift(star3, list_was_empty())),
+        )
+    });
+
+    // List.last :
+    //     Attr (* | u) (List (Attr u a)),
+    //     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+    add_type(Symbol::LIST_LAST, {
+        let_tvars! { a, u, star1, star2, star3 };
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    container(star1, vec![u]),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            )],
+            result_type(star2, attr_type(u, a), lift(star3, list_was_empty())),
         )
     });
 
@@ -1190,36 +1242,34 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 
 #[inline(always)]
 fn float_type(u: VarId) -> SolvedType {
+    let b_64 = builtin_aliases::binary64_type();
+    let attr_b_64 = lift(u, b_64);
+    let fp = builtin_aliases::floatingpoint_type(attr_b_64);
+    let attr_fb = lift(u, fp);
+    let num = builtin_aliases::num_type(attr_fb);
+
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(
-                Symbol::NUM_F64,
-                Vec::new(),
-                Box::new(builtin_aliases::num_type(SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![flex(u), builtin_aliases::floatingpoint_type()],
-                ))),
-            ),
+            SolvedType::Alias(Symbol::NUM_F64, Vec::new(), Box::new(num)),
         ],
     )
 }
 
 #[inline(always)]
 fn int_type(u: VarId) -> SolvedType {
+    let signed_64 = builtin_aliases::signed64_type();
+    let attr_signed_64 = lift(u, signed_64);
+    let integer = builtin_aliases::integer_type(attr_signed_64);
+    let attr_fb = lift(u, integer);
+    let num = builtin_aliases::num_type(attr_fb);
+
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(
-                Symbol::NUM_I64,
-                Vec::new(),
-                Box::new(builtin_aliases::num_type(SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![flex(u), builtin_aliases::integer_type()],
-                ))),
-            ),
+            SolvedType::Alias(Symbol::NUM_I64, Vec::new(), Box::new(num)),
         ],
     )
 }

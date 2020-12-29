@@ -1118,7 +1118,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Num.Integer
+                    x : Num.Num (Num.Integer Num.Signed64)
                     x = 4
 
                     x
@@ -1368,7 +1368,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Num.Integer
+                    x : I64
                     x =
                         when 2 is
                             3 -> 4
@@ -1816,7 +1816,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    { x, y } : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    { x, y } : { x : Str.Str, y : F64 }
                     { x, y } = { x : "foo", y : 3.14 }
 
                     x
@@ -2662,7 +2662,7 @@ mod solve_uniq_expr {
                 f
                 "#
             ),
-            "Attr * (Attr a I64, Attr b I64 -> Attr c I64)",
+            "Attr * (Attr b I64, Attr c I64 -> Attr d I64)",
         );
     }
 
@@ -3150,13 +3150,64 @@ mod solve_uniq_expr {
             indoc!(
                 r#"
                 empty : List I64
-                empty = 
+                empty =
                     []
 
                 List.walkBackwards empty (\a, b -> a + b) 0
                 "#
             ),
             "Attr a I64",
+        );
+    }
+
+    #[test]
+    fn list_set_out_of_bounds_num() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [2] 1337 0
+                "#
+            ),
+            "Attr * (List (Attr * (Num (Attr * *))))",
+        );
+    }
+
+    #[test]
+    fn list_set_out_of_bounds_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [0x2] 1337 0
+                "#
+            ),
+            "Attr * (List (Attr * I64))",
+        );
+    }
+
+    #[test]
+    fn list_set_out_of_bounds_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [0.2] 1337 0
+                "#
+            ),
+            "Attr * (List (Attr * F64))",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn list_set_out_of_bounds_int_int() {
+        // the unification of an integer list with a new integer element is a problem
+        // same for floats, but it's fine with the unspecified Num
+        infer_eq(
+            indoc!(
+                r#"
+                List.set [0x2] 1337 0x1
+                "#
+            ),
+            "Attr * (List (Attr a I64))",
         );
     }
 }

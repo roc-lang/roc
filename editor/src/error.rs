@@ -38,7 +38,7 @@ pub fn print_err(err: &EdError) {
 
 fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
     let backtrace_str = format!("{}", backtrace);
-    let backtrace_split = backtrace_str.split("\n");
+    let backtrace_split = backtrace_str.split('\n');
     let irrelevant_src = vec![".cargo", "registry", ".rustup", "rustc"];
 
     let mut ret_str = String::new();

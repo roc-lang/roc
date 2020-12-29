@@ -797,7 +797,35 @@ define_builtins! {
         54 NUM_ATAN: "atan"
         55 NUM_ACOS: "acos"
         56 NUM_ASIN: "asin"
-        57 NUM_BITWISE_AND: "bitwiseAnd"
+        57 NUM_AT_SIGNED128: "@Signed128"
+        58 NUM_SIGNED128: "Signed128" imported
+        59 NUM_AT_SIGNED64: "@Signed64"
+        60 NUM_SIGNED64: "Signed64" imported
+        61 NUM_AT_SIGNED32: "@Signed32"
+        62 NUM_SIGNED32: "Signed32" imported
+        63 NUM_AT_SIGNED16: "@Signed16"
+        64 NUM_SIGNED16: "Signed16" imported
+        65 NUM_AT_SIGNED8: "@Signed8"
+        66 NUM_SIGNED8: "Signed8" imported
+        67 NUM_AT_UNSIGNED128: "@Unsigned128"
+        68 NUM_UNSIGNED128: "Unsigned128" imported
+        69 NUM_AT_UNSIGNED64: "@Unsigned64"
+        70 NUM_UNSIGNED64: "Unsigned64" imported
+        71 NUM_AT_UNSIGNED32: "@Unsigned32"
+        72 NUM_UNSIGNED32: "Unsigned32" imported
+        73 NUM_AT_UNSIGNED16: "@Unsigned16"
+        74 NUM_UNSIGNED16: "Unsigned16" imported
+        75 NUM_AT_UNSIGNED8: "@Unsigned8"
+        76 NUM_UNSIGNED8: "Unsigned8" imported
+        77 NUM_AT_BINARY64: "@Binary64"
+        78 NUM_BINARY64: "Binary64" imported
+        79 NUM_AT_BINARY32: "@Binary32"
+        80 NUM_BINARY32: "Binary32" imported
+        81 NUM_BITWISE_AND: "bitwiseAnd"
+        82 NUM_SUB_WRAP: "subWrap"
+        83 NUM_SUB_CHECKED: "subChecked"
+        84 NUM_MUL_WRAP: "mulWrap"
+        85 NUM_MUL_CHECKED: "mulChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -841,6 +869,7 @@ define_builtins! {
         17 LIST_CONTAINS: "contains"
         18 LIST_SUM: "sum"
         19 LIST_WALK: "walk"
+        20 LIST_LAST: "last"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -27,6 +27,7 @@ roc_fmt = { path = "../compiler/fmt" }
 
 roc_reporting = { path = "../compiler/reporting" }
  # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
+ven_graph = { path = "../vendor/pathfinding" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }

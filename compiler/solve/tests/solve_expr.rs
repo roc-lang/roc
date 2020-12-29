@@ -1326,7 +1326,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Num.Integer
+                   int : Num.Num (Num.Integer Num.Signed64)
 
                    int
                 "#
@@ -1339,7 +1339,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Num.Integer
+                   int : Num.Num (Num.Integer Num.Signed64)
                    int = 5
 
                    int
@@ -1353,7 +1353,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num Integer
+                   int : Num (Integer Signed64)
 
                    int
                 "#
@@ -1366,7 +1366,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num Integer
+                   int : Num (Integer Signed64)
                    int = 5
 
                    int
@@ -1931,7 +1931,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Num Num.FloatingPoint
+                   float : Num.Num (Num.FloatingPoint Num.Binary64)
 
                    float
                 "#
@@ -1944,7 +1944,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Num Num.FloatingPoint
+                   float : Num.Num (Num.FloatingPoint Num.Binary64)
                    float = 5.5
 
                    float
@@ -1958,7 +1958,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num FloatingPoint
+                   float : Num (FloatingPoint Binary64)
 
                    float
                 "#
@@ -1971,7 +1971,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num FloatingPoint
+                   float : Num (FloatingPoint Binary64)
                    float = 5.5
 
                    float
@@ -2216,7 +2216,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    x : Num.Num Num.Integer
+                    x : Num.Num (Num.Integer Num.Signed64)
                     x =
                         when 2 is
                             3 -> 4
@@ -2428,7 +2428,7 @@ mod solve_expr {
                 r#"
                 Foo a : { foo : a }
 
-                v : Foo (Num.Num Num.Integer)
+                v : Foo (Num.Num (Num.Integer Num.Signed64))
                 v = { foo: 42 }
 
                 v
@@ -2492,7 +2492,7 @@ mod solve_expr {
                 r#"
                     Peano : [ S Peano, Z ]
 
-                    length : Peano -> Num.Num Num.Integer
+                    length : Peano -> Num.Num (Num.Integer Num.Signed64)
                     length = \peano ->
                         when peano is
                             Z -> 0
@@ -2592,10 +2592,10 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                r : { x : (Num.Num Num.Integer) }
+                r : { x : (Num.Num (Num.Integer Signed64)) }
                 r = { x : 1 }
 
-                s : { left : { x : Num.Num Num.FloatingPoint } }
+                s : { left : { x : Num.Num (Num.FloatingPoint Num.Binary64) } }
                 s = { left: { x : 3.14 } }
 
                 when 0 is
@@ -2757,7 +2757,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    { x, y } : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    { x, y } : { x : Str.Str, y : Num.Num (Num.FloatingPoint Num.Binary64) }
                     { x, y } = { x : "foo", y : 3.14 }
 
                     x
@@ -2772,7 +2772,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Foo : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num (Num.FloatingPoint Num.Binary64) }
 
                     { x, y } : Foo
                     { x, y } = { x : "foo", y : 3.14 }
@@ -2830,7 +2830,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Foo : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num (Num.FloatingPoint Num.Binary64) }
 
                     { x, y } : Foo
                     { x, y } = { x : "foo", y : 3.14 }

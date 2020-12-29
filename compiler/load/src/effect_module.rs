@@ -3,7 +3,7 @@ use roc_can::env::Env;
 use roc_can::expr::{Expr, Recursive};
 use roc_can::pattern::Pattern;
 use roc_can::scope::Scope;
-use roc_collections::all::SendMap;
+use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::TagName;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -48,7 +48,7 @@ pub fn build_effect_builtins(
     scope: &mut Scope,
     effect_symbol: Symbol,
     var_store: &mut VarStore,
-    exposed_vars_by_symbol: &mut Vec<(Symbol, Variable)>,
+    exposed_symbols: &mut MutSet<Symbol>,
     declarations: &mut Vec<Declaration>,
 ) {
     for (_, f) in BUILTIN_EFFECT_FUNCTIONS.iter() {
@@ -60,7 +60,7 @@ pub fn build_effect_builtins(
             var_store,
         );
 
-        exposed_vars_by_symbol.push((symbol, def.expr_var));
+        exposed_symbols.insert(symbol);
         declarations.push(Declaration::Declare(def));
     }
 }

@@ -261,6 +261,51 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_add_wrap() {
+        expect_success("Num.addWrap Num.maxInt 1", "-9223372036854775808 : I64");
+    }
+
+    #[test]
+    fn num_sub_wrap() {
+        expect_success("Num.subWrap Num.minInt 1", "9223372036854775807 : I64");
+    }
+
+    #[test]
+    fn num_mul_wrap() {
+        expect_success("Num.mulWrap Num.maxInt 2", "-2 : I64");
+    }
+
+    #[test]
+    fn num_add_checked() {
+        expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
+        expect_success(
+            "Num.addChecked Num.maxInt 1",
+            "Err (Overflow) : Result I64 [ Overflow ]*",
+        );
+    }
+
+    #[test]
+    fn num_sub_checked() {
+        expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
+        expect_success(
+            "Num.subChecked Num.minInt 1",
+            "Err (Overflow) : Result I64 [ Overflow ]*",
+        );
+    }
+
+    #[test]
+    fn num_mul_checked() {
+        expect_success(
+            "Num.mulChecked 20 2",
+            "Ok 40 : Result (Num *) [ Overflow ]*",
+        );
+        expect_success(
+            "Num.mulChecked Num.maxInt 2",
+            "Err (Overflow) : Result I64 [ Overflow ]*",
+        );
+    }
+
+    #[test]
     fn list_concat() {
         expect_success(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
@@ -280,6 +325,31 @@ mod repl_eval {
         expect_success("List.sum []", "0 : Num *");
         expect_success("List.sum [ 1, 2, 3 ]", "6 : Num *");
         expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : F64");
+    }
+
+    #[test]
+    fn list_first() {
+        expect_success(
+            "List.first [ 12, 9, 6, 3 ]",
+            "Ok 12 : Result (Num *) [ ListWasEmpty ]*",
+        );
+        expect_success(
+            "List.first []",
+            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
+        );
+    }
+
+    #[test]
+    fn list_last() {
+        expect_success(
+            "List.last [ 12, 9, 6, 3 ]",
+            "Ok 3 : Result (Num *) [ ListWasEmpty ]*",
+        );
+
+        expect_success(
+            "List.last []",
+            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
+        );
     }
 
     #[test]
@@ -397,6 +467,40 @@ mod repl_eval {
         expect_success(
             "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
             "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : I64, foo : F64 }",
+        );
+    }
+
+    #[test]
+    fn identity_lambda() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("\\x -> x", "<function> : a -> a");
+    }
+
+    #[test]
+    fn stdlib_function() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("Num.abs", "<function> : Num a -> Num a");
+    }
+
+    #[test]
+    fn too_few_args() {
+        expect_failure(
+            "Num.add 2",
+            indoc!(
+                r#"
+                ── TOO FEW ARGS ────────────────────────────────────────────────────────────────
+
+                The add function expects 2 arguments, but it got only 1:
+
+                4│      Num.add 2
+                        ^^^^^^^
+
+                Roc does not allow functions to be partially applied. Use a closure to
+                make partial application explicit.
+                "#
+            ),
         );
     }
 

@@ -41,7 +41,7 @@ fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
 
 pub fn create_selection_rects(
     raw_sel: RawSelection,
-    glyph_bound_rects: &Vec<Vec<Rect>>,
+    glyph_bound_rects: &[Vec<Rect>],
 ) -> EdResult<Vec<Rect>> {
     let valid_sel = validate_selection(raw_sel)?;
     let RawSelection { start_pos, end_pos } = valid_sel.selection;

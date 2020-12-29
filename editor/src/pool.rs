@@ -42,7 +42,7 @@ pub const NODE_BYTES: usize = 32;
 //   On the plus side, we could be okay with higher memory usage early on,
 //   and then later use the Mesh strategy to reduce long-running memory usage.
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq)]
 pub struct NodeId<T> {
     index: u32,
     _phantom: PhantomData<T>,
@@ -54,6 +54,12 @@ impl<T> Clone for NodeId<T> {
             index: self.index,
             _phantom: PhantomData::default(),
         }
+    }
+}
+
+impl<T> PartialEq for NodeId<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
     }
 }
 
@@ -244,8 +250,10 @@ impl PoolStr {
             }
         }
     }
+}
 
-    pub fn duplicate(&self) -> Self {
+impl ShallowClone for PoolStr {
+    fn shallow_clone(&self) -> Self {
         // Question: should this fully clone, or is a shallow copy
         // (and the aliasing it entails) OK?
         Self {
@@ -365,15 +373,6 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn duplicate(&self) -> Self {
-        // Question: should this fully clone, or is a shallow copy
-        // (and the aliasing it entails) OK?
-        Self {
-            first_node_id: self.first_node_id,
-            len: self.len,
-        }
-    }
-
     pub fn free<S>(self, pool: &'a mut Pool) {
         // zero out the memory
         unsafe {
@@ -385,6 +384,17 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
 
         // TODO insert it into the pool's free list
+    }
+}
+
+impl<T> ShallowClone for PoolVec<T> {
+    fn shallow_clone(&self) -> Self {
+        // Question: should this fully clone, or is a shallow copy
+        // (and the aliasing it entails) OK?
+        Self {
+            first_node_id: self.first_node_id,
+            len: self.len,
+        }
     }
 }
 
@@ -550,4 +560,9 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
             }
         }
     }
+}
+
+/// Clones the outer node, but does not clone any nodeids
+pub trait ShallowClone {
+    fn shallow_clone(&self) -> Self;
 }

@@ -1,7 +1,7 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-use crate::pool::{Pool, PoolStr, PoolVec};
+use crate::pool::{Pool, PoolStr, PoolVec, ShallowClone};
 use crate::types::{Alias, TypeId};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
@@ -25,7 +25,6 @@ pub struct Scope {
     symbols: MutMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    /// Uses BTreeMap because HashMap requires elements are Clone
     aliases: MutMap<Symbol, Alias>,
 
     /// The current module being processed. This will be used to turn
@@ -221,5 +220,20 @@ impl Scope {
 
     pub fn contains_alias(&mut self, name: Symbol) -> bool {
         self.aliases.contains_key(&name)
+    }
+}
+
+impl ShallowClone for Scope {
+    fn shallow_clone(&self) -> Self {
+        Self {
+            idents: self.idents.clone(),
+            symbols: self.symbols.clone(),
+            aliases: self
+                .aliases
+                .iter()
+                .map(|(s, a)| (*s, a.shallow_clone()))
+                .collect(),
+            home: self.home,
+        }
     }
 }

@@ -2694,6 +2694,7 @@ dependencies = [
  "roc_uniq",
  "snafu",
  "target-lexicon",
+ "ven_graph",
  "wgpu",
  "wgpu_glyph",
  "winit",
