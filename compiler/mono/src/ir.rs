@@ -5540,6 +5540,7 @@ pub struct WhenBranch<'a> {
     pub guard: Option<Stmt<'a>>,
 }
 
+#[allow(clippy::type_complexity)]
 fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
