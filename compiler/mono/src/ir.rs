@@ -1264,9 +1264,36 @@ fn patterns_to_when<'a>(
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
-        let (mono_pattern, assignments) = match from_can_pattern(env, layout_cache, &pattern.value)
-        {
-            Ok(v) => v,
+        let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
+            Ok((pat, assignments)) => {
+                for (symbol, variable, expr) in assignments.into_iter().rev() {
+                    if let Ok(old_body) = body {
+                        let def = roc_can::def::Def {
+                            annotation: None,
+                            expr_var: variable,
+                            loc_expr: Located::at(pattern.region, expr),
+                            loc_pattern: Located::at(
+                                pattern.region,
+                                roc_can::pattern::Pattern::Identifier(symbol),
+                            ),
+                            pattern_vars: std::iter::once((symbol, variable)).collect(),
+                        };
+                        let new_expr = roc_can::expr::Expr::LetNonRec(
+                            Box::new(def),
+                            Box::new(old_body),
+                            variable,
+                        );
+                        let new_body = Located {
+                            region: pattern.region,
+                            value: new_expr,
+                        };
+
+                        body = Ok(new_body);
+                    }
+                }
+
+                pat
+            }
             Err(runtime_error) => {
                 // Even if the body was Ok, replace it with this Err.
                 // If it was already an Err, leave it at that Err, so the first
@@ -2433,6 +2460,14 @@ pub fn with_hole<'a>(
                         }
                     } // TODO make all variables bound in the pattern evaluate to a runtime error
                       // return Stmt::RuntimeError("TODO non-exhaustive pattern");
+                }
+
+                let mut hole = hole;
+
+                for (symbol, variable, expr) in assignments {
+                    let stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
+
+                    hole = env.arena.alloc(stmt);
                 }
 
                 // convert the continuation
@@ -3953,9 +3988,15 @@ pub fn from_can<'a>(
                 };
 
             if let Pattern::Identifier(symbol) = mono_pattern {
-                let hole =
+                let mut hole =
                     env.arena
                         .alloc(from_can(env, variable, cont.value, procs, layout_cache));
+
+                for (symbol, variable, expr) in assignments {
+                    let stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
+
+                    hole = env.arena.alloc(stmt);
+                }
 
                 with_hole(
                     env,
@@ -3988,6 +4029,12 @@ pub fn from_can<'a>(
 
                 // convert the continuation
                 let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
+
+                // layer on any default record fields
+                for (symbol, variable, expr) in assignments {
+                    let hole = env.arena.alloc(stmt);
+                    stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
+                }
 
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
                     store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
@@ -4050,12 +4097,29 @@ fn to_opt_branches<'a>(
                         exhaustive_guard.clone(),
                     ));
 
+                    let mut loc_expr = when_branch.value.clone();
+                    let region = loc_pattern.region;
+                    for (symbol, variable, expr) in assignments.into_iter().rev() {
+                        let def = roc_can::def::Def {
+                            annotation: None,
+                            expr_var: variable,
+                            loc_expr: Located::at(region, expr),
+                            loc_pattern: Located::at(
+                                region,
+                                roc_can::pattern::Pattern::Identifier(symbol),
+                            ),
+                            pattern_vars: std::iter::once((symbol, variable)).collect(),
+                        };
+                        let new_expr = roc_can::expr::Expr::LetNonRec(
+                            Box::new(def),
+                            Box::new(loc_expr),
+                            variable,
+                        );
+                        loc_expr = Located::at(region, new_expr);
+                    }
+
                     // TODO remove clone?
-                    opt_branches.push((
-                        mono_pattern,
-                        when_branch.guard.clone(),
-                        when_branch.value.value.clone(),
-                    ));
+                    opt_branches.push((mono_pattern, when_branch.guard.clone(), loc_expr.value));
                 }
                 Err(runtime_error) => {
                     loc_branches.push((
@@ -5493,18 +5557,24 @@ fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
-) -> Result<(Pattern<'a>, &'a [(Symbol, Layout<'a>, roc_can::expr::Expr)]), RuntimeError> {
+) -> Result<
+    (
+        Pattern<'a>,
+        Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+    ),
+    RuntimeError,
+> {
     let mut assignments = Vec::new_in(env.arena);
     let pattern = from_can_pattern_help(env, layout_cache, can_pattern, &mut assignments)?;
 
-    Ok((pattern, assignments.into_bump_slice()))
+    Ok((pattern, assignments))
 }
 
 fn from_can_pattern_help<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
-    assignments: &mut Vec<'a, (Symbol, Layout<'a>, roc_can::expr::Expr)>,
+    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
 ) -> Result<Pattern<'a>, RuntimeError> {
     use roc_can::pattern::Pattern::*;
 
@@ -5783,7 +5853,7 @@ fn from_can_pattern_help<'a>(
                                         // so we push the default assignment into the branch
                                         assignments.push((
                                             destruct.value.symbol,
-                                            field_layout,
+                                            variable,
                                             loc_expr.value.clone(),
                                         ));
                                     }
@@ -5844,7 +5914,7 @@ fn from_can_record_destruct<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_rd: &roc_can::pattern::RecordDestruct,
     field_layout: Layout<'a>,
-    assignments: &mut Vec<'a, (Symbol, Layout<'a>, roc_can::expr::Expr)>,
+    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
 ) -> Result<RecordDestruct<'a>, RuntimeError> {
     Ok(RecordDestruct {
         label: can_rd.label.clone(),
