@@ -27,7 +27,6 @@ pub fn int_literal(
                 num_type.clone(),
                 ForReason(
                     reason,
-                    // TODO: Put into seperate function?
                     num_num(num_integer(Type::Variable(percision_var))),
                     region,
                 ),
@@ -49,6 +48,8 @@ pub fn float_literal(
     let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
 
+    dbg!(&expected);
+
     exists(
         vec![num_var],
         And(vec![
@@ -56,7 +57,6 @@ pub fn float_literal(
                 num_type.clone(),
                 ForReason(
                     reason,
-                    // TODO: Put into seperate function?
                     num_num(num_floatingpoint(Type::Variable(percision_var))),
                     region,
                 ),

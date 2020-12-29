@@ -1,4 +1,4 @@
-use crate::builtins::{num_binary64, num_floatingpoint, num_integer, num_num, num_signed64};
+use crate::builtins::{num_floatingpoint, num_integer, num_num};
 use crate::expr::{exists, Info};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};

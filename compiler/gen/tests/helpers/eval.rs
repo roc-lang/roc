@@ -201,10 +201,6 @@ pub fn helper<'a>(
     // because their bodies may reference each other.
     let mut scope = Scope::default();
     for ((symbol, layout), proc) in procedures.drain() {
-        dbg!("helper: build_proc_header");
-        dbg!(&proc);
-        dbg!(&layout);
-
         let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
         if proc.args.is_empty() {
@@ -224,9 +220,6 @@ pub fn helper<'a>(
         // this retain is not needed for correctness, but will cause less confusion when debugging
         let home = proc.name.module_id();
         current_scope.retain_top_level_thunks_for_module(home);
-
-        dbg!("helper: build_proc");
-        dbg!(&proc);
 
         build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 

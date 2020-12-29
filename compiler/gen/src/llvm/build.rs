@@ -495,7 +495,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Float(num) =>
             (match layout {
                 Layout::Builtin(Builtin::Float64) => env.context.f64_type(),
-                // Layout::Builtin(Builtin::Float32) => env.context.f32_type(),
+                Layout::Builtin(Builtin::Float32) => env.context.f32_type(),
                 _ => panic!("Invalid layout for float literal = {:?}", layout),
             }).const_float(*num).into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
@@ -1311,9 +1311,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     match stmt {
         Let(first_symbol, first_expr, first_layout, mut cont) => {
             let mut queue = Vec::new_in(env.arena);
-
-            dbg!(first_expr);
-            dbg!(first_layout);
 
 
             queue.push((first_symbol, first_expr, first_layout));
@@ -2207,9 +2204,6 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
-    dbg!("build_proc_header");
-    dbg!(&fn_name);
-
     use roc_mono::ir::HostExposedLayouts;
     match &proc.host_exposed_layouts {
         HostExposedLayouts::NotHostExposed => {}
@@ -2608,9 +2602,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
         scope.insert(*arg_symbol, (layout.clone(), alloca));
     }
-
-    dbg!("build_proc");
-    dbg!(&proc.body);
 
     let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
 

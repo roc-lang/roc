@@ -33,8 +33,20 @@ mod gen_num {
 
     #[test]
     fn i128_signed_int_alias() {
-        assert_evals_to!("15 : I128", 15, i128);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I128
+                    i = 15
+
+                    i
+                "#
+            ),
+            15,
+            i128
+        );
     }
+    // TODO: Use indoc
     #[test]
     fn i64_signed_int_alias() {
         assert_evals_to!("15 : I64", 15, i64);
