@@ -10,7 +10,7 @@ pub fn move_caret_left(old_caret_pos: Position, old_selection_opt: Option<RawSel
             if old_caret_pos.line == 0 {
                 (0, 0)
             } else if let Some(curr_line) = lines.get(old_line_nr - 1) {
-                (old_line_nr - 1, curr_line.len())
+                (old_line_nr - 1, curr_line.len()-2)
             } else {
                 (0, 0) // this should never happen, should this method return Result?
             }

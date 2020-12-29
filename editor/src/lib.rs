@@ -23,6 +23,7 @@ use std::path::Path;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
+use wgpu::{TextureView, CommandEncoder, RenderPass};
 
 
 pub mod ast;
@@ -137,7 +138,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
             Event::WindowEvent {
                 event: event::WindowEvent::CloseRequested,
                 ..
-            } => *control_flow = winit::event_loop::ControlFlow::Exit,
+            } => *control_flow = ControlFlow::Exit,
             //Resize
             Event::WindowEvent {
                 event: event::WindowEvent::Resized(new_size),
@@ -214,6 +215,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 );
 
                 if let Some(selection) = ed_model.selection_opt {
+                    
                     let selection_rects_res = create_selection_rects(selection, &glyph_bounds_rects);
 
                     match selection_rects_res {
@@ -225,25 +227,21 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                                     &selection_rects,
                                 );
             
-                                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                                        attachment: &frame.view,
-                                        resolve_target: None,
-                                        ops: wgpu::Operations::default(),
-                                    }],
-                                    depth_stencil_attachment: None,
-                                });            
+                                let mut render_pass = begin_render_pass(&mut encoder, &frame.view);         
             
                                 render_pass.set_pipeline(&rect_pipeline);
                                 render_pass.set_bind_group(0, &ortho.bind_group, &[]);
                                 render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
                                 render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
                                 render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-            
-                                drop(render_pass);
                             },
-                        Err(e) => print_err(&e) //TODO draw error text on screen
+                        Err(e) => {
+                            begin_render_pass(&mut encoder, &frame.view);
+                            print_err(&e) //TODO draw error text on screen
+                        }
                     }
+                } else {
+                    begin_render_pass(&mut encoder, &frame.view);
                 }
 
                 // draw all text
@@ -277,6 +275,28 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     })
 }
 
+
+fn begin_render_pass<'a>(
+    encoder: &'a mut CommandEncoder,
+    texture_view: &'a TextureView
+) -> RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+            attachment: texture_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                }),
+                store: true,
+            },
+        }],
+        depth_stencil_attachment: None,
+    })
+}
 
 fn make_rect_pipeline(
     gpu_device: &wgpu::Device,
@@ -414,17 +434,23 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
                 Position {
                     line: ed_model.caret_pos.line + 1,
                     column: 0
-                }
+                };
+
+            ed_model.selection_opt = None;
         }
         _ => {
+            let nr_lines = ed_model.lines.len();
+            
             if let Some(last_line) = ed_model.lines.last_mut() {
                 last_line.push(*received_char);
-
+                
                 ed_model.caret_pos =
                 Position {
-                    line: ed_model.caret_pos.line,
-                    column: ed_model.caret_pos.column + 1 
-                }
+                    line: nr_lines - 1,
+                    column: last_line.len() 
+                };
+
+                ed_model.selection_opt = None;
             }
         }
     }
