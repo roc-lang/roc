@@ -22,7 +22,7 @@ pub fn helper<'a>(
     stdlib: roc_builtins::std::StdLib,
     leak: bool,
     context: &'a inkwell::context::Context,
-) -> (&'static str, Vec<roc_problem::can::Problem>, Library) {
+) -> (&'static str, String, Library) {
     use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
@@ -111,13 +111,12 @@ pub fn helper<'a>(
                 | RuntimeError(_)
                 | UnsupportedPattern(_, _)
                 | ExposedButNotDefined(_) => {
-                    delayed_errors.push(problem.clone());
-
                     let report = can_problem(&alloc, module_path.clone(), problem);
                     let mut buf = String::new();
 
                     report.render_color_terminal(&mut buf, &alloc, &palette);
 
+                    delayed_errors.push(buf.clone());
                     lines.push(buf);
                 }
                 _ => {
@@ -146,6 +145,7 @@ pub fn helper<'a>(
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
+            delayed_errors.push(buf.clone());
             lines.push(buf);
         }
     }
@@ -287,7 +287,7 @@ pub fn helper<'a>(
     let lib = module_to_dylib(&env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
-    (main_fn_name, delayed_errors, lib)
+    (main_fn_name, delayed_errors.join("\n"), lib)
 }
 
 // TODO this is almost all code duplication with assert_llvm_evals_to
