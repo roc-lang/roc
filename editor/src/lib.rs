@@ -9,14 +9,14 @@
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
 use crate::buffer::create_rect_buffers;
-use crate::text::{build_glyph_brush, Text};
+use crate::text::{build_glyph_brush, Text, is_newline};
 use crate::vertex::Vertex;
 use crate::rect::{Rect};
 use crate::error::{print_err};
 use crate::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
 use crate::selection::{create_selection_rects};
 use crate::tea::{model, update};
-use model::Position;
+use model::{Position};
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -215,7 +215,6 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 );
 
                 if let Some(selection) = ed_model.selection_opt {
-                    
                     let selection_rects_res = create_selection_rects(selection, &glyph_bounds_rects);
 
                     match selection_rects_res {
@@ -425,7 +424,7 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
             // These are private use characters; ignore them.
             // See http://www.unicode.org/faq/private_use.html
         }
-        '\u{d}' => {
+        ch if is_newline(ch)  => {
             if let Some(last_line) = ed_model.lines.last_mut() {
                 last_line.push(*received_char)
             }
@@ -440,7 +439,7 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
         }
         _ => {
             let nr_lines = ed_model.lines.len();
-            
+
             if let Some(last_line) = ed_model.lines.last_mut() {
                 last_line.push(*received_char);
                 

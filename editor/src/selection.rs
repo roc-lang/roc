@@ -62,7 +62,7 @@ pub fn create_selection_rects(
 
         let stop_glyph_rect = 
             get_res(
-                end_pos.column,
+                end_pos.column - 1,
                 get_res(end_pos.line, glyph_bound_rects)?
             )?;
 
@@ -149,34 +149,36 @@ pub fn create_selection_rects(
         }
 
         //last line
-        let stop_line = get_res(end_pos.line, glyph_bound_rects)?;
+        if end_pos.column > 0 {
+            let stop_line = get_res(end_pos.line, glyph_bound_rects)?;
 
-        let stop_line_first_glyph_rect = 
-        get_res(
-            0,
-            stop_line
-        )?;
-
-        let stop_glyph_rect = 
+            let stop_line_first_glyph_rect = 
             get_res(
-                end_pos.column,
+                0,
                 stop_line
             )?;
 
-        let top_left_coords =
-            stop_line_first_glyph_rect.top_left_coords;
+            let stop_glyph_rect = 
+                get_res(
+                    end_pos.column - 1,
+                    stop_line
+                )?;
 
-        let height = stop_glyph_rect.height;
-        let width = (stop_glyph_rect.top_left_coords.x - stop_line_first_glyph_rect.top_left_coords.x) + stop_glyph_rect.width;
+            let top_left_coords =
+                stop_line_first_glyph_rect.top_left_coords;
 
-        all_rects.push(
-            Rect {
-                top_left_coords,
-                width,
-                height,
-                color: colors::WHITE
-            }
-        );
+            let height = stop_glyph_rect.height;
+            let width = (stop_glyph_rect.top_left_coords.x - stop_line_first_glyph_rect.top_left_coords.x) + stop_glyph_rect.width;
+
+            all_rects.push(
+                Rect {
+                    top_left_coords,
+                    width,
+                    height,
+                    color: colors::WHITE
+                }
+            );
+        }
         
         Ok(all_rects)
     }

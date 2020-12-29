@@ -72,7 +72,20 @@ pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Vec<Vec
         }
     ).group_by(|rect| rect.top_left_coords.y)
     .into_iter()
-    .map(|(_y_coord, rect_group)| rect_group.collect())
+    .map(|(_y_coord, rect_group)| {
+        let mut rects_vec = rect_group.collect::<Vec<Rect>>();
+        let last_rect_opt = rects_vec.last().cloned();
+        // add extra rect to make it easy to highlight the newline character
+        if let Some(last_rect) = last_rect_opt {
+            rects_vec.push(Rect {
+                top_left_coords: [last_rect.top_left_coords.x + last_rect.width, last_rect.top_left_coords.y].into(),
+                width: last_rect.width,
+                height: last_rect.height,
+                color: last_rect.color
+            });
+        }
+        rects_vec
+    })
     .collect()
 }
 
@@ -95,29 +108,8 @@ pub fn build_glyph_brush(
     Ok(GlyphBrushBuilder::using_font(inconsolata).build(&gpu_device, render_format))
 }
 
-/*fn my_draw_text(&mut self, ...) {
-    let layout = ...;
-    let section = ...;
+pub fn is_newline(char_ref: &char) -> bool {
+    let newline_codes = vec!['\u{d}'];
 
-    // Avoid re-allocating new vec's every time by storing them internally
-    self.last_glyphs.clear();
-    self.last_bounds.clear();
-
-    // Get all the glyphs for the current section to calculate their bounds. Due to
-    // mutable borrow, this must be stored first.
-    self.last_glyphs
-        .extend(self.brush.glyphs_custom_layout(&s, &layout).cloned());
-
-    // Calculate the bounds of each glyph
-    self.last_bounds
-        .extend(self.last_glyphs.iter().map(|glyph| {
-            let bounds = &fonts[glyph.font_id.0].glyph_bounds(&glyph.glyph);
-            Rect::new(
-                Vec2::new(bounds.min.x, bounds.min.y),
-                Vec2::new(bounds.max.x, bounds.max.y),
-            )
-        }));
-
-    // Queue the glyphs for drawing
-    self.brush.queue_custom_layout(s, &layout);
-}*/
+    newline_codes.contains(char_ref)
+}
