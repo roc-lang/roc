@@ -87,7 +87,7 @@ pub struct RectBuffers {
 pub fn create_rect_buffers(
     gpu_device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
-    rects: &[Rect]
+    rects: &[Rect],
 ) -> RectBuffers {
     let nr_of_rects = rects.len() as u64;
 
@@ -113,9 +113,7 @@ pub fn create_rect_buffers(
             quad_buffer_builder = quad_buffer_builder.push_rect(&rect);
         }
 
-
-        let (stg_vertex, stg_index, num_indices) =
-            quad_buffer_builder.build(&gpu_device);
+        let (stg_vertex, stg_index, num_indices) = quad_buffer_builder.build(&gpu_device);
 
         stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
         stg_index.copy_to_buffer(encoder, &index_buffer);

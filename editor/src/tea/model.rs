@@ -1,23 +1,17 @@
-
-use std::cmp::{Ordering};
+use std::cmp::Ordering;
 
 #[derive(Debug)]
 pub struct Model {
     pub lines: Vec<String>,
-    pub caret_pos: Position,
-    pub selection_opt: Option<RawSelection>
+    pub txt_cursor_pos: Position,
+    pub selection_opt: Option<RawSelection>,
 }
 
 pub fn init_model() -> Model {
     Model {
-        lines:
-            vec![String::new()],
-        caret_pos:
-            Position {
-                line: 0, column: 0
-            },
-        selection_opt:
-            None
+        lines: vec![String::new()],
+        txt_cursor_pos: Position { line: 0, column: 0 },
+        selection_opt: None,
     }
 }
 
@@ -25,7 +19,7 @@ pub fn init_model() -> Model {
 #[derive(Debug, Copy, Clone)]
 pub struct Position {
     pub line: usize,
-    pub column: usize
+    pub column: usize,
 }
 
 impl Ord for Position {
@@ -46,10 +40,10 @@ impl PartialEq for Position {
     }
 }
 
-impl Eq for Position { }
+impl Eq for Position {}
 
 #[derive(Debug, Copy, Clone)]
 pub struct RawSelection {
     pub start_pos: Position,
-    pub end_pos: Position
+    pub end_pos: Position,
 }

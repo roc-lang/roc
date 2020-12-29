@@ -1,5 +1,5 @@
-use snafu::{Backtrace, Snafu, ErrorCompat};
 use colored::*;
+use snafu::{Backtrace, ErrorCompat, Snafu};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -14,18 +14,15 @@ pub enum EdError {
         index,
         vec_len
     ))]
-    OutOfBounds { 
+    OutOfBounds {
         index: usize,
         vec_len: usize,
-        backtrace: Backtrace 
+        backtrace: Backtrace,
     },
-    #[snafu(display(
-        "InvalidSelection: {}",
-        err_msg
-    ))]
-    InvalidSelection { 
+    #[snafu(display("InvalidSelection: {}", err_msg))]
+    InvalidSelection {
         err_msg: String,
-        backtrace: Backtrace 
+        backtrace: Backtrace,
     },
 }
 
@@ -48,27 +45,23 @@ fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
     let mut prev_line_opt: Option<String> = None;
 
     for line in backtrace_split {
-
-        let new_line = 
-            if line.contains("src") {
-                if !contains_one_of(&line, &irrelevant_src) {
-                    if let Some(prev_line) = prev_line_opt {
-                        prev_line_opt = Some(format!("{}", prev_line.truecolor(255, 30, 30)));
-                    }
-                    format!("{}\n", line.truecolor(255, 100, 100))
-                } else {
-                    format!("{}\n", line)
+        let new_line = if line.contains("src") {
+            if !contains_one_of(&line, &irrelevant_src) {
+                if let Some(prev_line) = prev_line_opt {
+                    prev_line_opt = Some(format!("{}", prev_line.truecolor(255, 30, 30)));
                 }
+                format!("{}\n", line.truecolor(255, 100, 100))
             } else {
                 format!("{}\n", line)
-            };
-
+            }
+        } else {
+            format!("{}\n", line)
+        };
 
         if let Some(prev_line) = prev_line_opt {
             ret_str.push_str(&prev_line);
         }
         prev_line_opt = Some(new_line);
-        
     }
 
     ret_str
@@ -83,4 +76,3 @@ fn contains_one_of(main_str: &str, contain_slice: &[&str]) -> bool {
 
     false
 }
-

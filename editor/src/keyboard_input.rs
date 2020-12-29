@@ -1,6 +1,8 @@
+use crate::tea::model::Model;
+use crate::tea::update::{
+    move_txt_cursor_down, move_txt_cursor_left, move_txt_cursor_right, move_txt_cursor_up,
+};
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
-use crate::tea::model::{Model};
-use crate::tea::update::{move_caret_left, move_caret_right, move_caret_down, move_caret_up};
 
 pub fn handle_keydown(
     elem_state: ElementState,
@@ -16,25 +18,45 @@ pub fn handle_keydown(
 
     match virtual_keycode {
         Left => {
-            let (new_caret_pos, new_selection_opt) = move_caret_left(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
-            model.caret_pos = new_caret_pos;
+            let (new_txt_cursor_pos, new_selection_opt) = move_txt_cursor_left(
+                model.txt_cursor_pos,
+                model.selection_opt,
+                modifiers.shift(),
+                &model.lines,
+            );
+            model.txt_cursor_pos = new_txt_cursor_pos;
             model.selection_opt = new_selection_opt;
-        },
+        }
         Up => {
-            let (new_caret_pos, new_selection_opt) = move_caret_up(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
-            model.caret_pos = new_caret_pos;
+            let (new_txt_cursor_pos, new_selection_opt) = move_txt_cursor_up(
+                model.txt_cursor_pos,
+                model.selection_opt,
+                modifiers.shift(),
+                &model.lines,
+            );
+            model.txt_cursor_pos = new_txt_cursor_pos;
             model.selection_opt = new_selection_opt;
-        },
+        }
         Right => {
-            let (new_caret_pos, new_selection_opt) = move_caret_right(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
-            model.caret_pos = new_caret_pos;
+            let (new_txt_cursor_pos, new_selection_opt) = move_txt_cursor_right(
+                model.txt_cursor_pos,
+                model.selection_opt,
+                modifiers.shift(),
+                &model.lines,
+            );
+            model.txt_cursor_pos = new_txt_cursor_pos;
             model.selection_opt = new_selection_opt;
-        },
+        }
         Down => {
-            let (new_caret_pos, new_selection_opt) = move_caret_down(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
-            model.caret_pos = new_caret_pos;
+            let (new_txt_cursor_pos, new_selection_opt) = move_txt_cursor_down(
+                model.txt_cursor_pos,
+                model.selection_opt,
+                modifiers.shift(),
+                &model.lines,
+            );
+            model.txt_cursor_pos = new_txt_cursor_pos;
             model.selection_opt = new_selection_opt;
-        },
+        }
         Copy => {
             todo!("copy");
         }
@@ -100,7 +122,7 @@ pub fn handle_keydown(
 //         Escape | F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12 | F13 | F14 | F15
 //         | F16 | F17 | F18 | F19 | F20 | F21 | F22 | F23 | F24 | Snapshot | Scroll | Pause
 //         | Insert | Home | Delete | End | PageDown | PageUp | Left | Up | Right | Down | Compose
-//         | Caret | Numlock | AbntC1 | AbntC2 | Ax | Calculator | Capital | Convert | Kana
+//         | txt_cursor | Numlock | AbntC1 | AbntC2 | Ax | Calculator | Capital | Convert | Kana
 //         | Kanji | LAlt | LBracket | LControl | LShift | LWin | Mail | MediaSelect | PlayPause
 //         | Power | PrevTrack | MediaStop | Mute | MyComputer | NavigateForward
 //         | NavigateBackward | NextTrack | NoConvert | OEM102 | RAlt | Sysrq | RBracket

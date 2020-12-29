@@ -9,25 +9,26 @@
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
 use crate::buffer::create_rect_buffers;
-use crate::text::{build_glyph_brush, Text, is_newline};
-use crate::vertex::Vertex;
-use crate::rect::{Rect};
-use crate::error::{print_err};
+use crate::error::print_err;
 use crate::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
-use crate::selection::{create_selection_rects};
+use crate::rect::Rect;
+use crate::selection::create_selection_rects;
 use crate::tea::{model, update};
-use model::{Position};
+use crate::text::{build_glyph_brush, is_newline, Text};
+use crate::vertex::Vertex;
+use model::Position;
 use std::error::Error;
 use std::io;
 use std::path::Path;
+use wgpu::{CommandEncoder, RenderPass, TextureView};
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
-use wgpu::{TextureView, CommandEncoder, RenderPass};
-
 
 pub mod ast;
 mod buffer;
+mod colors;
+pub mod error;
 pub mod expr;
 pub mod file;
 mod keyboard_input;
@@ -36,15 +37,13 @@ mod pattern;
 pub mod pool;
 mod rect;
 mod scope;
+mod selection;
+mod tea;
 pub mod text;
 mod types;
 mod util;
-mod vertex;
-mod colors;
-pub mod error;
 mod vec_result;
-mod selection;
-mod tea;
+mod vertex;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -183,7 +182,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         input.state,
                         virtual_keycode,
                         keyboard_modifiers,
-                        &mut ed_model
+                        &mut ed_model,
                     );
                 }
             }
@@ -202,7 +201,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         label: Some("Redraw"),
                     });
 
-                    let frame = swap_chain
+                let frame = swap_chain
                     .get_current_frame()
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
@@ -210,30 +209,33 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 let glyph_bounds_rects = queue_all_text(
                     &size,
                     &ed_model.lines,
-                    ed_model.caret_pos,
+                    ed_model.txt_cursor_pos,
                     &mut glyph_brush,
                 );
 
                 if let Some(selection) = ed_model.selection_opt {
-                    let selection_rects_res = create_selection_rects(selection, &glyph_bounds_rects);
+                    let selection_rects_res =
+                        create_selection_rects(selection, &glyph_bounds_rects);
 
                     match selection_rects_res {
-                        Ok(selection_rects) => 
+                        Ok(selection_rects) => {
                             if !selection_rects.is_empty() {
                                 let rect_buffers = create_rect_buffers(
                                     &gpu_device,
-                                    &mut encoder, 
+                                    &mut encoder,
                                     &selection_rects,
                                 );
-            
-                                let mut render_pass = begin_render_pass(&mut encoder, &frame.view);         
-            
+
+                                let mut render_pass = begin_render_pass(&mut encoder, &frame.view);
+
                                 render_pass.set_pipeline(&rect_pipeline);
                                 render_pass.set_bind_group(0, &ortho.bind_group, &[]);
-                                render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+                                render_pass
+                                    .set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
                                 render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
                                 render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-                            },
+                            }
+                        }
                         Err(e) => {
                             begin_render_pass(&mut encoder, &frame.view);
                             print_err(&e) //TODO draw error text on screen
@@ -245,15 +247,15 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 // draw all text
                 glyph_brush
-                .draw_queued(
-                    &gpu_device,
-                    &mut staging_belt,
-                    &mut encoder,
-                    &frame.view,
-                    size.width,
-                    size.height,
-                )
-                .expect("Draw queued");
+                    .draw_queued(
+                        &gpu_device,
+                        &mut staging_belt,
+                        &mut encoder,
+                        &frame.view,
+                        size.width,
+                        size.height,
+                    )
+                    .expect("Draw queued");
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
@@ -274,10 +276,9 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     })
 }
 
-
 fn begin_render_pass<'a>(
     encoder: &'a mut CommandEncoder,
-    texture_view: &'a TextureView
+    texture_view: &'a TextureView,
 ) -> RenderPass<'a> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
@@ -365,7 +366,7 @@ fn create_render_pipeline(
 fn queue_all_text(
     size: &winit::dpi::PhysicalSize<u32>,
     lines: &[String],
-    caret_pos: Position,
+    txt_cursor_pos: Position,
     glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
 ) -> Vec<Vec<Rect>> {
     let area_bounds = (size.width as f32, size.height as f32).into();
@@ -388,18 +389,18 @@ fn queue_all_text(
         ..Default::default()
     };
 
-    let caret_pos_label = Text {
+    let txt_cursor_pos_label = Text {
         position: (30.0, 530.0).into(),
         area_bounds,
         color: (0.4666, 0.2, 1.0, 1.0).into(),
-        text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
+        text: format!("Ln {}, Col {}", txt_cursor_pos.line, txt_cursor_pos.column),
         size: 30.0,
         ..Default::default()
     };
 
     text::queue_text_draw(&main_label, glyph_brush);
 
-    text::queue_text_draw(&caret_pos_label, glyph_brush);
+    text::queue_text_draw(&txt_cursor_pos_label, glyph_brush);
 
     text::queue_text_draw(&code_text, glyph_brush)
 }
@@ -417,23 +418,28 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
                 } else if ed_model.lines.len() > 1 {
                     ed_model.lines.pop();
                 }
-                ed_model.caret_pos = update::move_caret_left(ed_model.caret_pos, None, false, &ed_model.lines).0;
+                ed_model.txt_cursor_pos = update::move_txt_cursor_left(
+                    ed_model.txt_cursor_pos,
+                    None,
+                    false,
+                    &ed_model.lines,
+                )
+                .0;
             }
         }
         '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
             // These are private use characters; ignore them.
             // See http://www.unicode.org/faq/private_use.html
         }
-        ch if is_newline(ch)  => {
+        ch if is_newline(ch) => {
             if let Some(last_line) = ed_model.lines.last_mut() {
                 last_line.push(*received_char)
             }
             ed_model.lines.push(String::new());
-            ed_model.caret_pos =
-                Position {
-                    line: ed_model.caret_pos.line + 1,
-                    column: 0
-                };
+            ed_model.txt_cursor_pos = Position {
+                line: ed_model.txt_cursor_pos.line + 1,
+                column: 0,
+            };
 
             ed_model.selection_opt = None;
         }
@@ -442,11 +448,10 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
 
             if let Some(last_line) = ed_model.lines.last_mut() {
                 last_line.push(*received_char);
-                
-                ed_model.caret_pos =
-                Position {
+
+                ed_model.txt_cursor_pos = Position {
                     line: nr_lines - 1,
-                    column: last_line.len() 
+                    column: last_line.len(),
                 };
 
                 ed_model.selection_opt = None;
