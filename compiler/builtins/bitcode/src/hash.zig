@@ -125,15 +125,3 @@ test "test hash" {
     expectEqual(frth_expectation, frth_result);
 }
 
-//test "Render Indices" {
-//    const print = std.debug.print;
-//
-//    const limit = 32;
-//
-//    var i : u8 = 0;
-//
-//    while (i < (2 * limit)) {
-//        print("Index {} hashes to {}\n", .{ i, hash(std.mem.asBytes(&i), 0) % limit});
-//        i += 1;
-//    }
-//}
