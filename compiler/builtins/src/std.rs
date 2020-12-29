@@ -223,12 +223,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // toFloat : Num a -> Float a
+    // toFloat : Num * -> Float *
     add_type(
         Symbol::NUM_TO_FLOAT,
         top_level_function(
             vec![num_type(flex(TVAR1))],
-            Box::new(float_type(flex(TVAR1))),
+            Box::new(float_type(flex(TVAR2))),
         ),
     );
 

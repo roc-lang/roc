@@ -2982,7 +2982,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
+                partition : Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -2994,7 +2994,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
+            "Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]",
         );
     }
 
@@ -3004,7 +3004,7 @@ mod solve_expr {
             infer_eq_without_problem(
                 indoc!(
                     r#"
-                swap : I64, I64, List a -> List a
+                swap : Int *, Int *, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -3015,7 +3015,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
+                partition : Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -3043,7 +3043,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
+                "Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]",
             );
         });
     }
@@ -3117,7 +3117,7 @@ mod solve_expr {
                 Num.toFloat
                 "#
             ),
-            "Num * -> F64",
+            "Num * -> Float *",
         );
     }
 
@@ -3129,7 +3129,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "F64, F64 -> F64",
+            "Float a, Float a -> Float a",
         );
     }
 
@@ -3141,7 +3141,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "F64 -> I64",
+            "Float * -> Int *",
         );
     }
 
@@ -3153,7 +3153,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "F64 -> I64",
+            "Float * -> Int *",
         );
     }
 
@@ -3165,7 +3165,7 @@ mod solve_expr {
                 Num.powInt
                 "#
             ),
-            "I64, I64 -> I64",
+            "Int a, Int a -> Int a",
         );
     }
 
@@ -3177,7 +3177,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "F64 -> F64",
+            "Float a -> Float a",
         );
     }
 
@@ -4096,7 +4096,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ partitionHelp ] to "./platform"
 
-                swap : I64, I64, List a -> List a
+                swap : Int *, Int *, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -4107,7 +4107,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+                partitionHelp : Int *, Int *, List (Num a), Int *, (Num a) -> [ Pair (Int *) (List (Num a)) ]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is

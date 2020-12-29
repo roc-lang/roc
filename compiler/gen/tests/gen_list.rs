@@ -1277,7 +1277,7 @@ mod gen_list {
                 app "quicksort" provides [ main ] to "./platform"
 
 
-                swap : I64, I64, List a -> List a
+                swap : Int *, Int *, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -1400,7 +1400,7 @@ mod gen_list {
                         quicksortHelp list 0 (n - 1)
 
 
-                    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+                    quicksortHelp : List (Num a), Int *, Int * -> List (Num a)
                     quicksortHelp = \list, low, high ->
                         if low < high then
                             when partition low high list is
@@ -1412,7 +1412,7 @@ mod gen_list {
                             list
 
 
-                    swap : I64, I64, List a -> List a
+                    swap : Int *, Int *, List a -> List a
                     swap = \i, j, list ->
                         when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1423,7 +1423,7 @@ mod gen_list {
                             _ ->
                                 []
 
-                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+                    partition : Int *, Int *, List (Num a) -> [ Pair (Int *) (List (Num a)) ]
                     partition = \low, high, initialList ->
                         when List.get initialList high is
                             Ok pivot ->
@@ -1435,7 +1435,7 @@ mod gen_list {
                                 Pair (low - 1) initialList
 
 
-                    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+                    partitionHelp : Int *, Int *, List (Num a), Int *, (Num a) -> [ Pair (Int *) (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
                         if j < high then
                             when List.get list j is
@@ -1470,7 +1470,7 @@ mod gen_list {
                            quicksortHelp list 0 (List.len list - 1)
 
 
-                       quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+                       quicksortHelp : List (Num a), Int *, Int * -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
                                when partition low high list is
@@ -1482,7 +1482,7 @@ mod gen_list {
                                list
 
 
-                       swap : I64, I64, List a -> List a
+                       swap : Int *, Int *, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
                                Pair (Ok atI) (Ok atJ) ->
@@ -1493,7 +1493,7 @@ mod gen_list {
                                _ ->
                                    []
 
-                       partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+                       partition : Int *, Int *, List (Num a) -> [ Pair (Int *) (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
                                Ok pivot ->
@@ -1505,7 +1505,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]
+                       partitionHelp : Int *, Int *, List (Num a), Int *, Num a -> [ Pair (Int *) (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            # if j < high then
                            if False then
@@ -1543,7 +1543,7 @@ mod gen_list {
                            quicksortHelp list 0 (List.len list - 1)
 
 
-                       quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+                       quicksortHelp : List (Num a), Int *, Int * -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
                                when partition low high list is
@@ -1555,7 +1555,7 @@ mod gen_list {
                                list
 
 
-                       swap : I64, I64, List a -> List a
+                       swap : Int *, Int *, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
                                Pair (Ok atI) (Ok atJ) ->
@@ -1566,7 +1566,7 @@ mod gen_list {
                                _ ->
                                    []
 
-                       partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+                       partition : Int *, Int *, List (Num a) -> [ Pair (Int *) (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
                                Ok pivot ->
@@ -1578,7 +1578,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]
+                       partitionHelp : Int *, Int *, List (Num a), Int *, Num a -> [ Pair (Int *) (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            if j < high then
                                when List.get list j is
