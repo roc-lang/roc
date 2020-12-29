@@ -5487,12 +5487,27 @@ pub struct WhenBranch<'a> {
     pub guard: Option<Stmt<'a>>,
 }
 
-pub fn from_can_pattern<'a>(
+fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
+    // ) -> Result<(Pattern<'a>, &'a [(Symbol, Layout<'a>, roc_can::expr::Expr)]), RuntimeError> {
+) -> Result<Pattern<'a>, RuntimeError> {
+    let mut assignments = Vec::new_in(env.arena);
+    let pattern = from_can_pattern_help(env, layout_cache, can_pattern, &mut assignments)?;
+
+    // Ok((pattern, assignments.into_bump_slice()))
+    Ok(pattern)
+}
+
+fn from_can_pattern_help<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    can_pattern: &roc_can::pattern::Pattern,
+    assignments: &mut Vec<'a, (Symbol, Layout<'a>, roc_can::expr::Expr)>,
 ) -> Result<Pattern<'a>, RuntimeError> {
     use roc_can::pattern::Pattern::*;
+
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
@@ -5614,7 +5629,7 @@ pub fn from_can_pattern<'a>(
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
                         mono_args.push((
-                            from_can_pattern(env, layout_cache, &loc_pat.value)?,
+                            from_can_pattern_help(env, layout_cache, &loc_pat.value, assignments)?,
                             layout.clone(),
                         ));
                     }
@@ -5674,7 +5689,7 @@ pub fn from_can_pattern<'a>(
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((
-                            from_can_pattern(env, layout_cache, &loc_pat.value)?,
+                            from_can_pattern_help(env, layout_cache, &loc_pat.value, assignments)?,
                             layout.clone(),
                         ));
                     }
@@ -5738,6 +5753,7 @@ pub fn from_can_pattern<'a>(
                                     layout_cache,
                                     &destruct.value,
                                     field_layout.clone(),
+                                    assignments,
                                 )?);
                             }
                             None => {
@@ -5761,22 +5777,20 @@ pub fn from_can_pattern<'a>(
                         match destructs_by_label.remove(&label) {
                             Some(destruct) => {
                                 // this field is destructured by the pattern
-                                mono_destructs.push(RecordDestruct {
-                                    label: destruct.value.label.clone(),
-                                    symbol: destruct.value.symbol,
-                                    layout: field_layout,
-                                    variable,
-                                    typ: match &destruct.value.typ {
-                                        roc_can::pattern::DestructType::Optional(_, loc_expr) => {
-                                            // if we reach this stage, the optional field is not present
-                                            // so use the default
-                                            DestructType::Optional(loc_expr.value.clone())
-                                        }
-                                        _ => unreachable!(
-                                            "only optional destructs can be optional fields"
-                                        ),
-                                    },
-                                });
+                                match &destruct.value.typ {
+                                    roc_can::pattern::DestructType::Optional(_, loc_expr) => {
+                                        // if we reach this stage, the optional field is not present
+                                        // so we push the default assignment into the branch
+                                        assignments.push((
+                                            destruct.value.symbol,
+                                            field_layout,
+                                            loc_expr.value.clone(),
+                                        ));
+                                    }
+                                    _ => unreachable!(
+                                        "only optional destructs can be optional fields"
+                                    ),
+                                };
                             }
                             None => {
                                 // this field is not destructured by the pattern
@@ -5830,6 +5844,7 @@ fn from_can_record_destruct<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_rd: &roc_can::pattern::RecordDestruct,
     field_layout: Layout<'a>,
+    assignments: &mut Vec<'a, (Symbol, Layout<'a>, roc_can::expr::Expr)>,
 ) -> Result<RecordDestruct<'a>, RuntimeError> {
     Ok(RecordDestruct {
         label: can_rd.label.clone(),
@@ -5843,9 +5858,9 @@ fn from_can_record_destruct<'a>(
                 // DestructType::Optional(loc_expr.value.clone())
                 DestructType::Required
             }
-            roc_can::pattern::DestructType::Guard(_, loc_pattern) => {
-                DestructType::Guard(from_can_pattern(env, layout_cache, &loc_pattern.value)?)
-            }
+            roc_can::pattern::DestructType::Guard(_, loc_pattern) => DestructType::Guard(
+                from_can_pattern_help(env, layout_cache, &loc_pattern.value, assignments)?,
+            ),
         },
     })
 }
