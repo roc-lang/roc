@@ -411,9 +411,6 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                             DestructType::Required => {
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
-                            DestructType::Optional(_expr) => {
-                                // do nothing
-                            }
                         }
                     }
 
@@ -540,27 +537,22 @@ fn to_relevant_branch_help<'a>(
                 ..
             } => {
                 debug_assert!(test_name == &TagName::Global(RECORD_TAG_NAME.into()));
-                let sub_positions = destructs
-                    .into_iter()
-                    .filter(|destruct| !matches!(destruct.typ, DestructType::Optional(_)))
-                    .enumerate()
-                    .map(|(index, destruct)| {
-                        let pattern = match destruct.typ {
-                            DestructType::Guard(guard) => guard.clone(),
-                            DestructType::Required => Pattern::Underscore,
-                            DestructType::Optional(_expr) => unreachable!("because of the filter"),
-                        };
+                let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
+                    let pattern = match destruct.typ {
+                        DestructType::Guard(guard) => guard.clone(),
+                        DestructType::Required => Pattern::Underscore,
+                    };
 
-                        (
-                            Path::Index {
-                                index: index as u64,
-                                tag_id: *tag_id,
-                                path: Box::new(path.clone()),
-                            },
-                            Guard::NoGuard,
-                            pattern,
-                        )
-                    });
+                    (
+                        Path::Index {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                            path: Box::new(path.clone()),
+                        },
+                        Guard::NoGuard,
+                        pattern,
+                    )
+                });
                 start.extend(sub_positions);
                 start.extend(end);
 

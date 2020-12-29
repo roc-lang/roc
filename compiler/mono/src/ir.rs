@@ -4802,17 +4802,6 @@ fn store_record_destruct<'a>(
                 env.arena.alloc(stmt),
             );
         }
-        DestructType::Optional(expr) => {
-            stmt = with_hole(
-                env,
-                expr.clone(),
-                destruct.variable,
-                procs,
-                layout_cache,
-                destruct.symbol,
-                env.arena.alloc(stmt),
-            );
-        }
         DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
                 stmt = Stmt::Let(
@@ -5535,14 +5524,13 @@ pub struct RecordDestruct<'a> {
     pub label: Lowercase,
     pub variable: Variable,
     pub layout: Layout<'a>,
-    pub symbol: Symbol,
     pub typ: DestructType<'a>,
+    pub symbol: Symbol,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DestructType<'a> {
     Required,
-    Optional(roc_can::expr::Expr),
     Guard(Pattern<'a>),
 }
 
@@ -5883,19 +5871,21 @@ fn from_can_pattern_help<'a>(
                 // it must be an optional field, and we will use the default
                 match &destruct.value.typ {
                     roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
-                        let field_layout = layout_cache
-                            .from_var(env.arena, *field_var, env.subs)
-                            .unwrap_or_else(|err| {
-                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                            });
-
-                        mono_destructs.push(RecordDestruct {
-                            label: destruct.value.label.clone(),
-                            symbol: destruct.value.symbol,
-                            variable: destruct.value.var,
-                            layout: field_layout,
-                            typ: DestructType::Optional(loc_expr.value.clone()),
-                        })
+                        // TODO these don't match up in the uniqueness inference; when we remove
+                        // that, reinstate this assert!
+                        //
+                        // dbg!(&env.subs.get_without_compacting(*field_var).content);
+                        // dbg!(&env.subs.get_without_compacting(destruct.value.var).content);
+                        // debug_assert_eq!(
+                        //     env.subs.get_root_key_without_compacting(*field_var),
+                        //     env.subs.get_root_key_without_compacting(destruct.value.var)
+                        // );
+                        assignments.push((
+                            destruct.value.symbol,
+                            // destruct.value.var,
+                            *field_var,
+                            loc_expr.value.clone(),
+                        ));
                     }
                     _ => unreachable!("only optional destructs can be optional fields"),
                 }
