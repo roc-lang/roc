@@ -1264,7 +1264,8 @@ fn patterns_to_when<'a>(
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
-        let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
+        let (mono_pattern, assignments) = match from_can_pattern(env, layout_cache, &pattern.value)
+        {
             Ok(v) => v,
             Err(runtime_error) => {
                 // Even if the body was Ok, replace it with this Err.
@@ -2407,14 +2408,14 @@ pub fn with_hole<'a>(
                 }
             } else {
                 // this may be a destructure pattern
-                let mono_pattern = match from_can_pattern(env, layout_cache, &def.loc_pattern.value)
-                {
-                    Ok(v) => v,
-                    Err(_runtime_error) => {
-                        // todo
-                        panic!();
-                    }
-                };
+                let (mono_pattern, assignments) =
+                    match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
+                        Ok(v) => v,
+                        Err(_runtime_error) => {
+                            // todo
+                            panic!();
+                        }
+                    };
 
                 let context = crate::exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
@@ -3945,10 +3946,11 @@ pub fn from_can<'a>(
             }
 
             // this may be a destructure pattern
-            let mono_pattern = match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
-                Ok(v) => v,
-                Err(_) => todo!(),
-            };
+            let (mono_pattern, assignments) =
+                match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
+                    Ok(v) => v,
+                    Err(_) => todo!(),
+                };
 
             if let Pattern::Identifier(symbol) = mono_pattern {
                 let hole =
@@ -4042,7 +4044,7 @@ fn to_opt_branches<'a>(
 
         for loc_pattern in when_branch.patterns {
             match from_can_pattern(env, layout_cache, &loc_pattern.value) {
-                Ok(mono_pattern) => {
+                Ok((mono_pattern, assignments)) => {
                     loc_branches.push((
                         Located::at(loc_pattern.region, mono_pattern.clone()),
                         exhaustive_guard.clone(),
@@ -5491,13 +5493,11 @@ fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
-    // ) -> Result<(Pattern<'a>, &'a [(Symbol, Layout<'a>, roc_can::expr::Expr)]), RuntimeError> {
-) -> Result<Pattern<'a>, RuntimeError> {
+) -> Result<(Pattern<'a>, &'a [(Symbol, Layout<'a>, roc_can::expr::Expr)]), RuntimeError> {
     let mut assignments = Vec::new_in(env.arena);
     let pattern = from_can_pattern_help(env, layout_cache, can_pattern, &mut assignments)?;
 
-    // Ok((pattern, assignments.into_bump_slice()))
-    Ok(pattern)
+    Ok((pattern, assignments.into_bump_slice()))
 }
 
 fn from_can_pattern_help<'a>(
