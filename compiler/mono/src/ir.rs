@@ -4794,9 +4794,9 @@ fn store_record_destruct<'a>(
     };
 
     match &destruct.typ {
-        DestructType::Required => {
+        DestructType::Required(symbol) => {
             stmt = Stmt::Let(
-                destruct.symbol,
+                *symbol,
                 load,
                 destruct.layout.clone(),
                 env.arena.alloc(stmt),
@@ -5525,12 +5525,11 @@ pub struct RecordDestruct<'a> {
     pub variable: Variable,
     pub layout: Layout<'a>,
     pub typ: DestructType<'a>,
-    pub symbol: Symbol,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DestructType<'a> {
-    Required,
+    Required(Symbol),
     Guard(Pattern<'a>),
 }
 
@@ -5819,7 +5818,6 @@ fn from_can_pattern_help<'a>(
                                 // put in an underscore
                                 mono_destructs.push(RecordDestruct {
                                     label: label.clone(),
-                                    symbol: env.unique_symbol(),
                                     variable,
                                     layout: field_layout.clone(),
                                     typ: DestructType::Guard(Pattern::Underscore),
@@ -5855,7 +5853,6 @@ fn from_can_pattern_help<'a>(
                                 // put in an underscore
                                 mono_destructs.push(RecordDestruct {
                                     label: label.clone(),
-                                    symbol: env.unique_symbol(),
                                     variable,
                                     layout: field_layout.clone(),
                                     typ: DestructType::Guard(Pattern::Underscore),
@@ -5908,15 +5905,13 @@ fn from_can_record_destruct<'a>(
 ) -> Result<RecordDestruct<'a>, RuntimeError> {
     Ok(RecordDestruct {
         label: can_rd.label.clone(),
-        symbol: can_rd.symbol,
         variable: can_rd.var,
         layout: field_layout,
         typ: match &can_rd.typ {
-            roc_can::pattern::DestructType::Required => DestructType::Required,
+            roc_can::pattern::DestructType::Required => DestructType::Required(can_rd.symbol),
             roc_can::pattern::DestructType::Optional(_, _) => {
                 // if we reach this stage, the optional field is present
-                // DestructType::Optional(loc_expr.value.clone())
-                DestructType::Required
+                DestructType::Required(can_rd.symbol)
             }
             roc_can::pattern::DestructType::Guard(_, loc_pattern) => DestructType::Guard(
                 from_can_pattern_help(env, layout_cache, &loc_pattern.value, assignments)?,

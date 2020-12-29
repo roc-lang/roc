@@ -67,7 +67,7 @@ fn simplify<'a>(pattern: &crate::ir::Pattern<'a>) -> Pattern {
                 field_names.push(destruct.label.clone());
 
                 match &destruct.typ {
-                    DestructType::Required => patterns.push(Anything),
+                    DestructType::Required(_) => patterns.push(Anything),
                     DestructType::Guard(guard) => patterns.push(simplify(guard)),
                 }
             }

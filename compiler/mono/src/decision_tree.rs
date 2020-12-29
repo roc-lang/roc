@@ -408,7 +408,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                             DestructType::Guard(guard) => {
                                 arguments.push((guard.clone(), destruct.layout.clone()));
                             }
-                            DestructType::Required => {
+                            DestructType::Required(_) => {
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
                         }
@@ -540,7 +540,7 @@ fn to_relevant_branch_help<'a>(
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
-                        DestructType::Required => Pattern::Underscore,
+                        DestructType::Required(_) => Pattern::Underscore,
                     };
 
                     (
