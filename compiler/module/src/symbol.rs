@@ -826,10 +826,11 @@ define_builtins! {
         83 NUM_SUB_CHECKED: "subChecked"
         84 NUM_MUL_WRAP: "mulWrap"
         85 NUM_MUL_CHECKED: "mulChecked"
-        86 NUM_AT_INT: "@Int"
-        87 NUM_INT: "Int" imported
-        88 NUM_AT_FLOAT: "@Float"
-        89 NUM_FLOAT: "Float" imported
+        86 NUM_INT: "Int" imported
+        87 NUM_FLOAT: "Float" imported
+        88 NUM_AT_NATURAL: "@Natural"
+        89 NUM_NATURAL: "Natural" imported
+        90 NUM_NAT: "Nat" imported
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

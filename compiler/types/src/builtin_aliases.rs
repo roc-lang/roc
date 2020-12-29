@@ -68,6 +68,26 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Natural : [ @Natural ]
+    add_alias(
+        Symbol::NUM_NATURAL,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![],
+            typ: natural_alias_content(),
+        },
+    );
+
+    // Nat : Int Natural
+    add_alias(
+        Symbol::NUM_NAT,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(natural_type()),
+        },
+    );
+
     // Signed128 : [ @Signed128 ]
     add_alias(
         Symbol::NUM_SIGNED128,
@@ -342,10 +362,19 @@ pub fn float_type(range: SolvedType) -> SolvedType {
 
 #[inline(always)]
 fn float_alias_content(range: SolvedType) -> SolvedType {
-    single_private_tag(
-        Symbol::NUM_AT_FLOAT,
-        vec![num_type(floatingpoint_type(range))],
-    )
+    num_type(floatingpoint_type(range))
+}
+
+// Nat
+
+#[inline(always)]
+pub fn nat_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_NAT, vec![], Box::new(nat_alias_content()))
+}
+
+#[inline(always)]
+fn nat_alias_content() -> SolvedType {
+    int_alias_content(natural_type())
 }
 
 // INT
@@ -361,7 +390,7 @@ pub fn int_type(range: SolvedType) -> SolvedType {
 
 #[inline(always)]
 fn int_alias_content(range: SolvedType) -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_INT, vec![num_type(integer_type(range))])
+    num_type(integer_type(range))
 }
 
 // INTEGER
@@ -406,6 +435,20 @@ pub fn binary32_type() -> SolvedType {
 #[inline(always)]
 fn binary32_alias_content() -> SolvedType {
     single_private_tag(Symbol::NUM_AT_BINARY32, vec![])
+}
+
+#[inline(always)]
+pub fn natural_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_NATURAL,
+        vec![],
+        Box::new(natural_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn natural_alias_content() -> SolvedType {
+    single_private_tag(Symbol::NUM_AT_NATURAL, vec![])
 }
 
 #[inline(always)]
