@@ -1,6 +1,6 @@
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 use crate::tea::model::{Model};
-use crate::tea::update::{move_caret_left, move_caret_right};
+use crate::tea::update::{move_caret_left, move_caret_right, move_caret_down, move_caret_up};
 
 pub fn handle_keydown(
     elem_state: ElementState,
@@ -21,7 +21,9 @@ pub fn handle_keydown(
             model.selection_opt = new_selection_opt;
         },
         Up => {
-            todo!("arrow up");
+            let (new_caret_pos, new_selection_opt) = move_caret_up(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
+            model.caret_pos = new_caret_pos;
+            model.selection_opt = new_selection_opt;
         },
         Right => {
             let (new_caret_pos, new_selection_opt) = move_caret_right(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
@@ -29,7 +31,9 @@ pub fn handle_keydown(
             model.selection_opt = new_selection_opt;
         },
         Down => {
-            todo!("arrow down");
+            let (new_caret_pos, new_selection_opt) = move_caret_down(model.caret_pos, model.selection_opt, modifiers.shift(), &model.lines);
+            model.caret_pos = new_caret_pos;
+            model.selection_opt = new_selection_opt;
         },
         Copy => {
             todo!("copy");
