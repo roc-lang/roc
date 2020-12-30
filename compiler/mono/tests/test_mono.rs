@@ -251,9 +251,9 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.5 = 1i64;
-                    let Test.6 = 3.14f64;
-                    let Test.2 = Struct {Test.5, Test.6};
+                    let Test.4 = 1i64;
+                    let Test.5 = 3.14f64;
+                    let Test.2 = Struct {Test.4, Test.5};
                     let Test.1 = Index 0 Test.2;
                     ret Test.1;
                 "#
@@ -853,10 +853,10 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.5 = 2i64;
-                    let Test.6 = 3.14f64;
-                    let Test.4 = Struct {Test.5, Test.6};
-                    let Test.1 = Index 0 Test.4;
+                    let Test.4 = 2i64;
+                    let Test.5 = 3.14f64;
+                    let Test.3 = Struct {Test.4, Test.5};
+                    let Test.1 = Index 0 Test.3;
                     ret Test.1;
                 "#
             ),
@@ -874,15 +874,15 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.7 = 1i64;
-                    let Test.8 = 3i64;
-                    let Test.9 = 4i64;
-                    let Test.5 = Array [Test.7, Test.8, Test.9];
-                    let Test.6 = 3.14f64;
-                    let Test.4 = Struct {Test.5, Test.6};
-                    let Test.1 = Index 0 Test.4;
+                    let Test.6 = 1i64;
+                    let Test.7 = 3i64;
+                    let Test.8 = 4i64;
+                    let Test.4 = Array [Test.6, Test.7, Test.8];
+                    let Test.5 = 3.14f64;
+                    let Test.3 = Struct {Test.4, Test.5};
+                    let Test.1 = Index 0 Test.3;
                     inc Test.1;
-                    dec Test.4;
+                    dec Test.3;
                     ret Test.1;
                 "#
             ),
@@ -1096,8 +1096,8 @@ mod test_mono {
                     ret Test.8;
 
                 procedure Test.1 (Test.2):
+                    let Test.4 = Index 0 Test.2;
                     let Test.3 = 10i64;
-                    let Test.4 = Index 1 Test.2;
                     let Test.7 = CallByName Num.24 Test.3 Test.4;
                     ret Test.7;
 
@@ -1131,6 +1131,7 @@ mod test_mono {
                 procedure Test.1 (Test.4):
                     let Test.2 = Index 0 Test.4;
                     let Test.3 = Index 1 Test.4;
+                    let Test.2 = 10i64;
                     let Test.7 = CallByName Num.24 Test.2 Test.3;
                     ret Test.7;
 
@@ -1163,8 +1164,9 @@ mod test_mono {
                     ret Test.8;
 
                 procedure Test.1 (Test.4):
+                    let Test.3 = Index 0 Test.4;
                     let Test.2 = 10i64;
-                    let Test.3 = Index 1 Test.4;
+                    let Test.2 = 10i64;
                     let Test.7 = CallByName Num.24 Test.2 Test.3;
                     ret Test.7;
 
