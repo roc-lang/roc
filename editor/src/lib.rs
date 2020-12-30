@@ -211,12 +211,8 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
 
-                let glyph_bounds_rects = queue_all_text(
-                    &size,
-                    &ed_model.lines,
-                    ed_model.caret_pos,
-                    &mut glyph_brush,
-                );
+                let glyph_bounds_rects =
+                    queue_all_text(&size, &ed_model.lines, ed_model.caret_pos, &mut glyph_brush);
 
                 if let Some(selection) = ed_model.selection_opt {
                     let selection_rects_res =
@@ -423,13 +419,8 @@ fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
                 } else if ed_model.lines.len() > 1 {
                     ed_model.lines.pop();
                 }
-                ed_model.caret_pos = update::move_caret_left(
-                    ed_model.caret_pos,
-                    None,
-                    false,
-                    &ed_model.lines,
-                )
-                .0;
+                ed_model.caret_pos =
+                    update::move_caret_left(ed_model.caret_pos, None, false, &ed_model.lines).0;
             }
         }
         '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
