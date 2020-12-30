@@ -34,6 +34,7 @@ pub mod error;
 pub mod expr;
 pub mod file;
 mod keyboard_input;
+mod module;
 mod ortho;
 mod pattern;
 pub mod pool;

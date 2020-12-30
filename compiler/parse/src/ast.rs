@@ -93,7 +93,10 @@ pub enum Expr<'a> {
     AccessorFunction(&'a str),
 
     // Collection Literals
-    List(&'a [&'a Loc<Expr<'a>>]),
+    List {
+        items: &'a [&'a Loc<Expr<'a>>],
+        final_comments: &'a [CommentOrNewline<'a>],
+    },
 
     Record {
         update: Option<&'a Loc<Expr<'a>>>,
@@ -298,6 +301,15 @@ impl<'a> CommentOrNewline<'a> {
             Newline => false,
             LineComment(_) => true,
             DocComment(_) => true,
+        }
+    }
+
+    pub fn is_newline(&self) -> bool {
+        use CommentOrNewline::*;
+        match self {
+            Newline => true,
+            LineComment(_) => false,
+            DocComment(_) => false,
         }
     }
 }

@@ -43,6 +43,28 @@ pub enum Def {
     Function(FunctionDef),
 }
 
+impl Def {
+    pub fn symbols(&self, pool: &Pool) -> MutSet<Symbol> {
+        let mut output = MutSet::default();
+
+        match self {
+            Def::AnnotationOnly { .. } => todo!("lost pattern information here ... "),
+            Def::Value(ValueDef { pattern, .. }) => {
+                let pattern2 = &pool[*pattern];
+                output.extend(symbols_from_pattern(pool, pattern2));
+            }
+            Def::Function(function_def) => match function_def {
+                FunctionDef::NoAnnotation { name, .. }
+                | FunctionDef::WithAnnotation { name, .. } => {
+                    output.insert(*name);
+                }
+            },
+        }
+
+        output
+    }
+}
+
 impl ShallowClone for Def {
     fn shallow_clone(&self) -> Self {
         match self {
@@ -787,7 +809,6 @@ pub struct CanDefs {
 pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
-    var_store: &mut VarStore,
     original_scope: &Scope,
     loc_defs: &'a [&'a Located<ast::Def<'a>>],
     pattern_type: PatternType,

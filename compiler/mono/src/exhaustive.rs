@@ -67,7 +67,7 @@ fn simplify<'a>(pattern: &crate::ir::Pattern<'a>) -> Pattern {
                 field_names.push(destruct.label.clone());
 
                 match &destruct.typ {
-                    DestructType::Required | DestructType::Optional(_) => patterns.push(Anything),
+                    DestructType::Required(_) => patterns.push(Anything),
                     DestructType::Guard(guard) => patterns.push(simplify(guard)),
                 }
             }
@@ -82,17 +82,6 @@ fn simplify<'a>(pattern: &crate::ir::Pattern<'a>) -> Pattern {
             };
 
             Ctor(union, tag_id, patterns)
-        }
-
-        Shadowed(_region, _ident) => {
-            // Treat as an Anything
-            // code-gen will make a runtime error out of the branch
-            Anything
-        }
-        UnsupportedPattern(_region) => {
-            // Treat as an Anything
-            // code-gen will make a runtime error out of the branch
-            Anything
         }
 
         AppliedTag {

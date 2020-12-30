@@ -43,7 +43,7 @@ impl Output {
 
 pub struct Env<'a> {
     pub home: ModuleId,
-    pub var_store: VarStore,
+    pub var_store: &'a mut VarStore,
     pub pool: &'a mut Pool,
     pub arena: &'a Bump,
 
@@ -63,6 +63,32 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
+    pub fn new(
+        home: ModuleId,
+        arena: &'a Bump,
+        pool: &'a mut Pool,
+        var_store: &'a mut VarStore,
+        dep_idents: MutMap<ModuleId, IdentIds>,
+        module_ids: &'a ModuleIds,
+        exposed_ident_ids: IdentIds,
+    ) -> Env<'a> {
+        Env {
+            home,
+            arena,
+            pool,
+            var_store,
+            dep_idents,
+            module_ids,
+            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
+            exposed_ident_ids,
+            closures: MutMap::default(),
+            qualified_lookups: MutSet::default(),
+            tailcallable_symbol: None,
+            closure_name_symbol: None,
+            top_level_symbols: MutSet::default(),
+        }
+    }
+
     pub fn add<T>(&mut self, item: T, region: Region) -> NodeId<T> {
         let id = self.pool.add(item);
         self.set_region(id, region);
@@ -285,14 +311,14 @@ pub fn to_expr2<'a>(
 
         Str(literal) => flatten_str_literal(env, scope, &literal),
 
-        List(elements) => {
+        List { items, .. } => {
             let mut output = Output::default();
             let output_ref = &mut output;
 
-            let elems = PoolVec::with_capacity(elements.len() as u32, env.pool);
+            let elems = PoolVec::with_capacity(items.len() as u32, env.pool);
 
-            for (node_id, element) in elems.iter_node_ids().zip(elements.iter()) {
-                let (expr, sub_output) = to_expr2(env, scope, &element.value, element.region);
+            for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
+                let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);
 
                 output_ref.union(sub_output);
 
