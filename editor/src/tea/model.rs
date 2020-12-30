@@ -3,14 +3,14 @@ use std::cmp::Ordering;
 #[derive(Debug)]
 pub struct Model {
     pub lines: Vec<String>,
-    pub txt_cursor_pos: Position,
+    pub caret_pos: Position,
     pub selection_opt: Option<RawSelection>,
 }
 
 pub fn init_model() -> Model {
     Model {
         lines: vec![String::new()],
-        txt_cursor_pos: Position { line: 0, column: 0 },
+        caret_pos: Position { line: 0, column: 0 },
         selection_opt: None,
     }
 }
