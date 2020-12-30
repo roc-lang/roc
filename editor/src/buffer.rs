@@ -3,6 +3,7 @@
 use crate::rect::Rect;
 use crate::util::size_of_slice;
 use crate::vertex::Vertex;
+use bumpalo::collections::Vec as BumpVec;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
 pub struct QuadBufferBuilder {
@@ -87,7 +88,7 @@ pub struct RectBuffers {
 pub fn create_rect_buffers(
     gpu_device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
-    rects: &[Rect],
+    rects: &BumpVec<Rect>,
 ) -> RectBuffers {
     let nr_of_rects = rects.len() as u64;
 

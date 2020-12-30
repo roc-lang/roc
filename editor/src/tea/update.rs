@@ -11,13 +11,13 @@ pub fn move_txt_cursor_left(
     let old_line_nr = old_txt_cursor_pos.line;
     let old_col_nr = old_txt_cursor_pos.column;
 
-    let (line_nr, col_nr) = if old_txt_cursor_pos.column == 0 {
-        if old_txt_cursor_pos.line == 0 {
+    let (line_nr, col_nr) = if old_col_nr == 0 {
+        if old_line_nr == 0 {
             (0, 0)
         } else if let Some(curr_line) = lines.get(old_line_nr - 1) {
             (old_line_nr - 1, curr_line.len() - 1)
         } else {
-            (0, 0) // this should never happen, should this method return Result?
+            unreachable!()
         }
     } else {
         (old_line_nr, old_col_nr - 1)
@@ -84,7 +84,7 @@ pub fn move_txt_cursor_right(
             (old_line_nr, old_col_nr)
         }
     } else {
-        (0, 0) // this should never happen, should this method return Result?
+        unreachable!()
     };
 
     let new_txt_cursor_pos = Position {
@@ -140,7 +140,7 @@ pub fn move_txt_cursor_up(
             (old_line_nr - 1, old_col_nr)
         }
     } else {
-        (0, 0) // this should never happen, should this method return Result?
+        unreachable!()
     };
 
     let new_txt_cursor_pos = Position {
@@ -195,7 +195,7 @@ pub fn move_txt_cursor_down(
             (old_line_nr + 1, old_col_nr)
         }
     } else {
-        (0, 0) // this should never happen, should this method return Result?
+        unreachable!()
     };
 
     let new_txt_cursor_pos = Position {

@@ -16,6 +16,7 @@ use crate::selection::create_selection_rects;
 use crate::tea::{model, update};
 use crate::text::{build_glyph_brush, is_newline, Text};
 use crate::vertex::Vertex;
+use bumpalo::Bump;
 use model::Position;
 use std::error::Error;
 use std::io;
@@ -121,6 +122,8 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let mut ed_model = model::init_model();
     let mut keyboard_modifiers = ModifiersState::empty();
 
+    let arena = Bump::new();
+
     // Render loop
     window.request_redraw();
 
@@ -216,7 +219,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 if let Some(selection) = ed_model.selection_opt {
                     let selection_rects_res =
-                        create_selection_rects(selection, &glyph_bounds_rects);
+                        create_selection_rects(selection, &glyph_bounds_rects, &arena);
 
                     match selection_rects_res {
                         Ok(selection_rects) => {

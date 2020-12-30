@@ -3,6 +3,8 @@ use crate::error::{EdResult, InvalidSelection};
 use crate::rect::Rect;
 use crate::tea::model::RawSelection;
 use crate::vec_result::get_res;
+use bumpalo::collections::Vec as BumpVec;
+use bumpalo::Bump;
 use snafu::ensure;
 
 //using the "parse don't validate" pattern
@@ -39,14 +41,15 @@ fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
     })
 }
 
-pub fn create_selection_rects(
+pub fn create_selection_rects<'a>(
     raw_sel: RawSelection,
     glyph_bound_rects: &[Vec<Rect>],
-) -> EdResult<Vec<Rect>> {
+    arena: &'a Bump,
+) -> EdResult<BumpVec<'a, Rect>> {
     let valid_sel = validate_selection(raw_sel)?;
     let RawSelection { start_pos, end_pos } = valid_sel.selection;
 
-    let mut all_rects = Vec::new();
+    let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
 
     if start_pos.line == end_pos.line {
         let start_glyph_rect = get_res(
