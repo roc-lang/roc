@@ -285,14 +285,14 @@ pub fn to_expr2<'a>(
 
         Str(literal) => flatten_str_literal(env, scope, &literal),
 
-        List(elements) => {
+        List { items, .. } => {
             let mut output = Output::default();
             let output_ref = &mut output;
 
-            let elems = PoolVec::with_capacity(elements.len() as u32, env.pool);
+            let elems = PoolVec::with_capacity(items.len() as u32, env.pool);
 
-            for (node_id, element) in elems.iter_node_ids().zip(elements.iter()) {
-                let (expr, sub_output) = to_expr2(env, scope, &element.value, element.region);
+            for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
+                let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);
 
                 output_ref.union(sub_output);
 
