@@ -752,9 +752,9 @@ fn annotate_usage_pattern(pattern: &Pattern, usage: &mut VarUsage) {
 
     match pattern {
         Identifier(_)
-        | IntLiteral(_)
+        | IntLiteral(_, _)
         | NumLiteral(_, _)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | Shadowed(_, _)

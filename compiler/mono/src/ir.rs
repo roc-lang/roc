@@ -1380,7 +1380,7 @@ fn pattern_to_when<'a>(
             (symbol, Located::at_zero(wrapped_body))
         }
 
-        IntLiteral(_) | NumLiteral(_, _) | FloatLiteral(_) | StrLiteral(_) => {
+        IntLiteral(_, _) | NumLiteral(_, _) | FloatLiteral(_, _) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -5468,8 +5468,8 @@ pub fn from_can_pattern<'a>(
     match can_pattern {
         Underscore => Pattern::Underscore,
         Identifier(symbol) => Pattern::Identifier(*symbol),
-        IntLiteral(v) => Pattern::IntLiteral(*v),
-        FloatLiteral(v) => Pattern::FloatLiteral(f64::to_bits(*v)),
+        IntLiteral(_, v) => Pattern::IntLiteral(*v),
+        FloatLiteral(_, v) => Pattern::FloatLiteral(f64::to_bits(*v)),
         StrLiteral(v) => Pattern::StrLiteral(v.clone()),
         Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
         UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),

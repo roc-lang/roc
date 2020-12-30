@@ -362,12 +362,12 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
-            Alias(Symbol::NUM_I64, args, _) => {
-                debug_assert!(args.is_empty());
+            Alias(Symbol::NUM_INT, args, _) => {
+                debug_assert!(args.len() == 1);
                 Ok(Layout::Builtin(Builtin::Int64))
             }
-            Alias(Symbol::NUM_F64, args, _) => {
-                debug_assert!(args.is_empty());
+            Alias(Symbol::NUM_FLOAT, args, _) => {
+                debug_assert!(args.len() == 1);
                 Ok(Layout::Builtin(Builtin::Float64))
             }
             Alias(_, _, var) => Self::from_var(env, var),
@@ -763,11 +763,11 @@ fn layout_from_flat_type<'a>(
     match flat_type {
         Apply(symbol, args) => {
             match symbol {
-                Symbol::NUM_I64 => {
+                Symbol::NUM_INT => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
-                Symbol::NUM_F64 => {
+                Symbol::NUM_FLOAT => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
                 }

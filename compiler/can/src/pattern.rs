@@ -25,9 +25,9 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Located<RecordDestruct>>,
     },
-    IntLiteral(i64),
+    IntLiteral(Variable, i64),
     NumLiteral(Variable, i64),
-    FloatLiteral(f64),
+    FloatLiteral(Variable, f64),
     StrLiteral(Box<str>),
     Underscore,
 
@@ -86,8 +86,8 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         }
 
         NumLiteral(_, _)
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)
@@ -191,7 +191,7 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern::FloatLiteral(float),
+                Ok(float) => Pattern::FloatLiteral(var_store.fresh(), float),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -224,9 +224,9 @@ pub fn canonicalize_pattern<'a>(
                 }
                 Ok(int) => {
                     if *is_negative {
-                        Pattern::IntLiteral(-int)
+                        Pattern::IntLiteral(var_store.fresh(), -int)
                     } else {
-                        Pattern::IntLiteral(int)
+                        Pattern::IntLiteral(var_store.fresh(), int)
                     }
                 }
             },
@@ -463,8 +463,8 @@ fn add_bindings_from_patterns(
             }
         }
         NumLiteral(_, _)
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | Shadowed(_, _)

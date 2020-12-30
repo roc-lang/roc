@@ -1242,9 +1242,8 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 
 #[inline(always)]
 fn float_type(u: VarId) -> SolvedType {
-    let b_64 = builtin_aliases::binary64_type();
-    let attr_b_64 = lift(u, b_64);
-    let fp = builtin_aliases::floatingpoint_type(attr_b_64);
+    let inner_type = lift(u, flex(u));
+    let fp = builtin_aliases::floatingpoint_type(inner_type.clone());
     let attr_fb = lift(u, fp);
     let num = builtin_aliases::num_type(attr_fb);
 
@@ -1252,16 +1251,19 @@ fn float_type(u: VarId) -> SolvedType {
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(Symbol::NUM_F64, Vec::new(), Box::new(num)),
+            SolvedType::Alias(
+                Symbol::NUM_FLOAT,
+                vec![("range".into(), inner_type)],
+                Box::new(num),
+            ),
         ],
     )
 }
 
 #[inline(always)]
 fn int_type(u: VarId) -> SolvedType {
-    let signed_64 = builtin_aliases::signed64_type();
-    let attr_signed_64 = lift(u, signed_64);
-    let integer = builtin_aliases::integer_type(attr_signed_64);
+    let inner_type = lift(u, flex(u));
+    let integer = builtin_aliases::integer_type(inner_type.clone());
     let attr_fb = lift(u, integer);
     let num = builtin_aliases::num_type(attr_fb);
 
@@ -1269,7 +1271,11 @@ fn int_type(u: VarId) -> SolvedType {
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(Symbol::NUM_I64, Vec::new(), Box::new(num)),
+            SolvedType::Alias(
+                Symbol::NUM_INT,
+                vec![("range".into(), inner_type)],
+                Box::new(num),
+            ),
         ],
     )
 }

@@ -363,8 +363,8 @@ fn fix_values_captured_in_closure_pattern(
         }
         Identifier(_)
         | NumLiteral(_, _)
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | Shadowed(_, _)

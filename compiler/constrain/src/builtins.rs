@@ -14,7 +14,7 @@ use roc_types::types::Type::{self, *};
 pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::IntLiteral;
-    let expected_literal = ForReason(reason, num_int(), region);
+    let expected_literal = ForReason(reason, num_int(Type::Variable(num_var)), region);
 
     exists(
         vec![num_var],
@@ -29,7 +29,7 @@ pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) 
 pub fn float_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
-    let expected_literal = ForReason(reason, num_float(), region);
+    let expected_literal = ForReason(reason, num_float(Type::Variable(num_var)), region);
 
     exists(
         vec![num_var],
@@ -72,11 +72,11 @@ pub fn str_type() -> Type {
 }
 
 #[inline(always)]
-pub fn num_float() -> Type {
+pub fn num_float(range: Type) -> Type {
     Type::Alias(
-        Symbol::NUM_F64,
-        vec![],
-        Box::new(num_num(num_floatingpoint(num_binary64()))),
+        Symbol::NUM_FLOAT,
+        vec![("range".into(), range.clone())],
+        Box::new(num_num(num_floatingpoint(range))),
     )
 }
 
@@ -108,11 +108,11 @@ pub fn num_binary64() -> Type {
 }
 
 #[inline(always)]
-pub fn num_int() -> Type {
+pub fn num_int(range: Type) -> Type {
     Type::Alias(
-        Symbol::NUM_I64,
-        vec![],
-        Box::new(num_num(num_integer(num_signed64()))),
+        Symbol::NUM_INT,
+        vec![("range".into(), range.clone())],
+        Box::new(num_num(num_integer(range))),
     )
 }
 
