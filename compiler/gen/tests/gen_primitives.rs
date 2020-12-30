@@ -1748,4 +1748,59 @@ mod gen_primitives {
             u8
         );
     }
+
+    #[test]
+    #[should_panic(
+        expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident(\\\"x\\\") }\""
+    )]
+    fn pattern_shadowing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = 4
+
+                when 4 is
+                    x -> x
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "TODO non-exhaustive pattern")]
+    fn non_exhaustive_pattern_let() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : Result I64 F64
+                x = Ok 4
+
+                (Ok y) = x
+
+                y
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    #[should_panic(expected = "")]
+    fn unsupported_pattern_str_interp() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x: 4 } = { x : 4 }
+
+                x
+                "#
+            ),
+            0,
+            i64
+        );
+    }
 }

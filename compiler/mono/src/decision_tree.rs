@@ -379,7 +379,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
 
             match pattern {
                 // TODO use guard!
-                Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
+                Identifier(_) | Underscore => {
                     if let Guard::Guard { symbol, id, stmt } = guard {
                         all_tests.push(Guarded {
                             opt_test: None,
@@ -408,11 +408,8 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                             DestructType::Guard(guard) => {
                                 arguments.push((guard.clone(), destruct.layout.clone()));
                             }
-                            DestructType::Required => {
+                            DestructType::Required(_) => {
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
-                            }
-                            DestructType::Optional(_expr) => {
-                                // do nothing
                             }
                         }
                     }
@@ -531,7 +528,7 @@ fn to_relevant_branch_help<'a>(
     use Test::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch.clone()),
+        Identifier(_) | Underscore => Some(branch.clone()),
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
@@ -540,27 +537,22 @@ fn to_relevant_branch_help<'a>(
                 ..
             } => {
                 debug_assert!(test_name == &TagName::Global(RECORD_TAG_NAME.into()));
-                let sub_positions = destructs
-                    .into_iter()
-                    .filter(|destruct| !matches!(destruct.typ, DestructType::Optional(_)))
-                    .enumerate()
-                    .map(|(index, destruct)| {
-                        let pattern = match destruct.typ {
-                            DestructType::Guard(guard) => guard.clone(),
-                            DestructType::Required => Pattern::Underscore,
-                            DestructType::Optional(_expr) => unreachable!("because of the filter"),
-                        };
+                let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
+                    let pattern = match destruct.typ {
+                        DestructType::Guard(guard) => guard.clone(),
+                        DestructType::Required(_) => Pattern::Underscore,
+                    };
 
-                        (
-                            Path::Index {
-                                index: index as u64,
-                                tag_id: *tag_id,
-                                path: Box::new(path.clone()),
-                            },
-                            Guard::NoGuard,
-                            pattern,
-                        )
-                    });
+                    (
+                        Path::Index {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                            path: Box::new(path.clone()),
+                        },
+                        Guard::NoGuard,
+                        pattern,
+                    )
+                });
                 start.extend(sub_positions);
                 start.extend(end);
 
@@ -742,7 +734,7 @@ fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
     use Pattern::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => false,
+        Identifier(_) | Underscore => false,
 
         RecordDestructure(_, _)
         | AppliedTag { .. }
