@@ -93,7 +93,10 @@ fn jit_to_ast_help<'a>(
         ),
         Layout::Builtin(Builtin::EmptyList) => {
             Ok(run_jit_function!(lib, main_fn_name, &'static str, |_| {
-                Expr::List(&[])
+                Expr::List {
+                    items: &[],
+                    final_comments: &[],
+                }
             }))
         }
         Layout::Builtin(Builtin::List(_, elem_layout)) => Ok(run_jit_function!(
@@ -251,7 +254,10 @@ fn ptr_to_ast<'a>(
 
             num_to_ast(env, f64_to_ast(env.arena, num), content)
         }
-        Layout::Builtin(Builtin::EmptyList) => Expr::List(&[]),
+        Layout::Builtin(Builtin::EmptyList) => Expr::List {
+            items: &[],
+            final_comments: &[],
+        },
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
@@ -331,7 +337,10 @@ fn list_to_ast<'a>(
 
     let output = output.into_bump_slice();
 
-    Expr::List(output)
+    Expr::List {
+        items: output,
+        final_comments: &[],
+    }
 }
 
 fn single_tag_union_to_ast<'a>(
