@@ -14,26 +14,6 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-// Function return type does not match operand type of return inst!
-// ret i64 %f1, !dbg !521
-// i32define private fastcc i32 @"#UserApp_main_1"() !dbg !517 {
-// entry:
-// %f = alloca i64
-// store i64 291, i64* %f, !dbg !521
-// %f1 = load i64, i64* %f, !dbg !521
-// ret i64 %f1, !dbg !521
-// }
-
-// Function return type does not match operand type of return inst!
-// ret i32 %f1, !dbg !521
-// i64define private fastcc i64 @"#UserApp_main_1"() !dbg !517 {
-// entry:
-// %f = alloca i32
-// store i32 291, i32* %f, !dbg !521
-// %f1 = load i32, i32* %f, !dbg !521
-// ret i32 %f1, !dbg !521
-// }
-
 pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -5618,15 +5598,16 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(var, v) => Ok(Pattern::IntLiteral(*var, *v)),
-        FloatLiteral(var, float) => Ok(Pattern::FloatLiteral(*var, f64::to_bits(*float))),
+        IntLiteral(precision_var, int) => Ok(Pattern::IntLiteral(*precision_var, *int)),
+        FloatLiteral(precision_var, float) => {
+            Ok(Pattern::FloatLiteral(*precision_var, f64::to_bits(*float)))
+        }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
         }),
         UnsupportedPattern(region) => Err(RuntimeError::UnsupportedPattern(*region)),
-
         MalformedPattern(_problem, region) => {
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
@@ -6070,7 +6051,6 @@ pub fn num_argument_to_int_or_float(
         | Content::Alias(Symbol::NUM_AT_SIGNED64, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I64)
         }
-        // TODO: Add ors for aall NUM_SIGNED, NUM_BINARY (maybe NUM_AT_*)
         Content::Alias(Symbol::NUM_I32, _, _)
         | Content::Alias(Symbol::NUM_SIGNED32, _, _)
         | Content::Alias(Symbol::NUM_AT_SIGNED32, _, _) => {

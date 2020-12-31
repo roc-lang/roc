@@ -154,20 +154,20 @@ pub fn constrain_pattern(
             ));
         }
 
-        IntLiteral(var, _) => {
+        IntLiteral(precision_var, _) => {
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Int,
-                builtins::num_int(Type::Variable(*var)),
+                builtins::num_integer(Type::Variable(*precision_var)),
                 expected,
             ));
         }
 
-        FloatLiteral(var, _) => {
+        FloatLiteral(precision_var, _) => {
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                builtins::num_float(Type::Variable(*var)),
+                builtins::num_floatingpoint(Type::Variable(*precision_var)),
                 expected,
             ));
         }
