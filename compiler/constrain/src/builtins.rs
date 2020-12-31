@@ -44,8 +44,6 @@ pub fn float_literal(
     let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
 
-    dbg!(&expected);
-
     exists(
         vec![num_var],
         And(vec![

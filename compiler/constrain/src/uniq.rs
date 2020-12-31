@@ -426,11 +426,8 @@ fn unique_int(
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
-    let num_uvar4 = var_store.fresh();
 
-    let inner_type = Type::Variable(inner_var);
-    let attr_inner_type = attr_type(Bool::variable(num_uvar1), inner_type);
-    let integer = num_integer(attr_inner_type);
+    let integer = num_integer(Type::Variable(inner_var));
     let attr_int = attr_type(Bool::variable(num_uvar2), integer);
     let num = num_num(attr_int);
     let attr_num = attr_type(Bool::variable(num_uvar3), num);
@@ -445,11 +442,8 @@ fn unique_float(
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
-    let num_uvar4 = var_store.fresh();
 
-    let inner_type = Type::Variable(inner_var);
-    let attr_inner_type = attr_type(Bool::variable(num_uvar1), inner_type);
-    let fp = num_floatingpoint(attr_inner_type);
+    let fp = num_floatingpoint(Type::Variable(inner_var));
     let attr_fp = attr_type(Bool::variable(num_uvar2), fp);
     let num = num_num(attr_fp);
     let attr_num = attr_type(Bool::variable(num_uvar3), num);

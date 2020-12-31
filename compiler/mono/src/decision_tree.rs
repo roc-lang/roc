@@ -445,7 +445,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                         num_alts: union.alternatives.len(),
                     });
                 }
-                IntLiteral(v) => {
+                IntLiteral(_, v) => {
                     all_tests.push(guarded(IsInt(*v)));
                 }
                 FloatLiteral(_, v) => {
@@ -636,7 +636,7 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        IntLiteral(int) => match test {
+        IntLiteral(_, int) => match test {
             IsInt(is_int) if int == *is_int => {
                 start.extend(end);
                 Some(Branch {
@@ -740,7 +740,7 @@ fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
         | AppliedTag { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
-        | IntLiteral(_)
+        | IntLiteral(_, _)
         | FloatLiteral(_, _)
         | StrLiteral(_) => true,
     }
