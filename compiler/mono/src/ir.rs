@@ -14,6 +14,26 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
+// Function return type does not match operand type of return inst!
+// ret i64 %f1, !dbg !521
+// i32define private fastcc i32 @"#UserApp_main_1"() !dbg !517 {
+// entry:
+// %f = alloca i64
+// store i64 291, i64* %f, !dbg !521
+// %f1 = load i64, i64* %f, !dbg !521
+// ret i64 %f1, !dbg !521
+// }
+
+// Function return type does not match operand type of return inst!
+// ret i32 %f1, !dbg !521
+// i64define private fastcc i64 @"#UserApp_main_1"() !dbg !517 {
+// entry:
+// %f = alloca i32
+// store i32 291, i32* %f, !dbg !521
+// %f1 = load i32, i32* %f, !dbg !521
+// ret i32 %f1, !dbg !521
+// }
+
 pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2245,19 +2265,37 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, num) => Stmt::Let(
-            assigned,
-            Expr::Literal(Literal::Int(num)),
-            Layout::Builtin(Builtin::Int64),
-            hole,
-        ),
+        Int(_, precision, num) => match num_argument_to_int_or_float(env.subs, precision) {
+            IntOrFloat::SignedIntType(precision) => Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Int(num)),
+                Layout::Builtin(int_precision_to_builtin(precision)),
+                hole,
+            ),
+            IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Int(num)),
+                Layout::Builtin(int_precision_to_builtin(precision)),
+                hole,
+            ),
+            _ => unreachable!("unexpected float precision for integer"),
+        },
 
-        Float(_, num) => Stmt::Let(
-            assigned,
-            Expr::Literal(Literal::Float(num)),
-            Layout::Builtin(Builtin::Float64),
-            hole,
-        ),
+        Float(_, precision, num) => match num_argument_to_int_or_float(env.subs, precision) {
+            IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Float(num as f64)),
+                Layout::Builtin(float_precision_to_builtin(precision)),
+                hole,
+            ),
+            IntOrFloat::DecimalFloatType(precision) => Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Float(num as f64)),
+                Layout::Builtin(float_precision_to_builtin(precision)),
+                hole,
+            ),
+            _ => unreachable!("unexpected float precision for integer"),
+        },
 
         Str(string) => Stmt::Let(
             assigned,
@@ -2267,16 +2305,28 @@ pub fn with_hole<'a>(
         ),
 
         Num(var, num) => match num_argument_to_int_or_float(env.subs, var) {
-            IntOrFloat::IntType => Stmt::Let(
+            IntOrFloat::SignedIntType(precision) => Stmt::Let(
                 assigned,
                 Expr::Literal(Literal::Int(num)),
-                Layout::Builtin(Builtin::Int64),
+                Layout::Builtin(int_precision_to_builtin(precision)),
                 hole,
             ),
-            IntOrFloat::FloatType => Stmt::Let(
+            IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Int(num)),
+                Layout::Builtin(int_precision_to_builtin(precision)),
+                hole,
+            ),
+            IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                 assigned,
                 Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(Builtin::Float64),
+                Layout::Builtin(float_precision_to_builtin(precision)),
+                hole,
+            ),
+            IntOrFloat::DecimalFloatType(precision) => Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Float(num as f64)),
+                Layout::Builtin(float_precision_to_builtin(precision)),
                 hole,
             ),
         },
@@ -4583,7 +4633,7 @@ fn store_pattern<'a>(
             // do nothing
         }
         IntLiteral(_)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | EnumLiteral { .. }
         | BitLiteral { .. }
         | StrLiteral(_) => {}
@@ -4623,7 +4673,7 @@ fn store_pattern<'a>(
                         // ignore
                     }
                     IntLiteral(_)
-                    | FloatLiteral(_)
+                    | FloatLiteral(_, _)
                     | EnumLiteral { .. }
                     | BitLiteral { .. }
                     | StrLiteral(_) => {}
@@ -4737,7 +4787,7 @@ fn store_record_destruct<'a>(
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
             IntLiteral(_)
-            | FloatLiteral(_)
+            | FloatLiteral(_, _)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5408,7 +5458,7 @@ pub enum Pattern<'a> {
     Underscore,
 
     IntLiteral(i64),
-    FloatLiteral(u64),
+    FloatLiteral(Variable, u64),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -5469,7 +5519,7 @@ pub fn from_can_pattern<'a>(
         Underscore => Pattern::Underscore,
         Identifier(symbol) => Pattern::Identifier(*symbol),
         IntLiteral(_, v) => Pattern::IntLiteral(*v),
-        FloatLiteral(_, v) => Pattern::FloatLiteral(f64::to_bits(*v)),
+        FloatLiteral(var, float) => Pattern::FloatLiteral(*var, f64::to_bits(*float)),
         StrLiteral(v) => Pattern::StrLiteral(v.clone()),
         Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
         UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
@@ -5478,8 +5528,10 @@ pub fn from_can_pattern<'a>(
             Pattern::UnsupportedPattern(*region)
         }
         NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
-            IntOrFloat::IntType => Pattern::IntLiteral(*num),
-            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
+            IntOrFloat::SignedIntType(_) => Pattern::IntLiteral(*num),
+            IntOrFloat::UnsignedIntType(_) => Pattern::IntLiteral(*num),
+            IntOrFloat::BinaryFloatType(_) => Pattern::FloatLiteral(*var, *num as u64),
+            IntOrFloat::DecimalFloatType(_) => Pattern::FloatLiteral(*var, *num as u64),
         },
 
         AppliedTag {
@@ -5854,29 +5906,100 @@ fn optimize_low_level(
     }
 }
 
+pub enum IntPrecision {
+    I128,
+    I64,
+    I32,
+    I16,
+    I8,
+}
+
+pub enum FloatPrecision {
+    F64,
+    F32,
+}
+
 pub enum IntOrFloat {
-    IntType,
-    FloatType,
+    SignedIntType(IntPrecision),
+    UnsignedIntType(IntPrecision),
+    BinaryFloatType(FloatPrecision),
+    DecimalFloatType(FloatPrecision),
+}
+
+fn float_precision_to_builtin(precision: FloatPrecision) -> Builtin<'static> {
+    use FloatPrecision::*;
+    match precision {
+        F64 => Builtin::Float64,
+        F32 => Builtin::Float32,
+    }
+}
+
+fn int_precision_to_builtin(precision: IntPrecision) -> Builtin<'static> {
+    use IntPrecision::*;
+    match precision {
+        I128 => Builtin::Int128,
+        I64 => Builtin::Int64,
+        I32 => Builtin::Int32,
+        I16 => Builtin::Int16,
+        I8 => Builtin::Int8,
+    }
 }
 
 /// Given the `a` in `Num a`, determines whether it's an int or a float
 pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     match subs.get_without_compacting(var).content {
-        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
-            debug_assert!(args.len() == 1);
-
-            // TODO: we probably need to match on the type of the arg
-            IntOrFloat::IntType
+        Content::FlexVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
+        Content::Alias(Symbol::NUM_I128, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED128, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED128, _, _) => {
+            IntOrFloat::SignedIntType(IntPrecision::I128)
         }
-        Content::FlexVar(_) => {
-            // If this was still a (Num *), assume compiling it to an Int
-            IntOrFloat::IntType
+        Content::Alias(Symbol::NUM_INTEGER, _, _) // We default Integer to I64
+        | Content::Alias(Symbol::NUM_I64, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED64, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED64, _, _) => {
+            IntOrFloat::SignedIntType(IntPrecision::I64)
         }
-        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
-            debug_assert!(args.len() == 1);
-
-            // TODO: we probably need to match on the type of the arg
-            IntOrFloat::FloatType
+        // TODO: Add ors for aall NUM_SIGNED, NUM_BINARY (maybe NUM_AT_*)
+        Content::Alias(Symbol::NUM_I32, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED32, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED32, _, _) => {
+            IntOrFloat::SignedIntType(IntPrecision::I32)
+        }
+        Content::Alias(Symbol::NUM_I16, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED16, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED16, _, _) => {
+            IntOrFloat::SignedIntType(IntPrecision::I16)
+        }
+        Content::Alias(Symbol::NUM_I8, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED8, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED8, _, _) => {
+            IntOrFloat::SignedIntType(IntPrecision::I8)
+        }
+        Content::Alias(Symbol::NUM_U128, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED128, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED128, _, _) => {
+            IntOrFloat::UnsignedIntType(IntPrecision::I128)
+        }
+        Content::Alias(Symbol::NUM_U64, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED64, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED64, _, _) => {
+            IntOrFloat::UnsignedIntType(IntPrecision::I64)
+        }
+        Content::Alias(Symbol::NUM_U32, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED32, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED32, _, _) => {
+            IntOrFloat::UnsignedIntType(IntPrecision::I32)
+        }
+        Content::Alias(Symbol::NUM_U16, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED16, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED16, _, _) => {
+            IntOrFloat::UnsignedIntType(IntPrecision::I16)
+        }
+        Content::Alias(Symbol::NUM_U8, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED8, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED8, _, _) => {
+            IntOrFloat::UnsignedIntType(IntPrecision::I8)
         }
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
             debug_assert!(attr_args.len() == 2);
@@ -5884,10 +6007,16 @@ pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
             // Recurse on the second argument
             num_argument_to_int_or_float(subs, attr_args[1])
         }
-        Content::Alias(Symbol::NUM_F64, args, _) | Content::Alias(Symbol::NUM_F32, args, _) => {
-            debug_assert!(args.is_empty());
-
-            IntOrFloat::FloatType
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, _, _) // We default FloatingPoint to F64
+        | Content::Alias(Symbol::NUM_F64, _, _)
+        | Content::Alias(Symbol::NUM_BINARY64, _, _)
+        | Content::Alias(Symbol::NUM_AT_BINARY64, _, _) => {
+            IntOrFloat::BinaryFloatType(FloatPrecision::F64)
+        }
+        Content::Alias(Symbol::NUM_F32, _, _)
+        | Content::Alias(Symbol::NUM_BINARY32, _, _)
+        | Content::Alias(Symbol::NUM_AT_BINARY32, _, _) => {
+            IntOrFloat::BinaryFloatType(FloatPrecision::F32)
         }
         other => {
             panic!(

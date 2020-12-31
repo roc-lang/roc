@@ -414,8 +414,8 @@ fn fix_values_captured_in_closure_expr(
         }
 
         Num(_, _)
-        | Int(_, _)
-        | Float(_, _)
+        | Int(_, _, _)
+        | Float(_, _, _)
         | Str(_)
         | Var(_)
         | EmptyRecord
