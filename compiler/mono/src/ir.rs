@@ -3177,7 +3177,7 @@ pub fn with_hole<'a>(
             enum FieldType<'a> {
                 CopyExisting(u64),
                 UpdateExisting(&'a roc_can::expr::Field),
-            };
+            }
 
             // Strategy: turn a record update into the creation of a new record.
             // This has the benefit that we don't need to do anything special for reference
