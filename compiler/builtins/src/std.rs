@@ -532,7 +532,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_GET,
         top_level_function(
-            vec![list_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            vec![list_type(flex(TVAR1)), int_type(flex(TVAR2))],
             Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
         ),
     );

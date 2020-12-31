@@ -2982,7 +2982,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]
+                partition : Int a, Int *, List (Int b) -> [ Pair (Int a) (List (Int b)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -2994,7 +2994,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]",
+            "Int a, Int *, List (Int b) -> [ Pair (Int a) (List (Int b)) ]",
         );
     }
 
@@ -3015,7 +3015,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]
+                partition : I64, I64, List (Int a) -> [ Pair I64 (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -3043,7 +3043,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "Int *, Int *, List (Int a) -> [ Pair (Int *) (List (Int a)) ]",
+                "I64, I64, List (Int a) -> [ Pair I64 (List (Int a)) ]",
             );
         });
     }
@@ -3076,6 +3076,15 @@ mod solve_expr {
                 "#
             ),
             "Result (Num *) [ OutOfBounds ]*",
+        );
+
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List.get
+                "#
+            ),
+            "List a, Int * -> Result a [ OutOfBounds ]*",
         );
     }
 
@@ -4107,7 +4116,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : Int *, Int *, List (Num a), Int *, (Num a) -> [ Pair (Int *) (List (Num a)) ]
+                partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
