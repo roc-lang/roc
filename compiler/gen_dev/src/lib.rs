@@ -332,18 +332,6 @@ where
                 }
                 self.scan_ast(default_branch);
             }
-            Stmt::Cond {
-                cond_symbol,
-                branching_symbol,
-                pass,
-                fail,
-                ..
-            } => {
-                self.set_last_seen(*cond_symbol, stmt);
-                self.set_last_seen(*branching_symbol, stmt);
-                self.scan_ast(pass);
-                self.scan_ast(fail);
-            }
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
