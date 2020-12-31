@@ -717,6 +717,28 @@ pub struct Param<'a> {
     pub layout: Layout<'a>,
 }
 
+fn cond<'a>(
+    env: &mut Env<'a, '_>,
+    cond_symbol: Symbol,
+    cond_layout: Layout<'a>,
+
+    // What to do if the condition either passes or fails
+    pass: Stmt<'a>,
+    fail: Stmt<'a>,
+    ret_layout: Layout<'a>,
+) -> Stmt<'a> {
+    let branches = env.arena.alloc([(1u64, pass)]);
+    let default_branch = env.arena.alloc(fail);
+
+    Stmt::Switch {
+        cond_symbol,
+        cond_layout,
+        ret_layout,
+        branches,
+        default_branch,
+    }
+}
+
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
@@ -2845,15 +2867,14 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = Stmt::Cond {
-                        cond_symbol: branching_symbol,
+                    stmt = cond(
+                        env,
                         branching_symbol,
-                        cond_layout: cond_layout.clone(),
-                        branching_layout: cond_layout.clone(),
-                        pass: env.arena.alloc(then),
-                        fail: env.arena.alloc(stmt),
-                        ret_layout: ret_layout.clone(),
-                    };
+                        cond_layout.clone(),
+                        then,
+                        stmt,
+                        ret_layout.clone(),
+                    );
 
                     // add condition
                     stmt = with_hole(
@@ -2897,15 +2918,14 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = Stmt::Cond {
-                        cond_symbol: branching_symbol,
+                    stmt = cond(
+                        env,
                         branching_symbol,
-                        cond_layout: cond_layout.clone(),
-                        branching_layout: cond_layout.clone(),
-                        pass: env.arena.alloc(then),
-                        fail: env.arena.alloc(stmt),
-                        ret_layout: ret_layout.clone(),
-                    };
+                        cond_layout.clone(),
+                        then,
+                        stmt,
+                        ret_layout.clone(),
+                    );
 
                     // add condition
                     stmt = with_hole(
@@ -3738,15 +3758,14 @@ pub fn from_can<'a>(
                 let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
-                stmt = Stmt::Cond {
-                    cond_symbol: branching_symbol,
+                stmt = cond(
+                    env,
                     branching_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_layout: cond_layout.clone(),
-                    pass: env.arena.alloc(then),
-                    fail: env.arena.alloc(stmt),
-                    ret_layout: ret_layout.clone(),
-                };
+                    cond_layout.clone(),
+                    then,
+                    stmt,
+                    ret_layout.clone(),
+                );
 
                 stmt = assign_to_symbol(
                     env,
