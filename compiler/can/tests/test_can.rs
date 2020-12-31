@@ -32,7 +32,7 @@ mod test_can {
         let actual_out = can_expr_with(&arena, test_home(), input);
 
         match actual_out.loc_expr.value {
-            Expr::Float(_, actual) => {
+            Expr::Float(_, _, actual) => {
                 assert_eq!(expected, actual);
             }
             actual => {
@@ -46,7 +46,7 @@ mod test_can {
         let actual_out = can_expr_with(&arena, test_home(), input);
 
         match actual_out.loc_expr.value {
-            Expr::Int(_, actual) => {
+            Expr::Int(_, _, actual) => {
                 assert_eq!(expected, actual);
             }
             actual => {
