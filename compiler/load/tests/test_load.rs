@@ -357,14 +357,14 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "F64",
-                "divisionFn" => "F64, F64 -> Result F64 [ DivByZero ]*",
-                "divisionTest" => "Result F64 [ DivByZero ]*",
-                "intTest" => "I64",
-                "x" => "F64",
+                "floatTest" => "Float *",
+                "divisionFn" => "Float a, Float a -> Result (Float a) [ DivByZero ]*",
+                "divisionTest" => "Result (Float *) [ DivByZero ]*",
+                "intTest" => "Int *",
+                "x" => "Float *",
                 "constantNum" => "Num *",
-                "divDep1ByDep2" => "Result F64 [ DivByZero ]*",
-                "fromDep2" => "F64",
+                "divDep1ByDep2" => "Result (Float *) [ DivByZero ]*",
+                "fromDep2" => "Float *",
             },
         );
     }
