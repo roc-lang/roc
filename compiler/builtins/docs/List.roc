@@ -24,15 +24,15 @@ interface List2
 ## to be created just fine, but then crashing later.)
 ##
 ## > The theoretical maximum length for a list created in Roc is
-## > #Int.highestLen divided by 2. Attempting to create a list bigger than that
+## > #Int.maxNat divided by 2. Attempting to create a list bigger than that
 ## > in Roc code will always fail, although in practice it is likely to fail
 ## > at much smaller lengths due to insufficient memory being available.
 ##
 ## ## Performance Details
 ##
-## Under the hood, a list is a record containing a `len : Len` field as well
+## Under the hood, a list is a record containing a `len : Nat` field as well
 ## as a pointer to a reference count and a flat array of bytes. Unique lists
-## store a capacity #Len instead of a reference count.
+## store a capacity #Nat instead of a reference count.
 ##
 ## ## Shared Lists
 ##
@@ -166,7 +166,7 @@ empty : List *
 ## Returns a list with the given length, where every element is the given value.
 ##
 ##
-repeat : elem, Len -> List elem
+repeat : elem, Nat -> List elem
 
 ## Returns a list of all the integers between one and another,
 ## including both of the given numbers.
@@ -226,11 +226,11 @@ mapOks : List before, (before -> Result after *) -> List after
 ## In particular when updating nested collections, this is potentially much more
 ## efficient than using #List.get to obtain the element, transforming it,
 ## and then putting it back in the same place.
-update : List elem, Len, (elem -> elem) -> List elem
+update : List elem, Nat, (elem -> elem) -> List elem
 
 ## A more flexible version of #List.update, which returns an "updater" function
 ## that lets you delay performing the update until later.
-updater : List elem, Len -> { elem, new : elem -> List elem }
+updater : List elem, Nat -> { elem, new : elem -> List elem }
 
 ## If all the elements in the list are #Ok, return a new list containing the
 ## contents of those #Ok tags. If any elements are #Err, return #Err.
@@ -354,7 +354,7 @@ first : List elem -> Result elem [ ListWasEmpty ]*
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
 last : List elem -> Result elem [ ListWasEmpty ]*
 
-get : List elem, Len -> Result elem [ OutOfBounds ]*
+get : List elem, Nat -> Result elem [ OutOfBounds ]*
 
 max : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 
@@ -370,14 +370,14 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 ## list unmodified.
 ##
 ## To drop the element at a given index, instead of replacing it, see #List.drop.
-put : List elem, Len, elem -> List elem
+put : List elem, Nat, elem -> List elem
 
 ## Drops the element at the given index from the list.
 ##
 ## This has no effect if the given index is outside the bounds of the list.
 ##
 ## To replace the element at a given index, instead of dropping it, see #List.put.
-drop : List elem, Len -> List elem
+drop : List elem, Nat -> List elem
 
 ## Adds a new element to the end of the list.
 ##
@@ -482,7 +482,7 @@ dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmp
 ## In fact, `List.takeFirst 1 list` runs faster than `List.first list` when given
 ## a Unique list, because #List.first returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
-takeFirst : List elem, Len -> List elem
+takeFirst : List elem, Nat -> List elem
 
 ## Returns the given number of elements from the end of the list.
 ##
@@ -510,7 +510,7 @@ takeFirst : List elem, Len -> List elem
 ## In fact, `List.takeLast 1 list` runs faster than `List.first list` when given
 ## a Unique list, because #List.first returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
-takeLast : List elem, Len -> List elem
+takeLast : List elem, Nat -> List elem
 
 ## Deconstruct
 
@@ -521,7 +521,7 @@ takeLast : List elem, Len -> List elem
 ## than the given index, # and the `others` list will be all the others. (This
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
-split : List elem, Len -> { before: List elem, others: List elem }
+split : List elem, Nat -> { before: List elem, others: List elem }
 
 ## Returns a subsection of the given list, beginning at the `start` index and
 ## including a total of `len` elements.
@@ -538,7 +538,7 @@ split : List elem, Len -> { before: List elem, others: List elem }
 ## > matter how long the list is, #List.takeLast can do that more efficiently.
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
-sublist : List elem, { start : Len, len : Len } -> List elem
+sublist : List elem, { start : Nat, len : Nat } -> List elem
 
 ## Build a value using each element in the list.
 ##
@@ -605,7 +605,7 @@ walkBackwardsUntil : List elem, { start : state, step : (state, elem -> [ Contin
 ## One #List can store up to 2,147,483,648 elements (just over 2 billion), which
 ## is exactly equal to the highest valid #I32 value. This means the #U32 this function
 ## returns can always be safely converted to an #I32 without losing any data.
-len : List * -> Len
+len : List * -> Nat
 
 isEmpty : List * -> Bool
 

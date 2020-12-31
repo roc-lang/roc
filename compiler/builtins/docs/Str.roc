@@ -111,7 +111,7 @@ Str2 : [ @Str ]
 ##
 ## If you want to keep all the digits, passing the same float to #Str.num
 ## will do that.
-decimal : Float *, Len -> Str
+decimal : Float *, Nat -> Str
 
 ## Split a string around a separator.
 ##
