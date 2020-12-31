@@ -203,8 +203,7 @@ mod test_reporting {
     }
 
     fn human_readable(str: &str) -> String {
-        str
-            .replace(RED_CODE, "<red>")
+        str.replace(RED_CODE, "<red>")
             .replace(WHITE_CODE, "<white>")
             .replace(BLUE_CODE, "<blue>")
             .replace(YELLOW_CODE, "<yellow>")
