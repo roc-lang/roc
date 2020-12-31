@@ -426,6 +426,7 @@ fn unique_int(
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
+    let num_uvar4 = var_store.fresh();
 
     let inner_type = Type::Variable(inner_var);
     let attr_inner_type = attr_type(Bool::variable(num_uvar1), inner_type);
@@ -444,6 +445,7 @@ fn unique_float(
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
+    let num_uvar4 = var_store.fresh();
 
     let inner_type = Type::Variable(inner_var);
     let attr_inner_type = attr_type(Bool::variable(num_uvar1), inner_type);
@@ -484,7 +486,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Int(var, _) => {
+        Int(var, _, _) => {
             let (a, b, c, num_type) = unique_int(*var, var_store);
 
             exists(
@@ -500,7 +502,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Float(var, _) => {
+        Float(var, _, _) => {
             let (a, b, c, num_type) = unique_float(*var, var_store);
 
             exists(

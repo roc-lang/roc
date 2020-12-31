@@ -448,7 +448,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                 IntLiteral(v) => {
                     all_tests.push(guarded(IsInt(*v)));
                 }
-                FloatLiteral(v) => {
+                FloatLiteral(_, v) => {
                     all_tests.push(IsFloat(*v));
                 }
                 StrLiteral(v) => {
@@ -647,7 +647,7 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        FloatLiteral(float) => match test {
+        FloatLiteral(_, float) => match test {
             IsFloat(test_float) if float == *test_float => {
                 start.extend(end);
                 Some(Branch {
@@ -741,7 +741,7 @@ fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
         | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | StrLiteral(_) => true,
     }
 }

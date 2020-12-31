@@ -11,30 +11,50 @@ use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
 
 #[inline(always)]
-pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn int_literal(
+    num_var: Variable,
+    percision_var: Variable,
+    expected: Expected<Type>,
+    region: Region,
+) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::IntLiteral;
-    let expected_literal = ForReason(reason, num_int(Type::Variable(num_var)), region);
 
     exists(
         vec![num_var],
         And(vec![
-            Eq(num_type.clone(), expected_literal, Category::Int, region),
+            Eq(
+                num_type.clone(),
+                ForReason(reason, num_int(Type::Variable(percision_var)), region),
+                Category::Int,
+                region,
+            ),
             Eq(num_type, expected, Category::Int, region),
         ]),
     )
 }
 
 #[inline(always)]
-pub fn float_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn float_literal(
+    num_var: Variable,
+    percision_var: Variable,
+    expected: Expected<Type>,
+    region: Region,
+) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
-    let expected_literal = ForReason(reason, num_float(Type::Variable(num_var)), region);
+
+    dbg!(&expected);
 
     exists(
         vec![num_var],
         And(vec![
-            Eq(num_type.clone(), expected_literal, Category::Float, region),
+            Eq(
+                num_type.clone(),
+                ForReason(reason, num_float(Type::Variable(percision_var)), region),
+                Category::Float,
+                region,
+            ),
             Eq(num_type, expected, Category::Float, region),
         ]),
     )

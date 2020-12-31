@@ -785,8 +785,8 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
     match expr {
         RuntimeError(_)
         | Num(_, _)
-        | Int(_, _)
-        | Float(_, _)
+        | Int(_, _, _)
+        | Float(_, _, _)
         | Str { .. }
         | EmptyRecord
         | Accessor { .. }
