@@ -1231,15 +1231,14 @@ fn compile_guard<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
     // calculate the guard value
     let param = Param {
@@ -1269,15 +1268,14 @@ fn compile_test<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
     let test = Expr::RunLowLevel(LowLevel::Eq, arena.alloc([lhs, rhs]));
 
@@ -1711,5 +1709,3 @@ fn insert_choices<'a>(
         },
     }
 }
-
-// Opt.FanOut path (map (second go) tests) (go fallback)

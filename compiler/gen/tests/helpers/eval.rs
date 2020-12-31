@@ -160,6 +160,10 @@ pub fn helper<'a>(
     }
 
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+
+    // strip Zig debug stuff
+    module.strip_debug_info();
+
     let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
         roc_gen::llvm::build::OptLevel::Normal
