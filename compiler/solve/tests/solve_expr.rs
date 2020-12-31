@@ -169,7 +169,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "F64");
+        infer_eq("0.5", "Float *");
     }
 
     #[test]
@@ -762,7 +762,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "F64",
+            "Float *",
         );
     }
 
@@ -1026,7 +1026,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : F64 }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float * }");
     }
 
     #[test]
@@ -2385,7 +2385,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "F64",
+            "Float *",
         );
     }
 
@@ -3444,7 +3444,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : I64 }",
+            "{ x : Num a, y : F64, z : Int * }",
         );
     }
 
