@@ -2867,9 +2867,9 @@ fn run_low_level<'a, 'ctx, 'env>(
                 {
                     use roc_mono::layout::Builtin::*;
 
-                    let tag_eq = env.context.i8_type().const_int(0 as u64, false);
-                    let tag_gt = env.context.i8_type().const_int(1 as u64, false);
-                    let tag_lt = env.context.i8_type().const_int(2 as u64, false);
+                    let tag_eq = env.context.i8_type().const_int(0_u64, false);
+                    let tag_gt = env.context.i8_type().const_int(1_u64, false);
+                    let tag_lt = env.context.i8_type().const_int(2_u64, false);
 
                     match lhs_builtin {
                         Int128 | Int64 | Int32 | Int16 | Int8 => {

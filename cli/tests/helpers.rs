@@ -319,7 +319,7 @@ pub fn repl_eval(input: &str) -> Out {
             panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
         }
     } else {
-        let expected_after_answer = format!("\n");
+        let expected_after_answer = "\n".to_string();
 
         assert!(
             answer.ends_with(&expected_after_answer),

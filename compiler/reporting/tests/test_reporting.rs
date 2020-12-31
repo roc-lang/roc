@@ -30,13 +30,13 @@ mod test_reporting {
         let mut filename = PathBuf::new();
         filename.push(str);
 
-        return filename;
+        filename
     }
 
     fn to_simple_report<'b>(doc: RocDocBuilder<'b>) -> Report<'b> {
         Report {
             title: "".to_string(),
-            doc: doc,
+            doc,
             filename: filename_from_string(r"\code\proj\Main.roc"),
         }
     }
@@ -109,7 +109,7 @@ mod test_reporting {
 
     fn list_reports<F>(src: &str, buf: &mut String, callback: F)
     where
-        F: FnOnce(RocDocBuilder<'_>, &mut String) -> (),
+        F: FnOnce(RocDocBuilder<'_>, &mut String),
     {
         use ven_pretty::DocAllocator;
 
@@ -203,7 +203,7 @@ mod test_reporting {
     }
 
     fn human_readable(str: &str) -> String {
-        return str
+        str
             .replace(RED_CODE, "<red>")
             .replace(WHITE_CODE, "<white>")
             .replace(BLUE_CODE, "<blue>")
@@ -213,7 +213,7 @@ mod test_reporting {
             .replace(MAGENTA_CODE, "<magenta>")
             .replace(RESET_CODE, "<reset>")
             .replace(BOLD_CODE, "<bold>")
-            .replace(UNDERLINE_CODE, "<underline>");
+            .replace(UNDERLINE_CODE, "<underline>")
     }
 
     #[test]

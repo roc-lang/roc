@@ -13,7 +13,7 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
-pub const REFCOUNT_MAX: usize = 0 as usize;
+pub const REFCOUNT_MAX: usize = 0_usize;
 
 pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
     match ptr_bytes {
@@ -65,7 +65,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             .into_pointer_value();
 
         // get a pointer to index -1
-        let index_intvalue = refcount_type.const_int((-1 as i64) as u64, false);
+        let index_intvalue = refcount_type.const_int(-1_i64 as u64, false);
         let refcount_ptr = unsafe {
             builder.build_in_bounds_gep(ptr_as_usize_ptr, &[index_intvalue], "get_rc_ptr")
         };
@@ -108,7 +108,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         );
         let incremented = builder.build_int_add(
             refcount,
-            refcount_type.const_int(1 as u64, false),
+            refcount_type.const_int(1_u64, false),
             "increment_refcount",
         );
 
@@ -210,7 +210,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 LLVM_SADD_WITH_OVERFLOW_I64,
                 &[
                     refcount.into(),
-                    refcount_type.const_int((-1 as i64) as u64, true).into(),
+                    refcount_type.const_int(-1_i64 as u64, true).into(),
                 ],
             )
             .into_struct_value();
@@ -222,7 +222,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let has_overflowed_comparison = builder.build_int_compare(
             IntPredicate::EQ,
             has_overflowed.into_int_value(),
-            ctx.bool_type().const_int(1 as u64, false),
+            ctx.bool_type().const_int(1_u64, false),
             "has_overflowed",
         );
 

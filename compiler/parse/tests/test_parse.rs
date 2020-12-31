@@ -111,7 +111,7 @@ mod test_parse {
                     "x"
                 "#
             ),
-            Expr::Str(PlainLine("x".into())),
+            Expr::Str(PlainLine("x")),
         );
     }
 
@@ -123,7 +123,7 @@ mod test_parse {
                     "foo"
                 "#
             ),
-            Expr::Str(PlainLine("foo".into())),
+            Expr::Str(PlainLine("foo")),
         );
     }
 
@@ -2702,8 +2702,7 @@ mod test_parse {
         // and then again for the lookup.
         let occurrences = format!("{:?}", actual)
             .split("isTest")
-            .collect::<std::vec::Vec<_>>()
-            .len()
+            .count()
             - 1;
 
         assert_eq!(occurrences, 2);

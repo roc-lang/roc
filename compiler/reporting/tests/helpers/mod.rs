@@ -57,7 +57,7 @@ const EXPANDED_STACK_SIZE: usize = 4 * 1024 * 1024;
 #[cfg(debug_assertions)]
 pub fn with_larger_debug_stack<F>(run_test: F)
 where
-    F: FnOnce() -> (),
+    F: FnOnce(),
     F: Send,
     F: 'static,
 {

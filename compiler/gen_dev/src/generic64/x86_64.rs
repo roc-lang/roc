@@ -505,7 +505,7 @@ mod tests {
     use super::*;
 
     const TEST_I32: i32 = 0x12345678;
-    const TEST_I64: i64 = 0x12345678_9ABCDEF0;
+    const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
 
     #[test]
     fn test_add_reg64_imm32() {
