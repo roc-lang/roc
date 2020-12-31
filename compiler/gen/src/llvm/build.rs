@@ -3920,7 +3920,7 @@ fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Function
     }
 }
 
-fn cxa_end_catch<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+fn cxa_end_catch(env: &Env<'_, '_, '_>) {
     let name = "__cxa_end_catch";
 
     let module = env.module;

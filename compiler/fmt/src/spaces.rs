@@ -4,13 +4,13 @@ use roc_parse::ast::CommentOrNewline;
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn newline<'a>(buf: &mut String<'a>, indent: u16) {
+pub fn newline(buf: &mut String<'_>, indent: u16) {
     buf.push('\n');
 
     add_spaces(buf, indent);
 }
 
-pub fn add_spaces<'a>(buf: &mut String<'a>, spaces: u16) {
+pub fn add_spaces(buf: &mut String<'_>, spaces: u16) {
     for _ in 0..spaces {
         buf.push(' ');
     }

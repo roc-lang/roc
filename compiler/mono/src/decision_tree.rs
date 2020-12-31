@@ -276,7 +276,7 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match<'a>(branches: &Vec<Branch<'a>>) -> Option<Label> {
+fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
     match branches.get(0) {
         Some(Branch { goal, patterns })
             if patterns
@@ -730,7 +730,7 @@ fn is_irrelevant_to<'a>(selected_path: &Path, branch: &Branch<'a>) -> bool {
     }
 }
 
-fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
+fn needs_tests(pattern: &Pattern) -> bool {
     use Pattern::*;
 
     match pattern {

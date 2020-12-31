@@ -109,7 +109,7 @@ impl Pools {
             .unwrap_or_else(|| panic!("Compiler bug: could not find pool at rank {}", rank))
     }
 
-    pub fn iter<'a>(&'a self) -> std::slice::Iter<'a, Vec<Variable>> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Vec<Variable>> {
         self.0.iter()
     }
 

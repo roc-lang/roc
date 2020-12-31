@@ -396,11 +396,7 @@ pub fn canonicalize_pattern<'a>(
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
-fn unsupported_pattern<'a>(
-    env: &mut Env<'a>,
-    pattern_type: PatternType,
-    region: Region,
-) -> Pattern {
+fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region) -> Pattern {
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
@@ -408,11 +404,7 @@ fn unsupported_pattern<'a>(
 
 /// When we detect a malformed pattern like `3.X` or `0b5`,
 /// report it to Env and return an UnsupportedPattern runtime error pattern.
-fn malformed_pattern<'a>(
-    env: &mut Env<'a>,
-    problem: MalformedPatternProblem,
-    region: Region,
-) -> Pattern {
+fn malformed_pattern(env: &mut Env, problem: MalformedPatternProblem, region: Region) -> Pattern {
     env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
         problem, region,
     )));
