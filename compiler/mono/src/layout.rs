@@ -11,6 +11,7 @@ pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
+pub const TAG_SIZE: Builtin<'_> = Builtin::Int64;
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
@@ -820,15 +821,15 @@ fn layout_from_flat_type<'a>(
                 }
                 Symbol::NUM_I32 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::Builtin(Builtin::Int32))
                 }
                 Symbol::NUM_I16 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::Builtin(Builtin::Int16))
                 }
                 Symbol::NUM_I8 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::Builtin(Builtin::Int8))
                 }
 
                 // I think unsigned and signed use the same layout
@@ -842,15 +843,15 @@ fn layout_from_flat_type<'a>(
                 }
                 Symbol::NUM_U32 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::Builtin(Builtin::Int32))
                 }
                 Symbol::NUM_U16 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::Builtin(Builtin::Int16))
                 }
                 Symbol::NUM_U8 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::Builtin(Builtin::Int8))
                 }
 
                 // Floats
@@ -987,7 +988,7 @@ fn layout_from_flat_type<'a>(
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
                 // store the discriminant
-                tag_layout.push(Layout::Builtin(Builtin::Int64));
+                tag_layout.push(Layout::Builtin(TAG_SIZE));
 
                 for var in variables {
                     // TODO does this cause problems with mutually recursive unions?
@@ -1218,7 +1219,7 @@ pub fn union_sorted_tags_help<'a>(
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
                 // add the tag discriminant (size currently always hardcoded to i64)
-                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+                arg_layouts.push(Layout::Builtin(TAG_SIZE));
 
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {
@@ -1410,16 +1411,61 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
 
-            // TODO: we probably need to match on the type of the arg
-            // and return the correct builtin ex: Builtin::{Int32, Int16}
-            Ok(Layout::Builtin(Builtin::Int64))
+            let (_, precision_var) = args[0];
+
+            let precision = subs.get_without_compacting(precision_var).content;
+
+            match precision {
+                Content::Alias(symbol, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    let builtin = match symbol {
+                        Symbol::NUM_SIGNED128 => Builtin::Int128,
+                        Symbol::NUM_SIGNED64 => Builtin::Int64,
+                        Symbol::NUM_SIGNED32 => Builtin::Int32,
+                        Symbol::NUM_SIGNED16 => Builtin::Int16,
+                        Symbol::NUM_SIGNED8 => Builtin::Int8,
+                        Symbol::NUM_UNSIGNED128 => Builtin::Int128,
+                        Symbol::NUM_UNSIGNED64 => Builtin::Int64,
+                        Symbol::NUM_UNSIGNED32 => Builtin::Int32,
+                        Symbol::NUM_UNSIGNED16 => Builtin::Int16,
+                        Symbol::NUM_UNSIGNED8 => Builtin::Int8,
+                        _ => unreachable!("not a valid int variant: {:?} {:?}", symbol, args),
+                    };
+
+                    Ok(Layout::Builtin(builtin))
+                }
+                Content::FlexVar(_) => {
+                    // default to i64
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                _ => unreachable!("not a valid int variant: {:?}", precision),
+            }
         }
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
             debug_assert!(args.len() == 1);
 
-            // TODO: we probably need to match on the type of the arg
-            // and return the correct builtin ex: Builtin::Float32
-            Ok(Layout::Builtin(Builtin::Float64))
+            let (_, precision_var) = args[0];
+
+            let precision = subs.get_without_compacting(precision_var).content;
+
+            match precision {
+                Content::Alias(Symbol::NUM_BINARY32, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    Ok(Layout::Builtin(Builtin::Float32))
+                }
+                Content::Alias(Symbol::NUM_BINARY64, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    Ok(Layout::Builtin(Builtin::Float64))
+                }
+                Content::FlexVar(_) => {
+                    // default to f64
+                    Ok(Layout::Builtin(Builtin::Float64))
+                }
+                _ => unreachable!("not a valid float variant: {:?}", precision),
+            }
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Num *) then default to compiling it to i64

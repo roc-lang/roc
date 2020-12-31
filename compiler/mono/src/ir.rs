@@ -1,6 +1,6 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
-use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
+use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, TAG_SIZE};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -2739,7 +2739,7 @@ pub fn with_hole<'a>(
                     stmt = Stmt::Let(
                         tag_id_symbol,
                         Expr::Literal(Literal::Int(tag_id as i64)),
-                        Layout::Builtin(Builtin::Int64),
+                        Layout::Builtin(TAG_SIZE),
                         arena.alloc(stmt),
                     );
 
@@ -4734,7 +4734,7 @@ fn store_pattern<'a>(
 
             if write_tag {
                 // add an element for the tag discriminant
-                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+                arg_layouts.push(Layout::Builtin(TAG_SIZE));
             }
 
             for (_, layout) in arguments {
@@ -6039,13 +6039,20 @@ pub fn num_argument_to_int_or_float(
     match subs.get_without_compacting(var).content {
         Content::FlexVar(_) if known_to_be_float => IntOrFloat::BinaryFloatType(FloatPrecision::F64),
         Content::FlexVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
+
+        Content::Alias(Symbol::NUM_INTEGER, args, _)  => {
+            debug_assert!(args.len() == 1);
+
+            // Recurse on the second argument
+            num_argument_to_int_or_float(subs, args[0].1, false)
+        }
+
         Content::Alias(Symbol::NUM_I128, _, _)
         | Content::Alias(Symbol::NUM_SIGNED128, _, _)
         | Content::Alias(Symbol::NUM_AT_SIGNED128, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I128)
         }
-        Content::Alias(Symbol::NUM_INT, _, _)
-        | Content::Alias(Symbol::NUM_INTEGER, _, _) // We default Integer to I64
+        Content::Alias(Symbol::NUM_INT, _, _)// We default Integer to I64
         | Content::Alias(Symbol::NUM_I64, _, _)
         | Content::Alias(Symbol::NUM_SIGNED64, _, _)
         | Content::Alias(Symbol::NUM_AT_SIGNED64, _, _) => {
@@ -6097,8 +6104,13 @@ pub fn num_argument_to_int_or_float(
             // Recurse on the second argument
             num_argument_to_int_or_float(subs, attr_args[1], false)
         }
-        Content::Alias(Symbol::NUM_FLOAT, _, _)
-        | Content::Alias(Symbol::NUM_FLOATINGPOINT, _, _) // We default FloatingPoint to F64
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _)  => {
+            debug_assert!(args.len() == 1);
+
+            // Recurse on the second argument
+            num_argument_to_int_or_float(subs, args[0].1, true)
+        }
+        Content::Alias(Symbol::NUM_FLOAT, _, _) // We default FloatingPoint to F64
         | Content::Alias(Symbol::NUM_F64, _, _)
         | Content::Alias(Symbol::NUM_BINARY64, _, _)
         | Content::Alias(Symbol::NUM_AT_BINARY64, _, _) => {

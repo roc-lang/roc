@@ -304,7 +304,9 @@ macro_rules! assert_opt_evals_to {
 
         let context = Context::create();
 
-        let stdlib = roc_builtins::unique::uniq_stdlib();
+        // don't use uniqueness types any more
+        // let stdlib = roc_builtins::unique::uniq_stdlib();
+        let stdlib = roc_builtins::std::standard_stdlib();
 
         let (main_fn_name, errors, lib) =
             $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
