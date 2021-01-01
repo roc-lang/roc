@@ -364,19 +364,19 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 
 ## Replaces the element at the given index with a replacement.
 ##
-## >>> List.put [ "a", "b", "c" ] 1 "B"
+## >>> List.set [ "a", "b", "c" ] 1 "B"
 ##
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
 ##
 ## To drop the element at a given index, instead of replacing it, see #List.drop.
-put : List elem, Nat, elem -> List elem
+set : List elem, Nat, elem -> List elem
 
 ## Drops the element at the given index from the list.
 ##
 ## This has no effect if the given index is outside the bounds of the list.
 ##
-## To replace the element at a given index, instead of dropping it, see #List.put.
+## To replace the element at a given index, instead of dropping it, see #List.set.
 drop : List elem, Nat -> List elem
 
 ## Adds a new element to the end of the list.

@@ -100,7 +100,7 @@ interface Str2
 
 ## A [Unicode](https://unicode.org) text value.
 ##
-Str2 : [ @Str ]
+Str : [ @Str ]
 
 ## Convert
 
