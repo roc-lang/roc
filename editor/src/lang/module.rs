@@ -2,14 +2,14 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
-use crate::ast::{FunctionDef, ValueDef};
-use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
-use crate::expr::Env;
-use crate::expr::Output;
-use crate::pattern::Pattern2;
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
-use crate::scope::Scope;
-use crate::types::Alias;
+use crate::lang::ast::{FunctionDef, ValueDef};
+use crate::lang::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
+use crate::lang::expr::Env;
+use crate::lang::expr::Output;
+use crate::lang::pattern::Pattern2;
+use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
+use crate::lang::scope::Scope;
+use crate::lang::types::Alias;
 use bumpalo::Bump;
 use roc_can::operator::desugar_def;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
@@ -176,7 +176,7 @@ pub fn canonicalize_module_defs<'a>(
 
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(mut declarations), output) => {
-            use crate::def::Declaration::*;
+            use Declaration::*;
 
             for decl in declarations.iter() {
                 match decl {
