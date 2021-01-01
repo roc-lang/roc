@@ -480,7 +480,7 @@ impl<'a> BorrowInfState<'a> {
             Invoke {
                 symbol,
                 call,
-                layout,
+                layout: _,
                 pass,
                 fail,
             } => {

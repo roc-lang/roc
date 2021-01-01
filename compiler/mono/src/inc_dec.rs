@@ -221,7 +221,7 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     }
 }
 
-fn consume_call(m: &VarMap, e: &crate::ir::Call<'_>) -> bool {
+fn consume_call(_: &VarMap, _: &crate::ir::Call<'_>) -> bool {
     // variables bound by a call (or invoke) must always be consumed
     true
 }
