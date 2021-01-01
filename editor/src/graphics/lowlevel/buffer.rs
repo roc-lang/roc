@@ -14,9 +14,7 @@ pub struct QuadBufferBuilder {
 impl QuadBufferBuilder {
     pub fn new() -> Self {
         Self {
-            vertex_data: Vec::new(),
-            index_data: Vec::new(),
-            current_quad: 0,
+            ..Default::default()
         }
     }
 
@@ -75,6 +73,16 @@ impl QuadBufferBuilder {
             StagingBuffer::new(device, &self.index_data),
             self.index_data.len() as u32,
         )
+    }
+}
+
+impl Default for QuadBufferBuilder {
+    fn default() -> Self {
+        Self {
+            vertex_data: Vec::new(),
+            index_data: Vec::new(),
+            current_quad: 0,
+        }
     }
 }
 
