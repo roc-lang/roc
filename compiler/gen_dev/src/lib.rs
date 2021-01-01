@@ -103,25 +103,30 @@ where
                 }
                 Ok(())
             }
-            Expr::FunctionCall {
-                call_type: CallType::ByName(func_sym),
-                args,
-                ..
-            } => {
-                match *func_sym {
-                    Symbol::NUM_ABS => {
-                        // Instead of calling the function, just inline it.
-                        self.build_expr(sym, &Expr::RunLowLevel(LowLevel::NumAbs, args), layout)
+            Expr::Call(roc_mono::ir::Call {
+                call_type,
+                arguments,
+            }) => {
+                match call_type {
+                    CallType::ByName { name: func_sym, .. } => {
+                        match *func_sym {
+                            Symbol::NUM_ABS => {
+                                // Instead of calling the function, just inline it.
+                                self.build_run_low_level(sym, &LowLevel::NumAbs, arguments, layout)
+                            }
+                            Symbol::NUM_ADD => {
+                                // Instead of calling the function, just inline it.
+                                self.build_run_low_level(sym, &LowLevel::NumAdd, arguments, layout)
+                            }
+                            x => Err(format!("the function, {:?}, is not yet implemented", x)),
+                        }
                     }
-                    Symbol::NUM_ADD => {
-                        // Instead of calling the function, just inline it.
-                        self.build_expr(sym, &Expr::RunLowLevel(LowLevel::NumAdd, args), layout)
+
+                    CallType::LowLevel { op: lowlevel } => {
+                        self.build_run_low_level(sym, lowlevel, arguments, layout)
                     }
-                    x => Err(format!("the function, {:?}, is not yet implemented", x)),
+                    x => Err(format!("the call type, {:?}, is not yet implemented", x)),
                 }
-            }
-            Expr::RunLowLevel(lowlevel, args) => {
-                self.build_run_low_level(sym, lowlevel, args, layout)
             }
             x => Err(format!("the expression, {:?}, is not yet implemented", x)),
         }
@@ -244,36 +249,30 @@ where
                 match expr {
                     Expr::Literal(_) => {}
                     Expr::FunctionPointer(sym, _) => self.set_last_seen(*sym, stmt),
-                    Expr::FunctionCall {
-                        call_type, args, ..
-                    } => {
-                        for sym in *args {
+                    Expr::Call(roc_mono::ir::Call {
+                        call_type,
+                        arguments,
+                    }) => {
+                        for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
                         }
+
                         match call_type {
-                            CallType::ByName(sym) => {
+                            CallType::ByName { name: sym, .. } => {
                                 // For functions that we won't inline, we should not be a leaf function.
                                 if !INLINED_SYMBOLS.contains(sym) {
                                     self.set_not_leaf_function();
                                 }
                             }
-                            CallType::ByPointer(sym) => {
+                            CallType::ByPointer { name: sym, .. } => {
                                 self.set_not_leaf_function();
                                 self.set_last_seen(*sym, stmt);
                             }
+                            CallType::LowLevel { .. } => {}
+                            CallType::Foreign { .. } => self.set_not_leaf_function(),
                         }
                     }
-                    Expr::RunLowLevel(_, args) => {
-                        for sym in *args {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                    }
-                    Expr::ForeignCall { arguments, .. } => {
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                        self.set_not_leaf_function();
-                    }
+
                     Expr::Tag { arguments, .. } => {
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
