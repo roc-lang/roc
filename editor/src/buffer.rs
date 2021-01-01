@@ -3,6 +3,7 @@
 use crate::rect::Rect;
 use crate::util::size_of_slice;
 use crate::vertex::Vertex;
+use bumpalo::collections::Vec as BumpVec;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
 pub struct QuadBufferBuilder {
@@ -87,24 +88,13 @@ pub struct RectBuffers {
 pub fn create_rect_buffers(
     gpu_device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
+    rects: &BumpVec<Rect>,
 ) -> RectBuffers {
-    // Test Rectangles
-    let test_rect_1 = Rect {
-        top_left_coords: (0.0, 0.0).into(),
-        width: 400.0,
-        height: 300.0,
-        color: [1.0, 0.0, 0.0],
-    };
-    let test_rect_2 = Rect {
-        top_left_coords: (400.0, 300.0).into(),
-        width: 400.0,
-        height: 300.0,
-        color: [0.0, 0.0, 1.0],
-    };
+    let nr_of_rects = rects.len() as u64;
 
     let vertex_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: Vertex::SIZE * 4 * 3,
+        size: Vertex::SIZE * 4 * nr_of_rects,
         usage: wgpu::BufferUsage::VERTEX | wgpu::BufferUsage::COPY_DST,
         mapped_at_creation: false,
     });
@@ -113,16 +103,18 @@ pub fn create_rect_buffers(
 
     let index_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: u32_size * 6 * 3,
+        size: u32_size * 6 * nr_of_rects,
         usage: wgpu::BufferUsage::INDEX | wgpu::BufferUsage::COPY_DST,
         mapped_at_creation: false,
     });
 
     let num_rects = {
-        let (stg_vertex, stg_index, num_indices) = QuadBufferBuilder::new()
-            .push_rect(&test_rect_1)
-            .push_rect(&test_rect_2)
-            .build(&gpu_device);
+        let mut quad_buffer_builder = QuadBufferBuilder::new();
+        for rect in rects {
+            quad_buffer_builder = quad_buffer_builder.push_rect(&rect);
+        }
+
+        let (stg_vertex, stg_index, num_indices) = quad_buffer_builder.build(&gpu_device);
 
         stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
         stg_index.copy_to_buffer(encoder, &index_buffer);
