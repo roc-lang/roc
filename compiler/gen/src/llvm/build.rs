@@ -18,6 +18,7 @@ use crate::llvm::refcounting::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use either::Either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -429,6 +430,14 @@ pub fn construct_optimization_passes<'a>(
             fpm.add_memcpy_optimize_pass(); // this one is very important
 
             fpm.add_licm_pass();
+
+            // turn invoke into call
+            mpm.add_prune_eh_pass();
+
+            // remove unused global values (often the `_wrapper` can be removed)
+            mpm.add_global_dce_pass();
+
+            mpm.add_function_inlining_pass();
         }
     }
 
@@ -1297,6 +1306,91 @@ fn list_literal<'a, 'ctx, 'env>(
     )
 }
 
+fn invoke_roc_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &mut Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    symbol: Symbol,
+    layout: Layout<'a>,
+    function_value: Either<FunctionValue<'ctx>, PointerValue<'ctx>>,
+    arguments: &[Symbol],
+    pass: &'a roc_mono::ir::Stmt<'a>,
+    fail: &'a roc_mono::ir::Stmt<'a>,
+) -> BasicValueEnum<'ctx> {
+    let context = env.context;
+
+    let call_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
+    let alloca = create_entry_block_alloca(env, parent, call_bt, symbol.ident_string(&env.interns));
+
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
+
+    for arg in arguments.iter() {
+        arg_vals.push(load_symbol(env, scope, arg));
+    }
+
+    let pass_block = context.append_basic_block(parent, "invoke_pass");
+    let fail_block = context.append_basic_block(parent, "invoke_fail");
+
+    let call_result = {
+        let call = env.builder.build_invoke(
+            function_value,
+            arg_vals.as_slice(),
+            pass_block,
+            fail_block,
+            "tmp",
+        );
+
+        match function_value {
+            Either::Left(function) => {
+                call.set_call_convention(function.get_call_conventions());
+            }
+            Either::Right(_) => {
+                call.set_call_convention(FAST_CALL_CONV);
+            }
+        }
+
+        call.try_as_basic_value()
+            .left()
+            .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+    };
+
+    {
+        env.builder.position_at_end(pass_block);
+
+        env.builder.build_store(alloca, call_result);
+        scope.insert(symbol, (layout, alloca));
+
+        build_exp_stmt(env, layout_ids, scope, parent, pass);
+
+        scope.remove(&symbol);
+    }
+
+    {
+        env.builder.position_at_end(fail_block);
+
+        let landing_pad_type = {
+            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
+            let selector_value = context.i32_type().into();
+
+            context.struct_type(&[exception_ptr, selector_value], false)
+        };
+
+        env.builder
+            .build_catch_all_landing_pad(
+                &landing_pad_type,
+                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+                context.i8_type().ptr_type(AddressSpace::Generic),
+                "invoke_landing_pad",
+            )
+            .into_struct_value();
+
+        build_exp_stmt(env, layout_ids, scope, parent, fail);
+    }
+
+    call_result
+}
+
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1384,136 +1478,76 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             call,
             layout,
             pass,
-            fail,
+            fail: roc_mono::ir::Stmt::Unreachable,
         } => {
-            let context = &env.context;
-
-            let val = build_exp_call(env, layout_ids, &scope, parent, layout, &call);
-            let call_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
-            let alloca =
-                create_entry_block_alloca(env, parent, call_bt, symbol.ident_string(&env.interns));
-
-            env.builder.build_store(alloca, val);
-
-            let arguments = call.arguments;
-            match call.call_type {
-                CallType::ByName {
-                    name,
-                    ref full_layout,
-                    ..
-                } => {
-                    let function_value = function_value_by_name(env, layout_ids, full_layout, name);
-
-                    let mut arg_vals: Vec<BasicValueEnum> =
-                        Vec::with_capacity_in(arguments.len(), env.arena);
-
-                    for arg in arguments.iter() {
-                        arg_vals.push(load_symbol(env, scope, arg));
-                    }
-
-                    let pass_block = context.append_basic_block(parent, "invoke_pass");
-                    let fail_block = context.append_basic_block(parent, "invoke_fail");
-
-                    {
-                        env.builder.position_at_end(pass_block);
-
-                        scope.insert(*symbol, (layout.clone(), alloca));
-
-                        build_exp_stmt(env, layout_ids, scope, parent, pass);
-
-                        scope.remove(symbol);
-                    }
-
-                    {
-                        env.builder.position_at_end(fail_block);
-
-                        build_exp_stmt(env, layout_ids, scope, parent, fail);
-                    }
-
-                    let call = env.builder.build_invoke(
-                        function_value,
-                        arg_vals.as_slice(),
-                        pass_block,
-                        fail_block,
-                        "tmp",
-                    );
-
-                    if env.exposed_to_host.contains(&name) {
-                        // If this is an external-facing function, use the C calling convention.
-                        call.set_call_convention(C_CALL_CONV);
-                    } else {
-                        // If it's an internal-only function, use the fast calling convention.
-                        call.set_call_convention(FAST_CALL_CONV);
-                    }
-
-                    call.try_as_basic_value()
-                        .left()
-                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-                }
-                CallType::ByPointer { name, .. } => {
-                    let sub_expr = load_symbol(env, scope, &name);
-
-                    let mut arg_vals: Vec<BasicValueEnum> =
-                        Vec::with_capacity_in(arguments.len(), env.arena);
-
-                    for arg in arguments.iter() {
-                        arg_vals.push(load_symbol(env, scope, arg));
-                    }
-
-                    let pass_block = context.append_basic_block(parent, "invoke_pass");
-                    let fail_block = context.append_basic_block(parent, "invoke_fail");
-
-                    {
-                        env.builder.position_at_end(pass_block);
-
-                        scope.insert(*symbol, (layout.clone(), alloca));
-
-                        build_exp_stmt(env, layout_ids, scope, parent, pass);
-
-                        scope.remove(symbol);
-                    }
-
-                    {
-                        env.builder.position_at_end(fail_block);
-
-                        build_exp_stmt(env, layout_ids, scope, parent, fail);
-                    }
-
-                    let call = match sub_expr {
-                        BasicValueEnum::PointerValue(ptr) => env.builder.build_invoke(
-                            ptr,
-                            arg_vals.as_slice(),
-                            pass_block,
-                            fail_block,
-                            "tmp",
-                        ),
-                        non_ptr => {
-                            panic!(
-                                "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                                non_ptr
-                            );
-                        }
-                    };
-
-                    if env.exposed_to_host.contains(&name) {
-                        // If this is an external-facing function, use the C calling convention.
-                        call.set_call_convention(C_CALL_CONV);
-                    } else {
-                        // If it's an internal-only function, use the fast calling convention.
-                        call.set_call_convention(FAST_CALL_CONV);
-                    }
-
-                    call.try_as_basic_value()
-                        .left()
-                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-                }
-                _ => {
-                    todo!()
-                }
-            }
+            // when the fail case is just Unreachable, there is no cleanup work to do
+            // so we can just treat this invoke as a normal call
+            let stmt =
+                roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+            build_exp_stmt(env, layout_ids, scope, parent, &stmt)
         }
 
+        Invoke {
+            symbol,
+            call,
+            layout,
+            pass,
+            fail,
+        } => match call.call_type {
+            CallType::ByName {
+                name,
+                ref full_layout,
+                ..
+            } => {
+                let function_value = function_value_by_name(env, layout_ids, full_layout, name);
+
+                invoke_roc_function(
+                    env,
+                    layout_ids,
+                    scope,
+                    parent,
+                    *symbol,
+                    layout.clone(),
+                    function_value.into(),
+                    call.arguments,
+                    pass,
+                    fail,
+                )
+            }
+            CallType::ByPointer { name, .. } => {
+                let sub_expr = load_symbol(env, scope, &name);
+
+                let function_ptr = match sub_expr {
+                    BasicValueEnum::PointerValue(ptr) => ptr,
+                    non_ptr => {
+                        panic!(
+                            "Tried to call by pointer, but encountered a non-pointer: {:?}",
+                            non_ptr
+                        );
+                    }
+                };
+
+                invoke_roc_function(
+                    env,
+                    layout_ids,
+                    scope,
+                    parent,
+                    *symbol,
+                    layout.clone(),
+                    function_ptr.into(),
+                    call.arguments,
+                    pass,
+                    fail,
+                )
+            }
+            _ => {
+                todo!()
+            }
+        },
+
         Unreachable => {
+            cxa_rethrow_exception(env);
+
             // used in exception handling
             env.builder.build_unreachable();
 
@@ -2166,7 +2200,11 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let wrapper_function_name = format!("{}_catcher", roc_function.get_name().to_str().unwrap());
 
-    make_exception_catching_wrapper(env, roc_function, &wrapper_function_name)
+    let function_value = make_exception_catching_wrapper(env, roc_function, &wrapper_function_name);
+
+    function_value.set_linkage(Linkage::Internal);
+
+    function_value
 }
 
 fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
@@ -4015,7 +4053,7 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
 }
 
 #[allow(dead_code)]
-fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
     let name = "__cxa_rethrow";
 
     let module = env.module;
@@ -4034,10 +4072,10 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
             cxa_rethrow
         }
     };
-    let call = env.builder.build_call(function, &[], "never_used");
+    let call = env.builder.build_call(function, &[], "rethrow");
 
     call.set_call_convention(C_CALL_CONV);
-    call.try_as_basic_value().left().unwrap()
+    // call.try_as_basic_value().left().unwrap()
 }
 
 fn get_foreign_symbol<'a, 'ctx, 'env>(

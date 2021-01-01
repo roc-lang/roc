@@ -742,6 +742,7 @@ impl<'a> Context<'a> {
                     fail,
                     layout: layout.clone(),
                 };
+
                 let stmt = self.arena.alloc(invoke);
 
                 (stmt, case_live_vars)

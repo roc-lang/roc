@@ -1128,10 +1128,37 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Invoke { symbol, .. } => alloc
+            Invoke {
+                symbol,
+                call,
+                pass,
+                fail: Stmt::Unreachable,
+                ..
+            } => alloc
+                .text("let ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(" = ")
+                .append(call.to_doc(alloc))
+                .append(";")
+                .append(alloc.hardline())
+                .append(pass.to_doc(alloc)),
+
+            Invoke {
+                symbol,
+                call,
+                pass,
+                fail,
+                ..
+            } => alloc
                 .text("invoke ")
                 .append(symbol_to_doc(alloc, *symbol))
-                .append(" = ?"),
+                .append(" = ")
+                .append(call.to_doc(alloc))
+                .append(" catch")
+                .append(alloc.hardline())
+                .append(fail.to_doc(alloc).indent(4))
+                .append(alloc.hardline())
+                .append(pass.to_doc(alloc)),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -4388,7 +4415,7 @@ fn substitute_in_stmt_help<'a>(
             let opt_pass = substitute_in_stmt_help(arena, pass, subs);
             let opt_fail = substitute_in_stmt_help(arena, fail, subs);
 
-            if opt_pass.is_some() || opt_fail.is_some() {
+            if opt_pass.is_some() || opt_fail.is_some() | opt_call.is_some() {
                 let pass = opt_pass.unwrap_or(pass);
                 let fail = opt_fail.unwrap_or_else(|| *fail);
                 let call = opt_call.unwrap_or_else(|| call.clone());
@@ -5201,6 +5228,34 @@ fn add_needed_external<'a>(
     existing.insert(name, solved_type);
 }
 
+fn can_throw_exception(call: &Call) -> bool {
+    match call.call_type {
+        CallType::ByName { name, .. } => name == Symbol::NUM_ADD,
+        _ => false,
+    }
+}
+
+fn build_call<'a>(
+    env: &mut Env<'a, '_>,
+    call: Call<'a>,
+    assigned: Symbol,
+    layout: Layout<'a>,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    if can_throw_exception(&call) {
+        let fail = env.arena.alloc(Stmt::Unreachable);
+        Stmt::Invoke {
+            symbol: assigned,
+            call,
+            layout,
+            fail,
+            pass: hole,
+        }
+    } else {
+        Stmt::Let(assigned, Expr::Call(call), layout, hole)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
@@ -5262,7 +5317,7 @@ fn call_by_name<'a>(
                     "see call_by_name for background (scroll down a bit)"
                 );
 
-                let call = Expr::Call(self::Call {
+                let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: ret_layout.clone(),
@@ -5270,9 +5325,9 @@ fn call_by_name<'a>(
                         arg_layouts,
                     },
                     arguments: field_symbols,
-                });
+                };
 
-                let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
+                let result = build_call(env, call, assigned, ret_layout.clone(), hole);
 
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                 assign_to_symbols(env, procs, layout_cache, iter, result)
@@ -5313,7 +5368,7 @@ fn call_by_name<'a>(
                             "see call_by_name for background (scroll down a bit)"
                         );
 
-                        let call = Expr::Call(self::Call {
+                        let call = self::Call {
                             call_type: CallType::ByName {
                                 name: proc_name,
                                 ret_layout: ret_layout.clone(),
@@ -5321,11 +5376,11 @@ fn call_by_name<'a>(
                                 arg_layouts,
                             },
                             arguments: field_symbols,
-                        });
+                        };
+
+                        let result = build_call(env, call, assigned, ret_layout.clone(), hole);
 
                         let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-
-                        let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
                         assign_to_symbols(env, procs, layout_cache, iter, result)
                     }
                     None => {
@@ -5375,7 +5430,7 @@ fn call_by_name<'a>(
                                             // and we have to fix it here.
                                             match full_layout {
                                                 Layout::Closure(_, closure_layout, _) => {
-                                                    let call = Expr::Call(self::Call {
+                                                    let call = self::Call {
                                                         call_type: CallType::ByName {
                                                             name: proc_name,
                                                             ret_layout: function_layout
@@ -5387,7 +5442,7 @@ fn call_by_name<'a>(
                                                             arg_layouts: function_layout.arguments,
                                                         },
                                                         arguments: field_symbols,
-                                                    });
+                                                    };
 
                                                     // in the case of a closure specifically, we
                                                     // have to create a custom layout, to make sure
@@ -5400,15 +5455,16 @@ fn call_by_name<'a>(
                                                         ]),
                                                     );
 
-                                                    Stmt::Let(
-                                                        assigned,
+                                                    build_call(
+                                                        env,
                                                         call,
+                                                        assigned,
                                                         closure_struct_layout,
                                                         hole,
                                                     )
                                                 }
                                                 _ => {
-                                                    let call = Expr::Call(self::Call {
+                                                    let call = self::Call {
                                                         call_type: CallType::ByName {
                                                             name: proc_name,
                                                             ret_layout: function_layout
@@ -5420,11 +5476,12 @@ fn call_by_name<'a>(
                                                             arg_layouts: function_layout.arguments,
                                                         },
                                                         arguments: field_symbols,
-                                                    });
+                                                    };
 
-                                                    Stmt::Let(
-                                                        assigned,
+                                                    build_call(
+                                                        env,
                                                         call,
+                                                        assigned,
                                                         function_layout.full,
                                                         hole,
                                                     )
@@ -5436,7 +5493,7 @@ fn call_by_name<'a>(
                                                 field_symbols.len(),
                                                 "scroll up a bit for background"
                                             );
-                                            let call = Expr::Call(self::Call {
+                                            let call = self::Call {
                                                 call_type: CallType::ByName {
                                                     name: proc_name,
                                                     ret_layout: function_layout.result.clone(),
@@ -5444,16 +5501,17 @@ fn call_by_name<'a>(
                                                     arg_layouts: function_layout.arguments,
                                                 },
                                                 arguments: field_symbols,
-                                            });
+                                            };
 
                                             let iter = loc_args
                                                 .into_iter()
                                                 .rev()
                                                 .zip(field_symbols.iter().rev());
 
-                                            let result = Stmt::Let(
-                                                assigned,
+                                            let result = build_call(
+                                                env,
                                                 call,
+                                                assigned,
                                                 function_layout.result,
                                                 hole,
                                             );
@@ -5490,7 +5548,7 @@ fn call_by_name<'a>(
                                     "scroll up a bit for background"
                                 );
 
-                                let call = Expr::Call(self::Call {
+                                let call = self::Call {
                                     call_type: CallType::ByName {
                                         name: proc_name,
                                         ret_layout: ret_layout.clone(),
@@ -5498,12 +5556,14 @@ fn call_by_name<'a>(
                                         arg_layouts,
                                     },
                                     arguments: field_symbols,
-                                });
+                                };
+
+                                let result =
+                                    build_call(env, call, assigned, ret_layout.clone(), hole);
 
                                 let iter =
                                     loc_args.into_iter().rev().zip(field_symbols.iter().rev());
 
-                                let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
                                 assign_to_symbols(env, procs, layout_cache, iter, result)
                             }
 

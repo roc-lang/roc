@@ -82,6 +82,18 @@ where
                 self.free_symbols(stmt);
                 Ok(())
             }
+            Stmt::Invoke {
+                symbol,
+                layout,
+                call,
+                pass,
+                fail: _,
+            } => {
+                // for now, treat invoke as a normal call
+
+                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+                self.build_stmt(&stmt)
+            }
             x => Err(format!("the statement, {:?}, is not yet implemented", x)),
         }
     }
@@ -299,7 +311,18 @@ where
                 self.scan_ast(following);
             }
 
-            Stmt::Invoke { .. } => todo!("invoke is not implemented (yet) for gen_dev"),
+            Stmt::Invoke {
+                symbol,
+                layout,
+                call,
+                pass,
+                fail: _,
+            } => {
+                // for now, treat invoke as a normal call
+
+                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+                self.scan_ast(&stmt);
+            }
 
             Stmt::Switch {
                 cond_symbol,
