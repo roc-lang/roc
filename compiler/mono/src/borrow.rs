@@ -400,6 +400,7 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
+    #[allow(clippy::many_single_char_names)]
     fn preserve_tail_call(&mut self, x: Symbol, v: &Expr<'a>, b: &Stmt<'a>) {
         match (v, b) {
             (

@@ -4622,7 +4622,7 @@ fn substitute_in_expr<'a>(
     match expr {
         Literal(_) | FunctionPointer(_, _) | EmptyArray | RuntimeErrorFunction(_) => None,
 
-        Call(call) => substitute_in_call(arena, call, subs).map(|new| Expr::Call(new)),
+        Call(call) => substitute_in_call(arena, call, subs).map(Expr::Call),
 
         Tag {
             tag_layout,

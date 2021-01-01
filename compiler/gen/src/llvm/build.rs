@@ -1306,6 +1306,7 @@ fn list_literal<'a, 'ctx, 'env>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn invoke_roc_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -4052,8 +4053,7 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
     call.set_call_convention(C_CALL_CONV);
 }
 
-#[allow(dead_code)]
-fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+fn cxa_rethrow_exception(env: &Env<'_, '_, '_>) {
     let name = "__cxa_rethrow";
 
     let module = env.module;
