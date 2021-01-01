@@ -741,6 +741,13 @@ pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
+    Invoke {
+        symbol: Symbol,
+        call: Call<'a>,
+        layout: Layout<'a>,
+        pass: &'a Stmt<'a>,
+        fail: &'a Stmt<'a>,
+    },
     Switch {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_symbol: Symbol,
@@ -1120,6 +1127,11 @@ impl<'a> Stmt<'a> {
                 .append(";")
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
+
+            Invoke { symbol, .. } => alloc
+                .text("invoke ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(" = ?"),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -4365,6 +4377,33 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
+        Invoke {
+            symbol,
+            call,
+            layout,
+            pass,
+            fail,
+        } => {
+            let opt_call = substitute_in_call(arena, call, subs);
+            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
+            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
+
+            if opt_pass.is_some() || opt_fail.is_some() {
+                let pass = opt_pass.unwrap_or(pass);
+                let fail = opt_fail.unwrap_or_else(|| *fail);
+                let call = opt_call.unwrap_or_else(|| call.clone());
+
+                Some(arena.alloc(Invoke {
+                    symbol: *symbol,
+                    call,
+                    layout: layout.clone(),
+                    pass,
+                    fail,
+                }))
+            } else {
+                None
+            }
+        }
         Join {
             id,
             parameters,
@@ -4483,6 +4522,69 @@ fn substitute_in_stmt_help<'a>(
     }
 }
 
+fn substitute_in_call<'a>(
+    arena: &'a Bump,
+    call: &'a Call<'a>,
+    subs: &MutMap<Symbol, Symbol>,
+) -> Option<Call<'a>> {
+    let Call {
+        call_type,
+        arguments,
+    } = call;
+
+    let opt_call_type = match call_type {
+        CallType::ByName {
+            name,
+            arg_layouts,
+            ret_layout,
+            full_layout,
+        } => substitute(subs, *name).map(|new| CallType::ByName {
+            name: new,
+            arg_layouts,
+            ret_layout: ret_layout.clone(),
+            full_layout: full_layout.clone(),
+        }),
+        CallType::ByPointer {
+            name,
+            arg_layouts,
+            ret_layout,
+            full_layout,
+        } => substitute(subs, *name).map(|new| CallType::ByPointer {
+            name: new,
+            arg_layouts,
+            ret_layout: ret_layout.clone(),
+            full_layout: full_layout.clone(),
+        }),
+        CallType::Foreign { .. } => None,
+        CallType::LowLevel { .. } => None,
+    };
+
+    let mut did_change = false;
+    let new_args = Vec::from_iter_in(
+        arguments.iter().map(|s| match substitute(subs, *s) {
+            None => *s,
+            Some(s) => {
+                did_change = true;
+                s
+            }
+        }),
+        arena,
+    );
+
+    if did_change || opt_call_type.is_some() {
+        let call_type = opt_call_type.unwrap_or_else(|| call_type.clone());
+
+        let arguments = new_args.into_bump_slice();
+
+        Some(self::Call {
+            call_type,
+            arguments,
+        })
+    } else {
+        None
+    }
+}
+
 fn substitute_in_expr<'a>(
     arena: &'a Bump,
     expr: &'a Expr<'a>,
@@ -4493,62 +4595,7 @@ fn substitute_in_expr<'a>(
     match expr {
         Literal(_) | FunctionPointer(_, _) | EmptyArray | RuntimeErrorFunction(_) => None,
 
-        Call(self::Call {
-            call_type,
-            arguments,
-        }) => {
-            let opt_call_type = match call_type {
-                CallType::ByName {
-                    name,
-                    arg_layouts,
-                    ret_layout,
-                    full_layout,
-                } => substitute(subs, *name).map(|new| CallType::ByName {
-                    name: new,
-                    arg_layouts,
-                    ret_layout: ret_layout.clone(),
-                    full_layout: full_layout.clone(),
-                }),
-                CallType::ByPointer {
-                    name,
-                    arg_layouts,
-                    ret_layout,
-                    full_layout,
-                } => substitute(subs, *name).map(|new| CallType::ByPointer {
-                    name: new,
-                    arg_layouts,
-                    ret_layout: ret_layout.clone(),
-                    full_layout: full_layout.clone(),
-                }),
-                CallType::Foreign { .. } => None,
-                CallType::LowLevel { .. } => None,
-            };
-
-            let mut did_change = false;
-            let new_args = Vec::from_iter_in(
-                arguments.iter().map(|s| match substitute(subs, *s) {
-                    None => *s,
-                    Some(s) => {
-                        did_change = true;
-                        s
-                    }
-                }),
-                arena,
-            );
-
-            if did_change || opt_call_type.is_some() {
-                let call_type = opt_call_type.unwrap_or_else(|| call_type.clone());
-
-                let arguments = new_args.into_bump_slice();
-
-                Some(Expr::Call(self::Call {
-                    call_type,
-                    arguments,
-                }))
-            } else {
-                None
-            }
-        }
+        Call(call) => substitute_in_call(arena, call, subs).map(|new| Expr::Call(new)),
 
         Tag {
             tag_layout,

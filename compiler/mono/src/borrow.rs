@@ -156,6 +156,10 @@ impl<'a> ParamMap<'a> {
                 Let(_, _, _, cont) => {
                     stack.push(cont);
                 }
+                Invoke { pass, fail, .. } => {
+                    stack.push(pass);
+                    stack.push(fail);
+                }
                 Switch {
                     branches,
                     default_branch,
@@ -295,6 +299,62 @@ impl<'a> BorrowInfState<'a> {
     ///
     /// and determines whether z and which of the symbols used in e
     /// must be taken as owned paramters
+    fn collect_call(&mut self, z: Symbol, e: &crate::ir::Call<'a>) {
+        use crate::ir::CallType::*;
+
+        let crate::ir::Call {
+            call_type,
+            arguments,
+        } = e;
+
+        match call_type {
+            ByName {
+                name, arg_layouts, ..
+            }
+            | ByPointer {
+                name, arg_layouts, ..
+            } => {
+                // get the borrow signature of the applied function
+                let ps = match self.param_map.get_symbol(*name) {
+                    Some(slice) => slice,
+                    None => Vec::from_iter_in(
+                        arg_layouts.iter().cloned().map(|layout| Param {
+                            symbol: Symbol::UNDERSCORE,
+                            borrow: false,
+                            layout,
+                        }),
+                        self.arena,
+                    )
+                    .into_bump_slice(),
+                };
+
+                // the return value will be owned
+                self.own_var(z);
+
+                // if the function exects an owned argument (ps), the argument must be owned (args)
+                self.own_args_using_params(arguments, ps);
+            }
+
+            LowLevel { op } => {
+                // very unsure what demand RunLowLevel should place upon its arguments
+                self.own_var(z);
+
+                let ps = lowlevel_borrow_signature(self.arena, *op);
+
+                self.own_args_using_bools(arguments, ps);
+            }
+
+            Foreign { .. } => {
+                // very unsure what demand ForeignCall should place upon its arguments
+                self.own_var(z);
+
+                let ps = foreign_borrow_signature(self.arena, arguments.len());
+
+                self.own_args_using_bools(arguments, ps);
+            }
+        }
+    }
+
     fn collect_expr(&mut self, z: Symbol, e: &Expr<'a>) {
         use Expr::*;
 
@@ -334,59 +394,7 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            Call(crate::ir::Call {
-                call_type,
-                arguments,
-            }) => {
-                use crate::ir::CallType::*;
-
-                match call_type {
-                    ByName {
-                        name, arg_layouts, ..
-                    }
-                    | ByPointer {
-                        name, arg_layouts, ..
-                    } => {
-                        // get the borrow signature of the applied function
-                        let ps = match self.param_map.get_symbol(*name) {
-                            Some(slice) => slice,
-                            None => Vec::from_iter_in(
-                                arg_layouts.iter().cloned().map(|layout| Param {
-                                    symbol: Symbol::UNDERSCORE,
-                                    borrow: false,
-                                    layout,
-                                }),
-                                self.arena,
-                            )
-                            .into_bump_slice(),
-                        };
-
-                        // the return value will be owned
-                        self.own_var(z);
-
-                        // if the function exects an owned argument (ps), the argument must be owned (args)
-                        self.own_args_using_params(arguments, ps);
-                    }
-
-                    LowLevel { op } => {
-                        // very unsure what demand RunLowLevel should place upon its arguments
-                        self.own_var(z);
-
-                        let ps = lowlevel_borrow_signature(self.arena, *op);
-
-                        self.own_args_using_bools(arguments, ps);
-                    }
-
-                    Foreign { .. } => {
-                        // very unsure what demand ForeignCall should place upon its arguments
-                        self.own_var(z);
-
-                        let ps = foreign_borrow_signature(self.arena, arguments.len());
-
-                        self.own_args_using_bools(arguments, ps);
-                    }
-                }
-            }
+            Call(call) => self.collect_call(z, call),
 
             Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}
         }
@@ -462,11 +470,29 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(b);
                 self.preserve_tail_call(*x, &Expr::FunctionPointer(*fsymbol, layout.clone()), b);
             }
+
             Let(x, v, _, b) => {
                 self.collect_stmt(b);
                 self.collect_expr(*x, v);
                 self.preserve_tail_call(*x, v, b);
             }
+
+            Invoke {
+                symbol,
+                call,
+                layout,
+                pass,
+                fail,
+            } => {
+                self.collect_stmt(pass);
+                self.collect_stmt(fail);
+
+                self.collect_call(*symbol, call);
+
+                // TODO how to preserve the tail call of an invoke?
+                // self.preserve_tail_call(*x, v, b);
+            }
+
             Jump(j, ys) => {
                 let ps = self.param_map.get_join_point(*j);
 
