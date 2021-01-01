@@ -1,5 +1,5 @@
 use crate::tea::model::{Position, RawSelection};
-use crate::text::is_newline;
+use crate::util::is_newline;
 use std::cmp::{max, min};
 
 pub fn move_caret_left(

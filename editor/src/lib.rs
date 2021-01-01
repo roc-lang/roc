@@ -8,14 +8,15 @@
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-use crate::buffer::create_rect_buffers;
 use crate::error::print_err;
-use crate::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
-use crate::rect::Rect;
+use crate::graphics::lowlevel::buffer::create_rect_buffers;
+use crate::graphics::lowlevel::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
+use crate::graphics::lowlevel::vertex::Vertex;
+use crate::graphics::primitives::rect::Rect;
+use crate::graphics::primitives::text::{build_glyph_brush, queue_text_draw, Text};
 use crate::selection::create_selection_rects;
 use crate::tea::{model, update};
-use crate::text::{build_glyph_brush, is_newline, Text};
-use crate::vertex::Vertex;
+use crate::util::is_newline;
 use bumpalo::Bump;
 use model::Position;
 use std::error::Error;
@@ -26,27 +27,14 @@ use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
 
-pub mod ast;
-mod buffer;
-mod colors;
-mod def;
 pub mod error;
-pub mod expr;
-pub mod file;
+pub mod graphics;
 mod keyboard_input;
-mod module;
-mod ortho;
-mod pattern;
-pub mod pool;
-mod rect;
-mod scope;
+pub mod lang;
 mod selection;
 mod tea;
-pub mod text;
-mod types;
 mod util;
 mod vec_result;
-mod vertex;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -315,8 +303,8 @@ fn make_rect_pipeline(
         &pipeline_layout,
         swap_chain_descr.format,
         &[Vertex::DESC],
-        wgpu::include_spirv!("shaders/rect.vert.spv"),
-        wgpu::include_spirv!("shaders/rect.frag.spv"),
+        wgpu::include_spirv!("graphics/shaders/rect.vert.spv"),
+        wgpu::include_spirv!("graphics/shaders/rect.frag.spv"),
     );
 
     (pipeline, ortho)
@@ -399,11 +387,11 @@ fn queue_all_text(
         ..Default::default()
     };
 
-    text::queue_text_draw(&main_label, glyph_brush);
+    queue_text_draw(&main_label, glyph_brush);
 
-    text::queue_text_draw(&caret_pos_label, glyph_brush);
+    queue_text_draw(&caret_pos_label, glyph_brush);
 
-    text::queue_text_draw(&code_text, glyph_brush)
+    queue_text_draw(&code_text, glyph_brush)
 }
 
 fn update_text_state(ed_model: &mut model::Model, received_char: &char) {

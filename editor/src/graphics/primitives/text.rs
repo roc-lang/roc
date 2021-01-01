@@ -1,7 +1,7 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
 
-use crate::rect::Rect;
+use crate::graphics::primitives::rect::Rect;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use itertools::Itertools;
@@ -108,13 +108,7 @@ pub fn build_glyph_brush(
     gpu_device: &wgpu::Device,
     render_format: wgpu::TextureFormat,
 ) -> Result<GlyphBrush<()>, InvalidFont> {
-    let inconsolata = FontArc::try_from_slice(include_bytes!("../Inconsolata-Regular.ttf"))?;
+    let inconsolata = FontArc::try_from_slice(include_bytes!("../../../Inconsolata-Regular.ttf"))?;
 
     Ok(GlyphBrushBuilder::using_font(inconsolata).build(&gpu_device, render_format))
-}
-
-pub fn is_newline(char_ref: &char) -> bool {
-    let newline_codes = vec!['\u{d}'];
-
-    newline_codes.contains(char_ref)
 }

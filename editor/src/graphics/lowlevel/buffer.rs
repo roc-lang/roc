@@ -1,8 +1,7 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
-use crate::rect::Rect;
-use crate::util::size_of_slice;
-use crate::vertex::Vertex;
+use crate::graphics::lowlevel::vertex::Vertex;
+use crate::graphics::primitives::rect::Rect;
 use bumpalo::collections::Vec as BumpVec;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
@@ -148,4 +147,10 @@ impl StagingBuffer {
     pub fn copy_to_buffer(&self, encoder: &mut wgpu::CommandEncoder, other: &wgpu::Buffer) {
         encoder.copy_buffer_to_buffer(&self.buffer, 0, other, 0, self.size)
     }
+}
+
+// Taken from https://github.com/sotrh/learn-wgpu
+// by Benjamin Hansen, licensed under the MIT license
+pub fn size_of_slice<T: Sized>(slice: &[T]) -> usize {
+    std::mem::size_of::<T>() * slice.len()
 }
