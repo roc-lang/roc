@@ -754,6 +754,7 @@ pub enum Stmt<'a> {
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
+    Unreachable,
     Inc(Symbol, &'a Stmt<'a>),
     Dec(Symbol, &'a Stmt<'a>),
     Join {
@@ -1102,6 +1103,8 @@ impl<'a> Stmt<'a> {
                 .text("ret ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
+
+            Unreachable => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -4435,6 +4438,8 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
+
+        Unreachable => None,
 
         RuntimeError(_) => None,
     }

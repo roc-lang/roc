@@ -1366,6 +1366,13 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             value
         }
 
+        Unreachable => {
+            // used in exception handling
+            env.builder.build_unreachable();
+
+            env.context.i64_type().const_zero().into()
+        }
+
         Switch {
             branches,
             default_branch,

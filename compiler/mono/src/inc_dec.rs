@@ -35,6 +35,8 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 result.insert(*symbol);
             }
 
+            Unreachable => {}
+
             Inc(symbol, cont) | Dec(symbol, cont) => {
                 result.insert(*symbol);
                 stack.push(cont);
@@ -673,6 +675,8 @@ impl<'a> Context<'a> {
                 }
             }
 
+            Unreachable => (stmt, MutSet::default()),
+
             Jump(j, xs) => {
                 let empty = MutSet::default();
                 let j_live_vars = match self.jp_live_vars.get(j) {
@@ -812,6 +816,8 @@ pub fn collect_stmt(
 
             vars
         }
+
+        Unreachable => vars,
 
         RuntimeError(_) => vars,
     }

@@ -187,6 +187,7 @@ fn insert_jumps<'a>(
             None => None,
         },
 
+        Unreachable => None,
         Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,
