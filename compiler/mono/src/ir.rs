@@ -866,8 +866,7 @@ impl<'a> Call<'a> {
                     .append(alloc.intersperse(it, " "))
             }
             Foreign {
-                foreign_symbol: ref foreign_symbol,
-                ..
+                ref foreign_symbol, ..
             } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
