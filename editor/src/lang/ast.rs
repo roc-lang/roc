@@ -1,6 +1,6 @@
-use crate::pattern::{Pattern2, PatternId};
-use crate::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
-use crate::types::{Type2, TypeId};
+use crate::lang::pattern::{Pattern2, PatternId};
+use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
+use crate::lang::types::{Type2, TypeId};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::expr::Recursive;
 use roc_module::low_level::LowLevel;
@@ -298,7 +298,7 @@ pub type ExprId = NodeId<Expr2>;
 
 #[test]
 fn size_of_expr() {
-    assert_eq!(std::mem::size_of::<Expr2>(), crate::pool::NODE_BYTES);
+    assert_eq!(std::mem::size_of::<Expr2>(), crate::lang::pool::NODE_BYTES);
 }
 
 impl ShallowClone for Rigids {
