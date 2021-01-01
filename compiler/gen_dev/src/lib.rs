@@ -249,29 +249,8 @@ where
                 match expr {
                     Expr::Literal(_) => {}
                     Expr::FunctionPointer(sym, _) => self.set_last_seen(*sym, stmt),
-                    Expr::Call(roc_mono::ir::Call {
-                        call_type,
-                        arguments,
-                    }) => {
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
-                        }
 
-                        match call_type {
-                            CallType::ByName { name: sym, .. } => {
-                                // For functions that we won't inline, we should not be a leaf function.
-                                if !INLINED_SYMBOLS.contains(sym) {
-                                    self.set_not_leaf_function();
-                                }
-                            }
-                            CallType::ByPointer { name: sym, .. } => {
-                                self.set_not_leaf_function();
-                                self.set_last_seen(*sym, stmt);
-                            }
-                            CallType::LowLevel { .. } => {}
-                            CallType::Foreign { .. } => self.set_not_leaf_function(),
-                        }
-                    }
+                    Expr::Call(call) => self.scan_ast_call(call, stmt),
 
                     Expr::Tag { arguments, .. } => {
                         for sym in *arguments {
@@ -319,6 +298,9 @@ where
                 }
                 self.scan_ast(following);
             }
+
+            Stmt::Invoke { .. } => todo!("invoke is not implemented (yet) for gen_dev"),
+
             Stmt::Switch {
                 cond_symbol,
                 branches,
@@ -362,6 +344,32 @@ where
                 }
             }
             Stmt::RuntimeError(_) => {}
+        }
+    }
+
+    fn scan_ast_call(&mut self, call: &roc_mono::ir::Call, stmt: &roc_mono::ir::Stmt<'a>) {
+        let roc_mono::ir::Call {
+            call_type,
+            arguments,
+        } = call;
+
+        for sym in *arguments {
+            self.set_last_seen(*sym, stmt);
+        }
+
+        match call_type {
+            CallType::ByName { name: sym, .. } => {
+                // For functions that we won't inline, we should not be a leaf function.
+                if !INLINED_SYMBOLS.contains(sym) {
+                    self.set_not_leaf_function();
+                }
+            }
+            CallType::ByPointer { name: sym, .. } => {
+                self.set_not_leaf_function();
+                self.set_last_seen(*sym, stmt);
+            }
+            CallType::LowLevel { .. } => {}
+            CallType::Foreign { .. } => self.set_not_leaf_function(),
         }
     }
 }
