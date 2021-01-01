@@ -75,17 +75,17 @@ fn insert_jumps<'a>(
     match stmt {
         Let(
             symbol,
-            Expr::FunctionCall {
-                call_type: CallType::ByName(fsym),
-                args,
+            Expr::Call(crate::ir::Call {
+                call_type: CallType::ByName { name: fsym, .. },
+                arguments,
                 ..
-            },
+            }),
             _,
             Stmt::Ret(rsym),
         ) if needle == *fsym && symbol == rsym => {
             // replace the call and return with a jump
 
-            let jump = Stmt::Jump(goal_id, args);
+            let jump = Stmt::Jump(goal_id, arguments);
 
             Some(arena.alloc(jump))
         }

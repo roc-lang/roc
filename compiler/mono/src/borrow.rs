@@ -334,49 +334,58 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            FunctionCall {
+            Call(crate::ir::Call {
                 call_type,
-                args,
-                arg_layouts,
-                ..
-            } => {
-                // get the borrow signature of the applied function
-                let ps = match self.param_map.get_symbol(call_type.get_inner()) {
-                    Some(slice) => slice,
-                    None => Vec::from_iter_in(
-                        arg_layouts.iter().cloned().map(|layout| Param {
-                            symbol: Symbol::UNDERSCORE,
-                            borrow: false,
-                            layout,
-                        }),
-                        self.arena,
-                    )
-                    .into_bump_slice(),
-                };
+                arguments,
+            }) => {
+                use crate::ir::CallType::*;
 
-                // the return value will be owned
-                self.own_var(z);
+                match call_type {
+                    ByName {
+                        name, arg_layouts, ..
+                    }
+                    | ByPointer {
+                        name, arg_layouts, ..
+                    } => {
+                        // get the borrow signature of the applied function
+                        let ps = match self.param_map.get_symbol(*name) {
+                            Some(slice) => slice,
+                            None => Vec::from_iter_in(
+                                arg_layouts.iter().cloned().map(|layout| Param {
+                                    symbol: Symbol::UNDERSCORE,
+                                    borrow: false,
+                                    layout,
+                                }),
+                                self.arena,
+                            )
+                            .into_bump_slice(),
+                        };
 
-                // if the function exects an owned argument (ps), the argument must be owned (args)
-                self.own_args_using_params(args, ps);
-            }
+                        // the return value will be owned
+                        self.own_var(z);
 
-            RunLowLevel(op, args) => {
-                // very unsure what demand RunLowLevel should place upon its arguments
-                self.own_var(z);
+                        // if the function exects an owned argument (ps), the argument must be owned (args)
+                        self.own_args_using_params(arguments, ps);
+                    }
 
-                let ps = lowlevel_borrow_signature(self.arena, *op);
+                    LowLevel { op } => {
+                        // very unsure what demand RunLowLevel should place upon its arguments
+                        self.own_var(z);
 
-                self.own_args_using_bools(args, ps);
-            }
+                        let ps = lowlevel_borrow_signature(self.arena, *op);
 
-            ForeignCall { arguments, .. } => {
-                // very unsure what demand ForeignCall should place upon its arguments
-                self.own_var(z);
+                        self.own_args_using_bools(arguments, ps);
+                    }
 
-                let ps = foreign_borrow_signature(self.arena, arguments.len());
+                    Foreign { .. } => {
+                        // very unsure what demand ForeignCall should place upon its arguments
+                        self.own_var(z);
 
-                self.own_args_using_bools(arguments, ps);
+                        let ps = foreign_borrow_signature(self.arena, arguments.len());
+
+                        self.own_args_using_bools(arguments, ps);
+                    }
+                }
             }
 
             Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}
@@ -384,23 +393,32 @@ impl<'a> BorrowInfState<'a> {
     }
 
     fn preserve_tail_call(&mut self, x: Symbol, v: &Expr<'a>, b: &Stmt<'a>) {
-        if let (
-            Expr::FunctionCall {
-                call_type,
-                args: ys,
-                ..
-            },
-            Stmt::Ret(z),
-        ) = (v, b)
-        {
-            let g = call_type.get_inner();
-            if self.current_proc == g && x == *z {
-                // anonymous functions (for which the ps may not be known)
-                // can never be tail-recursive, so this is fine
-                if let Some(ps) = self.param_map.get_symbol(g) {
-                    self.own_params_using_args(ys, ps)
+        match (v, b) {
+            (
+                Expr::Call(crate::ir::Call {
+                    call_type: crate::ir::CallType::ByName { name: g, .. },
+                    arguments: ys,
+                    ..
+                }),
+                Stmt::Ret(z),
+            )
+            | (
+                Expr::Call(crate::ir::Call {
+                    call_type: crate::ir::CallType::ByPointer { name: g, .. },
+                    arguments: ys,
+                    ..
+                }),
+                Stmt::Ret(z),
+            ) => {
+                if self.current_proc == *g && x == *z {
+                    // anonymous functions (for which the ps may not be known)
+                    // can never be tail-recursive, so this is fine
+                    if let Some(ps) = self.param_map.get_symbol(*g) {
+                        self.own_params_using_args(ys, ps)
+                    }
                 }
             }
+            _ => {}
         }
     }
 

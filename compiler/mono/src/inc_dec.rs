@@ -88,10 +88,10 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.insert(*symbol);
         }
 
-        FunctionCall { args, .. } => {
+        Call(crate::ir::Call { arguments, .. }) => {
             // NOTE thouth the function name does occur, it is a static constant in the program
             // for liveness, it should not be included here.
-            result.extend(args.iter().copied());
+            result.extend(arguments.iter().copied());
         }
 
         Tag { arguments, .. }
@@ -109,12 +109,6 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         }
         Reset(x) => {
             result.insert(*x);
-        }
-        RunLowLevel(_, args) => {
-            result.extend(args.iter());
-        }
-        ForeignCall { arguments, .. } => {
-            result.extend(arguments.iter());
         }
 
         EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
@@ -447,44 +441,54 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            RunLowLevel(op, args) => {
-                let ps = crate::borrow::lowlevel_borrow_signature(self.arena, op);
-                let b = self.add_dec_after_lowlevel(args, ps, b, b_live_vars);
+            Call(crate::ir::Call {
+                ref call_type,
+                arguments,
+            }) => {
+                use crate::ir::CallType::*;
 
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
+                match &call_type {
+                    LowLevel { op } => {
+                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
+                        let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
 
-            ForeignCall { arguments, .. } => {
-                let ps = crate::borrow::foreign_borrow_signature(self.arena, arguments.len());
-                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                    }
 
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
+                    Foreign { .. } => {
+                        let ps =
+                            crate::borrow::foreign_borrow_signature(self.arena, arguments.len());
+                        let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
 
-            FunctionCall {
-                args: ys,
-                arg_layouts,
-                call_type,
-                ..
-            } => {
-                // get the borrow signature
-                let ps = match self.param_map.get_symbol(call_type.get_inner()) {
-                    Some(slice) => slice,
-                    None => Vec::from_iter_in(
-                        arg_layouts.iter().cloned().map(|layout| Param {
-                            symbol: Symbol::UNDERSCORE,
-                            borrow: false,
-                            layout,
-                        }),
-                        self.arena,
-                    )
-                    .into_bump_slice(),
-                };
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                    }
 
-                let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
-                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+                    ByName {
+                        name, arg_layouts, ..
+                    }
+                    | ByPointer {
+                        name, arg_layouts, ..
+                    } => {
+                        // get the borrow signature
+                        let ps = match self.param_map.get_symbol(*name) {
+                            Some(slice) => slice,
+                            None => Vec::from_iter_in(
+                                arg_layouts.iter().cloned().map(|layout| Param {
+                                    symbol: Symbol::UNDERSCORE,
+                                    borrow: false,
+                                    layout,
+                                }),
+                                self.arena,
+                            )
+                            .into_bump_slice(),
+                        };
 
-                self.add_inc_before(ys, ps, b, b_live_vars)
+                        let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
+                        let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                        self.add_inc_before(arguments, ps, b, b_live_vars)
+                    }
+                }
             }
 
             EmptyArray
@@ -510,7 +514,7 @@ impl<'a> Context<'a> {
         // is this value a constant?
         // TODO do function pointers also fall into this category?
         let persistent = match expr {
-            Expr::FunctionCall { args, .. } => args.is_empty(),
+            Expr::Call(crate::ir::Call { arguments, .. }) => arguments.is_empty(),
             _ => false,
         };
 
