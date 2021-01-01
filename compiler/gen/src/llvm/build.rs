@@ -1366,81 +1366,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             value
         }
 
-        Cond {
-            branching_symbol,
-            pass: pass_stmt,
-            fail: fail_stmt,
-            ret_layout,
-            ..
-        } => {
-            let ret_type =
-                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
-
-            let cond_expr = load_symbol(env, scope, branching_symbol);
-
-            match cond_expr {
-                IntValue(value) => {
-                    // This is a call tobuild_basic_phi2, except inlined to prevent
-                    // problems with lifetimes and closures involving layout_ids.
-                    let builder = env.builder;
-                    let context = env.context;
-
-                    // build blocks
-                    let then_block = context.append_basic_block(parent, "then");
-                    let else_block = context.append_basic_block(parent, "else");
-                    let mut blocks: std::vec::Vec<(
-                        &dyn inkwell::values::BasicValue<'_>,
-                        inkwell::basic_block::BasicBlock<'_>,
-                    )> = std::vec::Vec::with_capacity(2);
-                    let cont_block = context.append_basic_block(parent, "condbranchcont");
-
-                    builder.build_conditional_branch(value, then_block, else_block);
-
-                    // build then block
-                    builder.position_at_end(then_block);
-                    let then_val = build_exp_stmt(env, layout_ids, scope, parent, pass_stmt);
-                    if then_block.get_terminator().is_none() {
-                        builder.build_unconditional_branch(cont_block);
-                        let then_block = builder.get_insert_block().unwrap();
-                        blocks.push((&then_val, then_block));
-                    }
-
-                    // build else block
-                    builder.position_at_end(else_block);
-                    let else_val = build_exp_stmt(env, layout_ids, scope, parent, fail_stmt);
-                    if else_block.get_terminator().is_none() {
-                        let else_block = builder.get_insert_block().unwrap();
-                        builder.build_unconditional_branch(cont_block);
-                        blocks.push((&else_val, else_block));
-                    }
-
-                    // emit merge block
-                    if blocks.is_empty() {
-                        // SAFETY there are no other references to this block in this case
-                        unsafe {
-                            cont_block.delete().unwrap();
-                        }
-
-                        // return garbage value
-                        context.i64_type().const_int(0, false).into()
-                    } else {
-                        builder.position_at_end(cont_block);
-
-                        let phi = builder.build_phi(ret_type, "branch");
-
-                        // phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
-                        phi.add_incoming(&blocks);
-
-                        phi.as_basic_value()
-                    }
-                }
-                _ => panic!(
-                    "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
-                    cond_expr,
-                ),
-            }
-        }
-
         Switch {
             branches,
             default_branch,
@@ -2942,9 +2867,9 @@ fn run_low_level<'a, 'ctx, 'env>(
                 {
                     use roc_mono::layout::Builtin::*;
 
-                    let tag_eq = env.context.i8_type().const_int(0 as u64, false);
-                    let tag_gt = env.context.i8_type().const_int(1 as u64, false);
-                    let tag_lt = env.context.i8_type().const_int(2 as u64, false);
+                    let tag_eq = env.context.i8_type().const_int(0_u64, false);
+                    let tag_gt = env.context.i8_type().const_int(1_u64, false);
+                    let tag_lt = env.context.i8_type().const_int(2_u64, false);
 
                     match lhs_builtin {
                         Int128 | Int64 | Int32 | Int16 | Int8 => {
@@ -3995,7 +3920,7 @@ fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Function
     }
 }
 
-fn cxa_end_catch<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+fn cxa_end_catch(env: &Env<'_, '_, '_>) {
     let name = "__cxa_end_catch";
 
     let module = env.module;

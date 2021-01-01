@@ -8,7 +8,6 @@ extern crate inkwell;
 extern crate libc;
 extern crate roc_gen;
 
-use core;
 use roc_std::RocStr;
 
 #[macro_use]

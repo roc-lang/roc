@@ -86,7 +86,7 @@ mod test_mono {
 
         debug_assert_eq!(exposed_to_host.len(), 1);
 
-        let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
+        let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
         verify_procedures(expected, procedures, main_fn_symbol);
     }
@@ -117,14 +117,14 @@ mod test_mono {
         let the_same = result == expected;
 
         if !the_same {
-            let expected_lines = expected.split("\n").collect::<Vec<&str>>();
-            let result_lines = result.split("\n").collect::<Vec<&str>>();
+            let expected_lines = expected.split('\n').collect::<Vec<&str>>();
+            let result_lines = result.split('\n').collect::<Vec<&str>>();
 
             for line in &result_lines {
                 if !line.is_empty() {
                     println!("                {}", line);
                 } else {
-                    println!("");
+                    println!();
                 }
             }
 

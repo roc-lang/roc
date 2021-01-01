@@ -111,7 +111,7 @@ mod test_parse {
                     "x"
                 "#
             ),
-            Expr::Str(PlainLine("x".into())),
+            Expr::Str(PlainLine("x")),
         );
     }
 
@@ -123,7 +123,7 @@ mod test_parse {
                     "foo"
                 "#
             ),
-            Expr::Str(PlainLine("foo".into())),
+            Expr::Str(PlainLine("foo")),
         );
     }
 
@@ -2700,11 +2700,7 @@ mod test_parse {
 
         // It should occur twice in the debug output - once for the pattern,
         // and then again for the lookup.
-        let occurrences = format!("{:?}", actual)
-            .split("isTest")
-            .collect::<std::vec::Vec<_>>()
-            .len()
-            - 1;
+        let occurrences = format!("{:?}", actual).split("isTest").count() - 1;
 
         assert_eq!(occurrences, 2);
     }

@@ -59,7 +59,7 @@ impl<T> ArenaVec<T> {
         }
     }
 
-    pub fn push<'a>(&'a mut self, val: T, arena: &mut Arena<T>) {
+    pub fn push(&mut self, val: T, arena: &mut Arena<T>) {
         // Verify that this is the arena where we originally got our buffer,
         // and is therefore safe to read and to write to. (If we have sufficient
         // capacity, we'll write to it, and otherwise we'll read from it when

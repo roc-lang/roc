@@ -717,6 +717,26 @@ pub struct Param<'a> {
     pub layout: Layout<'a>,
 }
 
+pub fn cond<'a>(
+    env: &mut Env<'a, '_>,
+    cond_symbol: Symbol,
+    cond_layout: Layout<'a>,
+    pass: Stmt<'a>,
+    fail: Stmt<'a>,
+    ret_layout: Layout<'a>,
+) -> Stmt<'a> {
+    let branches = env.arena.alloc([(1u64, pass)]);
+    let default_branch = env.arena.alloc(fail);
+
+    Stmt::Switch {
+        cond_symbol,
+        cond_layout,
+        ret_layout,
+        branches,
+        default_branch,
+    }
+}
+
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
@@ -731,25 +751,6 @@ pub enum Stmt<'a> {
         /// If no other branches pass, this default branch will be taken.
         default_branch: &'a Stmt<'a>,
         /// Each branch must return a value of this type.
-        ret_layout: Layout<'a>,
-    },
-    Cond {
-        // The left-hand side of the conditional comparison and the right-hand side.
-        // These are stored separately because there are different machine instructions
-        // for e.g. "compare float and jump" vs. "compare integer and jump"
-
-        // symbol storing the original expression that we branch on, e.g. `Ok 42`
-        // required for RC logic
-        cond_symbol: Symbol,
-        cond_layout: Layout<'a>,
-
-        // symbol storing the value that we branch on, e.g. `1` representing the `Ok` tag
-        branching_symbol: Symbol,
-        branching_layout: Layout<'a>,
-
-        // What to do if the condition either passes or fails
-        pass: &'a Stmt<'a>,
-        fail: &'a Stmt<'a>,
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
@@ -1108,49 +1109,53 @@ impl<'a> Stmt<'a> {
                 default_branch,
                 ..
             } => {
-                let default_doc = alloc
-                    .text("default:")
-                    .append(alloc.hardline())
-                    .append(default_branch.to_doc(alloc).indent(4))
-                    .indent(4);
-
-                let branches_docs = branches
-                    .iter()
-                    .map(|(tag, expr)| {
+                match branches {
+                    [(1, pass)] => {
+                        let fail = default_branch;
                         alloc
-                            .text(format!("case {}:", tag))
+                            .text("if ")
+                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(" then")
                             .append(alloc.hardline())
-                            .append(expr.to_doc(alloc).indent(4))
-                            .indent(4)
-                    })
-                    .chain(std::iter::once(default_doc));
-                //
-                alloc
-                    .text("switch ")
-                    .append(symbol_to_doc(alloc, *cond_symbol))
-                    .append(":")
-                    .append(alloc.hardline())
-                    .append(
-                        alloc.intersperse(branches_docs, alloc.hardline().append(alloc.hardline())),
-                    )
-                    .append(alloc.hardline())
+                            .append(pass.to_doc(alloc).indent(4))
+                            .append(alloc.hardline())
+                            .append(alloc.text("else"))
+                            .append(alloc.hardline())
+                            .append(fail.to_doc(alloc).indent(4))
+                    }
+
+                    _ => {
+                        let default_doc = alloc
+                            .text("default:")
+                            .append(alloc.hardline())
+                            .append(default_branch.to_doc(alloc).indent(4))
+                            .indent(4);
+
+                        let branches_docs = branches
+                            .iter()
+                            .map(|(tag, expr)| {
+                                alloc
+                                    .text(format!("case {}:", tag))
+                                    .append(alloc.hardline())
+                                    .append(expr.to_doc(alloc).indent(4))
+                                    .indent(4)
+                            })
+                            .chain(std::iter::once(default_doc));
+                        //
+                        alloc
+                            .text("switch ")
+                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(":")
+                            .append(alloc.hardline())
+                            .append(alloc.intersperse(
+                                branches_docs,
+                                alloc.hardline().append(alloc.hardline()),
+                            ))
+                            .append(alloc.hardline())
+                    }
+                }
             }
 
-            Cond {
-                branching_symbol,
-                pass,
-                fail,
-                ..
-            } => alloc
-                .text("if ")
-                .append(symbol_to_doc(alloc, *branching_symbol))
-                .append(" then")
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc).indent(4))
-                .append(alloc.hardline())
-                .append(alloc.text("else"))
-                .append(alloc.hardline())
-                .append(fail.to_doc(alloc).indent(4)),
             RuntimeError(s) => alloc.text(format!("Error {}", s)),
 
             Join {
@@ -1216,7 +1221,7 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Cond { .. } | Switch { .. } => {
+            Switch { .. } => {
                 // TODO is this the reason Lean only looks at the outermost `when`?
                 true
             }
@@ -2845,15 +2850,14 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = Stmt::Cond {
-                        cond_symbol: branching_symbol,
+                    stmt = cond(
+                        env,
                         branching_symbol,
-                        cond_layout: cond_layout.clone(),
-                        branching_layout: cond_layout.clone(),
-                        pass: env.arena.alloc(then),
-                        fail: env.arena.alloc(stmt),
-                        ret_layout: ret_layout.clone(),
-                    };
+                        cond_layout.clone(),
+                        then,
+                        stmt,
+                        ret_layout.clone(),
+                    );
 
                     // add condition
                     stmt = with_hole(
@@ -2897,15 +2901,14 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = Stmt::Cond {
-                        cond_symbol: branching_symbol,
+                    stmt = cond(
+                        env,
                         branching_symbol,
-                        cond_layout: cond_layout.clone(),
-                        branching_layout: cond_layout.clone(),
-                        pass: env.arena.alloc(then),
-                        fail: env.arena.alloc(stmt),
-                        ret_layout: ret_layout.clone(),
-                    };
+                        cond_layout.clone(),
+                        then,
+                        stmt,
+                        ret_layout.clone(),
+                    );
 
                     // add condition
                     stmt = with_hole(
@@ -3174,7 +3177,7 @@ pub fn with_hole<'a>(
             enum FieldType<'a> {
                 CopyExisting(u64),
                 UpdateExisting(&'a roc_can::expr::Field),
-            };
+            }
 
             // Strategy: turn a record update into the creation of a new record.
             // This has the benefit that we don't need to do anything special for reference
@@ -3738,15 +3741,14 @@ pub fn from_can<'a>(
                 let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
-                stmt = Stmt::Cond {
-                    cond_symbol: branching_symbol,
+                stmt = cond(
+                    env,
                     branching_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_layout: cond_layout.clone(),
-                    pass: env.arena.alloc(then),
-                    fail: env.arena.alloc(stmt),
-                    ret_layout: ret_layout.clone(),
-                };
+                    cond_layout.clone(),
+                    then,
+                    stmt,
+                    ret_layout.clone(),
+                );
 
                 stmt = assign_to_symbol(
                     env,
@@ -4340,35 +4342,6 @@ fn substitute_in_stmt_help<'a>(
                     parameters,
                     remainder,
                     continuation,
-                }))
-            } else {
-                None
-            }
-        }
-        Cond {
-            cond_symbol,
-            cond_layout,
-            branching_symbol,
-            branching_layout,
-            pass,
-            fail,
-            ret_layout,
-        } => {
-            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
-            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
-
-            if opt_pass.is_some() || opt_fail.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or_else(|| *fail);
-
-                Some(arena.alloc(Cond {
-                    cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_symbol: *branching_symbol,
-                    branching_layout: branching_layout.clone(),
-                    pass,
-                    fail,
-                    ret_layout: ret_layout.clone(),
                 }))
             } else {
                 None

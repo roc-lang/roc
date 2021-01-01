@@ -276,7 +276,7 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match<'a>(branches: &Vec<Branch<'a>>) -> Option<Label> {
+fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
     match branches.get(0) {
         Some(Branch { goal, patterns })
             if patterns
@@ -730,7 +730,7 @@ fn is_irrelevant_to<'a>(selected_path: &Path, branch: &Branch<'a>) -> bool {
     }
 }
 
-fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
+fn needs_tests(pattern: &Pattern) -> bool {
     use Pattern::*;
 
     match pattern {
@@ -1231,15 +1231,14 @@ fn compile_guard<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
     // calculate the guard value
     let param = Param {
@@ -1269,15 +1268,14 @@ fn compile_test<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
     let test = Expr::RunLowLevel(LowLevel::Eq, arena.alloc([lhs, rhs]));
 
@@ -1711,5 +1709,3 @@ fn insert_choices<'a>(
         },
     }
 }
-
-// Opt.FanOut path (map (second go) tests) (go fallback)
