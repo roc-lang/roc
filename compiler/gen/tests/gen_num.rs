@@ -16,6 +16,22 @@ mod gen_num {
     use roc_std::RocOrder;
 
     #[test]
+    fn nat_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : Nat
+                    i = 1
+
+                    i
+                "#
+            ),
+            1,
+            usize 
+        );
+    }
+
+    #[test]
     fn i128_signed_int_alias() {
         assert_evals_to!(
             indoc!(

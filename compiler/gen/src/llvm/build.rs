@@ -483,8 +483,9 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
     use roc_mono::ir::Literal::*;
 
     match literal {
-        Int(int) => 
+        Int(int) =>
             (match layout {
+                Layout::Builtin(Builtin::Usize) => ptr_int(env.context, env.ptr_bytes),
                 Layout::Builtin(Builtin::Int128) => env.context.i128_type(), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
                 Layout::Builtin(Builtin::Int64) => env.context.i64_type(),
                 Layout::Builtin(Builtin::Int32) => env.context.i32_type(),
@@ -1312,7 +1313,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Let(first_symbol, first_expr, first_layout, mut cont) => {
             let mut queue = Vec::new_in(env.arena);
 
-
             queue.push((first_symbol, first_expr, first_layout));
 
             while let Let(symbol, expr, layout, new_cont) = cont {
@@ -1742,8 +1742,11 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         //
         // they either need to all be i8, or i64
         let int_val = match cond_layout {
-            Layout::Builtin(Builtin::Int128) => context.i128_type().const_int(*int as u64, false), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
+            Layout::Builtin(Builtin::Usize) => {
+                ptr_int(env.context, env.ptr_bytes).const_int(*int as u64, false)
+            }
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int128) => context.i128_type().const_int(*int as u64, false), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
             Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
@@ -2933,7 +2936,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     use roc_mono::layout::Builtin::*;
 
                     match arg_builtin {
-                        Int128 | Int64 | Int32 | Int16 | Int8 => {
+                        Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
                         }
                         Float128 | Float64 | Float32 | Float16 => {
@@ -2971,7 +2974,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     let tag_lt = env.context.i8_type().const_int(2 as u64, false);
 
                     match lhs_builtin {
-                        Int128 | Int64 | Int32 | Int16 | Int8 => {
+                        Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             let are_equal = env.builder.build_int_compare(
                                 IntPredicate::EQ,
                                 lhs_arg.into_int_value(),
@@ -3395,7 +3398,7 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
             use roc_mono::layout::Builtin::*;
 
             match lhs_builtin {
-                Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                Usize | Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
                     env,
                     parent,
                     lhs_arg.into_int_value(),

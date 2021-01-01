@@ -313,6 +313,7 @@ pub enum Builtin<'a> {
     Int16,
     Int8,
     Int1,
+    Usize,
     Float128,
     Float64,
     Float32,
@@ -707,6 +708,7 @@ impl<'a> Builtin<'a> {
     const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
     const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
+    const USIZE_SIZE: u32 = std::mem::size_of::<usize>() as u32;
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
@@ -735,6 +737,7 @@ impl<'a> Builtin<'a> {
             Int16 => Builtin::I16_SIZE,
             Int8 => Builtin::I8_SIZE,
             Int1 => Builtin::I1_SIZE,
+            Usize => Builtin::USIZE_SIZE,
             Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
             Float32 => Builtin::F32_SIZE,
@@ -760,6 +763,7 @@ impl<'a> Builtin<'a> {
             Int16 => align_of::<i16>() as u32,
             Int8 => align_of::<i8>() as u32,
             Int1 => align_of::<bool>() as u32,
+            Usize => align_of::<usize>() as u32,
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
@@ -775,7 +779,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
             Str | Dict(_, _) | Set(_) | List(_, _) => false,
         }
@@ -786,7 +790,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
             List(mode, element_layout) => match mode {
                 MemoryMode::Refcounted => true,
@@ -811,6 +815,11 @@ fn layout_from_flat_type<'a>(
         Apply(symbol, args) => {
             match symbol {
                 // Ints
+                Symbol::NUM_NAT => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Usize))
+                }
+
                 Symbol::NUM_I128 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int128))
@@ -832,7 +841,6 @@ fn layout_from_flat_type<'a>(
                     Ok(Layout::Builtin(Builtin::Int8))
                 }
 
-                // I think unsigned and signed use the same layout
                 Symbol::NUM_U128 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int128))
@@ -1358,6 +1366,8 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
         }
         Structure(Apply(symbol, args)) => match symbol {
             // Ints
+            Symbol::NUM_NAT => Ok(Layout::Builtin(Builtin::Usize)),
+
             Symbol::NUM_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
             Symbol::NUM_I128 => Ok(Layout::Builtin(Builtin::Int128)),
             Symbol::NUM_I64 => Ok(Layout::Builtin(Builtin::Int64)),
@@ -1365,7 +1375,6 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
             Symbol::NUM_I16 => Ok(Layout::Builtin(Builtin::Int16)),
             Symbol::NUM_I8 => Ok(Layout::Builtin(Builtin::Int8)),
 
-            // I think unsigned and signed use the same layout
             Symbol::NUM_U128 => Ok(Layout::Builtin(Builtin::Int128)),
             Symbol::NUM_U64 => Ok(Layout::Builtin(Builtin::Int64)),
             Symbol::NUM_U32 => Ok(Layout::Builtin(Builtin::Int32)),
@@ -1430,6 +1439,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
                         Symbol::NUM_UNSIGNED32 => Builtin::Int32,
                         Symbol::NUM_UNSIGNED16 => Builtin::Int16,
                         Symbol::NUM_UNSIGNED8 => Builtin::Int8,
+                        Symbol::NUM_NATURAL => Builtin::Usize,
                         _ => unreachable!("not a valid int variant: {:?} {:?}", symbol, args),
                     };
 

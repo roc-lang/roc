@@ -29,6 +29,7 @@ pub fn build_file(
 ) -> Result<PathBuf, LoadingProblem> {
     let compilation_start = SystemTime::now();
     let arena = Bump::new();
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
@@ -44,6 +45,7 @@ pub fn build_file(
         stdlib,
         src_dir.as_path(),
         subs_by_module,
+        ptr_bytes,
     )?;
 
     let path_to_platform = loaded.platform_path.clone();

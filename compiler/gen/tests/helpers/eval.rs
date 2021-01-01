@@ -41,6 +41,9 @@ pub fn helper<'a>(
         module_src = &temp;
     }
 
+    let target = target_lexicon::Triple::host();
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
@@ -49,6 +52,7 @@ pub fn helper<'a>(
         stdlib,
         src_dir,
         exposed_types,
+        ptr_bytes,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -72,9 +76,6 @@ pub fn helper<'a>(
             &procedures.keys()
         ),
     };
-
-    let target = target_lexicon::Triple::host();
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
