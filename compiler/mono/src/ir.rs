@@ -3685,18 +3685,15 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, ret_var, env.subs)
                 .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-            let result = Stmt::Let(
-                assigned,
-                Expr::Call(self::Call {
-                    call_type: CallType::Foreign {
-                        foreign_symbol,
-                        ret_layout: layout.clone(),
-                    },
-                    arguments: arg_symbols,
-                }),
-                layout,
-                hole,
-            );
+            let call = self::Call {
+                call_type: CallType::Foreign {
+                    foreign_symbol,
+                    ret_layout: layout.clone(),
+                },
+                arguments: arg_symbols,
+            };
+
+            let result = build_call(env, call, assigned, layout, hole);
 
             let iter = args
                 .into_iter()
@@ -3735,15 +3732,12 @@ pub fn with_hole<'a>(
                 }
             };
 
-            let result = Stmt::Let(
-                assigned,
-                Expr::Call(self::Call {
-                    call_type: CallType::LowLevel { op },
-                    arguments: arg_symbols,
-                }),
-                layout,
-                hole,
-            );
+            let call = self::Call {
+                call_type: CallType::LowLevel { op },
+                arguments: arg_symbols,
+            };
+
+            let result = build_call(env, call, assigned, layout, hole);
 
             let iter = args
                 .into_iter()
@@ -5230,8 +5224,29 @@ fn add_needed_external<'a>(
 
 fn can_throw_exception(call: &Call) -> bool {
     match call.call_type {
-        CallType::ByName { name, .. } => name == Symbol::NUM_ADD,
-        _ => false,
+        CallType::ByName { name, .. } => matches!(
+            name,
+            Symbol::NUM_ADD
+                | Symbol::NUM_SUB
+                | Symbol::NUM_MUL
+                | Symbol::NUM_DIV_FLOAT
+                | Symbol::NUM_ABS
+                | Symbol::NUM_NEG
+        ),
+        CallType::ByPointer { .. } => {
+            // we don't know what we're calling; it might throw, so better be safe than sorry
+            true
+        }
+
+        CallType::Foreign { .. } => {
+            // calling foreign functions is very unsafe
+            true
+        }
+
+        CallType::LowLevel { .. } => {
+            // lowlevel operations themselves don't throw
+            false
+        }
     }
 }
 
