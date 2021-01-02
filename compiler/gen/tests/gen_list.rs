@@ -1707,4 +1707,19 @@ mod gen_list {
         assert_evals_to!("List.sum [ 1, 2, 3 ]", 6, i64);
         assert_evals_to!("List.sum [ 1.1, 2.2, 3.3 ]", 6.6, f64);
     }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+    fn cleanup_because_exception() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = [ 1,2 ]
+                5 + Num.maxInt + 3 + List.len x
+                   "#
+            ),
+            RocList::from_slice(&[false; 1]),
+            RocList<bool>
+        );
+    }
 }
