@@ -34,19 +34,19 @@ pub fn RocDict(
                 // two entries, and there is
                 // therefore an extra entry
                 // that needs to be stored
-                pub fn new(index: u64, key_ptr: *Key, value_ptr: *Value) Overflow {
+                pub fn new(allocator: *Allocator, index: u64, key_ptr: *Key, value_ptr: *Value) Overflow {
                     var init_entries: [size]?*Entry = undefined;
 
                     var new_overflow = Overflow{ .entries = &init_entries };
 
-                    new_overflow.setAtIndex(index, key_ptr, value_ptr);
+                    new_overflow.setAtIndex(allocator, index, key_ptr, value_ptr);
 
                     return new_overflow;
                 }
 
-                pub fn setAtIndex(self: *Overflow, index: u64, key_ptr: *Key, value_ptr: *Value) void {
+                pub fn setAtIndex(self: *Overflow, allocator: *Allocator, index: u64, key_ptr: *Key, value_ptr: *Value) void {
                     var overflow = self.*;
-                    var new_entry = Entry.new(key_ptr, value_ptr);
+                    var new_entry = Entry.new(allocator, key_ptr, value_ptr);
 
                     overflow.entries.*[index] = &new_entry;
                 }
@@ -59,7 +59,7 @@ pub fn RocDict(
                 }
             };
 
-            pub fn new(key_ptr: *Key, value_ptr: *Value) Entry {
+            pub fn new(allocator: *Allocator, key_ptr: *Key, value_ptr: *Value) Entry {
                 return Entry{
                     .value_ptr = value_ptr,
                     .key_ptr = key_ptr,
@@ -109,7 +109,7 @@ pub fn RocDict(
             // represents if an new entry was
             // added (true), or if an old one
             // was updated (false);
-            pub fn insertIntoOverflow(self: *Entry, key_ptr: *Key, value_ptr: *Value, level: u64) bool {
+            pub fn insertIntoOverflow(self: *Entry, allocator: *Allocator, key_ptr: *Key, value_ptr: *Value, level: u64) bool {
                 const key = key_ptr.*;
 
                 const index = keyToIndexAtLevel(key, level);
@@ -118,7 +118,7 @@ pub fn RocDict(
 
                 // If there is no overflow, make a new OverFlow
                 if (entry.overflow == null) {
-                    var new_overflow: Overflow = Overflow.new(index, key_ptr, value_ptr);
+                    var new_overflow: Overflow = Overflow.new(allocator, index, key_ptr, value_ptr);
 
                     entry.overflow = new_overflow;
 
@@ -131,9 +131,7 @@ pub fn RocDict(
                     // If there is overflow, check if this index is taken
                     // and if it isnt, than insert it
                     if (maybe_overflow_entry_ptr == null) {
-                        var new_entry = Entry.new(key_ptr, value_ptr);
-
-                        overflow.setAtIndex(index, key_ptr, value_ptr);
+                        overflow.setAtIndex(allocator, index, key_ptr, value_ptr);
                         return true;
                     } else {
                         var overflow_entry_ptr = maybe_overflow_entry_ptr.?;
@@ -148,7 +146,7 @@ pub fn RocDict(
                             overflow_entry.setValue(value_ptr);
                             return false;
                         } else {
-                            return overflow_entry.insertIntoOverflow(key_ptr, value_ptr, level + 1);
+                            return overflow_entry.insertIntoOverflow(allocator, key_ptr, value_ptr, level + 1);
                         }
                     }
                 }
@@ -219,7 +217,7 @@ pub fn RocDict(
             }
         }
 
-        pub fn insert(self: *Self, key_ptr: *Key, value_ptr: *Value) void {
+        pub fn insert(self: *Self, allocator: *Allocator, key_ptr: *Key, value_ptr: *Value) void {
             const level = 0;
 
             const key = key_ptr.*;
@@ -229,7 +227,7 @@ pub fn RocDict(
             const index = keyToIndexAtLevel(key, level);
 
             if (q.maybe_entry == null) {
-                var new_entry = Entry.new(value_ptr, key_ptr);
+                var new_entry = Entry.new(allocator, value_ptr, key_ptr);
 
                 self.entries[index] = new_entry;
 
@@ -242,7 +240,7 @@ pub fn RocDict(
                     entry_ptr.setValue(value_ptr);
                     self.entries[index] = entry;
                 } else {
-                    const inserted_new_entry = entry.insertIntoOverflow(key_ptr, value_ptr, 0);
+                    const inserted_new_entry = entry.insertIntoOverflow(allocator, key_ptr, value_ptr, 0);
 
                     if (inserted_new_entry) {
                         self.len += 1;
@@ -300,7 +298,7 @@ test "RocDict.insert with hash collisions" {
     var i: u64 = 0;
 
     while (i < (size * 2)) {
-        dict.insert(&i, &i);
+        dict.insert(testing.allocator, &i, &i);
 
         i += 1;
     }
@@ -322,8 +320,8 @@ test "repeated RocDict.insert" {
     var fst_val: u64 = 17;
     var snd_val: u64 = 49;
 
-    dict.insert(&index, &fst_val);
-    dict.insert(&index, &snd_val);
+    dict.insert(testing.allocator, &index, &fst_val);
+    dict.insert(testing.allocator, &index, &snd_val);
 
     var value_ptr: ?*u64 = dict.get(index);
 
@@ -342,8 +340,8 @@ test "RocDict.eq" {
     var key: u64 = 0;
     var value: u64 = 30;
 
-    fst.insert(&key, &value);
-    snd.insert(&key, &value);
+    fst.insert(testing.allocator, &key, &value);
+    snd.insert(testing.allocator, &key, &value);
     assert(fst.eq(snd));
 
     var empty = RocDict(u64, u64).init(testing.allocator);
@@ -351,7 +349,7 @@ test "RocDict.eq" {
 
     var trd = RocDict(u64, u64).init(testing.allocator);
     var new_value: u64 = value + 1;
-    trd.insert(&key, &new_value);
+    trd.insert(testing.allocator, &key, &new_value);
 
     assert(!fst.eq(trd));
 }
@@ -362,18 +360,18 @@ test "RocDict.getLen" {
     var key: u64 = 0;
 
     var value: u64 = 16;
-    dict.insert(&key, &value);
+    dict.insert(testing.allocator, &key, &value);
 
     const expect_len: u64 = 1;
     expectEqual(dict.getLen(), expect_len);
 
-    dict.insert(&key, &value);
+    dict.insert(testing.allocator, &key, &value);
 
     expectEqual(dict.getLen(), expect_len);
 
     var next_key: u64 = key + 1;
     var next_value: u64 = 3;
-    dict.insert(&next_key, &next_value);
+    dict.insert(testing.allocator, &next_key, &next_value);
 
     var next_expected_len: u64 = 2;
     expectEqual(dict.getLen(), next_expected_len);
@@ -385,7 +383,7 @@ test "RocDict.insert" {
     var index: u64 = 0;
     var value: u64 = 30;
 
-    dict.insert(&index, &value);
+    dict.insert(testing.allocator, &index, &value);
 
     var result_value: ?*u64 = dict.get(index);
     expectEqual(result_value.?.*, value);
