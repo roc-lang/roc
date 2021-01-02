@@ -1,5 +1,6 @@
 use crate::llvm::build::Env;
-use inkwell::values::BasicValueEnum;
+use crate::llvm::build_str::str_equal;
+use inkwell::values::{BasicValueEnum, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
 use roc_mono::layout::{Builtin, Layout};
 
@@ -43,6 +44,7 @@ pub fn build_eq<'a, 'ctx, 'env>(
                 (Builtin::Int1, Builtin::Int1) => int_cmp(IntPredicate::EQ, "eq_i1"),
                 (Builtin::Float64, Builtin::Float64) => float_cmp(FloatPredicate::OEQ, "eq_f64"),
                 (Builtin::Float32, Builtin::Float32) => float_cmp(FloatPredicate::OEQ, "eq_f32"),
+                (Builtin::Str, Builtin::Str) => str_equal(env, lhs_val, rhs_val),
                 (b1, b2) => {
                     todo!("Handle equals for builtin layouts {:?} == {:?}", b1, b2);
                 }
@@ -95,6 +97,12 @@ pub fn build_neq<'a, 'ctx, 'env>(
                 (Builtin::Int1, Builtin::Int1) => int_cmp(IntPredicate::NE, "neq_i1"),
                 (Builtin::Float64, Builtin::Float64) => float_cmp(FloatPredicate::ONE, "neq_f64"),
                 (Builtin::Float32, Builtin::Float32) => float_cmp(FloatPredicate::ONE, "neq_f32"),
+                (Builtin::Str, Builtin::Str) => {
+                    let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();
+                    let result: IntValue = env.builder.build_not(is_equal, "negate");
+
+                    result.into()
+                }
                 (b1, b2) => {
                     todo!("Handle not equals for builtin layouts {:?} == {:?}", b1, b2);
                 }

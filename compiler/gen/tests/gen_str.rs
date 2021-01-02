@@ -514,4 +514,16 @@ mod gen_str {
         let min = format!("{}", i64::MIN);
         assert_evals_to!(r#"Str.fromInt Num.minInt"#, &min, &'static str);
     }
+
+    #[test]
+    fn str_equality() {
+        assert_evals_to!(r#""a" == "a""#, true, bool);
+        assert_evals_to!(
+            r#""loremipsumdolarsitamet" == "loremipsumdolarsitamet""#,
+            true,
+            bool
+        );
+        assert_evals_to!(r#""a" != "b""#, true, bool);
+        assert_evals_to!(r#""a" == "b""#, false, bool);
+    }
 }
