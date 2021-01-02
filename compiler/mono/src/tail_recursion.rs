@@ -124,35 +124,6 @@ fn insert_jumps<'a>(
                 None
             }
         }
-        Cond {
-            cond_symbol,
-            cond_layout,
-            branching_symbol,
-            branching_layout,
-            pass,
-            fail,
-            ret_layout,
-        } => {
-            let opt_pass = insert_jumps(arena, pass, goal_id, needle);
-            let opt_fail = insert_jumps(arena, fail, goal_id, needle);
-
-            if opt_pass.is_some() || opt_fail.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or_else(|| *fail);
-
-                Some(arena.alloc(Cond {
-                    cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_symbol: *branching_symbol,
-                    branching_layout: branching_layout.clone(),
-                    pass,
-                    fail,
-                    ret_layout: ret_layout.clone(),
-                }))
-            } else {
-                None
-            }
-        }
         Switch {
             cond_symbol,
             cond_layout,

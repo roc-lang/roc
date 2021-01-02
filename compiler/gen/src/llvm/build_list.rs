@@ -32,7 +32,7 @@ pub fn list_single<'a, 'ctx, 'env>(
             ptr,
             &[ctx.i64_type().const_int(
                 // 0 as in 0 index of our new list
-                0 as u64, false,
+                0_u64, false,
             )],
             "index",
         )
@@ -152,7 +152,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 
     // The output list length, which is the old list length + 1
     let new_list_len = env.builder.build_int_add(
-        ctx.i64_type().const_int(1 as u64, false),
+        ctx.i64_type().const_int(1_u64, false),
         len,
         "new_list_length",
     );
@@ -165,7 +165,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     let index_1_ptr = unsafe {
         builder.build_in_bounds_gep(
             clone_ptr,
-            &[ctx.i64_type().const_int(1 as u64, false)],
+            &[ctx.i64_type().const_int(1_u64, false)],
             "load_index",
         )
     };
@@ -321,7 +321,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                         let inc_dest_elem_ptr = BasicValueEnum::PointerValue(unsafe {
                             builder.build_in_bounds_gep(
                                 curr_dest_elem_ptr,
-                                &[env.ptr_int().const_int(1 as u64, false)],
+                                &[env.ptr_int().const_int(1_u64, false)],
                                 "increment_dest_elem",
                             )
                         });
@@ -609,7 +609,7 @@ pub fn list_append<'a, 'ctx, 'env>(
 
     // The output list length, which is the old list length + 1
     let new_list_len = env.builder.build_int_add(
-        ctx.i64_type().const_int(1 as u64, false),
+        ctx.i64_type().const_int(1_u64, false),
         list_len,
         "new_list_length",
     );

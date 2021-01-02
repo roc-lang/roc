@@ -340,7 +340,7 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
     // and variables actually used in constraints
     let (declared, used) = variable_usage(constraint);
 
-    let used: ImSet<Variable> = used.clone().into();
+    let used: ImSet<Variable> = used.into();
     let mut decl: ImSet<Variable> = declared.rigid_vars.clone().into();
 
     for var in declared.flex_vars.clone() {
@@ -451,7 +451,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 #[cfg(debug_assertions)]
 pub fn with_larger_debug_stack<F>(run_test: F)
 where
-    F: FnOnce() -> (),
+    F: FnOnce(),
     F: Send,
     F: 'static,
 {

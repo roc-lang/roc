@@ -4,7 +4,7 @@ use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
-use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -717,6 +717,26 @@ pub struct Param<'a> {
     pub layout: Layout<'a>,
 }
 
+pub fn cond<'a>(
+    env: &mut Env<'a, '_>,
+    cond_symbol: Symbol,
+    cond_layout: Layout<'a>,
+    pass: Stmt<'a>,
+    fail: Stmt<'a>,
+    ret_layout: Layout<'a>,
+) -> Stmt<'a> {
+    let branches = env.arena.alloc([(1u64, pass)]);
+    let default_branch = env.arena.alloc(fail);
+
+    Stmt::Switch {
+        cond_symbol,
+        cond_layout,
+        ret_layout,
+        branches,
+        default_branch,
+    }
+}
+
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
@@ -731,25 +751,6 @@ pub enum Stmt<'a> {
         /// If no other branches pass, this default branch will be taken.
         default_branch: &'a Stmt<'a>,
         /// Each branch must return a value of this type.
-        ret_layout: Layout<'a>,
-    },
-    Cond {
-        // The left-hand side of the conditional comparison and the right-hand side.
-        // These are stored separately because there are different machine instructions
-        // for e.g. "compare float and jump" vs. "compare integer and jump"
-
-        // symbol storing the original expression that we branch on, e.g. `Ok 42`
-        // required for RC logic
-        cond_symbol: Symbol,
-        cond_layout: Layout<'a>,
-
-        // symbol storing the value that we branch on, e.g. `1` representing the `Ok` tag
-        branching_symbol: Symbol,
-        branching_layout: Layout<'a>,
-
-        // What to do if the condition either passes or fails
-        pass: &'a Stmt<'a>,
-        fail: &'a Stmt<'a>,
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
@@ -1108,49 +1109,53 @@ impl<'a> Stmt<'a> {
                 default_branch,
                 ..
             } => {
-                let default_doc = alloc
-                    .text("default:")
-                    .append(alloc.hardline())
-                    .append(default_branch.to_doc(alloc).indent(4))
-                    .indent(4);
-
-                let branches_docs = branches
-                    .iter()
-                    .map(|(tag, expr)| {
+                match branches {
+                    [(1, pass)] => {
+                        let fail = default_branch;
                         alloc
-                            .text(format!("case {}:", tag))
+                            .text("if ")
+                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(" then")
                             .append(alloc.hardline())
-                            .append(expr.to_doc(alloc).indent(4))
-                            .indent(4)
-                    })
-                    .chain(std::iter::once(default_doc));
-                //
-                alloc
-                    .text("switch ")
-                    .append(symbol_to_doc(alloc, *cond_symbol))
-                    .append(":")
-                    .append(alloc.hardline())
-                    .append(
-                        alloc.intersperse(branches_docs, alloc.hardline().append(alloc.hardline())),
-                    )
-                    .append(alloc.hardline())
+                            .append(pass.to_doc(alloc).indent(4))
+                            .append(alloc.hardline())
+                            .append(alloc.text("else"))
+                            .append(alloc.hardline())
+                            .append(fail.to_doc(alloc).indent(4))
+                    }
+
+                    _ => {
+                        let default_doc = alloc
+                            .text("default:")
+                            .append(alloc.hardline())
+                            .append(default_branch.to_doc(alloc).indent(4))
+                            .indent(4);
+
+                        let branches_docs = branches
+                            .iter()
+                            .map(|(tag, expr)| {
+                                alloc
+                                    .text(format!("case {}:", tag))
+                                    .append(alloc.hardline())
+                                    .append(expr.to_doc(alloc).indent(4))
+                                    .indent(4)
+                            })
+                            .chain(std::iter::once(default_doc));
+                        //
+                        alloc
+                            .text("switch ")
+                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(":")
+                            .append(alloc.hardline())
+                            .append(alloc.intersperse(
+                                branches_docs,
+                                alloc.hardline().append(alloc.hardline()),
+                            ))
+                            .append(alloc.hardline())
+                    }
+                }
             }
 
-            Cond {
-                branching_symbol,
-                pass,
-                fail,
-                ..
-            } => alloc
-                .text("if ")
-                .append(symbol_to_doc(alloc, *branching_symbol))
-                .append(" then")
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc).indent(4))
-                .append(alloc.hardline())
-                .append(alloc.text("else"))
-                .append(alloc.hardline())
-                .append(fail.to_doc(alloc).indent(4)),
             RuntimeError(s) => alloc.text(format!("Error {}", s)),
 
             Join {
@@ -1216,7 +1221,7 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Cond { .. } | Switch { .. } => {
+            Switch { .. } => {
                 // TODO is this the reason Lean only looks at the outermost `when`?
                 true
             }
@@ -1264,7 +1269,50 @@ fn patterns_to_when<'a>(
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
-        let mono_pattern = from_can_pattern(env, layout_cache, &pattern.value);
+        let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
+            Ok((pat, assignments)) => {
+                for (symbol, variable, expr) in assignments.into_iter().rev() {
+                    if let Ok(old_body) = body {
+                        let def = roc_can::def::Def {
+                            annotation: None,
+                            expr_var: variable,
+                            loc_expr: Located::at(pattern.region, expr),
+                            loc_pattern: Located::at(
+                                pattern.region,
+                                roc_can::pattern::Pattern::Identifier(symbol),
+                            ),
+                            pattern_vars: std::iter::once((symbol, variable)).collect(),
+                        };
+                        let new_expr = roc_can::expr::Expr::LetNonRec(
+                            Box::new(def),
+                            Box::new(old_body),
+                            variable,
+                        );
+                        let new_body = Located {
+                            region: pattern.region,
+                            value: new_expr,
+                        };
+
+                        body = Ok(new_body);
+                    }
+                }
+
+                pat
+            }
+            Err(runtime_error) => {
+                // Even if the body was Ok, replace it with this Err.
+                // If it was already an Err, leave it at that Err, so the first
+                // RuntimeError we encountered remains the first.
+                body = body.and({
+                    Err(Located {
+                        region: pattern.region,
+                        value: runtime_error,
+                    })
+                });
+
+                continue;
+            }
+        };
 
         match crate::exhaustive::check(
             pattern.region,
@@ -2392,7 +2440,14 @@ pub fn with_hole<'a>(
                 }
             } else {
                 // this may be a destructure pattern
-                let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
+                let (mono_pattern, assignments) =
+                    match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
+                        Ok(v) => v,
+                        Err(_runtime_error) => {
+                            // todo
+                            panic!();
+                        }
+                    };
 
                 let context = crate::exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
@@ -2410,6 +2465,14 @@ pub fn with_hole<'a>(
                         }
                     } // TODO make all variables bound in the pattern evaluate to a runtime error
                       // return Stmt::RuntimeError("TODO non-exhaustive pattern");
+                }
+
+                let mut hole = hole;
+
+                for (symbol, variable, expr) in assignments {
+                    let stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
+
+                    hole = env.arena.alloc(stmt);
                 }
 
                 // convert the continuation
@@ -2787,15 +2850,14 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = Stmt::Cond {
-                        cond_symbol: branching_symbol,
+                    stmt = cond(
+                        env,
                         branching_symbol,
-                        cond_layout: cond_layout.clone(),
-                        branching_layout: cond_layout.clone(),
-                        pass: env.arena.alloc(then),
-                        fail: env.arena.alloc(stmt),
-                        ret_layout: ret_layout.clone(),
-                    };
+                        cond_layout.clone(),
+                        then,
+                        stmt,
+                        ret_layout.clone(),
+                    );
 
                     // add condition
                     stmt = with_hole(
@@ -2839,15 +2901,14 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = Stmt::Cond {
-                        cond_symbol: branching_symbol,
+                    stmt = cond(
+                        env,
                         branching_symbol,
-                        cond_layout: cond_layout.clone(),
-                        branching_layout: cond_layout.clone(),
-                        pass: env.arena.alloc(then),
-                        fail: env.arena.alloc(stmt),
-                        ret_layout: ret_layout.clone(),
-                    };
+                        cond_layout.clone(),
+                        then,
+                        stmt,
+                        ret_layout.clone(),
+                    );
 
                     // add condition
                     stmt = with_hole(
@@ -3116,7 +3177,7 @@ pub fn with_hole<'a>(
             enum FieldType<'a> {
                 CopyExisting(u64),
                 UpdateExisting(&'a roc_can::expr::Field),
-            };
+            }
 
             // Strategy: turn a record update into the creation of a new record.
             // This has the benefit that we don't need to do anything special for reference
@@ -3680,15 +3741,14 @@ pub fn from_can<'a>(
                 let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
-                stmt = Stmt::Cond {
-                    cond_symbol: branching_symbol,
+                stmt = cond(
+                    env,
                     branching_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_layout: cond_layout.clone(),
-                    pass: env.arena.alloc(then),
-                    fail: env.arena.alloc(stmt),
-                    ret_layout: ret_layout.clone(),
-                };
+                    cond_layout.clone(),
+                    then,
+                    stmt,
+                    ret_layout.clone(),
+                );
 
                 stmt = assign_to_symbol(
                     env,
@@ -3923,12 +3983,22 @@ pub fn from_can<'a>(
             }
 
             // this may be a destructure pattern
-            let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
+            let (mono_pattern, assignments) =
+                match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
+                    Ok(v) => v,
+                    Err(_) => todo!(),
+                };
 
             if let Pattern::Identifier(symbol) = mono_pattern {
-                let hole =
+                let mut hole =
                     env.arena
                         .alloc(from_can(env, variable, cont.value, procs, layout_cache));
+
+                for (symbol, variable, expr) in assignments {
+                    let stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
+
+                    hole = env.arena.alloc(stmt);
+                }
 
                 with_hole(
                     env,
@@ -3954,12 +4024,19 @@ pub fn from_can<'a>(
                         for error in errors {
                             env.problems.push(MonoProblem::PatternProblem(error))
                         }
-                    } // TODO make all variables bound in the pattern evaluate to a runtime error
-                      // return Stmt::RuntimeError("TODO non-exhaustive pattern");
+
+                        return Stmt::RuntimeError("TODO non-exhaustive pattern");
+                    }
                 }
 
                 // convert the continuation
                 let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
+
+                // layer on any default record fields
+                for (symbol, variable, expr) in assignments {
+                    let hole = env.arena.alloc(stmt);
+                    stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
+                }
 
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
                     store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
@@ -4015,19 +4092,51 @@ fn to_opt_branches<'a>(
         };
 
         for loc_pattern in when_branch.patterns {
-            let mono_pattern = from_can_pattern(env, layout_cache, &loc_pattern.value);
+            match from_can_pattern(env, layout_cache, &loc_pattern.value) {
+                Ok((mono_pattern, assignments)) => {
+                    loc_branches.push((
+                        Located::at(loc_pattern.region, mono_pattern.clone()),
+                        exhaustive_guard.clone(),
+                    ));
 
-            loc_branches.push((
-                Located::at(loc_pattern.region, mono_pattern.clone()),
-                exhaustive_guard.clone(),
-            ));
+                    let mut loc_expr = when_branch.value.clone();
+                    let region = loc_pattern.region;
+                    for (symbol, variable, expr) in assignments.into_iter().rev() {
+                        let def = roc_can::def::Def {
+                            annotation: None,
+                            expr_var: variable,
+                            loc_expr: Located::at(region, expr),
+                            loc_pattern: Located::at(
+                                region,
+                                roc_can::pattern::Pattern::Identifier(symbol),
+                            ),
+                            pattern_vars: std::iter::once((symbol, variable)).collect(),
+                        };
+                        let new_expr = roc_can::expr::Expr::LetNonRec(
+                            Box::new(def),
+                            Box::new(loc_expr),
+                            variable,
+                        );
+                        loc_expr = Located::at(region, new_expr);
+                    }
 
-            // TODO remove clone?
-            opt_branches.push((
-                mono_pattern,
-                when_branch.guard.clone(),
-                when_branch.value.value.clone(),
-            ));
+                    // TODO remove clone?
+                    opt_branches.push((mono_pattern, when_branch.guard.clone(), loc_expr.value));
+                }
+                Err(runtime_error) => {
+                    loc_branches.push((
+                        Located::at(loc_pattern.region, Pattern::Underscore),
+                        exhaustive_guard.clone(),
+                    ));
+
+                    // TODO remove clone?
+                    opt_branches.push((
+                        Pattern::Underscore,
+                        when_branch.guard.clone(),
+                        roc_can::expr::Expr::RuntimeError(runtime_error),
+                    ));
+                }
+            }
         }
     }
 
@@ -4233,35 +4342,6 @@ fn substitute_in_stmt_help<'a>(
                     parameters,
                     remainder,
                     continuation,
-                }))
-            } else {
-                None
-            }
-        }
-        Cond {
-            cond_symbol,
-            cond_layout,
-            branching_symbol,
-            branching_layout,
-            pass,
-            fail,
-            ret_layout,
-        } => {
-            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
-            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
-
-            if opt_pass.is_some() || opt_fail.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or_else(|| *fail);
-
-                Some(arena.alloc(Cond {
-                    cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_symbol: *branching_symbol,
-                    branching_layout: branching_layout.clone(),
-                    pass,
-                    fail,
-                    ret_layout: ret_layout.clone(),
                 }))
             } else {
                 None
@@ -4658,14 +4738,6 @@ fn store_pattern<'a>(
         RecordDestructure(_, _) => {
             unreachable!("a record destructure must always occur on a struct layout");
         }
-
-        Shadowed(_region, _ident) => {
-            return Err(&"shadowed");
-        }
-
-        UnsupportedPattern(_region) => {
-            return Err(&"unsupported pattern");
-        }
     }
 
     Ok(stmt)
@@ -4695,22 +4767,11 @@ fn store_record_destruct<'a>(
     };
 
     match &destruct.typ {
-        DestructType::Required => {
+        DestructType::Required(symbol) => {
             stmt = Stmt::Let(
-                destruct.symbol,
+                *symbol,
                 load,
                 destruct.layout.clone(),
-                env.arena.alloc(stmt),
-            );
-        }
-        DestructType::Optional(expr) => {
-            stmt = with_hole(
-                env,
-                expr.clone(),
-                destruct.variable,
-                procs,
-                layout_cache,
-                destruct.symbol,
                 env.arena.alloc(stmt),
             );
         }
@@ -5429,11 +5490,6 @@ pub enum Pattern<'a> {
         layout: Layout<'a>,
         union: crate::exhaustive::Union,
     },
-
-    // Runtime Exceptions
-    Shadowed(Region, Located<Ident>),
-    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-    UnsupportedPattern(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -5441,14 +5497,12 @@ pub struct RecordDestruct<'a> {
     pub label: Lowercase,
     pub variable: Variable,
     pub layout: Layout<'a>,
-    pub symbol: Symbol,
     pub typ: DestructType<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DestructType<'a> {
-    Required,
-    Optional(roc_can::expr::Expr),
+    Required(Symbol),
     Guard(Pattern<'a>),
 }
 
@@ -5459,27 +5513,51 @@ pub struct WhenBranch<'a> {
     pub guard: Option<Stmt<'a>>,
 }
 
-pub fn from_can_pattern<'a>(
+#[allow(clippy::type_complexity)]
+fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
-) -> Pattern<'a> {
+) -> Result<
+    (
+        Pattern<'a>,
+        Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+    ),
+    RuntimeError,
+> {
+    let mut assignments = Vec::new_in(env.arena);
+    let pattern = from_can_pattern_help(env, layout_cache, can_pattern, &mut assignments)?;
+
+    Ok((pattern, assignments))
+}
+
+fn from_can_pattern_help<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    can_pattern: &roc_can::pattern::Pattern,
+    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+) -> Result<Pattern<'a>, RuntimeError> {
     use roc_can::pattern::Pattern::*;
+
     match can_pattern {
-        Underscore => Pattern::Underscore,
-        Identifier(symbol) => Pattern::Identifier(*symbol),
-        IntLiteral(v) => Pattern::IntLiteral(*v),
-        FloatLiteral(v) => Pattern::FloatLiteral(f64::to_bits(*v)),
-        StrLiteral(v) => Pattern::StrLiteral(v.clone()),
-        Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
-        UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
+        Underscore => Ok(Pattern::Underscore),
+        Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
+        IntLiteral(v) => Ok(Pattern::IntLiteral(*v)),
+        FloatLiteral(v) => Ok(Pattern::FloatLiteral(f64::to_bits(*v))),
+        StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
+        Shadowed(region, ident) => Err(RuntimeError::Shadowing {
+            original_region: *region,
+            shadow: ident.clone(),
+        }),
+        UnsupportedPattern(region) => Err(RuntimeError::UnsupportedPattern(*region)),
+
         MalformedPattern(_problem, region) => {
             // TODO preserve malformed problem information here?
-            Pattern::UnsupportedPattern(*region)
+            Err(RuntimeError::UnsupportedPattern(*region))
         }
         NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
-            IntOrFloat::IntType => Pattern::IntLiteral(*num),
-            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
+            IntOrFloat::IntType => Ok(Pattern::IntLiteral(*num)),
+            IntOrFloat::FloatType => Ok(Pattern::FloatLiteral(*num as u64)),
         },
 
         AppliedTag {
@@ -5493,7 +5571,7 @@ pub fn from_can_pattern<'a>(
 
             let variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
 
-            match variant {
+            let result = match variant {
                 Never => unreachable!(
                     "there is no pattern of type `[]`, union var {:?}",
                     *whole_var
@@ -5582,7 +5660,7 @@ pub fn from_can_pattern<'a>(
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
                         mono_args.push((
-                            from_can_pattern(env, layout_cache, &loc_pat.value),
+                            from_can_pattern_help(env, layout_cache, &loc_pat.value, assignments)?,
                             layout.clone(),
                         ));
                     }
@@ -5642,7 +5720,7 @@ pub fn from_can_pattern<'a>(
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((
-                            from_can_pattern(env, layout_cache, &loc_pat.value),
+                            from_can_pattern_help(env, layout_cache, &loc_pat.value, assignments)?,
                             layout.clone(),
                         ));
                     }
@@ -5664,7 +5742,9 @@ pub fn from_can_pattern<'a>(
                         layout,
                     }
                 }
-            }
+            };
+
+            Ok(result)
         }
 
         RecordDestructure {
@@ -5704,14 +5784,14 @@ pub fn from_can_pattern<'a>(
                                     layout_cache,
                                     &destruct.value,
                                     field_layout.clone(),
-                                ));
+                                    assignments,
+                                )?);
                             }
                             None => {
                                 // this field is not destructured by the pattern
                                 // put in an underscore
                                 mono_destructs.push(RecordDestruct {
                                     label: label.clone(),
-                                    symbol: env.unique_symbol(),
                                     variable,
                                     layout: field_layout.clone(),
                                     typ: DestructType::Guard(Pattern::Underscore),
@@ -5727,29 +5807,26 @@ pub fn from_can_pattern<'a>(
                         match destructs_by_label.remove(&label) {
                             Some(destruct) => {
                                 // this field is destructured by the pattern
-                                mono_destructs.push(RecordDestruct {
-                                    label: destruct.value.label.clone(),
-                                    symbol: destruct.value.symbol,
-                                    layout: field_layout,
-                                    variable,
-                                    typ: match &destruct.value.typ {
-                                        roc_can::pattern::DestructType::Optional(_, loc_expr) => {
-                                            // if we reach this stage, the optional field is not present
-                                            // so use the default
-                                            DestructType::Optional(loc_expr.value.clone())
-                                        }
-                                        _ => unreachable!(
-                                            "only optional destructs can be optional fields"
-                                        ),
-                                    },
-                                });
+                                match &destruct.value.typ {
+                                    roc_can::pattern::DestructType::Optional(_, loc_expr) => {
+                                        // if we reach this stage, the optional field is not present
+                                        // so we push the default assignment into the branch
+                                        assignments.push((
+                                            destruct.value.symbol,
+                                            variable,
+                                            loc_expr.value.clone(),
+                                        ));
+                                    }
+                                    _ => unreachable!(
+                                        "only optional destructs can be optional fields"
+                                    ),
+                                };
                             }
                             None => {
                                 // this field is not destructured by the pattern
                                 // put in an underscore
                                 mono_destructs.push(RecordDestruct {
                                     label: label.clone(),
-                                    symbol: env.unique_symbol(),
                                     variable,
                                     layout: field_layout.clone(),
                                     typ: DestructType::Guard(Pattern::Underscore),
@@ -5765,28 +5842,30 @@ pub fn from_can_pattern<'a>(
                 // it must be an optional field, and we will use the default
                 match &destruct.value.typ {
                     roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
-                        let field_layout = layout_cache
-                            .from_var(env.arena, *field_var, env.subs)
-                            .unwrap_or_else(|err| {
-                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                            });
-
-                        mono_destructs.push(RecordDestruct {
-                            label: destruct.value.label.clone(),
-                            symbol: destruct.value.symbol,
-                            variable: destruct.value.var,
-                            layout: field_layout,
-                            typ: DestructType::Optional(loc_expr.value.clone()),
-                        })
+                        // TODO these don't match up in the uniqueness inference; when we remove
+                        // that, reinstate this assert!
+                        //
+                        // dbg!(&env.subs.get_without_compacting(*field_var).content);
+                        // dbg!(&env.subs.get_without_compacting(destruct.value.var).content);
+                        // debug_assert_eq!(
+                        //     env.subs.get_root_key_without_compacting(*field_var),
+                        //     env.subs.get_root_key_without_compacting(destruct.value.var)
+                        // );
+                        assignments.push((
+                            destruct.value.symbol,
+                            // destruct.value.var,
+                            *field_var,
+                            loc_expr.value.clone(),
+                        ));
                     }
                     _ => unreachable!("only optional destructs can be optional fields"),
                 }
             }
 
-            Pattern::RecordDestructure(
+            Ok(Pattern::RecordDestructure(
                 mono_destructs,
                 Layout::Struct(field_layouts.into_bump_slice()),
-            )
+            ))
         }
     }
 }
@@ -5796,24 +5875,23 @@ fn from_can_record_destruct<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_rd: &roc_can::pattern::RecordDestruct,
     field_layout: Layout<'a>,
-) -> RecordDestruct<'a> {
-    RecordDestruct {
+    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+) -> Result<RecordDestruct<'a>, RuntimeError> {
+    Ok(RecordDestruct {
         label: can_rd.label.clone(),
-        symbol: can_rd.symbol,
         variable: can_rd.var,
         layout: field_layout,
         typ: match &can_rd.typ {
-            roc_can::pattern::DestructType::Required => DestructType::Required,
+            roc_can::pattern::DestructType::Required => DestructType::Required(can_rd.symbol),
             roc_can::pattern::DestructType::Optional(_, _) => {
                 // if we reach this stage, the optional field is present
-                // DestructType::Optional(loc_expr.value.clone())
-                DestructType::Required
+                DestructType::Required(can_rd.symbol)
             }
-            roc_can::pattern::DestructType::Guard(_, loc_pattern) => {
-                DestructType::Guard(from_can_pattern(env, layout_cache, &loc_pattern.value))
-            }
+            roc_can::pattern::DestructType::Guard(_, loc_pattern) => DestructType::Guard(
+                from_can_pattern_help(env, layout_cache, &loc_pattern.value, assignments)?,
+            ),
         },
-    }
+    })
 }
 
 /// Potentially translate LowLevel operations into more efficient ones based on

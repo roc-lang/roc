@@ -18,7 +18,7 @@ mod gen_list {
 
     #[test]
     fn roc_list_construction() {
-        let list = RocList::from_slice(&vec![1i64; 23]);
+        let list = RocList::from_slice(&[1i64; 23]);
         assert_eq!(&list, &list);
     }
 
@@ -37,7 +37,7 @@ mod gen_list {
         assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
         assert_evals_to!(
             "[ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 ]",
-            RocList::from_slice(&(vec![1i64; 23])),
+            RocList::from_slice(&[1i64; 23]),
             RocList<i64>
         );
     }
@@ -57,7 +57,7 @@ mod gen_list {
                    [ false ]
                    "#
             ),
-            RocList::from_slice(&(vec![false; 1])),
+            RocList::from_slice(&[false; 1]),
             RocList<bool>
         );
 
@@ -76,7 +76,7 @@ mod gen_list {
                    [false ]
                    "#
             ),
-            RocList::from_slice(&(vec![false; 1])),
+            RocList::from_slice(&[false; 1]),
             RocList<bool>
         );
 
@@ -89,7 +89,7 @@ mod gen_list {
                    List.repeat 23 true
                    "#
             ),
-            RocList::from_slice(&(vec![true; 23])),
+            RocList::from_slice(&[true; 23]),
             RocList<bool>
         );
 
@@ -102,7 +102,7 @@ mod gen_list {
                    List.repeat 23 { x: true, y: true }
                    "#
             ),
-            RocList::from_slice(&(vec![[true, true]; 23])),
+            RocList::from_slice(&[[true, true]; 23]),
             RocList<[bool; 2]>
         );
 
@@ -115,7 +115,7 @@ mod gen_list {
                    List.repeat 23 { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true }
                    "#
             ),
-            RocList::from_slice(&(vec![[true, true, true, true, true, true, true, true]; 23])),
+            RocList::from_slice(&[[true, true, true, true, true, true, true, true]; 23]),
             RocList<[bool; 8]>
         );
     }

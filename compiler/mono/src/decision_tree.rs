@@ -276,7 +276,7 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match<'a>(branches: &Vec<Branch<'a>>) -> Option<Label> {
+fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
     match branches.get(0) {
         Some(Branch { goal, patterns })
             if patterns
@@ -379,7 +379,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
 
             match pattern {
                 // TODO use guard!
-                Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
+                Identifier(_) | Underscore => {
                     if let Guard::Guard { symbol, id, stmt } = guard {
                         all_tests.push(Guarded {
                             opt_test: None,
@@ -408,11 +408,8 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                             DestructType::Guard(guard) => {
                                 arguments.push((guard.clone(), destruct.layout.clone()));
                             }
-                            DestructType::Required => {
+                            DestructType::Required(_) => {
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
-                            }
-                            DestructType::Optional(_expr) => {
-                                // do nothing
                             }
                         }
                     }
@@ -531,7 +528,7 @@ fn to_relevant_branch_help<'a>(
     use Test::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch.clone()),
+        Identifier(_) | Underscore => Some(branch.clone()),
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
@@ -540,27 +537,22 @@ fn to_relevant_branch_help<'a>(
                 ..
             } => {
                 debug_assert!(test_name == &TagName::Global(RECORD_TAG_NAME.into()));
-                let sub_positions = destructs
-                    .into_iter()
-                    .filter(|destruct| !matches!(destruct.typ, DestructType::Optional(_)))
-                    .enumerate()
-                    .map(|(index, destruct)| {
-                        let pattern = match destruct.typ {
-                            DestructType::Guard(guard) => guard.clone(),
-                            DestructType::Required => Pattern::Underscore,
-                            DestructType::Optional(_expr) => unreachable!("because of the filter"),
-                        };
+                let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
+                    let pattern = match destruct.typ {
+                        DestructType::Guard(guard) => guard.clone(),
+                        DestructType::Required(_) => Pattern::Underscore,
+                    };
 
-                        (
-                            Path::Index {
-                                index: index as u64,
-                                tag_id: *tag_id,
-                                path: Box::new(path.clone()),
-                            },
-                            Guard::NoGuard,
-                            pattern,
-                        )
-                    });
+                    (
+                        Path::Index {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                            path: Box::new(path.clone()),
+                        },
+                        Guard::NoGuard,
+                        pattern,
+                    )
+                });
                 start.extend(sub_positions);
                 start.extend(end);
 
@@ -738,11 +730,11 @@ fn is_irrelevant_to<'a>(selected_path: &Path, branch: &Branch<'a>) -> bool {
     }
 }
 
-fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
+fn needs_tests(pattern: &Pattern) -> bool {
     use Pattern::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => false,
+        Identifier(_) | Underscore => false,
 
         RecordDestructure(_, _)
         | AppliedTag { .. }
@@ -1239,15 +1231,14 @@ fn compile_guard<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
     // calculate the guard value
     let param = Param {
@@ -1277,15 +1268,14 @@ fn compile_test<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
     let test = Expr::RunLowLevel(LowLevel::Eq, arena.alloc([lhs, rhs]));
 
@@ -1719,5 +1709,3 @@ fn insert_choices<'a>(
         },
     }
 }
-
-// Opt.FanOut path (map (second go) tests) (go fallback)

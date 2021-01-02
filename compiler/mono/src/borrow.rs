@@ -156,10 +156,6 @@ impl<'a> ParamMap<'a> {
                 Let(_, _, _, cont) => {
                     stack.push(cont);
                 }
-                Cond { pass, fail, .. } => {
-                    stack.push(pass);
-                    stack.push(fail);
-                }
                 Switch {
                     branches,
                     default_branch,
@@ -461,10 +457,6 @@ impl<'a> BorrowInfState<'a> {
 
                 // for making sure the tail call is preserved
                 self.own_params_using_args(ys, ps);
-            }
-            Cond { pass, fail, .. } => {
-                self.collect_stmt(pass);
-                self.collect_stmt(fail);
             }
             Switch {
                 branches,

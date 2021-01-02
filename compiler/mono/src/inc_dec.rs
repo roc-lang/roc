@@ -68,20 +68,6 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 stack.push(default_branch);
             }
 
-            Cond {
-                cond_symbol,
-                branching_symbol,
-                pass,
-                fail,
-                ..
-            } => {
-                result.insert(*cond_symbol);
-                result.insert(*branching_symbol);
-
-                stack.push(pass);
-                stack.push(fail);
-            }
-
             RuntimeError(_) => {}
         }
     }
@@ -704,44 +690,6 @@ impl<'a> Context<'a> {
                 (b, b_live_vars)
             }
 
-            Cond {
-                pass,
-                fail,
-                cond_symbol,
-                cond_layout,
-                branching_symbol,
-                branching_layout,
-                ret_layout,
-            } => {
-                let case_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
-
-                let pass = {
-                    // TODO should we use ctor info like Lean?
-                    let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(pass);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
-                };
-
-                let fail = {
-                    // TODO should we use ctor info like Lean?
-                    let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(fail);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
-                };
-
-                let cond = self.arena.alloc(Cond {
-                    cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_symbol: *branching_symbol,
-                    branching_layout: branching_layout.clone(),
-                    pass,
-                    fail,
-                    ret_layout: ret_layout.clone(),
-                });
-
-                (cond, case_live_vars)
-            }
-
             Switch {
                 cond_symbol,
                 cond_layout,
@@ -861,22 +809,6 @@ pub fn collect_stmt(
             }
 
             vars.extend(collect_stmt(default_branch, jp_live_vars, vars.clone()));
-
-            vars
-        }
-
-        Cond {
-            cond_symbol,
-            branching_symbol,
-            pass,
-            fail,
-            ..
-        } => {
-            vars.insert(*cond_symbol);
-            vars.insert(*branching_symbol);
-
-            vars.extend(collect_stmt(pass, jp_live_vars, vars.clone()));
-            vars.extend(collect_stmt(fail, jp_live_vars, vars.clone()));
 
             vars
         }

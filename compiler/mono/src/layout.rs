@@ -499,13 +499,7 @@ impl<'a> Layout<'a> {
     }
 
     pub fn is_refcounted(&self) -> bool {
-        match self {
-            Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => true,
-            Layout::Builtin(Builtin::Str) => true,
-            Layout::RecursiveUnion(_) => true,
-            Layout::RecursivePointer => true,
-            _ => false,
-        }
+        matches!(self, Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) | Layout::Builtin(Builtin::Str) | Layout::RecursiveUnion(_) | Layout::RecursivePointer)
     }
 
     /// Even if a value (say, a record) is not itself reference counted,

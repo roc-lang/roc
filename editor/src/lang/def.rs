@@ -12,15 +12,15 @@
 // };
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
-use crate::ast::{Expr2, FunctionDef, Rigids, ValueDef};
-use crate::expr::Output;
-use crate::expr::{to_expr2, to_expr_id, Env};
-use crate::pattern::{
+use crate::lang::ast::{Expr2, FunctionDef, Rigids, ValueDef};
+use crate::lang::expr::Output;
+use crate::lang::expr::{to_expr2, to_expr_id, Env};
+use crate::lang::pattern::{
     symbols_and_variables_from_pattern, symbols_from_pattern, to_pattern_id, Pattern2, PatternId,
 };
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
-use crate::scope::Scope;
-use crate::types::{to_annotation2, Alias, Annotation2, Signature, Type2, TypeId};
+use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
+use crate::lang::scope::Scope;
+use crate::lang::types::{to_annotation2, Alias, Annotation2, Signature, Type2, TypeId};
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -35,12 +35,31 @@ use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
 #[derive(Debug)]
 pub enum Def {
-    AnnotationOnly {
-        rigids: crate::ast::Rigids,
-        annotation: TypeId,
-    },
+    AnnotationOnly { rigids: Rigids, annotation: TypeId },
     Value(ValueDef),
     Function(FunctionDef),
+}
+
+impl Def {
+    pub fn symbols(&self, pool: &Pool) -> MutSet<Symbol> {
+        let mut output = MutSet::default();
+
+        match self {
+            Def::AnnotationOnly { .. } => todo!("lost pattern information here ... "),
+            Def::Value(ValueDef { pattern, .. }) => {
+                let pattern2 = &pool[*pattern];
+                output.extend(symbols_from_pattern(pool, pattern2));
+            }
+            Def::Function(function_def) => match function_def {
+                FunctionDef::NoAnnotation { name, .. }
+                | FunctionDef::WithAnnotation { name, .. } => {
+                    output.insert(*name);
+                }
+            },
+        }
+
+        output
+    }
 }
 
 impl ShallowClone for Def {
@@ -105,7 +124,7 @@ fn to_pending_def<'a>(
     match def {
         Annotation(loc_pattern, loc_ann) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = crate::pattern::to_pattern_id(
+            let (output, loc_can_pattern) = crate::lang::pattern::to_pattern_id(
                 env,
                 scope,
                 pattern_type,
@@ -120,7 +139,7 @@ fn to_pending_def<'a>(
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = crate::pattern::to_pattern_id(
+            let (output, loc_can_pattern) = crate::lang::pattern::to_pattern_id(
                 env,
                 scope,
                 pattern_type,
@@ -787,7 +806,6 @@ pub struct CanDefs {
 pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
-    var_store: &mut VarStore,
     original_scope: &Scope,
     loc_defs: &'a [&'a Located<ast::Def<'a>>],
     pattern_type: PatternType,

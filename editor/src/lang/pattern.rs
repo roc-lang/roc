@@ -1,10 +1,10 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-use crate::ast::{ExprId, FloatVal, IntVal};
-use crate::expr::{to_expr_id, Env, Output};
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
-use crate::scope::Scope;
+use crate::lang::ast::{ExprId, FloatVal, IntVal};
+use crate::lang::expr::{to_expr_id, Env, Output};
+use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
+use crate::lang::scope::Scope;
 use roc_can::expr::unescape_char;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_module::symbol::Symbol;

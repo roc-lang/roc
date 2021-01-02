@@ -1,12 +1,12 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-use crate::ast::{Expr2, ExprId, FloatVal, IntStyle, IntVal};
-use crate::def::References;
-use crate::pattern::to_pattern2;
-use crate::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
-use crate::scope::Scope;
-use crate::types::{Type2, TypeId};
+use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, WhenBranch};
+use crate::lang::def::References;
+use crate::lang::pattern::to_pattern2;
+use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
+use crate::lang::scope::Scope;
+use crate::lang::types::{Alias, Type2, TypeId};
 use bumpalo::Bump;
 use inlinable_string::InlinableString;
 use roc_can::expr::Recursive;
@@ -22,9 +22,9 @@ use roc_types::subs::{VarStore, Variable};
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
-    pub references: crate::def::References,
+    pub references: References,
     pub tail_call: Option<Symbol>,
-    pub aliases: MutMap<Symbol, NodeId<crate::types::Alias>>,
+    pub aliases: MutMap<Symbol, NodeId<Alias>>,
     pub non_closures: MutSet<Symbol>,
 }
 
@@ -43,7 +43,7 @@ impl Output {
 
 pub struct Env<'a> {
     pub home: ModuleId,
-    pub var_store: VarStore,
+    pub var_store: &'a mut VarStore,
     pub pool: &'a mut Pool,
     pub arena: &'a Bump,
 
@@ -63,6 +63,32 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
+    pub fn new(
+        home: ModuleId,
+        arena: &'a Bump,
+        pool: &'a mut Pool,
+        var_store: &'a mut VarStore,
+        dep_idents: MutMap<ModuleId, IdentIds>,
+        module_ids: &'a ModuleIds,
+        exposed_ident_ids: IdentIds,
+    ) -> Env<'a> {
+        Env {
+            home,
+            arena,
+            pool,
+            var_store,
+            dep_idents,
+            module_ids,
+            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
+            exposed_ident_ids,
+            closures: MutMap::default(),
+            qualified_lookups: MutSet::default(),
+            tailcallable_symbol: None,
+            closure_name_symbol: None,
+            top_level_symbols: MutSet::default(),
+        }
+    }
+
     pub fn add<T>(&mut self, item: T, region: Region) -> NodeId<T> {
         let id = self.pool.add(item);
         self.set_region(id, region);
@@ -190,7 +216,7 @@ pub fn to_expr_id<'a>(
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
     region: Region,
-) -> (crate::ast::ExprId, Output) {
+) -> (ExprId, Output) {
     let (expr, output) = to_expr2(env, scope, parse_expr, region);
 
     (env.add(expr, region), output)
@@ -201,7 +227,7 @@ pub fn to_expr2<'a>(
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
     region: Region,
-) -> (crate::ast::Expr2, self::Output) {
+) -> (Expr2, self::Output) {
     use roc_parse::ast::Expr::*;
     match parse_expr {
         Float(string) => {
@@ -285,14 +311,14 @@ pub fn to_expr2<'a>(
 
         Str(literal) => flatten_str_literal(env, scope, &literal),
 
-        List(elements) => {
+        List { items, .. } => {
             let mut output = Output::default();
             let output_ref = &mut output;
 
-            let elems = PoolVec::with_capacity(elements.len() as u32, env.pool);
+            let elems = PoolVec::with_capacity(items.len() as u32, env.pool);
 
-            for (node_id, element) in elems.iter_node_ids().zip(elements.iter()) {
-                let (expr, sub_output) = to_expr2(env, scope, &element.value, element.region);
+            for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
+                let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);
 
                 output_ref.union(sub_output);
 
@@ -620,7 +646,7 @@ pub fn to_expr2<'a>(
 
             let captured_symbols = PoolVec::new(captured_symbols.into_iter(), env.pool);
 
-            let extra = crate::ast::ClosureExtra {
+            let extra = ClosureExtra {
                 return_type: env.var_store.fresh(),     // 4B
                 captured_symbols,                       // 8B
                 closure_type: env.var_store.fresh(),    // 4B
@@ -1065,7 +1091,7 @@ fn canonicalize_when_branch<'a>(
     scope: &mut Scope,
     branch: &'a roc_parse::ast::WhenBranch<'a>,
     output: &mut Output,
-) -> (crate::ast::WhenBranch, References) {
+) -> (WhenBranch, References) {
     let patterns = PoolVec::with_capacity(branch.patterns.len() as u32, env.pool);
 
     let original_scope = scope;
@@ -1123,7 +1149,7 @@ fn canonicalize_when_branch<'a>(
     output.union(branch_output);
 
     (
-        crate::ast::WhenBranch {
+        WhenBranch {
             patterns,
             body: value_id,
             guard,
