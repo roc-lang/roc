@@ -2731,7 +2731,16 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_keep_if(env, inplace, parent, func, func_layout, list, list_layout)
+            list_keep_if(
+                env,
+                layout_ids,
+                inplace,
+                parent,
+                func,
+                func_layout,
+                list,
+                list_layout,
+            )
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool

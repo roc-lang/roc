@@ -1113,6 +1113,7 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     output_inplace: InPlace,
     parent: FunctionValue<'ctx>,
     func: BasicValueEnum<'ctx>,
@@ -1211,6 +1212,9 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             }
 
             builder.position_at_end(cont_block);
+
+            // consume the input list
+            decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
 
             builder.build_load(result, "load_result")
         }
