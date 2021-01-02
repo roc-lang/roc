@@ -433,7 +433,7 @@ test "RocDict.get" {
 
 test "RocDict.init" {
     const empty = RocDict(u64, u64).init(testing.allocator);
-    expectEqual(0, empty.get_len());
+    expectEqual(empty.get_len(), 0);
 
     const MadeUpType = struct {
         oneField: u64
