@@ -13,3 +13,4 @@ pub fn get_res<T>(index: usize, vec: &[T]) -> EdResult<&<usize as SliceIndex<[T]
 
     Ok(elt_ref)
 }
+

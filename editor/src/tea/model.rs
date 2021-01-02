@@ -15,7 +15,6 @@ pub fn init_model() -> Model {
     }
 }
 
-//Is model.rs the right place for these structs?
 #[derive(Debug, Copy, Clone)]
 pub struct Position {
     pub line: usize,

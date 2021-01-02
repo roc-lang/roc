@@ -2,7 +2,7 @@ use crate::error::{EdResult, InvalidSelection};
 use crate::graphics::colors;
 use crate::graphics::primitives::rect::Rect;
 use crate::tea::model::RawSelection;
-use crate::vec_result::get_res;
+use crate::vec_result::{get_res};
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use snafu::ensure;
@@ -148,5 +148,224 @@ pub fn create_selection_rects<'a>(
         }
 
         Ok(all_rects)
+    }
+}
+
+#[cfg(test)]
+mod test_parse {
+    use crate::tea::update::{move_caret_left, move_caret_right, move_caret_down, move_caret_up};
+    use crate::tea::model::{RawSelection, Position};
+    use crate::error::{EdResult, OutOfBounds};
+    use crate::vec_result::{get_res};
+    use snafu::OptionExt;
+    use std::slice::SliceIndex;
+    use pest::Parser;
+
+    #[derive(Parser)]
+    #[grammar = "../tests/selection.pest"]
+    pub struct LineParser;
+
+    fn convert_selection_to_dsl(raw_sel_opt: Option<RawSelection>, caret_pos: Position, lines: &mut [String])  -> EdResult<&[String]> {
+        if let Some(raw_sel) = raw_sel_opt {
+            let mut to_insert = vec![(raw_sel.start_pos, '['), (raw_sel.end_pos, ']'), (caret_pos, '|')];
+            to_insert.sort();
+
+            for i in 0..to_insert.len() {
+                let (pos, insert_char) = *get_res(i, &to_insert)?;
+
+                insert_at_pos(lines, pos, insert_char)?;
+
+                for j in i..to_insert.len() {
+                    let (old_pos, _) = get_mut_res(j, &mut to_insert)?;
+                    
+                    if old_pos.line == pos.line {
+                        old_pos.column += 1;
+                    }
+                }
+            }
+
+        } else {
+            insert_at_pos(lines, caret_pos, '|')?;
+        }
+
+        Ok(lines)
+    }
+
+    fn insert_at_pos(lines: &mut [String], pos: Position, insert_char: char) -> EdResult<()> {
+        let line = get_mut_res(pos.line, lines)?;
+        line.insert(pos.column, insert_char);
+
+        Ok(())
+    }
+
+    fn get_mut_res<T>(index: usize, vec: & mut [T]) -> EdResult<& mut <usize as SliceIndex<[T]>>::Output> {
+        let vec_len = vec.len();
+    
+        let elt_ref = vec.get_mut(index).context(OutOfBounds {
+            index,
+            vec_len,
+        })?;
+    
+        Ok(elt_ref)
+    }
+
+    fn convert_dsl_to_selection(lines: &[String]) -> Result<(Option<RawSelection>, Position), String> {
+        let lines_str: String = lines.join("");
+
+        let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str).expect("Selection test DSL parsing failed");
+
+        let mut caret_opt: Option<(usize, usize)> = None;
+        let mut sel_start_opt: Option<(usize, usize)> = None;
+        let mut sel_end_opt: Option<(usize, usize)> = None;
+        let mut line_nr = 0;
+        let mut col_nr = 0;
+
+        for line in parsed {
+
+            for elt in line.into_inner() {
+                match elt.as_rule() {
+                    Rule::optCaret => {
+                        if elt.as_span().as_str() == "|" {
+                            if caret_opt.is_some() {
+                                return Err("Multiple carets found, there should be only one".to_owned())
+                            } else {
+                                caret_opt = Some((line_nr, col_nr));
+                                col_nr += elt.as_span().as_str().len();
+                            }
+                        }
+                    },
+                    Rule::optSelStart => {
+                        if sel_start_opt.is_some() {
+                            if elt.as_span().as_str() == "[" {
+                                return Err("Found start of selection more than once, there should be only one".to_owned())
+                            }
+                        } else  if elt.as_span().as_str() == "[" {
+                            sel_start_opt = Some((line_nr, col_nr));
+                            col_nr += elt.as_span().as_str().len();
+                        }
+                    },
+                    Rule::optSelEnd => {
+                        if sel_end_opt.is_some() {
+                            if elt.as_span().as_str() == "]" {
+                                return Err("Found end of selection more than once, there should be only one".to_owned())
+                            } 
+                        } else if elt.as_span().as_str() == "]" {
+                                sel_end_opt = Some((line_nr, col_nr));
+                                col_nr += elt.as_span().as_str().len();
+                        }
+                    },
+                    Rule::text => {
+                        let split_str = elt.as_span().as_str().split('\n').into_iter().collect::<Vec<&str>>();
+
+                        if split_str.len() > 1 {
+                            line_nr += split_str.len() - 1;
+                            col_nr = 0
+                        }
+                        if let Some(last_str) = split_str.last() {
+                            col_nr += last_str.len()
+                        }
+                        
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        if let Some((line, column)) = caret_opt {
+            let caret_pos =
+                Position {
+                    line,
+                    column
+                };
+            if sel_start_opt.is_none() && sel_end_opt.is_none() {
+                Ok ((
+                    None,
+                    caret_pos
+                ))
+            } else if let Some((start_line, start_column)) = sel_start_opt {
+                    if let Some((end_line, end_column)) = sel_end_opt  {
+                        Ok ((
+                            Some (
+                                RawSelection {
+                                    start_pos :
+                                        Position {
+                                            line: start_line,
+                                            column: start_column
+                                        },
+                                    end_pos :
+                                        Position {
+                                            line: end_line,
+                                            column: end_column
+                                        }
+                                }
+                            ),
+                            caret_pos
+                        ))
+                    } else {
+                        Err("Selection end ']' was not found, but selection start '[' was. Bad input string.".to_owned())
+                    }
+            } else {
+                Err("Selection start '[' was not found, but selection end ']' was. Bad input string.".to_owned())
+            }
+        } else {
+            Err("No caret was found in lines.".to_owned())
+        }
+
+    }
+
+    fn assert_move(
+        pre_lines_str: &[&str],
+        expected_post_lines_str: &[&str],
+        shift_pressed: bool,
+        move_fun: 
+            fn(Position, Option<RawSelection>, bool, &[String]) -> (Position, Option<RawSelection>)
+    ) -> Result<(), String> {
+        let pre_lines: Vec<String> = pre_lines_str.iter().map(|l| l.to_string()).collect();
+        let expected_post_lines: Vec<String> = expected_post_lines_str.iter().map(|l| l.to_string()).collect();
+
+        let (sel_opt, caret_pos) = convert_dsl_to_selection(&pre_lines)?;
+
+        let mut clean_lines = 
+            pre_lines.into_iter()
+            .map(|line| {
+                line.replace(&['[', ']', '|'][..], "")
+            })
+            .collect::<Vec<String>>();
+
+        let (new_caret_pos, new_sel_opt) = move_fun(caret_pos, sel_opt, shift_pressed, &clean_lines);
+
+        let post_lines_res =
+            convert_selection_to_dsl(new_sel_opt, new_caret_pos, &mut clean_lines);
+
+        match post_lines_res {
+            Ok(post_lines) => {
+                assert_eq!(expected_post_lines, post_lines);
+                Ok(())
+            },
+            Err(e) => Err(format!("{:?}", e))
+        }
+    }
+
+    #[test]
+    fn move_right() -> Result<(), String> {
+        assert_move(&["|"], &["|"], false, move_caret_right)?;
+        assert_move(&["a|"], &["a|"], false, move_caret_right)?;
+        assert_move(&["|A"], &["A|"], false, move_caret_right)?;
+        assert_move(&["|abc"], &["a|bc"], false, move_caret_right)?;
+        assert_move(&["a|bc"], &["ab|c"], false, move_caret_right)?;
+        assert_move(&["abc|"], &["abc|"], false, move_caret_right)?;
+        assert_move(&["| abc"], &[" |abc"], false, move_caret_right)?;
+        assert_move(&["abc| "], &["abc |"], false, move_caret_right)?;
+        assert_move(&["abc|\n","d"], &["abc\n","|d"], false, move_caret_right)?;
+        assert_move(&["abc|\n",""], &["abc\n","|"], false, move_caret_right)?;
+        assert_move(&["abc\n","|def"], &["abc\n","d|ef"], false, move_caret_right)?;
+        assert_move(&["abc\n","def| "], &["abc\n","def |"], false, move_caret_right)?;
+        assert_move(&["abc\n","def |\n", "ghi"], &["abc\n","def \n", "|ghi"], false, move_caret_right)?;
+        assert_move(&["abc\n","def|\n",""], &["abc\n","def\n", "|"], false, move_caret_right)?;
+        assert_move(&["abc\n","def\n", "ghi|\n","jkl"], &["abc\n","def\n", "ghi\n", "|jkl"], false, move_caret_right)?;
+        assert_move(&["abc\n","def\n", "|ghi\n","jkl"], &["abc\n","def\n", "g|hi\n", "jkl"], false, move_caret_right)?;
+        assert_move(&["abc\n","def\n", "g|hi\n","jkl"], &["abc\n","def\n", "gh|i\n", "jkl"], false, move_caret_right)?;
+        
+        Ok(())
     }
 }
