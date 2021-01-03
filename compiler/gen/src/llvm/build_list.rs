@@ -1045,6 +1045,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn list_contains_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
