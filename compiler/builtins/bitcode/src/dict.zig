@@ -18,6 +18,9 @@ pub fn RocDict(
     return struct {
         const Self = @This();
 
+        len: u64,
+        entries: [size]?Entry,
+
         pub const Entry = struct {
             key_ptr: *Key,
             value_ptr: *Value,
@@ -26,14 +29,9 @@ pub fn RocDict(
             pub const Overflow = struct {
                 entries: *[size]?*Entry,
 
-                // This function takes an
-                // index, key, and value,
-                // because presumably overflow
-                // is only created once an
-                // there is a collision between
-                // two entries, and there is
-                // therefore an extra entry
-                // that needs to be stored
+                // This function takes an index, key, and value, because presumably overflow
+                // is only created once an there is a collision between two entries, and 
+                // there is therefore an extra entry that needs to be stored
                 pub fn new(allocator: *Allocator, index: u64, key_ptr: *Key, value_ptr: *Value) Overflow {
                     var init_entries: [size]?*Entry = undefined;
 
@@ -105,10 +103,8 @@ pub fn RocDict(
                 }
             }
 
-            // The bool this function returns
-            // represents if an new entry was
-            // added (true), or if an old one
-            // was updated (false);
+            // The bool this function returns represents if an new entry was
+            // added (true), or if an old one was updated (false);
             pub fn insertIntoOverflow(self: *Entry, allocator: *Allocator, key_ptr: *Key, value_ptr: *Value, level: u64) bool {
                 const key = key_ptr.*;
 
@@ -156,9 +152,6 @@ pub fn RocDict(
         pub const Query = struct {
             maybe_entry: ?Entry
         };
-
-        len: u64,
-        entries: [size]?Entry,
 
         fn query(self: Self, key: Key, level: u64) Query {
             const index = keyToIndexAtLevel(key, level);
