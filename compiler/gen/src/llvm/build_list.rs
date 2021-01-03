@@ -1111,6 +1111,7 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
+#[allow(clippy::too_many_arguments)]
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
