@@ -81,203 +81,6 @@ pub fn build_eq<'a, 'ctx, 'env>(
     }
 }
 
-fn build_list_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    list_layout: &Layout<'a>,
-    element_layout: &Layout<'a>,
-    list1: StructValue<'ctx>,
-    list2: StructValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let symbol = Symbol::LIST_EQ;
-    let fn_name = layout_ids
-        .get(symbol, &element_layout)
-        .to_symbol_string(symbol, &env.interns);
-
-    let function = match env.module.get_function(fn_name.as_str()) {
-        Some(function_value) => function_value,
-        None => {
-            let arena = env.arena;
-            let arg_type = basic_type_from_layout(arena, env.context, &list_layout, env.ptr_bytes);
-
-            let function_value = crate::llvm::refcounting::build_header_help(
-                env,
-                &fn_name,
-                env.context.bool_type().into(),
-                &[arg_type, arg_type],
-            );
-
-            build_list_eq_help(env, layout_ids, function_value, element_layout);
-
-            function_value
-        }
-    };
-
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
-    let call = env
-        .builder
-        .build_call(function, &[list1.into(), list2.into()], "list_eq");
-
-    call.set_call_convention(FAST_CALL_CONV);
-
-    call.try_as_basic_value().left().unwrap()
-}
-
-fn build_list_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
-    element_layout: &Layout<'a>,
-) {
-    let ctx = env.context;
-    let builder = env.builder;
-
-    {
-        use inkwell::debug_info::AsDIScope;
-
-        let func_scope = parent.get_subprogram().unwrap();
-        let lexical_block = env.dibuilder.create_lexical_block(
-            /* scope */ func_scope.as_debug_info_scope(),
-            /* file */ env.compile_unit.get_file(),
-            /* line_no */ 0,
-            /* column_no */ 0,
-        );
-
-        let loc = env.dibuilder.create_debug_location(
-            ctx,
-            /* line */ 0,
-            /* column */ 0,
-            /* current_scope */ lexical_block.as_debug_info_scope(),
-            /* inlined_at */ None,
-        );
-        builder.set_current_debug_location(&ctx, loc);
-    }
-
-    // Add args to scope
-    let mut it = parent.get_param_iter();
-    let list1 = it.next().unwrap().into_struct_value();
-    let list2 = it.next().unwrap().into_struct_value();
-
-    set_name(list1.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(list1.into(), Symbol::ARG_2.ident_string(&env.interns));
-
-    let entry = ctx.append_basic_block(parent, "entry");
-    env.builder.position_at_end(entry);
-
-    let return_true = ctx.append_basic_block(parent, "return_true");
-    let return_false = ctx.append_basic_block(parent, "return_false");
-
-    // first, check whether the length is equal
-
-    let len1 = list_len(env.builder, list1);
-    let len2 = list_len(env.builder, list2);
-
-    let length_equal: IntValue =
-        env.builder
-            .build_int_compare(IntPredicate::EQ, len1, len2, "bounds_check");
-
-    let then_block = ctx.append_basic_block(parent, "then");
-
-    env.builder
-        .build_conditional_branch(length_equal, then_block, return_false);
-
-    {
-        // the length is equal; check elements pointwise
-        env.builder.position_at_end(then_block);
-
-        {
-            let builder = env.builder;
-            let element_type =
-                basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes);
-            let ptr_type = get_ptr_type(&element_type, AddressSpace::Generic);
-            let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
-            let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
-
-            // we know that len1 == len2
-            let end = len1;
-
-            // constant 1i64
-            let one = ctx.i64_type().const_int(1, false);
-
-            // allocate a stack slot for the current index
-            let index_alloca = builder.build_alloca(ctx.i64_type(), "index");
-            builder.build_store(index_alloca, ctx.i64_type().const_zero());
-
-            let loop_bb = ctx.append_basic_block(parent, "loop");
-            let body_bb = ctx.append_basic_block(parent, "body");
-            let increment_bb = ctx.append_basic_block(parent, "increment");
-
-            builder.build_unconditional_branch(loop_bb);
-            builder.position_at_end(loop_bb);
-
-            let curr_index = builder.build_load(index_alloca, "index").into_int_value();
-
-            // #index < end
-            let loop_end_cond =
-                builder.build_int_compare(IntPredicate::ULT, curr_index, end, "bounds_check");
-
-            builder.build_conditional_branch(loop_end_cond, body_bb, return_true);
-
-            builder.position_at_end(body_bb);
-
-            {
-                // loop body
-                let elem1 = {
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr1, &[curr_index], "load_index") };
-                    builder.build_load(elem_ptr, "get_elem")
-                };
-
-                let elem2 = {
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr2, &[curr_index], "load_index") };
-                    builder.build_load(elem_ptr, "get_elem")
-                };
-
-                let are_equal = build_eq(
-                    env,
-                    layout_ids,
-                    elem1,
-                    elem2,
-                    element_layout,
-                    element_layout,
-                )
-                .into_int_value();
-
-                builder.build_conditional_branch(are_equal, increment_bb, return_false);
-            }
-
-            {
-                env.builder.position_at_end(increment_bb);
-
-                let next_index = builder.build_int_add(curr_index, one, "nextindex");
-
-                builder.build_store(index_alloca, next_index);
-
-                // jump back to the top of the loop
-                builder.build_unconditional_branch(loop_bb);
-            }
-        }
-    }
-
-    {
-        env.builder.position_at_end(return_true);
-        env.builder
-            .build_return(Some(&env.context.bool_type().const_int(1, false)));
-    }
-
-    {
-        env.builder.position_at_end(return_false);
-        env.builder
-            .build_return(Some(&env.context.bool_type().const_int(0, false)));
-    }
-}
-
 pub fn build_neq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -361,5 +164,205 @@ pub fn build_neq<'a, 'ctx, 'env>(
                 other2
             );
         }
+    }
+}
+
+fn build_list_eq<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
+    list1: StructValue<'ctx>,
+    list2: StructValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::LIST_EQ;
+    let fn_name = layout_ids
+        .get(symbol, &element_layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arena = env.arena;
+            let arg_type = basic_type_from_layout(arena, env.context, &list_layout, env.ptr_bytes);
+
+            let function_value = crate::llvm::refcounting::build_header_help(
+                env,
+                &fn_name,
+                env.context.bool_type().into(),
+                &[arg_type, arg_type],
+            );
+
+            build_list_eq_help(env, layout_ids, function_value, element_layout);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+    let call = env
+        .builder
+        .build_call(function, &[list1.into(), list2.into()], "list_eq");
+
+    call.set_call_convention(FAST_CALL_CONV);
+
+    call.try_as_basic_value().left().unwrap()
+}
+
+fn build_list_eq_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    parent: FunctionValue<'ctx>,
+    element_layout: &Layout<'a>,
+) {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    {
+        use inkwell::debug_info::AsDIScope;
+
+        let func_scope = parent.get_subprogram().unwrap();
+        let lexical_block = env.dibuilder.create_lexical_block(
+            /* scope */ func_scope.as_debug_info_scope(),
+            /* file */ env.compile_unit.get_file(),
+            /* line_no */ 0,
+            /* column_no */ 0,
+        );
+
+        let loc = env.dibuilder.create_debug_location(
+            ctx,
+            /* line */ 0,
+            /* column */ 0,
+            /* current_scope */ lexical_block.as_debug_info_scope(),
+            /* inlined_at */ None,
+        );
+        builder.set_current_debug_location(&ctx, loc);
+    }
+
+    // Add args to scope
+    let mut it = parent.get_param_iter();
+    let list1 = it.next().unwrap().into_struct_value();
+    let list2 = it.next().unwrap().into_struct_value();
+
+    set_name(list1.into(), Symbol::ARG_1.ident_string(&env.interns));
+    set_name(list2.into(), Symbol::ARG_2.ident_string(&env.interns));
+
+    let entry = ctx.append_basic_block(parent, "entry");
+    env.builder.position_at_end(entry);
+
+    let return_true = ctx.append_basic_block(parent, "return_true");
+    let return_false = ctx.append_basic_block(parent, "return_false");
+
+    // first, check whether the length is equal
+
+    let len1 = list_len(env.builder, list1);
+    let len2 = list_len(env.builder, list2);
+
+    let length_equal: IntValue =
+        env.builder
+            .build_int_compare(IntPredicate::EQ, len1, len2, "bounds_check");
+
+    let then_block = ctx.append_basic_block(parent, "then");
+
+    env.builder
+        .build_conditional_branch(length_equal, then_block, return_false);
+
+    {
+        // the length is equal; check elements pointwise
+        env.builder.position_at_end(then_block);
+
+        let builder = env.builder;
+        let element_type =
+            basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes);
+        let ptr_type = get_ptr_type(&element_type, AddressSpace::Generic);
+        let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
+        let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
+
+        // we know that len1 == len2
+        let end = len1;
+
+        // allocate a stack slot for the current index
+        let index_alloca = builder.build_alloca(ctx.i64_type(), "index");
+        builder.build_store(index_alloca, ctx.i64_type().const_zero());
+
+        let loop_bb = ctx.append_basic_block(parent, "loop");
+        let body_bb = ctx.append_basic_block(parent, "body");
+        let increment_bb = ctx.append_basic_block(parent, "increment");
+
+        // the "top" of the loop
+        builder.build_unconditional_branch(loop_bb);
+        builder.position_at_end(loop_bb);
+
+        let curr_index = builder.build_load(index_alloca, "index").into_int_value();
+
+        // #index < end
+        let loop_end_cond =
+            builder.build_int_compare(IntPredicate::ULT, curr_index, end, "bounds_check");
+
+        // if we're at the end, and all elements were equal so far, return true
+        // otherwise check the current elements for equality
+        builder.build_conditional_branch(loop_end_cond, body_bb, return_true);
+
+        {
+            // loop body
+            builder.position_at_end(body_bb);
+
+            let elem1 = {
+                let elem_ptr =
+                    unsafe { builder.build_in_bounds_gep(ptr1, &[curr_index], "load_index") };
+                builder.build_load(elem_ptr, "get_elem")
+            };
+
+            let elem2 = {
+                let elem_ptr =
+                    unsafe { builder.build_in_bounds_gep(ptr2, &[curr_index], "load_index") };
+                builder.build_load(elem_ptr, "get_elem")
+            };
+
+            let are_equal = build_eq(
+                env,
+                layout_ids,
+                elem1,
+                elem2,
+                element_layout,
+                element_layout,
+            )
+            .into_int_value();
+
+            // if the elements are equal, increment the index and check the next element
+            // otherwise, return false
+            builder.build_conditional_branch(are_equal, increment_bb, return_false);
+        }
+
+        {
+            env.builder.position_at_end(increment_bb);
+
+            // constant 1i64
+            let one = ctx.i64_type().const_int(1, false);
+
+            let next_index = builder.build_int_add(curr_index, one, "nextindex");
+
+            builder.build_store(index_alloca, next_index);
+
+            // jump back to the top of the loop
+            builder.build_unconditional_branch(loop_bb);
+        }
+    }
+
+    {
+        env.builder.position_at_end(return_true);
+        env.builder
+            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+    }
+
+    {
+        env.builder.position_at_end(return_false);
+        env.builder
+            .build_return(Some(&env.context.bool_type().const_int(0, false)));
     }
 }
