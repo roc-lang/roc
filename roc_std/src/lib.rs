@@ -99,26 +99,26 @@ impl<T> RocList<T> {
         self.get_storage_ptr() as *mut usize
     }
 
-    fn get_element_ptr<Q>(elements: *const Q) -> *const usize {
+    fn get_element_ptr(elements: *const T) -> *const T {
         let elem_alignment = core::mem::align_of::<T>();
         let ptr = elements as *const usize;
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.offset(1)
+                ptr.offset(1) as *const T
             } else {
                 // If elements have an alignment bigger than usize (e.g. an i128),
                 // we will have necessarily allocated two usize slots worth of
                 // space for the storage value (with the first usize slot being
                 // padding for alignment's sake), and we need to skip past both.
-                ptr.offset(2)
+                ptr.offset(2) as *const T
             }
         }
     }
 
     pub fn from_slice_with_capacity(slice: &[T], capacity: usize) -> RocList<T>
     where
-        T: Copy,
+        T: Clone,
     {
         assert!(slice.len() <= capacity);
 
@@ -138,25 +138,37 @@ impl<T> RocList<T> {
         let num_bytes = core::mem::size_of::<usize>() + padding + element_bytes;
 
         let elements = unsafe {
-            let raw_ptr = libc::malloc(num_bytes);
+            let raw_ptr = libc::malloc(num_bytes) as *mut u8;
+
+            // pointer to the first element
+            let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T) as *mut T;
 
             // write the capacity
             let capacity_ptr = raw_ptr as *mut usize;
-            *capacity_ptr = capacity;
-
-            let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T);
+            *(capacity_ptr.offset(-1)) = capacity;
 
             {
                 // NOTE: using a memcpy here causes weird issues
                 let target_ptr = raw_ptr as *mut T;
                 let source_ptr = ptr as *const T;
-                let length = slice.len() as isize;
-                for index in 0..length {
-                    *target_ptr.offset(index) = *source_ptr.offset(index);
+                for index in 0..slice.len() {
+                    let source = &*source_ptr.add(index);
+                    let target = &mut *target_ptr.add(index);
+
+                    // NOTE for a weird reason, it's important that we clone onto the stack
+                    // and explicitly forget the swapped-in value
+                    // cloning directly from source to target causes some garbage memory (cast to a
+                    // RocStr) to end up in the drop implementation of RocStr and cause havoc by
+                    // freeing NULL
+                    let mut temporary = source.clone();
+
+                    core::mem::swap(target, &mut temporary);
+
+                    core::mem::forget(temporary);
                 }
             }
 
-            raw_ptr as *mut T
+            raw_ptr
         };
 
         RocList {
@@ -167,7 +179,7 @@ impl<T> RocList<T> {
 
     pub fn from_slice(slice: &[T]) -> RocList<T>
     where
-        T: Copy,
+        T: Clone,
     {
         Self::from_slice_with_capacity(slice, slice.len())
     }
@@ -328,21 +340,27 @@ impl RocStr {
         (self as *mut RocStr).cast()
     }
 
-    pub fn from_slice_with_capacity(slice: &[u8], capacity: usize) -> RocStr {
-        assert!(slice.len() <= capacity);
+    fn from_slice_with_capacity_str(slice: &[u8], capacity: usize) -> RocStr {
+        assert!(
+            slice.len() <= capacity,
+            "RocStr::from_slice_with_capacity_str length bigger than capacity {} {}",
+            slice.len(),
+            capacity
+        );
         if capacity < core::mem::size_of::<RocStr>() {
             let mut rocstr = RocStr::empty();
             let target_ptr = rocstr.get_small_str_ptr_mut();
             let source_ptr = slice.as_ptr() as *const u8;
-            for index in 0..(slice.len() as isize) {
+            for index in 0..slice.len() {
                 unsafe {
-                    *target_ptr.offset(index) = *source_ptr.offset(index);
+                    *target_ptr.add(index) = *source_ptr.add(index);
                 }
             }
             // Write length and small string bit to last byte of length.
             let mut bytes = rocstr.length.to_ne_bytes();
             bytes[bytes.len() - 1] = capacity as u8 ^ 0b1000_0000;
             rocstr.length = usize::from_ne_bytes(bytes);
+
             rocstr
         } else {
             let ptr = slice.as_ptr();
@@ -380,7 +398,7 @@ impl RocStr {
     }
 
     pub fn from_slice(slice: &[u8]) -> RocStr {
-        Self::from_slice_with_capacity(slice, slice.len())
+        Self::from_slice_with_capacity_str(slice, slice.len())
     }
 
     pub fn as_slice(&self) -> &[u8] {
@@ -422,6 +440,30 @@ impl PartialEq for RocStr {
 }
 
 impl Eq for RocStr {}
+
+impl Clone for RocStr {
+    fn clone(&self) -> Self {
+        if self.is_small_str() {
+            Self {
+                elements: self.elements,
+                length: self.length,
+            }
+        } else {
+            let elements = unsafe {
+                let raw = libc::malloc(self.length);
+
+                libc::memcpy(raw, self.elements as *mut libc::c_void, self.length);
+
+                raw as *mut u8
+            };
+
+            Self {
+                elements,
+                length: self.length,
+            }
+        }
+    }
+}
 
 impl Drop for RocStr {
     fn drop(&mut self) {
