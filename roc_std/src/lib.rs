@@ -443,18 +443,26 @@ impl Eq for RocStr {}
 
 impl Clone for RocStr {
     fn clone(&self) -> Self {
-        if self.is_small_str() {
+        if self.is_small_str() || self.is_empty() {
             Self {
                 elements: self.elements,
                 length: self.length,
             }
         } else {
+            let capacity_size = core::mem::size_of::<usize>();
+            let copy_length = self.length + capacity_size;
             let elements = unsafe {
-                let raw = libc::malloc(self.length);
+                let raw = libc::malloc(copy_length);
 
-                libc::memcpy(raw, self.elements as *mut libc::c_void, self.length);
+                libc::memcpy(
+                    raw,
+                    self.elements.offset(-(capacity_size as isize)) as *mut libc::c_void,
+                    copy_length,
+                );
 
-                raw as *mut u8
+                *(raw as *mut usize) = self.length;
+
+                (raw as *mut u8).add(capacity_size)
             };
 
             Self {

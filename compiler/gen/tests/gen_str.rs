@@ -526,4 +526,16 @@ mod gen_str {
         assert_evals_to!(r#""a" != "b""#, true, bool);
         assert_evals_to!(r#""a" == "b""#, false, bool);
     }
+
+    #[test]
+    fn str_clone() {
+        use roc_std::RocStr;
+        let long = RocStr::from_slice("loremipsumdolarsitamet".as_bytes());
+        let short = RocStr::from_slice("x".as_bytes());
+        let empty = RocStr::from_slice("".as_bytes());
+
+        debug_assert_eq!(long.clone(), long);
+        debug_assert_eq!(short.clone(), short);
+        debug_assert_eq!(empty.clone(), empty);
+    }
 }
