@@ -62,6 +62,7 @@ mod solve_expr {
                 stdlib,
                 dir.path(),
                 exposed_types,
+                8,
             );
 
             dir.close()?;

@@ -85,6 +85,7 @@ mod test_load {
                     stdlib,
                     dir.path(),
                     exposed_types,
+                    8,
                 )
             };
 
@@ -126,6 +127,7 @@ mod test_load {
             roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
+            8,
         );
         let mut loaded_module = loaded.expect("Test module failed to load");
 
@@ -288,6 +290,7 @@ mod test_load {
             roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
+            8,
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");

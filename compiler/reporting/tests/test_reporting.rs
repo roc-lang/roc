@@ -94,6 +94,7 @@ mod test_reporting {
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
+                ptr_bytes: 8,
             };
             let _mono_expr = Stmt::new(
                 &mut mono_env,
