@@ -415,25 +415,21 @@ mod gen_list {
         );
     }
 
-    //
-    // "panicked at 'not yet implemented: Handle equals for builtin layouts Str == Str'"
-    //
-    // #[test]
-    // fn list_keep_if_str_is_hello() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             strIsHello : Str -> Bool
-    //             strIsHello = \str ->
-    //                 str == "Hello"
-    //
-    //             List.keepIf ["Hello", "Hello", "Goodbye"] strIsHello
-    //             "#
-    //         ),
-    //         RocList::from_slice(&["Hello", "Hello"]),
-    //         RocList<&'static str>
-    //     );
-    // }
+    #[test]
+    fn list_keep_if_str_is_hello() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                 List.keepIf ["x", "y", "x"] (\x -> x == "x")
+                 "#
+            ),
+            RocList::from_slice(&[
+                RocStr::from_slice("x".as_bytes()),
+                RocStr::from_slice("x".as_bytes())
+            ]),
+            RocList<RocStr>
+        );
+    }
 
     #[test]
     fn list_map_on_empty_list_with_int_layout() {

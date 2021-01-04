@@ -260,6 +260,11 @@ pub const RocStr = extern struct {
     }
 };
 
+// Str.equal
+pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
+    return self.eq(other);
+}
+
 // Str.numberOfBytes
 pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
