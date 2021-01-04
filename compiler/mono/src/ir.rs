@@ -976,6 +976,19 @@ impl<'a> Literal<'a> {
     }
 }
 
+pub fn tag_name_to_doc<'b, D, A>(alloc: &'b D, tag_name: &'b TagName) -> DocBuilder<'b, D, A>
+where
+    D: DocAllocator<'b, A>,
+    D::Doc: Clone,
+    A: Clone,
+{
+    match tag_name {
+        TagName::Global(name) => alloc.text(name.as_str()),
+        TagName::Private(symbol) => symbol_to_doc(alloc, *symbol),
+        TagName::Closure(symbol) => symbol_to_doc(alloc, *symbol),
+    }
+}
+
 pub fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
@@ -5643,6 +5656,66 @@ pub enum Pattern<'a> {
         layout: Layout<'a>,
         union: crate::exhaustive::Union,
     },
+}
+
+impl<'a> Pattern<'a> {
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: bool) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use Pattern::*;
+
+        match self {
+            Underscore => alloc.text("_"),
+            Identifier(symbol) => symbol_to_doc(alloc, *symbol),
+
+            IntLiteral(i) => alloc.text(format!("{}", i)),
+            FloatLiteral(i) => alloc.text(format!("{}", unsafe {
+                std::mem::transmute::<u64, f64>(*i)
+            })),
+
+            StrLiteral(s) => alloc.text(s.as_ref()),
+
+            BitLiteral { tag_name, .. } | EnumLiteral { tag_name, .. } => {
+                tag_name_to_doc(alloc, tag_name)
+            }
+
+            AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                let branches_doc = arguments.iter().map(|(arg, _)| arg.to_doc(alloc, true));
+
+                let it = std::iter::once(tag_name_to_doc(alloc, tag_name)).chain(branches_doc);
+
+                if parens {
+                    alloc
+                        .text("(")
+                        .append(alloc.intersperse(it, " "))
+                        .append(alloc.text(")"))
+                } else {
+                    alloc.intersperse(it, " ")
+                }
+            }
+            RecordDestructure(destructs, _) => {
+                let destructs_doc = destructs.iter().map(|destruct| match &destruct.typ {
+                    DestructType::Required(symbol) => symbol_to_doc(alloc, *symbol),
+                    DestructType::Guard(subpattern) => alloc
+                        .text(destruct.label.as_str())
+                        .append(": ")
+                        .append(subpattern.to_doc(alloc, false)),
+                });
+
+                alloc
+                    .text("{")
+                    .append(alloc.intersperse(destructs_doc, " "))
+                    .append(alloc.text("}"))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
