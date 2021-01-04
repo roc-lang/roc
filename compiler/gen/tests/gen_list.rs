@@ -1739,7 +1739,7 @@ mod gen_list {
         assert_evals_to!("[[1]] != [[1]]", false, bool);
         assert_evals_to!("[[2]] != [[1]]", true, bool);
     }
-  
+
     #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
     fn cleanup_because_exception() {
         assert_evals_to!(
