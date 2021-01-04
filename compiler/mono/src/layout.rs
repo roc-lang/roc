@@ -1439,7 +1439,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
 
                     Ok(Layout::Builtin(builtin))
                 }
-                Content::FlexVar(_) => {
+                Content::FlexVar(_) | Content::RigidVar(_) => {
                     // default to i64
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
@@ -1464,7 +1464,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
 
                     Ok(Layout::Builtin(Builtin::Float64))
                 }
-                Content::FlexVar(_) => {
+                Content::FlexVar(_) | Content::RigidVar(_) => {
                     // default to f64
                     Ok(Layout::Builtin(Builtin::Float64))
                 }
