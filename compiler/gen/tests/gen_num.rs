@@ -27,7 +27,7 @@ mod gen_num {
                 "#
             ),
             1,
-            usize 
+            usize
         );
     }
 
