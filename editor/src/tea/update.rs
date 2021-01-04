@@ -132,9 +132,9 @@ pub fn move_caret_up(
     let old_col_nr = old_caret_pos.column;
 
     let (line_nr, col_nr) = if old_line_nr == 0 {
-        (old_line_nr, old_col_nr)
+        (old_line_nr, 0)
     } else if let Some(prev_line) = lines.get(old_line_nr - 1) {
-        if prev_line.len() < old_col_nr {
+        if prev_line.len() <= old_col_nr {
             (old_line_nr - 1, prev_line.len() - 1)
         } else {
             (old_line_nr - 1, old_col_nr)
@@ -179,7 +179,11 @@ pub fn move_caret_down(
     let old_col_nr = old_caret_pos.column;
 
     let (line_nr, col_nr) = if old_line_nr + 1 >= lines.len() {
-        (old_line_nr, old_col_nr)
+        if let Some(curr_line) = lines.get(old_line_nr) {
+            (old_line_nr, curr_line.len())
+        } else {
+            unreachable!()
+        }
     } else if let Some(next_line) = lines.get(old_line_nr + 1) {
         if next_line.len() < old_col_nr {
             if let Some(last_char) = next_line.chars().last() {
