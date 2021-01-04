@@ -158,7 +158,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Int,
-                builtins::num_integer(Type::Variable(*precision_var)),
+                builtins::num_int(Type::Variable(*precision_var)),
                 expected,
             ));
         }
@@ -167,7 +167,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                builtins::num_floatingpoint(Type::Variable(*precision_var)),
+                builtins::num_float(Type::Variable(*precision_var)),
                 expected,
             ));
         }
