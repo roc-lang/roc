@@ -37,7 +37,7 @@ pub fn build_file(
     // Release builds use uniqueness optimizations
     let stdlib = match opt_level {
         OptLevel::Normal => roc_builtins::std::standard_stdlib(),
-        OptLevel::Optimize => roc_builtins::unique::uniq_stdlib(),
+        OptLevel::Optimize => roc_builtins::std::standard_stdlib(),
     };
     let loaded = roc_load::file::load_and_monomorphize(
         &arena,
