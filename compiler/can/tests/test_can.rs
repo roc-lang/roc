@@ -50,7 +50,7 @@ mod test_can {
                 assert_eq!(expected, actual);
             }
             actual => {
-                panic!("Expected an I64, but got: {:?}", actual);
+                panic!("Expected an Int *, but got: {:?}", actual);
             }
         }
     }
@@ -249,7 +249,7 @@ mod test_can {
     fn correct_annotated_body() {
         let src = indoc!(
             r#"
-                f : I64 -> I64
+                f : Int * -> Int *
                 f = \ a -> a
 
                 f
@@ -265,7 +265,7 @@ mod test_can {
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
             r#"
-                f : I64 -> I64 # comment
+                f : Int * -> Int * # comment
                 f = \ a -> a
 
                 f
@@ -281,7 +281,7 @@ mod test_can {
     fn name_mismatch_annotated_body() {
         let src = indoc!(
             r#"
-                f : I64 -> I64
+                f : Int * -> Int *
                 g = \ a -> a
 
                 g
@@ -307,7 +307,7 @@ mod test_can {
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
             r#"
-                f : I64 -> I64 # comment
+                f : Int * -> Int * # comment
                 g = \ a -> a
 
                 g
@@ -333,7 +333,7 @@ mod test_can {
     fn separated_annotated_body() {
         let src = indoc!(
             r#"
-                f : I64 -> I64
+                f : Int * -> Int *
 
                 f = \ a -> a
 
@@ -354,7 +354,7 @@ mod test_can {
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
             r#"
-                f : I64 -> I64
+                f : Int * -> Int *
                 # comment
                 f = \ a -> a
 
@@ -375,9 +375,9 @@ mod test_can {
     fn shadowed_annotation() {
         let src = indoc!(
             r#"
-                f : I64 -> I64
+                f : Int * -> Int *
 
-                f : I64 -> I64
+                f : Int * -> Int *
 
                 f
             "#
@@ -397,7 +397,7 @@ mod test_can {
     fn correct_nested_unannotated_body() {
         let src = indoc!(
             r#"
-                f : I64
+                f : Int *
                 f =
                     g = 42
 
@@ -416,9 +416,9 @@ mod test_can {
     fn correct_nested_annotated_body() {
         let src = indoc!(
             r#"
-                f : I64
+                f : Int *
                 f =
-                    g : I64
+                    g : Int *
                     g = 42
 
                     g + 1
@@ -436,11 +436,11 @@ mod test_can {
     fn correct_nested_body_annotated_multiple_lines() {
         let src = indoc!(
             r#"
-                f : I64
+                f : Int *
                 f =
-                    g : I64
+                    g : Int *
                     g = 42
-                    h : I64
+                    h : Int *
                     h = 5
                     z = 4
                     g + h + z
@@ -458,10 +458,10 @@ mod test_can {
     fn correct_nested_body_unannotated_multiple_lines() {
         let src = indoc!(
             r#"
-                f : I64
+                f : Int *
                 f =
                     g = 42
-                    h : I64
+                    h : Int *
                     h = 5
                     z = 4
                     g + h + z
@@ -478,7 +478,7 @@ mod test_can {
     fn correct_double_nested_body() {
         let src = indoc!(
             r#"
-                f : I64
+                f : Int *
                 f =
                     g =
                         h = 42
@@ -499,7 +499,7 @@ mod test_can {
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                F : I64
+                F : Int *
 
                 x = 1
 
@@ -520,9 +520,9 @@ mod test_can {
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                G : I64
+                G : Int *
 
-                F : I64
+                F : Int *
                 
                 x = 1
 

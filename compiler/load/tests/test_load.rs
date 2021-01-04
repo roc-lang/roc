@@ -380,10 +380,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "I64, I64, List a -> List a",
-                "partition" => "I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]",
-                "partitionHelp" => "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
-                "quicksort" => "List (Num a), I64, I64 -> List (Num a)",
+                "swap" => "Int *, Int *, List a -> List a",
+                "partition" => "Int b, Int b, List (Num a) -> [ Pair (Int b) (List (Num a)) ]",
+                "partitionHelp" => "Int b, Int c, List (Num a), Int c, Num a -> [ Pair (Int b) (List (Num a)) ]",
+                "quicksort" => "List (Num a), Int b, Int b -> List (Num a)",
             },
         );
     }
@@ -409,10 +409,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "I64, I64, List a -> List a",
-                "partition" => "I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]",
-                "partitionHelp" => "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
-                "quicksort" => "List (Num a), I64, I64 -> List (Num a)",
+                "swap" => "Int *, Int *, List a -> List a",
+                "partition" => "Int b, Int b, List (Num a) -> [ Pair (Int b) (List (Num a)) ]",
+                "partitionHelp" => "Int b, Int c, List (Num a), Int c, Num a -> [ Pair (Int b) (List (Num a)) ]",
+                "quicksort" => "List (Num a), Int b, Int b -> List (Num a)",
             },
         );
     }
@@ -457,7 +457,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "F64",
+                "blah2" => "Float *",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",
@@ -479,7 +479,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "F64",
+                "blah2" => "Float *",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",

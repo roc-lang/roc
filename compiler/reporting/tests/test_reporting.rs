@@ -447,9 +447,9 @@ mod test_reporting {
                 these names seem close though:
 
                     baz
+                    Nat
                     Str
                     U8
-                    F64
                 "#
             ),
         )
@@ -961,7 +961,7 @@ mod test_reporting {
                 r#"
                 bar = { bar : 0x3 }
 
-                f : { foo : I64 } -> Bool
+                f : { foo : Int * } -> Bool
                 f = \_ -> True
 
                 f bar
@@ -978,11 +978,11 @@ mod test_reporting {
 
                 This `bar` value is a:
 
-                    { bar : I64 }
+                    { bar : Int a }
 
                 But `f` needs the 1st argument to be:
 
-                    { foo : I64 }
+                    { foo : Int a }
 
                 Tip: Seems like a record field typo. Maybe `bar` should be `foo`?
 
@@ -1037,7 +1037,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Red I64, Green Bool ] -> Bool
+                f : [ Red (Int *), Green Bool ] -> Bool
                 f = \_ -> True
 
                 f (Blue 3.14)
@@ -1054,11 +1054,11 @@ mod test_reporting {
 
                 This `Blue` global tag application has the type:
 
-                    [ Blue F64 ]a
+                    [ Blue (Float a) ]a
 
                 But `f` needs the 1st argument to be:
 
-                    [ Green Bool, Red I64 ]
+                    [ Green Bool, Red (Int a) ]
 
                 Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1075,7 +1075,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : I64
+                x : Int *
                 x = if True then 3.14 else 4
 
                 x
@@ -1092,11 +1092,11 @@ mod test_reporting {
 
                 The 1st branch is a float of type:
 
-                    F64
+                    Float a
 
                 But the type annotation on `x` says it should be:
 
-                    I64
+                    Int b
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1110,7 +1110,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : I64
+                x : Int *
                 x =
                     when True is
                         _ -> 3.14
@@ -1124,18 +1124,18 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│   x : I64
+                1│   x : Int *
                 2│   x =
                 3│>      when True is
                 4│>          _ -> 3.14
 
                 This `when`expression produces:
 
-                    F64
+                    Float a
 
                 But the type annotation on `x` says it should be:
 
-                    I64
+                    Int b
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1149,7 +1149,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : I64 -> I64
+                x : Int * -> Int *
                 x = \_ -> 3.14
 
                 x
@@ -1161,17 +1161,17 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : I64 -> I64
+                1│  x : Int * -> Int *
                 2│  x = \_ -> 3.14
                               ^^^^
 
                 The body is a float of type:
 
-                    F64
+                    Float a
 
                 But the type annotation on `x` says it should be:
 
-                    I64
+                    Int b
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1374,7 +1374,7 @@ mod test_reporting {
                     Bool
                     U8
                     F64
-                    Str
+                    Nat
                 "#
             ),
         )
@@ -1483,7 +1483,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                { x } : { x : I64 }
+                { x } : { x : Int * }
                 { x } = { x: 4.0 }
 
                 x
@@ -1495,17 +1495,17 @@ mod test_reporting {
 
                 Something is off with the body of this definition:
 
-                1│  { x } : { x : I64 }
+                1│  { x } : { x : Int * }
                 2│  { x } = { x: 4.0 }
                             ^^^^^^^^^^
 
                 The body is a record of type:
 
-                    { x : F64 }
+                    { x : Float a }
 
                 But the type annotation says it should be:
 
-                    { x : I64 }
+                    { x : Int b }
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1644,7 +1644,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : { a : I64, b : F64, c : Bool }
+                x : { a : Int *, b : Float *, c : Bool }
                 x = { b: 4.0 }
 
                 x
@@ -1656,17 +1656,17 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : { a : I64, b : F64, c : Bool }
+                1│  x : { a : Int *, b : Float *, c : Bool }
                 2│  x = { b: 4.0 }
                         ^^^^^^^^^^
 
                 The body is a record of type:
 
-                    { b : F64 }
+                    { b : Float a }
 
                 But the type annotation on `x` says it should be:
 
-                    { a : I64, b : F64, c : Bool }
+                    { a : Int a, b : Float b, c : Bool }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -1788,7 +1788,7 @@ mod test_reporting {
 
                 The body is an integer of type:
 
-                    I64
+                    Int a
 
                 But the type annotation on `f` says it should be:
 
@@ -1796,7 +1796,7 @@ mod test_reporting {
 
                 Tip: The type annotation uses the type variable `msg` to say that this
                 definition can produce any type of value. But in the body I see that
-                it will only produce a `I64` value of a single specific type. Maybe
+                it will only produce a `Int` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
@@ -2094,7 +2094,7 @@ mod test_reporting {
 
                 But `add` needs the 2nd argument to be:
 
-                    Num (Integer Signed64)
+                    Num (Integer a)
                 "#
             ),
         )
@@ -2119,11 +2119,11 @@ mod test_reporting {
 
                 This argument is a float of type:
 
-                    F64
+                    Float a
 
                 But `add` needs the 2nd argument to be:
 
-                    Num (Integer Signed64)
+                    Num (Integer a)
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -2581,9 +2581,9 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Foo : { x : I64 }
+                Foo : { x : Int * }
 
-                f : Foo -> I64
+                f : Foo -> Int *
                 f = \r -> r.x
 
                 f { y: 3.14 }
@@ -2601,11 +2601,11 @@ mod test_reporting {
 
                 This argument is a record of type:
 
-                    { y : F64 }
+                    { y : Float a }
 
                 But `f` needs the 1st argument to be:
 
-                    { x : I64 }
+                    { x : Int a }
 
                 Tip: Seems like a record field typo. Maybe `y` should be `x`?
 
