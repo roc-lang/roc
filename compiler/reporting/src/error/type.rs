@@ -1891,7 +1891,7 @@ fn diff_tag_union<'b>(
             alloc.tag_name(field.clone()),
             // TODO add spaces between args
             args.iter()
-                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg.clone()))
+                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()))
                 .collect(),
         )
     };
