@@ -789,7 +789,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     use roc_mono::ir::Expr::*;
 
     match expr {
-        Literal(literal) => build_exp_literal(env, literal),
+        Literal(literal) => build_exp_literal(env, layout, literal),
 
         Call(call) => build_exp_call(env, layout_ids, scope, parent, layout, call),
 
