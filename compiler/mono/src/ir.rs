@@ -976,7 +976,7 @@ impl<'a> Literal<'a> {
     }
 }
 
-fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
+pub fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,
@@ -998,7 +998,7 @@ where
     }
 }
 
-fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
+pub fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,

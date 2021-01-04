@@ -1,10 +1,14 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
+use crate::ir::{
+    join_point_to_doc, symbol_to_doc, Call, CallType, DestructType, Expr, JoinPointId, Literal,
+    Param, Pattern, RecordDestruct, Wrapped,
+};
 use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
-use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -143,17 +147,6 @@ impl<'a> Proc<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
-
-    pub fn insert_refcount_operations(
-        arena: &'a Bump,
-        procs: &mut MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-    ) {
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
-
-        for (_, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -250,110 +243,6 @@ impl<'a> Procs<'a> {
         for symbol in other.module_thunks.drain() {
             self.module_thunks.insert(symbol);
         }
-    }
-
-    pub fn get_specialized_procs_without_rc(
-        self,
-        arena: &'a Bump,
-    ) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
-
-        for (key, in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => unreachable!("The procedure {:?} should have be done by now", key),
-                Done(mut proc) => {
-                    use self::SelfRecursive::*;
-                    if let SelfRecursive(id) = proc.is_self_recursive {
-                        proc.body = crate::tail_recursion::make_tail_recursive(
-                            arena,
-                            id,
-                            proc.name,
-                            proc.body.clone(),
-                            proc.args,
-                        );
-                    }
-
-                    result.insert(key, proc);
-                }
-            }
-        }
-
-        result
-    }
-
-    // TODO investigate make this an iterator?
-    pub fn get_specialized_procs(self, arena: &'a Bump) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
-
-        for (key, in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => unreachable!("The procedure {:?} should have be done by now", key),
-                Done(proc) => {
-                    result.insert(key, proc);
-                }
-            }
-        }
-
-        for (_, proc) in result.iter_mut() {
-            use self::SelfRecursive::*;
-            if let SelfRecursive(id) = proc.is_self_recursive {
-                proc.body = crate::tail_recursion::make_tail_recursive(
-                    arena,
-                    id,
-                    proc.name,
-                    proc.body.clone(),
-                    proc.args,
-                );
-            }
-        }
-
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
-
-        for (_, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
-        }
-
-        result
-    }
-
-    pub fn get_specialized_procs_help(
-        self,
-        arena: &'a Bump,
-    ) -> (
-        MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-        &'a crate::borrow::ParamMap<'a>,
-    ) {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
-
-        for (key, in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => unreachable!("The procedure {:?} should have be done by now", key),
-                Done(proc) => {
-                    result.insert(key, proc);
-                }
-            }
-        }
-
-        for (_, proc) in result.iter_mut() {
-            use self::SelfRecursive::*;
-            if let SelfRecursive(id) = proc.is_self_recursive {
-                proc.body = crate::tail_recursion::make_tail_recursive(
-                    arena,
-                    id,
-                    proc.name,
-                    proc.body.clone(),
-                    proc.args,
-                );
-            }
-        }
-
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
-
-        for (_, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
-        }
-
-        (result, borrow_params)
     }
 
     // TODO trim down these arguments!
@@ -707,16 +596,6 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
-pub struct JoinPointId(pub Symbol);
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Param<'a> {
-    pub symbol: Symbol,
-    pub borrow: bool,
-    pub layout: Layout<'a>,
-}
-
 pub fn cond<'a>(
     env: &mut Env<'a, '_>,
     cond_symbol: Symbol,
@@ -725,15 +604,44 @@ pub fn cond<'a>(
     fail: Stmt<'a>,
     ret_layout: Layout<'a>,
 ) -> Stmt<'a> {
-    let branches = env.arena.alloc([(1u64, pass)]);
-    let default_branch = env.arena.alloc(fail);
+    let true_ctor = crate::exhaustive::Ctor {
+        arity: 0,
+        name: TagName::Global("True".into()),
+        tag_id: TagId(1),
+    };
+
+    let false_ctor = crate::exhaustive::Ctor {
+        arity: 0,
+        name: TagName::Global("False".into()),
+        tag_id: TagId(0),
+    };
+
+    let union = crate::exhaustive::Union {
+        alternatives: vec![true_ctor, false_ctor],
+        render_as: crate::exhaustive::RenderAs::Tag,
+    };
+
+    let true_pattern = Pattern::BitLiteral {
+        value: true,
+        tag_name: TagName::Global("True".into()),
+        union: union.clone(),
+    };
+
+    let false_pattern = Pattern::BitLiteral {
+        value: false,
+        tag_name: TagName::Global("False".into()),
+        union,
+    };
+
+    let branches = env
+        .arena
+        .alloc([(true_pattern, None, pass), (false_pattern, None, fail)]);
 
     Stmt::Switch {
         cond_symbol,
         cond_layout,
         ret_layout,
         branches,
-        default_branch,
     }
 }
 
@@ -751,14 +659,9 @@ pub enum Stmt<'a> {
     /// rethrows a thrown exception; must be the final instruction in the invoke `fail` branch
     Rethrow,
     Switch {
-        /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_symbol: Symbol,
         cond_layout: Layout<'a>,
-        /// The u64 in the tuple will be compared directly to the condition Expr.
-        /// If they are equal, this branch will be taken.
-        branches: &'a [(u64, Stmt<'a>)],
-        /// If no other branches pass, this default branch will be taken.
-        default_branch: &'a Stmt<'a>,
+        branches: &'a [(Pattern<'a>, Option<Stmt<'a>>, Stmt<'a>)],
         /// Each branch must return a value of this type.
         ret_layout: Layout<'a>,
     },
@@ -775,329 +678,6 @@ pub enum Stmt<'a> {
     },
     Jump(JoinPointId, &'a [Symbol]),
     RuntimeError(&'a str),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Literal<'a> {
-    // Literals
-    Int(i64),
-    Float(f64),
-    Str(&'a str),
-    /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
-    /// so they can (at least potentially) be emitted as 1-bit machine bools.
-    ///
-    /// So [ True, False ] compiles to this, and so do [ A, B ] and [ Foo, Bar ].
-    /// However, a union like [ True, False, Other Int ] would not.
-    Bool(bool),
-    /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
-    /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
-    Byte(u8),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Wrapped {
-    EmptyRecord,
-    SingleElementRecord,
-    RecordOrSingleTagUnion,
-    MultiTagUnion,
-}
-
-impl Wrapped {
-    pub fn from_layout(layout: &Layout<'_>) -> Self {
-        match Self::opt_from_layout(layout) {
-            Some(result) => result,
-            None => unreachable!("not an indexable type {:?}", layout),
-        }
-    }
-
-    pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
-        match layout {
-            Layout::Struct(fields) => match fields.len() {
-                0 => Some(Wrapped::EmptyRecord),
-                1 => Some(Wrapped::SingleElementRecord),
-                _ => Some(Wrapped::RecordOrSingleTagUnion),
-            },
-
-            Layout::Union(tags) | Layout::RecursiveUnion(tags) => match tags {
-                [] => todo!("how to handle empty tag unions?"),
-                [single] => match single.len() {
-                    0 => Some(Wrapped::EmptyRecord),
-                    1 => Some(Wrapped::SingleElementRecord),
-                    _ => Some(Wrapped::RecordOrSingleTagUnion),
-                },
-                _ => Some(Wrapped::MultiTagUnion),
-            },
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Call<'a> {
-    pub call_type: CallType<'a>,
-    pub arguments: &'a [Symbol],
-}
-
-impl<'a> Call<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
-    where
-        D: DocAllocator<'b, A>,
-        D::Doc: Clone,
-        A: Clone,
-    {
-        use CallType::*;
-
-        let arguments = self.arguments;
-
-        match self.call_type {
-            CallType::ByName { name, .. } => {
-                let it = std::iter::once(name)
-                    .chain(arguments.iter().copied())
-                    .map(|s| symbol_to_doc(alloc, s));
-
-                alloc.text("CallByName ").append(alloc.intersperse(it, " "))
-            }
-            CallType::ByPointer { name, .. } => {
-                let it = std::iter::once(name)
-                    .chain(arguments.iter().copied())
-                    .map(|s| symbol_to_doc(alloc, s));
-
-                alloc
-                    .text("CallByPointer ")
-                    .append(alloc.intersperse(it, " "))
-            }
-            LowLevel { op: lowlevel } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text(format!("lowlevel {:?} ", lowlevel))
-                    .append(alloc.intersperse(it, " "))
-            }
-            Foreign {
-                ref foreign_symbol, ..
-            } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text(format!("foreign {:?} ", foreign_symbol.as_str()))
-                    .append(alloc.intersperse(it, " "))
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum CallType<'a> {
-    ByName {
-        name: Symbol,
-
-        full_layout: Layout<'a>,
-        ret_layout: Layout<'a>,
-        arg_layouts: &'a [Layout<'a>],
-    },
-    ByPointer {
-        name: Symbol,
-
-        full_layout: Layout<'a>,
-        ret_layout: Layout<'a>,
-        arg_layouts: &'a [Layout<'a>],
-    },
-    Foreign {
-        foreign_symbol: ForeignSymbol,
-        ret_layout: Layout<'a>,
-    },
-    LowLevel {
-        op: LowLevel,
-    },
-}
-
-// x = f a b c; S
-//
-//
-// invoke x = f a b c in S else Rethrow
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Expr<'a> {
-    Literal(Literal<'a>),
-
-    // Functions
-    FunctionPointer(Symbol, Layout<'a>),
-    Call(Call<'a>),
-
-    Tag {
-        tag_layout: Layout<'a>,
-        tag_name: TagName,
-        tag_id: u8,
-        union_size: u8,
-        arguments: &'a [Symbol],
-    },
-    Struct(&'a [Symbol]),
-
-    AccessAtIndex {
-        index: u64,
-        field_layouts: &'a [Layout<'a>],
-        structure: Symbol,
-        wrapped: Wrapped,
-    },
-
-    Array {
-        elem_layout: Layout<'a>,
-        elems: &'a [Symbol],
-    },
-    EmptyArray,
-
-    Reuse {
-        symbol: Symbol,
-        tag_name: TagName,
-        tag_id: u8,
-        arguments: &'a [Symbol],
-    },
-    Reset(Symbol),
-
-    RuntimeErrorFunction(&'a str),
-}
-
-impl<'a> Literal<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
-    where
-        D: DocAllocator<'b, A>,
-        D::Doc: Clone,
-        A: Clone,
-    {
-        use Literal::*;
-
-        match self {
-            Int(lit) => alloc.text(format!("{}i64", lit)),
-            Float(lit) => alloc.text(format!("{}f64", lit)),
-            Bool(lit) => alloc.text(format!("{}", lit)),
-            Byte(lit) => alloc.text(format!("{}u8", lit)),
-            Str(lit) => alloc.text(format!("{:?}", lit)),
-        }
-    }
-}
-
-fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
-where
-    D: DocAllocator<'b, A>,
-    D::Doc: Clone,
-    A: Clone,
-{
-    use roc_module::ident::ModuleName;
-
-    if PRETTY_PRINT_IR_SYMBOLS {
-        alloc.text(format!("{:?}", symbol))
-    } else {
-        let text = format!("{}", symbol);
-
-        if text.starts_with(ModuleName::APP) {
-            let name: String = text.trim_start_matches(ModuleName::APP).into();
-            alloc.text("Test").append(name)
-        } else {
-            alloc.text(text)
-        }
-    }
-}
-
-fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
-where
-    D: DocAllocator<'b, A>,
-    D::Doc: Clone,
-    A: Clone,
-{
-    symbol_to_doc(alloc, symbol.0)
-}
-
-impl<'a> Expr<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
-    where
-        D: DocAllocator<'b, A>,
-        D::Doc: Clone,
-        A: Clone,
-    {
-        use Expr::*;
-
-        match self {
-            Literal(lit) => lit.to_doc(alloc),
-
-            FunctionPointer(symbol, _) => alloc
-                .text("FunctionPointer ")
-                .append(symbol_to_doc(alloc, *symbol)),
-
-            Call(call) => call.to_doc(alloc),
-
-            Tag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                let doc_tag = match tag_name {
-                    TagName::Global(s) => alloc.text(s.as_str()),
-                    TagName::Private(s) => symbol_to_doc(alloc, *s),
-                    TagName::Closure(s) => alloc
-                        .text("ClosureTag(")
-                        .append(symbol_to_doc(alloc, *s))
-                        .append(")"),
-                };
-
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                doc_tag
-                    .append(alloc.space())
-                    .append(alloc.intersperse(it, " "))
-            }
-            Reuse {
-                symbol,
-                tag_name,
-                arguments,
-                ..
-            } => {
-                let doc_tag = match tag_name {
-                    TagName::Global(s) => alloc.text(s.as_str()),
-                    TagName::Private(s) => alloc.text(format!("{}", s)),
-                    TagName::Closure(s) => alloc
-                        .text("ClosureTag(")
-                        .append(symbol_to_doc(alloc, *s))
-                        .append(")"),
-                };
-
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text("Reuse ")
-                    .append(symbol_to_doc(alloc, *symbol))
-                    .append(doc_tag)
-                    .append(alloc.space())
-                    .append(alloc.intersperse(it, " "))
-            }
-            Reset(symbol) => alloc.text("Reuse ").append(symbol_to_doc(alloc, *symbol)),
-
-            Struct(args) => {
-                let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text("Struct {")
-                    .append(alloc.intersperse(it, ", "))
-                    .append(alloc.text("}"))
-            }
-            Array { elems, .. } => {
-                let it = elems.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text("Array [")
-                    .append(alloc.intersperse(it, ", "))
-                    .append(alloc.text("]"))
-            }
-            EmptyArray => alloc.text("Array []"),
-
-            AccessAtIndex {
-                index, structure, ..
-            } => alloc
-                .text(format!("Index {} ", index))
-                .append(symbol_to_doc(alloc, *structure)),
-
-            RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
-        }
-    }
 }
 
 impl<'a> Stmt<'a> {
@@ -1169,56 +749,44 @@ impl<'a> Stmt<'a> {
             Rethrow => alloc.text("rethrow;"),
 
             Switch {
-                cond_symbol,
-                branches,
-                default_branch,
+                cond_symbol: _,
+                branches: _,
                 ..
             } => {
-                match branches {
-                    [(1, pass)] => {
-                        let fail = default_branch;
-                        alloc
-                            .text("if ")
-                            .append(symbol_to_doc(alloc, *cond_symbol))
-                            .append(" then")
-                            .append(alloc.hardline())
-                            .append(pass.to_doc(alloc).indent(4))
-                            .append(alloc.hardline())
-                            .append(alloc.text("else"))
-                            .append(alloc.hardline())
-                            .append(fail.to_doc(alloc).indent(4))
-                    }
-
-                    _ => {
-                        let default_doc = alloc
-                            .text("default:")
-                            .append(alloc.hardline())
-                            .append(default_branch.to_doc(alloc).indent(4))
-                            .indent(4);
-
-                        let branches_docs = branches
-                            .iter()
-                            .map(|(tag, expr)| {
-                                alloc
-                                    .text(format!("case {}:", tag))
-                                    .append(alloc.hardline())
-                                    .append(expr.to_doc(alloc).indent(4))
-                                    .indent(4)
-                            })
-                            .chain(std::iter::once(default_doc));
-                        //
-                        alloc
-                            .text("switch ")
-                            .append(symbol_to_doc(alloc, *cond_symbol))
-                            .append(":")
-                            .append(alloc.hardline())
-                            .append(alloc.intersperse(
-                                branches_docs,
-                                alloc.hardline().append(alloc.hardline()),
-                            ))
-                            .append(alloc.hardline())
-                    }
-                }
+                todo!()
+                //                match branches {
+                //                    [(0, None, fail), (1, None, pass)] => alloc
+                //                        .text("if ")
+                //                        .append(symbol_to_doc(alloc, *cond_symbol))
+                //                        .append(" then")
+                //                        .append(alloc.hardline())
+                //                        .append(pass.to_doc(alloc).indent(4))
+                //                        .append(alloc.hardline())
+                //                        .append(alloc.text("else"))
+                //                        .append(alloc.hardline())
+                //                        .append(fail.to_doc(alloc).indent(4)),
+                //
+                //                    _ => {
+                //                        let branches_docs = branches.iter().map(|(tag, expr)| {
+                //                            alloc
+                //                                .text(format!("case {}:", tag))
+                //                                .append(alloc.hardline())
+                //                                .append(expr.to_doc(alloc).indent(4))
+                //                                .indent(4)
+                //                        });
+                //
+                //                        alloc
+                //                            .text("switch ")
+                //                            .append(symbol_to_doc(alloc, *cond_symbol))
+                //                            .append(":")
+                //                            .append(alloc.hardline())
+                //                            .append(alloc.intersperse(
+                //                                branches_docs,
+                //                                alloc.hardline().append(alloc.hardline()),
+                //                            ))
+                //                            .append(alloc.hardline())
+                //                    }
+                //                }
             }
 
             RuntimeError(s) => alloc.text(format!("Error {}", s)),
@@ -4271,11 +3839,8 @@ fn from_can_when<'a>(
     procs: &mut Procs<'a>,
     join_point: Option<JoinPointId>,
 ) -> Stmt<'a> {
-    if branches.is_empty() {
-        // A when-expression with no branches is a runtime error.
-        // We can't know what to return!
-        return Stmt::RuntimeError("Hit a 0-branch when expression");
-    }
+    debug_assert!(!branches.is_empty());
+
     let opt_branches = to_opt_branches(env, region, branches, layout_cache);
 
     let cond_layout = layout_cache
@@ -4301,7 +3866,6 @@ fn from_can_when<'a>(
                 }
             };
 
-            use crate::decision_tree::Guard;
             if let Some(loc_expr) = opt_guard {
                 let id = JoinPointId(env.unique_symbol());
                 let symbol = env.unique_symbol();
@@ -4317,44 +3881,19 @@ fn from_can_when<'a>(
                     jump,
                 );
 
-                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt) {
-                    Ok(new_guard_stmt) => (
-                        pattern,
-                        Guard::Guard {
-                            id,
-                            symbol,
-                            stmt: new_guard_stmt,
-                        },
-                        branch_stmt,
-                    ),
-                    Err(msg) => (
-                        Pattern::Underscore,
-                        Guard::NoGuard,
-                        Stmt::RuntimeError(env.arena.alloc(msg)),
-                    ),
-                }
+                (pattern, Some(guard_stmt), branch_stmt)
             } else {
-                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt) {
-                    Ok(new_branch_stmt) => (pattern, Guard::NoGuard, new_branch_stmt),
-                    Err(msg) => (
-                        Pattern::Underscore,
-                        Guard::NoGuard,
-                        Stmt::RuntimeError(env.arena.alloc(msg)),
-                    ),
-                }
+                (pattern, None, branch_stmt)
             }
         });
-    let mono_branches = Vec::from_iter_in(it, arena);
+    let mono_branches = Vec::from_iter_in(it, arena).into_bump_slice();
 
-    crate::decision_tree::optimize_when(
-        env,
-        procs,
-        layout_cache,
+    Stmt::Switch {
         cond_symbol,
-        cond_layout.clone(),
+        cond_layout,
         ret_layout,
-        mono_branches,
-    )
+        branches: mono_branches,
+    }
 }
 
 fn substitute(substitutions: &MutMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
@@ -4453,29 +3992,35 @@ fn substitute_in_stmt_help<'a>(
             cond_symbol,
             cond_layout,
             branches,
-            default_branch,
             ret_layout,
         } => {
-            let opt_default = substitute_in_stmt_help(arena, default_branch, subs);
-
             let mut did_change = false;
 
             let opt_branches = Vec::from_iter_in(
-                branches.iter().map(|(label, branch)| {
-                    match substitute_in_stmt_help(arena, branch, subs) {
+                branches.iter().map(|(pattern, opt_guard, branch)| {
+                    let sub_branch = substitute_in_stmt_help(arena, branch, subs);
+                    let sub_opt_guard = match opt_guard {
+                        Some(guard) => Some(substitute_in_stmt_help(arena, guard, subs)),
                         None => None,
-                        Some(branch) => {
-                            did_change = true;
-                            Some((*label, branch.clone()))
-                        }
+                    };
+
+                    if sub_branch.is_some() || sub_opt_guard.is_some() {
+                        did_change = true;
+
+                        let branch = sub_branch.unwrap_or_else(|| branch);
+                        let opt_guard: Option<Stmt> = sub_opt_guard
+                            .unwrap_or_else(|| opt_guard.as_ref())
+                            .map(|x| x.clone());
+
+                        Some((pattern.clone(), opt_guard, branch.clone()))
+                    } else {
+                        None
                     }
                 }),
                 arena,
             );
 
-            if opt_default.is_some() || did_change {
-                let default_branch = opt_default.unwrap_or(default_branch);
-
+            if did_change {
                 let branches = if did_change {
                     let new = Vec::from_iter_in(
                         opt_branches.into_iter().zip(branches.iter()).map(
@@ -4495,7 +4040,6 @@ fn substitute_in_stmt_help<'a>(
                 Some(arena.alloc(Switch {
                     cond_symbol: *cond_symbol,
                     cond_layout: cond_layout.clone(),
-                    default_branch,
                     branches,
                     ret_layout: ret_layout.clone(),
                 }))
@@ -5612,51 +5156,6 @@ fn call_by_name<'a>(
             Stmt::RuntimeError(env.arena.alloc(msg))
         }
     }
-}
-
-/// A pattern, including possible problems (e.g. shadowing) so that
-/// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Pattern<'a> {
-    Identifier(Symbol),
-    Underscore,
-
-    IntLiteral(i64),
-    FloatLiteral(u64),
-    BitLiteral {
-        value: bool,
-        tag_name: TagName,
-        union: crate::exhaustive::Union,
-    },
-    EnumLiteral {
-        tag_id: u8,
-        tag_name: TagName,
-        union: crate::exhaustive::Union,
-    },
-    StrLiteral(Box<str>),
-
-    RecordDestructure(Vec<'a, RecordDestruct<'a>>, Layout<'a>),
-    AppliedTag {
-        tag_name: TagName,
-        tag_id: u8,
-        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
-        layout: Layout<'a>,
-        union: crate::exhaustive::Union,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecordDestruct<'a> {
-    pub label: Lowercase,
-    pub variable: Variable,
-    pub layout: Layout<'a>,
-    pub typ: DestructType<'a>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DestructType<'a> {
-    Required(Symbol),
-    Guard(Pattern<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
