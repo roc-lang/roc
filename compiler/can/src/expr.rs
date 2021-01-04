@@ -310,12 +310,11 @@ pub fn canonicalize_expr<'a>(
                     can_elems.push(can_expr);
                 }
 
-                let mut output = Output::default();
-
-                output.references = references;
-
-                // A list literal is never a tail call!
-                output.tail_call = None;
+                let output = Output {
+                    references,
+                    tail_call: None,
+                    ..Default::default()
+                };
 
                 (
                     List {
@@ -893,10 +892,7 @@ pub fn local_successors<'a>(
     answer
 }
 
-fn call_successors<'a>(
-    call_symbol: Symbol,
-    closures: &'a MutMap<Symbol, References>,
-) -> ImSet<Symbol> {
+fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -> ImSet<Symbol> {
     let mut answer = im_rc::hashset::HashSet::default();
     let mut seen = MutSet::default();
     let mut queue = vec![call_symbol];

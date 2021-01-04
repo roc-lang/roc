@@ -66,7 +66,7 @@ pub fn helper<'a>(
     } = loaded;
 
     debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
+    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(found) => found.clone(),
@@ -161,6 +161,10 @@ pub fn helper<'a>(
     }
 
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+
+    // strip Zig debug stuff
+    module.strip_debug_info();
+
     let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
         roc_gen::llvm::build::OptLevel::Normal

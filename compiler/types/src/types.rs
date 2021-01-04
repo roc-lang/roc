@@ -1128,7 +1128,7 @@ fn write_error_type_help(
     use ErrorType::*;
 
     match error_type {
-        Infinite => buf.push_str("∞"),
+        Infinite => buf.push('∞'),
         Error => buf.push('?'),
         FlexVar(name) => buf.push_str(name.as_str()),
         RigidVar(name) => buf.push_str(name.as_str()),
@@ -1246,7 +1246,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
     use ErrorType::*;
 
     match error_type {
-        Infinite => buf.push_str("∞"),
+        Infinite => buf.push('∞'),
         Error => buf.push('?'),
         FlexVar(name) => buf.push_str(name.as_str()),
         RigidVar(name) => buf.push_str(name.as_str()),

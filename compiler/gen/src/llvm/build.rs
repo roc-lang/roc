@@ -18,6 +18,7 @@ use crate::llvm::refcounting::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use either::Either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -40,7 +41,7 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{JoinPointId, Wrapped};
+use roc_mono::ir::{CallType, JoinPointId, Wrapped};
 use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode};
 use target_lexicon::CallingConvention;
 
@@ -429,6 +430,14 @@ pub fn construct_optimization_passes<'a>(
             fpm.add_memcpy_optimize_pass(); // this one is very important
 
             fpm.add_licm_pass();
+
+            // turn invoke into call
+            mpm.add_prune_eh_pass();
+
+            // remove unused global values (often the `_wrapper` can be removed)
+            mpm.add_global_dce_pass();
+
+            mpm.add_function_inlining_pass();
         }
     }
 
@@ -625,26 +634,81 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
     }
 }
 
-pub fn build_exp_expr<'a, 'ctx, 'env>(
+pub fn build_exp_call<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
-    expr: &roc_mono::ir::Expr<'a>,
+    call: &roc_mono::ir::Call<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use roc_mono::ir::CallType::*;
-    use roc_mono::ir::Expr::*;
+    let roc_mono::ir::Call {
+        call_type,
+        arguments,
+    } = call;
 
-    match expr {
-        Literal(literal) => build_exp_literal(env, layout, literal),
-        RunLowLevel(op, symbols) => {
-            run_low_level(env, layout_ids, scope, parent, layout, *op, symbols)
+    match call_type {
+        CallType::ByName {
+            name, full_layout, ..
+        } => {
+            let mut arg_tuples: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for symbol in arguments.iter() {
+                arg_tuples.push(load_symbol(env, scope, symbol));
+            }
+
+            call_with_args(
+                env,
+                layout_ids,
+                &full_layout,
+                *name,
+                parent,
+                arg_tuples.into_bump_slice(),
+            )
         }
 
-        ForeignCall {
+        CallType::ByPointer { name, .. } => {
+            let sub_expr = load_symbol(env, scope, name);
+
+            let mut arg_vals: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for arg in arguments.iter() {
+                arg_vals.push(load_symbol(env, scope, arg));
+            }
+
+            let call = match sub_expr {
+                BasicValueEnum::PointerValue(ptr) => {
+                    env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
+                }
+                non_ptr => {
+                    panic!(
+                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
+                        non_ptr
+                    );
+                }
+            };
+
+            if env.exposed_to_host.contains(name) {
+                // If this is an external-facing function, use the C calling convention.
+                call.set_call_convention(C_CALL_CONV);
+            } else {
+                // If it's an internal-only function, use the fast calling convention.
+                call.set_call_convention(FAST_CALL_CONV);
+            }
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+        }
+
+        CallType::LowLevel { op } => {
+            run_low_level(env, layout_ids, scope, parent, layout, *op, arguments)
+        }
+
+        CallType::Foreign {
             foreign_symbol,
-            arguments,
             ret_layout,
         } => {
             let mut arg_vals: Vec<BasicValueEnum> =
@@ -711,65 +775,23 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
             }
         }
-        FunctionCall {
-            call_type: ByName(name),
-            full_layout,
-            args,
-            ..
-        } => {
-            let mut arg_tuples: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+    }
+}
 
-            for symbol in args.iter() {
-                arg_tuples.push(load_symbol(env, scope, symbol));
-            }
+pub fn build_exp_expr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
+    expr: &roc_mono::ir::Expr<'a>,
+) -> BasicValueEnum<'ctx> {
+    use roc_mono::ir::Expr::*;
 
-            call_with_args(
-                env,
-                layout_ids,
-                &full_layout,
-                *name,
-                parent,
-                arg_tuples.into_bump_slice(),
-            )
-        }
+    match expr {
+        Literal(literal) => build_exp_literal(env, literal),
 
-        FunctionCall {
-            call_type: ByPointer(name),
-            args,
-            ..
-        } => {
-            let sub_expr = load_symbol(env, scope, name);
-
-            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-            for arg in args.iter() {
-                arg_vals.push(load_symbol(env, scope, arg));
-            }
-
-            let call = match sub_expr {
-                BasicValueEnum::PointerValue(ptr) => {
-                    env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
-                }
-                non_ptr => {
-                    panic!(
-                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                        non_ptr
-                    );
-                }
-            };
-
-            if env.exposed_to_host.contains(name) {
-                // If this is an external-facing function, use the C calling convention.
-                call.set_call_convention(C_CALL_CONV);
-            } else {
-                // If it's an internal-only function, use the fast calling convention.
-                call.set_call_convention(FAST_CALL_CONV);
-            }
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-        }
+        Call(call) => build_exp_call(env, layout_ids, scope, parent, layout, call),
 
         Struct(sorted_fields) => {
             let ctx = env.context;
@@ -1299,6 +1321,92 @@ fn list_literal<'a, 'ctx, 'env>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn invoke_roc_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &mut Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    symbol: Symbol,
+    layout: Layout<'a>,
+    function_value: Either<FunctionValue<'ctx>, PointerValue<'ctx>>,
+    arguments: &[Symbol],
+    pass: &'a roc_mono::ir::Stmt<'a>,
+    fail: &'a roc_mono::ir::Stmt<'a>,
+) -> BasicValueEnum<'ctx> {
+    let context = env.context;
+
+    let call_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
+    let alloca = create_entry_block_alloca(env, parent, call_bt, symbol.ident_string(&env.interns));
+
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
+
+    for arg in arguments.iter() {
+        arg_vals.push(load_symbol(env, scope, arg));
+    }
+
+    let pass_block = context.append_basic_block(parent, "invoke_pass");
+    let fail_block = context.append_basic_block(parent, "invoke_fail");
+
+    let call_result = {
+        let call = env.builder.build_invoke(
+            function_value,
+            arg_vals.as_slice(),
+            pass_block,
+            fail_block,
+            "tmp",
+        );
+
+        match function_value {
+            Either::Left(function) => {
+                call.set_call_convention(function.get_call_conventions());
+            }
+            Either::Right(_) => {
+                call.set_call_convention(FAST_CALL_CONV);
+            }
+        }
+
+        call.try_as_basic_value()
+            .left()
+            .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+    };
+
+    {
+        env.builder.position_at_end(pass_block);
+
+        env.builder.build_store(alloca, call_result);
+        scope.insert(symbol, (layout, alloca));
+
+        build_exp_stmt(env, layout_ids, scope, parent, pass);
+
+        scope.remove(&symbol);
+    }
+
+    {
+        env.builder.position_at_end(fail_block);
+
+        let landing_pad_type = {
+            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
+            let selector_value = context.i32_type().into();
+
+            context.struct_type(&[exception_ptr, selector_value], false)
+        };
+
+        env.builder
+            .build_catch_all_landing_pad(
+                &landing_pad_type,
+                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+                context.i8_type().ptr_type(AddressSpace::Generic),
+                "invoke_landing_pad",
+            )
+            .into_struct_value();
+
+        build_exp_stmt(env, layout_ids, scope, parent, fail);
+    }
+
+    call_result
+}
+
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1381,79 +1489,85 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             value
         }
 
-        Cond {
-            branching_symbol,
-            pass: pass_stmt,
-            fail: fail_stmt,
-            ret_layout,
-            ..
+        Invoke {
+            symbol,
+            call,
+            layout,
+            pass,
+            fail: roc_mono::ir::Stmt::Unreachable,
         } => {
-            let ret_type =
-                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
+            // when the fail case is just Unreachable, there is no cleanup work to do
+            // so we can just treat this invoke as a normal call
+            let stmt =
+                roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+            build_exp_stmt(env, layout_ids, scope, parent, &stmt)
+        }
 
-            let cond_expr = load_symbol(env, scope, branching_symbol);
+        Invoke {
+            symbol,
+            call,
+            layout,
+            pass,
+            fail,
+        } => match call.call_type {
+            CallType::ByName {
+                name,
+                ref full_layout,
+                ..
+            } => {
+                let function_value = function_value_by_name(env, layout_ids, full_layout, name);
 
-            match cond_expr {
-                IntValue(value) => {
-                    // This is a call tobuild_basic_phi2, except inlined to prevent
-                    // problems with lifetimes and closures involving layout_ids.
-                    let builder = env.builder;
-                    let context = env.context;
-
-                    // build blocks
-                    let then_block = context.append_basic_block(parent, "then");
-                    let else_block = context.append_basic_block(parent, "else");
-                    let mut blocks: std::vec::Vec<(
-                        &dyn inkwell::values::BasicValue<'_>,
-                        inkwell::basic_block::BasicBlock<'_>,
-                    )> = std::vec::Vec::with_capacity(2);
-                    let cont_block = context.append_basic_block(parent, "condbranchcont");
-
-                    builder.build_conditional_branch(value, then_block, else_block);
-
-                    // build then block
-                    builder.position_at_end(then_block);
-                    let then_val = build_exp_stmt(env, layout_ids, scope, parent, pass_stmt);
-                    if then_block.get_terminator().is_none() {
-                        builder.build_unconditional_branch(cont_block);
-                        let then_block = builder.get_insert_block().unwrap();
-                        blocks.push((&then_val, then_block));
-                    }
-
-                    // build else block
-                    builder.position_at_end(else_block);
-                    let else_val = build_exp_stmt(env, layout_ids, scope, parent, fail_stmt);
-                    if else_block.get_terminator().is_none() {
-                        let else_block = builder.get_insert_block().unwrap();
-                        builder.build_unconditional_branch(cont_block);
-                        blocks.push((&else_val, else_block));
-                    }
-
-                    // emit merge block
-                    if blocks.is_empty() {
-                        // SAFETY there are no other references to this block in this case
-                        unsafe {
-                            cont_block.delete().unwrap();
-                        }
-
-                        // return garbage value
-                        context.i64_type().const_int(0, false).into()
-                    } else {
-                        builder.position_at_end(cont_block);
-
-                        let phi = builder.build_phi(ret_type, "branch");
-
-                        // phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
-                        phi.add_incoming(&blocks);
-
-                        phi.as_basic_value()
-                    }
-                }
-                _ => panic!(
-                    "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
-                    cond_expr,
-                ),
+                invoke_roc_function(
+                    env,
+                    layout_ids,
+                    scope,
+                    parent,
+                    *symbol,
+                    layout.clone(),
+                    function_value.into(),
+                    call.arguments,
+                    pass,
+                    fail,
+                )
             }
+            CallType::ByPointer { name, .. } => {
+                let sub_expr = load_symbol(env, scope, &name);
+
+                let function_ptr = match sub_expr {
+                    BasicValueEnum::PointerValue(ptr) => ptr,
+                    non_ptr => {
+                        panic!(
+                            "Tried to call by pointer, but encountered a non-pointer: {:?}",
+                            non_ptr
+                        );
+                    }
+                };
+
+                invoke_roc_function(
+                    env,
+                    layout_ids,
+                    scope,
+                    parent,
+                    *symbol,
+                    layout.clone(),
+                    function_ptr.into(),
+                    call.arguments,
+                    pass,
+                    fail,
+                )
+            }
+            _ => {
+                todo!()
+            }
+        },
+
+        Unreachable => {
+            cxa_rethrow_exception(env);
+
+            // used in exception handling
+            env.builder.build_unreachable();
+
+            env.context.i64_type().const_zero().into()
         }
 
         Switch {
@@ -2114,7 +2228,11 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let wrapper_function_name = format!("{}_catcher", roc_function.get_name().to_str().unwrap());
 
-    make_exception_catching_wrapper(env, roc_function, &wrapper_function_name)
+    let function_value = make_exception_catching_wrapper(env, roc_function, &wrapper_function_name);
+
+    function_value.set_linkage(Linkage::Internal);
+
+    function_value
 }
 
 fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
@@ -2626,6 +2744,29 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
+fn function_value_by_name<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    symbol: Symbol,
+) -> FunctionValue<'ctx> {
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+    let fn_name = fn_name.as_str();
+
+    env.module.get_function(fn_name).unwrap_or_else(|| {
+        if symbol.is_builtin() {
+            panic!("Unrecognized builtin function: {:?}", fn_name)
+        } else {
+            panic!(
+                "Unrecognized non-builtin function: {:?} (symbol: {:?}, layout: {:?})",
+                fn_name, symbol, layout
+            )
+        }
+    })
+}
+
 // #[allow(clippy::cognitive_complexity)]
 #[inline(always)]
 fn call_with_args<'a, 'ctx, 'env>(
@@ -2636,21 +2777,7 @@ fn call_with_args<'a, 'ctx, 'env>(
     _parent: FunctionValue<'ctx>,
     args: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_name = layout_ids
-        .get(symbol, layout)
-        .to_symbol_string(symbol, &env.interns);
-    let fn_name = fn_name.as_str();
-
-    let fn_val = env.module.get_function(fn_name).unwrap_or_else(|| {
-        if symbol.is_builtin() {
-            panic!("Unrecognized builtin function: {:?}", fn_name)
-        } else {
-            panic!(
-                "Unrecognized non-builtin function: {:?} (symbol: {:?}, layout: {:?})",
-                fn_name, symbol, layout
-            )
-        }
-    });
+    let fn_val = function_value_by_name(env, layout_ids, layout, symbol);
 
     let call = env.builder.build_call(fn_val, args, "call");
 
@@ -2833,7 +2960,16 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_keep_if(env, inplace, parent, func, func_layout, list, list_layout)
+            list_keep_if(
+                env,
+                layout_ids,
+                inplace,
+                parent,
+                func,
+                func_layout,
+                list,
+                list_layout,
+            )
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
@@ -2969,9 +3105,9 @@ fn run_low_level<'a, 'ctx, 'env>(
                 {
                     use roc_mono::layout::Builtin::*;
 
-                    let tag_eq = env.context.i8_type().const_int(0 as u64, false);
-                    let tag_gt = env.context.i8_type().const_int(1 as u64, false);
-                    let tag_lt = env.context.i8_type().const_int(2 as u64, false);
+                    let tag_eq = env.context.i8_type().const_int(0_u64, false);
+                    let tag_gt = env.context.i8_type().const_int(1_u64, false);
+                    let tag_lt = env.context.i8_type().const_int(2_u64, false);
 
                     match lhs_builtin {
                         Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
@@ -3955,8 +4091,7 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
     call.set_call_convention(C_CALL_CONV);
 }
 
-#[allow(dead_code)]
-fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+fn cxa_rethrow_exception(env: &Env<'_, '_, '_>) {
     let name = "__cxa_rethrow";
 
     let module = env.module;
@@ -3975,10 +4110,10 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
             cxa_rethrow
         }
     };
-    let call = env.builder.build_call(function, &[], "never_used");
+    let call = env.builder.build_call(function, &[], "rethrow");
 
     call.set_call_convention(C_CALL_CONV);
-    call.try_as_basic_value().left().unwrap()
+    // call.try_as_basic_value().left().unwrap()
 }
 
 fn get_foreign_symbol<'a, 'ctx, 'env>(
@@ -4024,7 +4159,7 @@ fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Function
     }
 }
 
-fn cxa_end_catch<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+fn cxa_end_catch(env: &Env<'_, '_, '_>) {
     let name = "__cxa_end_catch";
 
     let module = env.module;

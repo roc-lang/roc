@@ -1803,8 +1803,6 @@ fn update<'a>(
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -1817,6 +1815,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
@@ -1844,11 +1844,11 @@ fn update<'a>(
     }
 }
 
-fn finish_specialization<'a>(
-    state: State<'a>,
+fn finish_specialization(
+    state: State,
     subs: Subs,
     exposed_to_host: MutMap<Symbol, Variable>,
-) -> MonomorphizedModule<'a> {
+) -> MonomorphizedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
@@ -1917,8 +1917,8 @@ fn finish_specialization<'a>(
     }
 }
 
-fn finish<'a>(
-    state: State<'a>,
+fn finish(
+    state: State,
     solved: Solved<Subs>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,

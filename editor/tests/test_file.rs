@@ -6,7 +6,7 @@ extern crate indoc;
 #[cfg(test)]
 mod test_file {
     use bumpalo::Bump;
-    use roc_editor::file::File;
+    use roc_editor::lang::file::File;
     use std::path::Path;
 
     #[test]

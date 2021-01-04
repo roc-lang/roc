@@ -1,8 +1,17 @@
-# Not ready to be shared yet!
+# Not ready to be a public repo yet!
 
-Roc is a language to help anyone create delightful software.
+> ...but if you'd like to share it around, feel free to link people to
+> [this short talk](https://youtu.be/ZnYa99QoznE?t=4790) introducing the
+> language. It'd be best to avoid having Roc ending up on link aggregators like
+> Hacker News or Reddit until it's further along, but it's not a top secret
+> project or anything. For now it's better to spread gradually, not virally.
 
-Here's [a short talk](https://youtu.be/ZnYa99QoznE?t=4790) introducing it at a meetup.
+Roc is a language for making delightful software.
+
+If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/rtfeldman/roc/blob/trunk/roc-for-elm-programmers.md) may be of interest.
+
+If you're curious about where the language's name and logo came from,
+[here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
 
 ## Getting started
 
@@ -43,7 +52,7 @@ By using systems-level programming languages like C and C++, platform authors sa
 Roc is designed to make the "systems-level platform, higher-level application" experience as nice as possible.
 
 * **Application** authors code exclusively in Roc. It's a language designed for nice ergonomics. The syntax resembles Ruby or CoffeeScript, and it has a fast compiler with full type inference.
-* **Platform** authors code almost exclusively in Rust, except for the thin Roc API they expose to application authors. Roc application code compiles to Rust behind the scenes, so production builds of Roc apps benefit from the Rust compiler's whole-program optimizations. Roc application authors do not even need to know Rust exists.
+* **Platform** authors code almost exclusively in a systems-level langauge like C, C++, Rust, or [Zig](https://ziglang.org/), except for the thin Roc API they expose to application authors. Roc application code compiles to machine code, and production builds of Roc apps benefit from the same [LLLM](https://llvm.org/) optimizations that C++, Rust, and Zig do. Roc application authors do not need to know this lower-level code exists; all they have to interact with is the platform's API, which is exposed as an ordinary Roc API.
 
 Every Roc application is built on top of exactly one Roc platform. There is no such thing as a Roc application that runs without a platform, and there is no default platform. You must choose one!
 
@@ -57,7 +66,7 @@ Each Roc platform gets its own separate package repository, with packages built 
 
 ## Project Goals
 
-Roc is in the extremely early stages of development. It barely does anything yet. With any luck, it will support doing something useful by the end of 2020.
+Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/docs) is in even earlier stages than the compiler itself.
 
 Besides the above language design, a separate goal is for Roc to ship with an ambitiously boundary-pushing graphical editor. Not like "an IDE," but rather something that makes people say "I have never seen anything remotely like this outside of Bret Victor demos."
 
@@ -74,3 +83,15 @@ Finally, some implementation goals:
 * The CLI (for building Roc projects on CI platforms) has its user interface written in Roc (with an underlying Rust platform for fast compilation and basic CLI interactions).
 
 It's an ambitious project! It'll take a long time to get where it's going, but hopefully it'll be worth the wait.
+
+## Getting Involved
+
+The number of people involved in Roc's development has been steadily increasing
+over time - which has been great, because it's meant we've been able to onboard
+people at a nice pace. (Most people who have contributed to Roc had previously
+never done anything with Rust and also never worked on a compiler, but we've
+been able to find beginner-friendly projects to get people up to speed gradually.)
+
+If you're interested in getting involved, check out
+[this talk](https://youtu.be/ZnYa99QoznE?t=4790) which has more context on goals
+and timelines, and send an email to the address mentioned towards the end!

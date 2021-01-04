@@ -1,8 +1,8 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-use crate::pool::{Pool, PoolStr, PoolVec, ShallowClone};
-use crate::types::{Alias, TypeId};
+use crate::lang::pool::{Pool, PoolStr, PoolVec, ShallowClone};
+use crate::lang::types::{Alias, TypeId};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};

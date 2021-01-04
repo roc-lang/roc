@@ -73,8 +73,8 @@ mod test_load {
                 let (name, source) = app_module;
 
                 let filename = PathBuf::from(name);
-                let file_path = dir.path().join(filename.clone());
-                let full_file_path = PathBuf::from(file_path.clone());
+                let file_path = dir.path().join(filename);
+                let full_file_path = file_path.clone();
                 let mut file = File::create(file_path)?;
                 writeln!(file, "{}", source)?;
                 file_handles.push(file);

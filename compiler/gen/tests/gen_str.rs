@@ -8,7 +8,6 @@ extern crate inkwell;
 extern crate libc;
 extern crate roc_gen;
 
-use core;
 use roc_std::RocStr;
 
 #[macro_use]
@@ -514,5 +513,29 @@ mod gen_str {
 
         let min = format!("{}", i64::MIN);
         assert_evals_to!(r#"Str.fromInt Num.minInt"#, &min, &'static str);
+    }
+
+    #[test]
+    fn str_equality() {
+        assert_evals_to!(r#""a" == "a""#, true, bool);
+        assert_evals_to!(
+            r#""loremipsumdolarsitamet" == "loremipsumdolarsitamet""#,
+            true,
+            bool
+        );
+        assert_evals_to!(r#""a" != "b""#, true, bool);
+        assert_evals_to!(r#""a" == "b""#, false, bool);
+    }
+
+    #[test]
+    fn str_clone() {
+        use roc_std::RocStr;
+        let long = RocStr::from_slice("loremipsumdolarsitamet".as_bytes());
+        let short = RocStr::from_slice("x".as_bytes());
+        let empty = RocStr::from_slice("".as_bytes());
+
+        debug_assert_eq!(long.clone(), long);
+        debug_assert_eq!(short.clone(), short);
+        debug_assert_eq!(empty.clone(), empty);
     }
 }

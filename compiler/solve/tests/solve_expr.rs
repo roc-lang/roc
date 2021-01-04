@@ -51,8 +51,8 @@ mod solve_expr {
         let loaded = {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
-            let file_path = dir.path().join(filename.clone());
-            let full_file_path = PathBuf::from(file_path.clone());
+            let file_path = dir.path().join(filename);
+            let full_file_path = file_path.clone();
             let mut file = File::create(file_path)?;
             writeln!(file, "{}", module_src)?;
             drop(file);

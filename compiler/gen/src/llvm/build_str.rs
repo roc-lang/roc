@@ -77,6 +77,28 @@ fn str_symbol_to_i128<'a, 'ctx, 'env>(
         .into_int_value()
 }
 
+fn str_to_i128<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: BasicValueEnum<'ctx>,
+) -> IntValue<'ctx> {
+    let cell = env.builder.build_alloca(value.get_type(), "cell");
+
+    env.builder.build_store(cell, value);
+
+    let i128_ptr = env
+        .builder
+        .build_bitcast(
+            cell,
+            env.context.i128_type().ptr_type(AddressSpace::Generic),
+            "cast",
+        )
+        .into_pointer_value();
+
+    env.builder
+        .build_load(i128_ptr, "load_as_i128")
+        .into_int_value()
+}
+
 fn zig_str_to_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     zig_str: StructValue<'ctx>,
@@ -221,4 +243,20 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
 
     zig_str_to_struct(env, zig_result).into()
+}
+
+/// Str.equal : Str, Str -> Bool
+pub fn str_equal<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value1: BasicValueEnum<'ctx>,
+    value2: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let str1_i128 = str_to_i128(env, value1);
+    let str2_i128 = str_to_i128(env, value2);
+
+    call_bitcode_fn(
+        env,
+        &[str1_i128.into(), str2_i128.into()],
+        &bitcode::STR_EQUAL,
+    )
 }

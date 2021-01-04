@@ -44,7 +44,7 @@ pub enum Literal {
     Str(Box<str>),
 }
 
-fn simplify<'a>(pattern: &crate::ir::Pattern<'a>) -> Pattern {
+fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
     use crate::ir::Pattern::*;
 
     match pattern {
@@ -124,9 +124,9 @@ pub enum Guard {
 
 /// Check
 
-pub fn check<'a>(
+pub fn check(
     region: Region,
-    patterns: &[(Located<crate::ir::Pattern<'a>>, Guard)],
+    patterns: &[(Located<crate::ir::Pattern>, Guard)],
     context: Context,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
@@ -273,9 +273,9 @@ fn recover_ctor(
 /// REDUNDANT PATTERNS
 
 /// INVARIANT: Produces a list of rows where (forall row. length row == 1)
-fn to_nonredundant_rows<'a>(
+fn to_nonredundant_rows(
     overall_region: Region,
-    patterns: &[(Located<crate::ir::Pattern<'a>>, Guard)],
+    patterns: &[(Located<crate::ir::Pattern>, Guard)],
 ) -> Result<Vec<Vec<Pattern>>, Error> {
     let mut checked_rows = Vec::with_capacity(patterns.len());
 
