@@ -186,11 +186,11 @@ mod test_mono {
                     let Test.10 = 4i64;
                     invoke Test.7 = CallByName Num.24 Test.9 Test.10 catch
                         dec Test.1;
-                        unreachable;
+                        rethrow;
                     let Test.8 = 3i64;
                     invoke Test.3 = CallByName Num.24 Test.7 Test.8 catch
                         dec Test.1;
-                        unreachable;
+                        rethrow;
                     let Test.4 = CallByName List.7 Test.1;
                     dec Test.1;
                     let Test.2 = CallByName Num.24 Test.3 Test.4;

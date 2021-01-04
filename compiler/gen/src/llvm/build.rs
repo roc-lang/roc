@@ -1479,9 +1479,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             call,
             layout,
             pass,
-            fail: roc_mono::ir::Stmt::Unreachable,
+            fail: roc_mono::ir::Stmt::Rethrow,
         } => {
-            // when the fail case is just Unreachable, there is no cleanup work to do
+            // when the fail case is just Rethrow, there is no cleanup work to do
             // so we can just treat this invoke as a normal call
             let stmt =
                 roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
@@ -1546,7 +1546,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
         },
 
-        Unreachable => {
+        Rethrow => {
             cxa_rethrow_exception(env);
 
             // used in exception handling

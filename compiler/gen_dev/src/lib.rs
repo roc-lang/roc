@@ -339,7 +339,7 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Unreachable => {}
+            Stmt::Rethrow => {}
             Stmt::Inc(sym, following) => {
                 self.set_last_seen(*sym, stmt);
                 self.scan_ast(following);
