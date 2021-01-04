@@ -1054,7 +1054,7 @@ mod test_reporting {
 
                 This `Blue` global tag application has the type:
 
-                    [ Blue (Float a) ]a
+                    [ Blue (Float a) ]b
 
                 But `f` needs the 1st argument to be:
 
