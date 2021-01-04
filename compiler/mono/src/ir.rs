@@ -741,6 +741,13 @@ pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
+    Invoke {
+        symbol: Symbol,
+        call: Call<'a>,
+        layout: Layout<'a>,
+        pass: &'a Stmt<'a>,
+        fail: &'a Stmt<'a>,
+    },
     Switch {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_symbol: Symbol,
@@ -754,6 +761,7 @@ pub enum Stmt<'a> {
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
+    Unreachable,
     Inc(Symbol, &'a Stmt<'a>),
     Dec(Symbol, &'a Stmt<'a>),
     Join {
@@ -783,20 +791,6 @@ pub enum Literal<'a> {
     /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
     /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
     Byte(u8),
-}
-#[derive(Clone, Debug, PartialEq, Copy)]
-pub enum CallType {
-    ByName(Symbol),
-    ByPointer(Symbol),
-}
-
-impl CallType {
-    pub fn get_inner(&self) -> Symbol {
-        match self {
-            CallType::ByName(s) => *s,
-            CallType::ByPointer(s) => *s,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -838,24 +832,96 @@ impl Wrapped {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Call<'a> {
+    pub call_type: CallType<'a>,
+    pub arguments: &'a [Symbol],
+}
+
+impl<'a> Call<'a> {
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use CallType::*;
+
+        let arguments = self.arguments;
+
+        match self.call_type {
+            CallType::ByName { name, .. } => {
+                let it = std::iter::once(name)
+                    .chain(arguments.iter().copied())
+                    .map(|s| symbol_to_doc(alloc, s));
+
+                alloc.text("CallByName ").append(alloc.intersperse(it, " "))
+            }
+            CallType::ByPointer { name, .. } => {
+                let it = std::iter::once(name)
+                    .chain(arguments.iter().copied())
+                    .map(|s| symbol_to_doc(alloc, s));
+
+                alloc
+                    .text("CallByPointer ")
+                    .append(alloc.intersperse(it, " "))
+            }
+            LowLevel { op: lowlevel } => {
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text(format!("lowlevel {:?} ", lowlevel))
+                    .append(alloc.intersperse(it, " "))
+            }
+            Foreign {
+                ref foreign_symbol, ..
+            } => {
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text(format!("foreign {:?} ", foreign_symbol.as_str()))
+                    .append(alloc.intersperse(it, " "))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CallType<'a> {
+    ByName {
+        name: Symbol,
+
+        full_layout: Layout<'a>,
+        ret_layout: Layout<'a>,
+        arg_layouts: &'a [Layout<'a>],
+    },
+    ByPointer {
+        name: Symbol,
+
+        full_layout: Layout<'a>,
+        ret_layout: Layout<'a>,
+        arg_layouts: &'a [Layout<'a>],
+    },
+    Foreign {
+        foreign_symbol: ForeignSymbol,
+        ret_layout: Layout<'a>,
+    },
+    LowLevel {
+        op: LowLevel,
+    },
+}
+
+// x = f a b c; S
+//
+//
+// invoke x = f a b c in S else Unreachable
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
 
     // Functions
     FunctionPointer(Symbol, Layout<'a>),
-    FunctionCall {
-        call_type: CallType,
-        full_layout: Layout<'a>,
-        ret_layout: Layout<'a>,
-        arg_layouts: &'a [Layout<'a>],
-        args: &'a [Symbol],
-    },
-    RunLowLevel(LowLevel, &'a [Symbol]),
-    ForeignCall {
-        foreign_symbol: ForeignSymbol,
-        arguments: &'a [Symbol],
-        ret_layout: Layout<'a>,
-    },
+    Call(Call<'a>),
 
     Tag {
         tag_layout: Layout<'a>,
@@ -956,44 +1022,8 @@ impl<'a> Expr<'a> {
                 .text("FunctionPointer ")
                 .append(symbol_to_doc(alloc, *symbol)),
 
-            FunctionCall {
-                call_type, args, ..
-            } => match call_type {
-                CallType::ByName(name) => {
-                    let it = std::iter::once(name)
-                        .chain(args.iter())
-                        .map(|s| symbol_to_doc(alloc, *s));
+            Call(call) => call.to_doc(alloc),
 
-                    alloc.text("CallByName ").append(alloc.intersperse(it, " "))
-                }
-                CallType::ByPointer(name) => {
-                    let it = std::iter::once(name)
-                        .chain(args.iter())
-                        .map(|s| symbol_to_doc(alloc, *s));
-
-                    alloc
-                        .text("CallByPointer ")
-                        .append(alloc.intersperse(it, " "))
-                }
-            },
-            RunLowLevel(lowlevel, args) => {
-                let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text(format!("lowlevel {:?} ", lowlevel))
-                    .append(alloc.intersperse(it, " "))
-            }
-            ForeignCall {
-                foreign_symbol,
-                arguments,
-                ..
-            } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text(format!("foreign {:?} ", foreign_symbol.as_str()))
-                    .append(alloc.intersperse(it, " "))
-            }
             Tag {
                 tag_name,
                 arguments,
@@ -1098,10 +1128,44 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
+            Invoke {
+                symbol,
+                call,
+                pass,
+                fail: Stmt::Unreachable,
+                ..
+            } => alloc
+                .text("let ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(" = ")
+                .append(call.to_doc(alloc))
+                .append(";")
+                .append(alloc.hardline())
+                .append(pass.to_doc(alloc)),
+
+            Invoke {
+                symbol,
+                call,
+                pass,
+                fail,
+                ..
+            } => alloc
+                .text("invoke ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(" = ")
+                .append(call.to_doc(alloc))
+                .append(" catch")
+                .append(alloc.hardline())
+                .append(fail.to_doc(alloc).indent(4))
+                .append(alloc.hardline())
+                .append(pass.to_doc(alloc)),
+
             Ret(symbol) => alloc
                 .text("ret ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
+
+            Unreachable => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -3506,13 +3570,15 @@ pub fn with_hole<'a>(
                                 // build the call
                                 result = Stmt::Let(
                                     assigned,
-                                    Expr::FunctionCall {
-                                        call_type: CallType::ByPointer(closure_function_symbol),
-                                        full_layout: function_ptr_layout.clone(),
-                                        ret_layout: ret_layout.clone(),
-                                        args: arg_symbols,
-                                        arg_layouts,
-                                    },
+                                    Expr::Call(self::Call {
+                                        call_type: CallType::ByPointer {
+                                            name: closure_function_symbol,
+                                            full_layout: function_ptr_layout.clone(),
+                                            ret_layout: ret_layout.clone(),
+                                            arg_layouts,
+                                        },
+                                        arguments: arg_symbols,
+                                    }),
                                     ret_layout,
                                     arena.alloc(hole),
                                 );
@@ -3553,13 +3619,15 @@ pub fn with_hole<'a>(
                             } else {
                                 result = Stmt::Let(
                                     assigned,
-                                    Expr::FunctionCall {
-                                        call_type: CallType::ByPointer(function_symbol),
-                                        full_layout,
-                                        ret_layout: ret_layout.clone(),
-                                        args: arg_symbols,
-                                        arg_layouts,
-                                    },
+                                    Expr::Call(self::Call {
+                                        call_type: CallType::ByPointer {
+                                            name: function_symbol,
+                                            full_layout,
+                                            ret_layout: ret_layout.clone(),
+                                            arg_layouts,
+                                        },
+                                        arguments: arg_symbols,
+                                    }),
                                     ret_layout,
                                     arena.alloc(hole),
                                 );
@@ -3570,13 +3638,15 @@ pub fn with_hole<'a>(
 
                             result = Stmt::Let(
                                 assigned,
-                                Expr::FunctionCall {
-                                    call_type: CallType::ByPointer(function_symbol),
-                                    full_layout,
-                                    ret_layout: ret_layout.clone(),
-                                    args: arg_symbols,
-                                    arg_layouts,
-                                },
+                                Expr::Call(self::Call {
+                                    call_type: CallType::ByPointer {
+                                        name: function_symbol,
+                                        full_layout,
+                                        ret_layout: ret_layout.clone(),
+                                        arg_layouts,
+                                    },
+                                    arguments: arg_symbols,
+                                }),
                                 ret_layout,
                                 arena.alloc(hole),
                             );
@@ -3615,16 +3685,15 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, ret_var, env.subs)
                 .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-            let result = Stmt::Let(
-                assigned,
-                Expr::ForeignCall {
+            let call = self::Call {
+                call_type: CallType::Foreign {
                     foreign_symbol,
-                    arguments: arg_symbols,
                     ret_layout: layout.clone(),
                 },
-                layout,
-                hole,
-            );
+                arguments: arg_symbols,
+            };
+
+            let result = build_call(env, call, assigned, layout, hole);
 
             let iter = args
                 .into_iter()
@@ -3663,7 +3732,12 @@ pub fn with_hole<'a>(
                 }
             };
 
-            let result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
+            let call = self::Call {
+                call_type: CallType::LowLevel { op },
+                arguments: arg_symbols,
+            };
+
+            let result = build_call(env, call, assigned, layout, hole);
 
             let iter = args
                 .into_iter()
@@ -4324,6 +4398,33 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
+        Invoke {
+            symbol,
+            call,
+            layout,
+            pass,
+            fail,
+        } => {
+            let opt_call = substitute_in_call(arena, call, subs);
+            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
+            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
+
+            if opt_pass.is_some() || opt_fail.is_some() | opt_call.is_some() {
+                let pass = opt_pass.unwrap_or(pass);
+                let fail = opt_fail.unwrap_or_else(|| *fail);
+                let call = opt_call.unwrap_or_else(|| call.clone());
+
+                Some(arena.alloc(Invoke {
+                    symbol: *symbol,
+                    call,
+                    layout: layout.clone(),
+                    pass,
+                    fail,
+                }))
+            } else {
+                None
+            }
+        }
         Join {
             id,
             parameters,
@@ -4436,7 +4537,72 @@ fn substitute_in_stmt_help<'a>(
             }
         }
 
+        Unreachable => None,
+
         RuntimeError(_) => None,
+    }
+}
+
+fn substitute_in_call<'a>(
+    arena: &'a Bump,
+    call: &'a Call<'a>,
+    subs: &MutMap<Symbol, Symbol>,
+) -> Option<Call<'a>> {
+    let Call {
+        call_type,
+        arguments,
+    } = call;
+
+    let opt_call_type = match call_type {
+        CallType::ByName {
+            name,
+            arg_layouts,
+            ret_layout,
+            full_layout,
+        } => substitute(subs, *name).map(|new| CallType::ByName {
+            name: new,
+            arg_layouts,
+            ret_layout: ret_layout.clone(),
+            full_layout: full_layout.clone(),
+        }),
+        CallType::ByPointer {
+            name,
+            arg_layouts,
+            ret_layout,
+            full_layout,
+        } => substitute(subs, *name).map(|new| CallType::ByPointer {
+            name: new,
+            arg_layouts,
+            ret_layout: ret_layout.clone(),
+            full_layout: full_layout.clone(),
+        }),
+        CallType::Foreign { .. } => None,
+        CallType::LowLevel { .. } => None,
+    };
+
+    let mut did_change = false;
+    let new_args = Vec::from_iter_in(
+        arguments.iter().map(|s| match substitute(subs, *s) {
+            None => *s,
+            Some(s) => {
+                did_change = true;
+                s
+            }
+        }),
+        arena,
+    );
+
+    if did_change || opt_call_type.is_some() {
+        let call_type = opt_call_type.unwrap_or_else(|| call_type.clone());
+
+        let arguments = new_args.into_bump_slice();
+
+        Some(self::Call {
+            call_type,
+            arguments,
+        })
+    } else {
+        None
     }
 }
 
@@ -4450,96 +4616,7 @@ fn substitute_in_expr<'a>(
     match expr {
         Literal(_) | FunctionPointer(_, _) | EmptyArray | RuntimeErrorFunction(_) => None,
 
-        FunctionCall {
-            call_type,
-            args,
-            arg_layouts,
-            ret_layout,
-            full_layout,
-        } => {
-            let opt_call_type = match call_type {
-                CallType::ByName(s) => substitute(subs, *s).map(CallType::ByName),
-                CallType::ByPointer(s) => substitute(subs, *s).map(CallType::ByPointer),
-            };
-
-            let mut did_change = false;
-            let new_args = Vec::from_iter_in(
-                args.iter().map(|s| match substitute(subs, *s) {
-                    None => *s,
-                    Some(s) => {
-                        did_change = true;
-                        s
-                    }
-                }),
-                arena,
-            );
-
-            if did_change || opt_call_type.is_some() {
-                let call_type = opt_call_type.unwrap_or(*call_type);
-
-                let args = new_args.into_bump_slice();
-
-                Some(FunctionCall {
-                    call_type,
-                    args,
-                    arg_layouts: *arg_layouts,
-                    ret_layout: ret_layout.clone(),
-                    full_layout: full_layout.clone(),
-                })
-            } else {
-                None
-            }
-        }
-        RunLowLevel(op, args) => {
-            let mut did_change = false;
-            let new_args = Vec::from_iter_in(
-                args.iter().map(|s| match substitute(subs, *s) {
-                    None => *s,
-                    Some(s) => {
-                        did_change = true;
-                        s
-                    }
-                }),
-                arena,
-            );
-
-            if did_change {
-                let args = new_args.into_bump_slice();
-
-                Some(RunLowLevel(*op, args))
-            } else {
-                None
-            }
-        }
-        ForeignCall {
-            foreign_symbol,
-            arguments,
-            ret_layout,
-        } => {
-            let mut did_change = false;
-            let new_args = Vec::from_iter_in(
-                arguments.iter().map(|s| match substitute(subs, *s) {
-                    None => *s,
-                    Some(s) => {
-                        did_change = true;
-                        s
-                    }
-                }),
-                arena,
-            );
-
-            if did_change {
-                let args = new_args.into_bump_slice();
-
-                Some(ForeignCall {
-                    foreign_symbol: foreign_symbol.clone(),
-                    arguments: args,
-                    ret_layout: ret_layout.clone(),
-                })
-            } else {
-                None
-            }
-        }
+        Call(call) => substitute_in_call(arena, call, subs).map(Expr::Call),
 
         Tag {
             tag_layout,
@@ -5145,6 +5222,55 @@ fn add_needed_external<'a>(
     existing.insert(name, solved_type);
 }
 
+fn can_throw_exception(call: &Call) -> bool {
+    match call.call_type {
+        CallType::ByName { name, .. } => matches!(
+            name,
+            Symbol::NUM_ADD
+                | Symbol::NUM_SUB
+                | Symbol::NUM_MUL
+                | Symbol::NUM_DIV_FLOAT
+                | Symbol::NUM_ABS
+                | Symbol::NUM_NEG
+        ),
+        CallType::ByPointer { .. } => {
+            // we don't know what we're calling; it might throw, so better be safe than sorry
+            true
+        }
+
+        CallType::Foreign { .. } => {
+            // calling foreign functions is very unsafe
+            true
+        }
+
+        CallType::LowLevel { .. } => {
+            // lowlevel operations themselves don't throw
+            false
+        }
+    }
+}
+
+fn build_call<'a>(
+    env: &mut Env<'a, '_>,
+    call: Call<'a>,
+    assigned: Symbol,
+    layout: Layout<'a>,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    if can_throw_exception(&call) {
+        let fail = env.arena.alloc(Stmt::Unreachable);
+        Stmt::Invoke {
+            symbol: assigned,
+            call,
+            layout,
+            fail,
+            pass: hole,
+        }
+    } else {
+        Stmt::Let(assigned, Expr::Call(call), layout, hole)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
@@ -5206,15 +5332,17 @@ fn call_by_name<'a>(
                     "see call_by_name for background (scroll down a bit)"
                 );
 
-                let call = Expr::FunctionCall {
-                    call_type: CallType::ByName(proc_name),
-                    ret_layout: ret_layout.clone(),
-                    full_layout: full_layout.clone(),
-                    arg_layouts,
-                    args: field_symbols,
+                let call = self::Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: ret_layout.clone(),
+                        full_layout: full_layout.clone(),
+                        arg_layouts,
+                    },
+                    arguments: field_symbols,
                 };
 
-                let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
+                let result = build_call(env, call, assigned, ret_layout.clone(), hole);
 
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                 assign_to_symbols(env, procs, layout_cache, iter, result)
@@ -5254,17 +5382,20 @@ fn call_by_name<'a>(
                             field_symbols.len(),
                             "see call_by_name for background (scroll down a bit)"
                         );
-                        let call = Expr::FunctionCall {
-                            call_type: CallType::ByName(proc_name),
-                            ret_layout: ret_layout.clone(),
-                            full_layout: full_layout.clone(),
-                            arg_layouts,
-                            args: field_symbols,
+
+                        let call = self::Call {
+                            call_type: CallType::ByName {
+                                name: proc_name,
+                                ret_layout: ret_layout.clone(),
+                                full_layout: full_layout.clone(),
+                                arg_layouts,
+                            },
+                            arguments: field_symbols,
                         };
 
-                        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
+                        let result = build_call(env, call, assigned, ret_layout.clone(), hole);
 
-                        let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
+                        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                         assign_to_symbols(env, procs, layout_cache, iter, result)
                     }
                     None => {
@@ -5314,12 +5445,18 @@ fn call_by_name<'a>(
                                             // and we have to fix it here.
                                             match full_layout {
                                                 Layout::Closure(_, closure_layout, _) => {
-                                                    let call = Expr::FunctionCall {
-                                                        call_type: CallType::ByName(proc_name),
-                                                        ret_layout: function_layout.result.clone(),
-                                                        full_layout: function_layout.full.clone(),
-                                                        arg_layouts: function_layout.arguments,
-                                                        args: field_symbols,
+                                                    let call = self::Call {
+                                                        call_type: CallType::ByName {
+                                                            name: proc_name,
+                                                            ret_layout: function_layout
+                                                                .result
+                                                                .clone(),
+                                                            full_layout: function_layout
+                                                                .full
+                                                                .clone(),
+                                                            arg_layouts: function_layout.arguments,
+                                                        },
+                                                        arguments: field_symbols,
                                                     };
 
                                                     // in the case of a closure specifically, we
@@ -5333,25 +5470,33 @@ fn call_by_name<'a>(
                                                         ]),
                                                     );
 
-                                                    Stmt::Let(
-                                                        assigned,
+                                                    build_call(
+                                                        env,
                                                         call,
+                                                        assigned,
                                                         closure_struct_layout,
                                                         hole,
                                                     )
                                                 }
                                                 _ => {
-                                                    let call = Expr::FunctionCall {
-                                                        call_type: CallType::ByName(proc_name),
-                                                        ret_layout: function_layout.result.clone(),
-                                                        full_layout: function_layout.full.clone(),
-                                                        arg_layouts: function_layout.arguments,
-                                                        args: field_symbols,
+                                                    let call = self::Call {
+                                                        call_type: CallType::ByName {
+                                                            name: proc_name,
+                                                            ret_layout: function_layout
+                                                                .result
+                                                                .clone(),
+                                                            full_layout: function_layout
+                                                                .full
+                                                                .clone(),
+                                                            arg_layouts: function_layout.arguments,
+                                                        },
+                                                        arguments: field_symbols,
                                                     };
 
-                                                    Stmt::Let(
-                                                        assigned,
+                                                    build_call(
+                                                        env,
                                                         call,
+                                                        assigned,
                                                         function_layout.full,
                                                         hole,
                                                     )
@@ -5363,12 +5508,14 @@ fn call_by_name<'a>(
                                                 field_symbols.len(),
                                                 "scroll up a bit for background"
                                             );
-                                            let call = Expr::FunctionCall {
-                                                call_type: CallType::ByName(proc_name),
-                                                ret_layout: function_layout.result.clone(),
-                                                full_layout: function_layout.full,
-                                                arg_layouts: function_layout.arguments,
-                                                args: field_symbols,
+                                            let call = self::Call {
+                                                call_type: CallType::ByName {
+                                                    name: proc_name,
+                                                    ret_layout: function_layout.result.clone(),
+                                                    full_layout: function_layout.full.clone(),
+                                                    arg_layouts: function_layout.arguments,
+                                                },
+                                                arguments: field_symbols,
                                             };
 
                                             let iter = loc_args
@@ -5376,9 +5523,10 @@ fn call_by_name<'a>(
                                                 .rev()
                                                 .zip(field_symbols.iter().rev());
 
-                                            let result = Stmt::Let(
-                                                assigned,
+                                            let result = build_call(
+                                                env,
                                                 call,
+                                                assigned,
                                                 function_layout.result,
                                                 hole,
                                             );
@@ -5415,18 +5563,22 @@ fn call_by_name<'a>(
                                     "scroll up a bit for background"
                                 );
 
-                                let call = Expr::FunctionCall {
-                                    call_type: CallType::ByName(proc_name),
-                                    ret_layout: ret_layout.clone(),
-                                    full_layout: full_layout.clone(),
-                                    arg_layouts,
-                                    args: field_symbols,
+                                let call = self::Call {
+                                    call_type: CallType::ByName {
+                                        name: proc_name,
+                                        ret_layout: ret_layout.clone(),
+                                        full_layout: full_layout.clone(),
+                                        arg_layouts,
+                                    },
+                                    arguments: field_symbols,
                                 };
+
+                                let result =
+                                    build_call(env, call, assigned, ret_layout.clone(), hole);
 
                                 let iter =
                                     loc_args.into_iter().rev().zip(field_symbols.iter().rev());
 
-                                let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
                                 assign_to_symbols(env, procs, layout_cache, iter, result)
                             }
 

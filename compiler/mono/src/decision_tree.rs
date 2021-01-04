@@ -1277,7 +1277,10 @@ fn compile_test<'a>(
         ret_layout,
     );
 
-    let test = Expr::RunLowLevel(LowLevel::Eq, arena.alloc([lhs, rhs]));
+    let test = Expr::Call(crate::ir::Call {
+        call_type: crate::ir::CallType::LowLevel { op: LowLevel::Eq },
+        arguments: arena.alloc([lhs, rhs]),
+    });
 
     // write to the test symbol
     cond = Stmt::Let(
