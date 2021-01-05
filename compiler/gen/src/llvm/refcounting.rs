@@ -8,6 +8,7 @@ use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::debug_info::AsDIScope;
 use inkwell::module::Linkage;
+use inkwell::types::{AnyTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
@@ -993,12 +994,28 @@ pub fn build_header<'a, 'ctx, 'env>(
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
     let arena = env.arena;
-    let context = &env.context;
-
     let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
+    build_header_help(env, fn_name, env.context.void_type().into(), &[arg_type])
+}
 
-    // inc and dec return void
-    let fn_type = context.void_type().fn_type(&[arg_type], false);
+/// Build an increment or decrement function for a specific layout
+pub fn build_header_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    return_type: AnyTypeEnum<'ctx>,
+    arguments: &[BasicTypeEnum<'ctx>],
+) -> FunctionValue<'ctx> {
+    use inkwell::types::AnyTypeEnum::*;
+    let fn_type = match return_type {
+        ArrayType(t) => t.fn_type(arguments, false),
+        FloatType(t) => t.fn_type(arguments, false),
+        FunctionType(_) => unreachable!("functions cannot return functions"),
+        IntType(t) => t.fn_type(arguments, false),
+        PointerType(t) => t.fn_type(arguments, false),
+        StructType(t) => t.fn_type(arguments, false),
+        VectorType(t) => t.fn_type(arguments, false),
+        VoidType(t) => t.fn_type(arguments, false),
+    };
 
     let fn_val = env
         .module

@@ -2979,7 +2979,15 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_contains(env, parent, elem, elem_layout, list, list_layout)
+            list_contains(
+                env,
+                layout_ids,
+                parent,
+                elem,
+                elem_layout,
+                list,
+                list_layout,
+            )
         }
         ListWalk => {
             debug_assert_eq!(args.len(), 3);
@@ -3204,7 +3212,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            build_eq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+            build_eq(env, layout_ids, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
         }
         NotEq => {
             debug_assert_eq!(args.len(), 2);
@@ -3212,7 +3220,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            build_neq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+            build_neq(env, layout_ids, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
         }
         And => {
             // The (&&) operator

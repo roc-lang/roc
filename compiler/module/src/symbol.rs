@@ -738,6 +738,7 @@ define_builtins! {
         10 INC: "#inc" // internal function that increments the refcount
         11 DEC: "#dec" // internal function that increments the refcount
         12 ARG_CLOSURE: "#arg_closure" // symbol used to store the closure record
+        13 LIST_EQ: "#list_eq" // internal function that checks list equality
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
