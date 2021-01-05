@@ -72,6 +72,9 @@ fn jit_to_ast_help<'a>(
                 run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content)),
             )
         }
+        Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
+            num_to_ast(env, nat_to_ast(env.arena, num), content)
+        })),
         Layout::Builtin(Builtin::Int64) => {
             Ok(run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
                 env,
@@ -241,6 +244,11 @@ fn ptr_to_ast<'a>(
             let num = unsafe { *(ptr as *const i64) };
 
             num_to_ast(env, i64_to_ast(env.arena, num), content)
+        }
+        Layout::Builtin(Builtin::Usize) => {
+            let num = unsafe { *(ptr as *const usize) };
+
+            num_to_ast(env, nat_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::Int1) => {
             // TODO: bits are not as expected here.
@@ -810,6 +818,12 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
             panic!("Unexpected FlatType {:?} in num_to_ast", other);
         }
     }
+}
+
+/// This is centralized in case we want to format it differently later,
+/// e.g. adding underscores for large numbers
+fn nat_to_ast(arena: &Bump, num: usize) -> Expr<'_> {
+    Expr::Num(arena.alloc(format!("{}", num)))
 }
 
 /// This is centralized in case we want to format it differently later,
