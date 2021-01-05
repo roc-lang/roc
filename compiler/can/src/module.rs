@@ -363,8 +363,8 @@ fn fix_values_captured_in_closure_pattern(
         }
         Identifier(_)
         | NumLiteral(_, _)
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | Shadowed(_, _)
@@ -414,8 +414,8 @@ fn fix_values_captured_in_closure_expr(
         }
 
         Num(_, _)
-        | Int(_, _)
-        | Float(_, _)
+        | Int(_, _, _)
+        | Float(_, _, _)
         | Str(_)
         | Var(_)
         | EmptyRecord

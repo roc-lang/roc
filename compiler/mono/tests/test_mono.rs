@@ -61,6 +61,7 @@ mod test_mono {
             stdlib,
             src_dir,
             exposed_types,
+            8,
         );
 
         let mut loaded = loaded.expect("failed to load module");

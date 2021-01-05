@@ -486,13 +486,28 @@ fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
 
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'_>,
     literal: &roc_mono::ir::Literal<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::Literal::*;
 
     match literal {
-        Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
-        Float(num) => env.context.f64_type().const_float(*num).into(),
+        Int(int) =>
+            (match layout {
+                Layout::Builtin(Builtin::Usize) => ptr_int(env.context, env.ptr_bytes),
+                Layout::Builtin(Builtin::Int128) => env.context.i128_type(), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
+                Layout::Builtin(Builtin::Int64) => env.context.i64_type(),
+                Layout::Builtin(Builtin::Int32) => env.context.i32_type(),
+                Layout::Builtin(Builtin::Int16) => env.context.i16_type(),
+                Layout::Builtin(Builtin::Int8) => env.context.i8_type(),
+                _ => panic!("Invalid layout for int literal = {:?}", layout),
+            }).const_int(*int as u64, false).into(),
+        Float(num) =>
+            (match layout {
+                Layout::Builtin(Builtin::Float64) => env.context.f64_type(),
+                Layout::Builtin(Builtin::Float32) => env.context.f32_type(),
+                _ => panic!("Invalid layout for float literal = {:?}", layout),
+            }).const_float(*num).into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
@@ -774,7 +789,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     use roc_mono::ir::Expr::*;
 
     match expr {
-        Literal(literal) => build_exp_literal(env, literal),
+        Literal(literal) => build_exp_literal(env, layout, literal),
 
         Call(call) => build_exp_call(env, layout_ids, scope, parent, layout, call),
 
@@ -1805,6 +1820,15 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .build_bitcast(full_cond, env.context.i64_type(), "")
                 .into_int_value()
         }
+        Layout::Builtin(Builtin::Float32) => {
+            // float matches are done on the bit pattern
+            cond_layout = Layout::Builtin(Builtin::Int32);
+            let full_cond = load_symbol(env, scope, cond_symbol);
+
+            builder
+                .build_bitcast(full_cond, env.context.i32_type(), "")
+                .into_int_value()
+        }
         Layout::Union(_) => {
             // we match on the discriminant, not the whole Tag
             cond_layout = Layout::Builtin(Builtin::Int64);
@@ -1832,8 +1856,11 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         //
         // they either need to all be i8, or i64
         let int_val = match cond_layout {
-            Layout::Builtin(Builtin::Int128) => context.i128_type().const_int(*int as u64, false), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
+            Layout::Builtin(Builtin::Usize) => {
+                ptr_int(env.context, env.ptr_bytes).const_int(*int as u64, false)
+            }
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int128) => context.i128_type().const_int(*int as u64, false), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
             Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
@@ -3045,7 +3072,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     use roc_mono::layout::Builtin::*;
 
                     match arg_builtin {
-                        Int128 | Int64 | Int32 | Int16 | Int8 => {
+                        Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
                         }
                         Float128 | Float64 | Float32 | Float16 => {
@@ -3083,7 +3110,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     let tag_lt = env.context.i8_type().const_int(2_u64, false);
 
                     match lhs_builtin {
-                        Int128 | Int64 | Int32 | Int16 | Int8 => {
+                        Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             let are_equal = env.builder.build_int_compare(
                                 IntPredicate::EQ,
                                 lhs_arg.into_int_value(),
@@ -3507,7 +3534,7 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
             use roc_mono::layout::Builtin::*;
 
             match lhs_builtin {
-                Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                Usize | Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
                     env,
                     parent,
                     lhs_arg.into_int_value(),
@@ -3758,6 +3785,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             int_abs_raise_on_overflow(env, arg, arg_layout)
         }
         NumToFloat => {
+            // TODO: Handle differnt sized numbers
             // This is an Int, so we need to convert it.
             bd.build_cast(
                 InstructionOpcode::SIToFP,
@@ -3884,6 +3912,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
+    // TODO: Handle differnt sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),

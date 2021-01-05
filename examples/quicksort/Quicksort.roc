@@ -5,7 +5,7 @@ app "quicksort"
 
 quicksort = \originalList ->
 
-    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+    quicksortHelp : List (Num a), Int *, Int * -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
             when partition low high list is
@@ -17,7 +17,7 @@ quicksort = \originalList ->
             list
 
 
-    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+    partition : Int a, Int a, List (Num b) -> [ Pair (Int a) (List (Num b)) ]
     partition = \low, high, initialList ->
         when List.get initialList high is
             Ok pivot ->
@@ -28,7 +28,7 @@ quicksort = \originalList ->
             Err _ ->
                 Pair (low - 1) initialList
 
-    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+    partitionHelp : Int a, Int b, List (Num c), Int b, (Num c) -> [ Pair (Int a) (List (Num c)) ]
     partitionHelp = \i, j, list, high, pivot ->
         if j < high then
             when List.get list j is
@@ -44,7 +44,7 @@ quicksort = \originalList ->
             Pair i list
 
 
-    swap : I64, I64, List a -> List a
+    swap : Int *, Int *, List a -> List a
     swap = \i, j, list ->
         when Pair (List.get list i) (List.get list j) is
             Pair (Ok atI) (Ok atJ) ->

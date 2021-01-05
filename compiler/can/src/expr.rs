@@ -56,8 +56,8 @@ pub enum Expr {
     Num(Variable, i64),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, i64),
-    Float(Variable, f64),
+    Int(Variable, Variable, i64),
+    Float(Variable, Variable, f64),
     Str(InlinableString),
     List {
         list_var: Variable, // required for uniqueness of the list
@@ -1168,8 +1168,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
         other @ Num(_, _)
-        | other @ Int(_, _)
-        | other @ Float(_, _)
+        | other @ Int(_, _, _)
+        | other @ Float(_, _, _)
         | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord

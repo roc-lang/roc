@@ -48,8 +48,8 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
     use crate::ir::Pattern::*;
 
     match pattern {
-        IntLiteral(v) => Literal(Literal::Int(*v)),
-        FloatLiteral(v) => Literal(Literal::Float(*v)),
+        IntLiteral(_, v) => Literal(Literal::Int(*v)),
+        FloatLiteral(_, v) => Literal(Literal::Float(*v)),
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
 
         // To make sure these are exhaustive, we have to "fake" a union here

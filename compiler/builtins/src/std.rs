@@ -91,10 +91,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // addWrap : Int, Int -> Int
+    // addWrap : Int range, Int range -> Int range
     add_type(
         Symbol::NUM_ADD_WRAP,
-        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
     );
 
     // sub or (-) : Num a, Num a -> Num a
@@ -106,10 +109,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // subWrap : Int, Int -> Int
+    // subWrap : Int range, Int range -> Int range
     add_type(
         Symbol::NUM_SUB_WRAP,
-        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
     );
 
     // subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
@@ -130,10 +136,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // mulWrap : Int, Int -> Int
+    // mulWrap : Int range, Int range -> Int range
     add_type(
         Symbol::NUM_MUL_WRAP,
-        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
     );
 
     // mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
@@ -214,10 +223,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // toFloat : Num a -> Float
+    // toFloat : Num * -> Float *
     add_type(
         Symbol::NUM_TO_FLOAT,
-        top_level_function(vec![num_type(flex(TVAR1))], Box::new(float_type())),
+        top_level_function(
+            vec![num_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR2))),
+        ),
     );
 
     // isNegative : Num a -> Bool
@@ -250,11 +262,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![num_type(flex(TVAR1))], Box::new(bool_type())),
     );
 
-    // maxInt : Int
-    add_type(Symbol::NUM_MAX_INT, int_type());
+    // maxInt : Int range
+    add_type(Symbol::NUM_MAX_INT, int_type(flex(TVAR1)));
 
-    // minInt : Int
-    add_type(Symbol::NUM_MIN_INT, int_type());
+    // minInt : Int range
+    add_type(Symbol::NUM_MIN_INT, int_type(flex(TVAR1)));
 
     // div : Int, Int -> Result Int [ DivByZero ]*
     let div_by_zero = SolvedType::TagUnion(
@@ -265,56 +277,59 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_DIV_INT,
         top_level_function(
-            vec![int_type(), int_type()],
-            Box::new(result_type(int_type(), div_by_zero.clone())),
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
         ),
     );
 
-    // bitwiseAnd : Int, Int -> Int
+    // bitwiseAnd : Int a, Int a -> Int a
     add_type(
         Symbol::NUM_BITWISE_AND,
-        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
     );
 
-    // rem : Int, Int -> Result Int [ DivByZero ]*
+    // rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_type(
         Symbol::NUM_REM,
         top_level_function(
-            vec![int_type(), int_type()],
-            Box::new(result_type(int_type(), div_by_zero.clone())),
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
         ),
     );
 
-    // mod : Int, Int -> Result Int [ DivByZero ]*
+    // mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_type(
         Symbol::NUM_MOD_INT,
         top_level_function(
-            vec![int_type(), int_type()],
-            Box::new(result_type(int_type(), div_by_zero.clone())),
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
         ),
     );
 
     // Float module
 
-    // div : Float, Float -> Float
+    // div : Float a, Float a -> Float a
     add_type(
         Symbol::NUM_DIV_FLOAT,
         top_level_function(
-            vec![float_type(), float_type()],
-            Box::new(result_type(float_type(), div_by_zero.clone())),
+            vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
+            Box::new(result_type(float_type(flex(TVAR1)), div_by_zero.clone())),
         ),
     );
 
-    // mod : Float, Float -> Result Int [ DivByZero ]*
+    // mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
     add_type(
         Symbol::NUM_MOD_FLOAT,
         top_level_function(
-            vec![float_type(), float_type()],
-            Box::new(result_type(float_type(), div_by_zero)),
+            vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
+            Box::new(result_type(float_type(flex(TVAR1)), div_by_zero)),
         ),
     );
 
-    // sqrt : Float -> Float
+    // sqrt : Float a -> Float a
     let sqrt_of_negative = SolvedType::TagUnion(
         vec![(TagName::Global("SqrtOfNegative".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -323,81 +338,114 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_SQRT,
         top_level_function(
-            vec![float_type()],
-            Box::new(result_type(float_type(), sqrt_of_negative)),
+            vec![float_type(flex(TVAR1))],
+            Box::new(result_type(float_type(flex(TVAR1)), sqrt_of_negative)),
         ),
     );
 
-    // round : Float -> Int
+    // round : Float a -> Int b
     add_type(
         Symbol::NUM_ROUND,
-        top_level_function(vec![float_type()], Box::new(int_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR2))),
+        ),
     );
 
-    // sin : Float -> Float
+    // sin : Float a -> Float a
     add_type(
         Symbol::NUM_SIN,
-        top_level_function(vec![float_type()], Box::new(float_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR1))),
+        ),
     );
 
-    // cos : Float -> Float
+    // cos : Float a -> Float a
     add_type(
         Symbol::NUM_COS,
-        top_level_function(vec![float_type()], Box::new(float_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR1))),
+        ),
     );
 
-    // tan : Float -> Float
+    // tan : Float a -> Float a
     add_type(
         Symbol::NUM_TAN,
-        top_level_function(vec![float_type()], Box::new(float_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR1))),
+        ),
     );
 
-    // maxFloat : Float
-    add_type(Symbol::NUM_MAX_FLOAT, float_type());
+    // maxFloat : Float a
+    add_type(Symbol::NUM_MAX_FLOAT, float_type(flex(TVAR1)));
 
-    // minFloat : Float
-    add_type(Symbol::NUM_MIN_FLOAT, float_type());
+    // minFloat : Float a
+    add_type(Symbol::NUM_MIN_FLOAT, float_type(flex(TVAR1)));
 
-    // pow : Float, Float -> Float
+    // pow : Float a, Float a -> Float a
     add_type(
         Symbol::NUM_POW,
-        top_level_function(vec![float_type(), float_type()], Box::new(float_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR1))),
+        ),
     );
 
-    // ceiling : Float -> Int
+    // ceiling : Float a -> Int b
     add_type(
         Symbol::NUM_CEILING,
-        top_level_function(vec![float_type()], Box::new(int_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR2))),
+        ),
     );
 
-    // powInt : Int, Int -> Int
+    // powInt : Int a, Int a -> Int a
     add_type(
         Symbol::NUM_POW_INT,
-        top_level_function(vec![int_type(), int_type()], Box::new(int_type())),
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
     );
 
-    // floor : Float -> Int
+    // floor : Float a -> Int b
     add_type(
         Symbol::NUM_FLOOR,
-        top_level_function(vec![float_type()], Box::new(int_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR2))),
+        ),
     );
 
-    // atan : Float -> Float
+    // atan : Float a -> Float a
     add_type(
         Symbol::NUM_ATAN,
-        top_level_function(vec![float_type()], Box::new(float_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR1))),
+        ),
     );
 
-    // acos : Float -> Float
+    // acos : Float a -> Float a
     add_type(
         Symbol::NUM_ACOS,
-        top_level_function(vec![float_type()], Box::new(float_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR1))),
+        ),
     );
 
-    // asin : Float -> Float
+    // asin : Float a -> Float a
     add_type(
         Symbol::NUM_ASIN,
-        top_level_function(vec![float_type()], Box::new(float_type())),
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(float_type(flex(TVAR1))),
+        ),
     );
 
     // Bool module
@@ -461,16 +509,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![str_type(), str_type()], Box::new(bool_type())),
     );
 
-    // countGraphemes : Str -> Int
+    // countGraphemes : Str -> Int a
     add_type(
         Symbol::STR_COUNT_GRAPHEMES,
-        top_level_function(vec![str_type()], Box::new(int_type())),
+        top_level_function(vec![str_type()], Box::new(int_type(flex(TVAR1)))),
     );
 
-    // fromInt : Int -> Str
+    // fromInt : Int a -> Str
     add_type(
         Symbol::STR_FROM_INT,
-        top_level_function(vec![int_type()], Box::new(str_type())),
+        top_level_function(vec![int_type(flex(TVAR1))], Box::new(str_type())),
     );
 
     // List module
@@ -484,7 +532,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_GET,
         top_level_function(
-            vec![list_type(flex(TVAR1)), int_type()],
+            vec![list_type(flex(TVAR1)), int_type(flex(TVAR2))],
             Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
         ),
     );
@@ -512,11 +560,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // set : List elem, Int, elem -> List elem
+    // set : List elem, Int a, elem -> List elem
     add_type(
         Symbol::LIST_SET,
         top_level_function(
-            vec![list_type(flex(TVAR1)), int_type(), flex(TVAR1)],
+            vec![list_type(flex(TVAR1)), int_type(flex(TVAR2)), flex(TVAR1)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );
@@ -631,11 +679,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![flex(TVAR1)], Box::new(list_type(flex(TVAR1)))),
     );
 
-    // repeat : Int, elem -> List elem
+    // repeat : Int a, elem -> List elem
     add_type(
         Symbol::LIST_REPEAT,
         top_level_function(
-            vec![int_type(), flex(TVAR1)],
+            vec![int_type(flex(TVAR1)), flex(TVAR2)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );
@@ -649,10 +697,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // len : List * -> Int
+    // len : List * -> Int a
     add_type(
         Symbol::LIST_LEN,
-        top_level_function(vec![list_type(flex(TVAR1))], Box::new(int_type())),
+        top_level_function(
+            vec![list_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR2))),
+        ),
     );
 
     // isEmpty : List * -> Bool
