@@ -2144,7 +2144,7 @@ mod test_mono {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                swap : I64, I64, List a -> List a
+                swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->

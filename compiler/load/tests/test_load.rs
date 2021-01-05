@@ -380,10 +380,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "Int *, Int *, List a -> List a",
-                "partition" => "Int b, Int b, List (Num a) -> [ Pair (Int b) (List (Num a)) ]",
-                "partitionHelp" => "Int b, Int c, List (Num a), Int c, Num a -> [ Pair (Int b) (List (Num a)) ]",
-                "quicksort" => "List (Num a), Int b, Int b -> List (Num a)",
+                "swap" => "Nat, Nat, List a -> List a",
+                "partition" => "Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]",
+                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+                "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
             },
         );
     }
@@ -409,10 +409,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "Int *, Int *, List a -> List a",
-                "partition" => "Int b, Int b, List (Num a) -> [ Pair (Int b) (List (Num a)) ]",
-                "partitionHelp" => "Int b, Int c, List (Num a), Int c, Num a -> [ Pair (Int b) (List (Num a)) ]",
-                "quicksort" => "List (Num a), Int b, Int b -> List (Num a)",
+                "swap" => "Nat, Nat, List a -> List a",
+                "partition" => "Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]",
+                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+                "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
             },
         );
     }
