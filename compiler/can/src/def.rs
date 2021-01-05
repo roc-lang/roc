@@ -735,8 +735,8 @@ fn pattern_to_vars_by_symbol(
         }
 
         NumLiteral(_, _)
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)
@@ -864,7 +864,9 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        Alias { name, ann, vars } => {
+        Alias {
+            name, ann, vars, ..
+        } => {
             let symbol = name.value;
             let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
 
@@ -1407,7 +1409,9 @@ fn to_pending_def<'a>(
             }
         }
 
-        Alias { name, vars, ann } => {
+        Alias {
+            name, vars, ann, ..
+        } => {
             let region = Region::span_across(&name.region, &ann.region);
 
             match scope.introduce(

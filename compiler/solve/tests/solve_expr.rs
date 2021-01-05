@@ -62,6 +62,7 @@ mod solve_expr {
                 stdlib,
                 dir.path(),
                 exposed_types,
+                8,
             );
 
             dir.close()?;
@@ -169,7 +170,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "F64");
+        infer_eq("0.5", "Float *");
     }
 
     #[test]
@@ -762,7 +763,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "F64",
+            "Float *",
         );
     }
 
@@ -1026,7 +1027,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : F64 }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float * }");
     }
 
     #[test]
@@ -2385,7 +2386,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "F64",
+            "Float *",
         );
     }
 
@@ -2982,7 +2983,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
+                partition : Int a, Int *, List (Int b) -> [ Pair (Int a) (List (Int b)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -2994,7 +2995,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
+            "Int a, Int *, List (Int b) -> [ Pair (Int a) (List (Int b)) ]",
         );
     }
 
@@ -3004,7 +3005,7 @@ mod solve_expr {
             infer_eq_without_problem(
                 indoc!(
                     r#"
-                swap : I64, I64, List a -> List a
+                swap : Int *, Int *, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -3015,7 +3016,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
+                partition : I64, I64, List (Int a) -> [ Pair I64 (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -3043,7 +3044,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
+                "I64, I64, List (Int a) -> [ Pair I64 (List (Int a)) ]",
             );
         });
     }
@@ -3076,6 +3077,15 @@ mod solve_expr {
                 "#
             ),
             "Result (Num *) [ OutOfBounds ]*",
+        );
+
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List.get
+                "#
+            ),
+            "List a, Int * -> Result a [ OutOfBounds ]*",
         );
     }
 
@@ -3117,7 +3127,7 @@ mod solve_expr {
                 Num.toFloat
                 "#
             ),
-            "Num * -> F64",
+            "Num * -> Float *",
         );
     }
 
@@ -3129,7 +3139,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "F64, F64 -> F64",
+            "Float a, Float a -> Float a",
         );
     }
 
@@ -3141,7 +3151,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "F64 -> I64",
+            "Float * -> Int *",
         );
     }
 
@@ -3153,7 +3163,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "F64 -> I64",
+            "Float * -> Int *",
         );
     }
 
@@ -3165,7 +3175,7 @@ mod solve_expr {
                 Num.powInt
                 "#
             ),
-            "I64, I64 -> I64",
+            "Int a, Int a -> Int a",
         );
     }
 
@@ -3177,7 +3187,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "F64 -> F64",
+            "Float a -> Float a",
         );
     }
 
@@ -3444,7 +3454,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : I64 }",
+            "{ x : Num a, y : F64, z : Int * }",
         );
     }
 
@@ -4096,7 +4106,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ partitionHelp ] to "./platform"
 
-                swap : I64, I64, List a -> List a
+                swap : Int *, Int *, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
