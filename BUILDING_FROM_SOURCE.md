@@ -8,7 +8,7 @@ To build the compiler, you need these installed:
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
 * Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
-* Zig (0.7.0 or greater, see below)
+* [Zig](https://ziglang.org/) 0.7.1 or greater
 * a particular version of LLVM (see below)
 
 To run the test suite (via `cargo test`), you additionally need to install:
