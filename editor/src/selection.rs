@@ -72,7 +72,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords,
             width,
             height,
-            color: colors::WHITE,
+            color: colors::SELECT_COLOR,
         });
 
         Ok(all_rects)
@@ -95,7 +95,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords,
             width,
             height,
-            color: colors::WHITE,
+            color: colors::SELECT_COLOR,
         });
 
         //middle lines
@@ -120,7 +120,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords,
                 width,
                 height,
-                color: colors::WHITE,
+                color: colors::SELECT_COLOR,
             });
         }
 
@@ -143,7 +143,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords,
                 width,
                 height,
-                color: colors::WHITE,
+                color: colors::SELECT_COLOR,
             });
         }
 

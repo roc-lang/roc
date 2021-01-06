@@ -8,17 +8,23 @@
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-use crate::error::print_err;
+use crate::error::{print_err, EdResult};
+use crate::error::EdError::MissingGlyphDims;
+use crate::vec_result::{get_res};
 use crate::graphics::lowlevel::buffer::create_rect_buffers;
 use crate::graphics::lowlevel::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
 use crate::graphics::lowlevel::vertex::Vertex;
 use crate::graphics::primitives::rect::Rect;
-use crate::graphics::primitives::text::{build_glyph_brush, queue_text_draw, Text};
+use crate::graphics::primitives::text::{build_glyph_brush, queue_text_draw, Text, example_code_glyph_rect};
+use crate::graphics::colors::{TXT_COLOR, CODE_COLOR, CARET_COLOR};
+use crate::graphics::style::{CODE_FONT_SIZE};
 use crate::selection::create_selection_rects;
 use crate::tea::{model, update};
+use crate::tea::model::Model;
 use crate::util::is_newline;
+use model::{Position};
 use bumpalo::Bump;
-use model::Position;
+use bumpalo::collections::Vec as BumpVec;
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -109,6 +115,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
     let is_animating = true;
     let mut ed_model = model::init_model();
+    ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(&mut glyph_brush));
     let mut keyboard_modifiers = ModifiersState::empty();
 
     let arena = Bump::new();
@@ -202,36 +209,22 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 let glyph_bounds_rects =
                     queue_all_text(&size, &ed_model.lines, ed_model.caret_pos, &mut glyph_brush);
 
-                if let Some(selection) = ed_model.selection_opt {
-                    let selection_rects_res =
-                        create_selection_rects(selection, &glyph_bounds_rects, &arena);
-
-                    match selection_rects_res {
-                        Ok(selection_rects) => {
-                            if !selection_rects.is_empty() {
-                                let rect_buffers = create_rect_buffers(
-                                    &gpu_device,
-                                    &mut encoder,
-                                    &selection_rects,
-                                );
-
-                                let mut render_pass = begin_render_pass(&mut encoder, &frame.view);
-
-                                render_pass.set_pipeline(&rect_pipeline);
-                                render_pass.set_bind_group(0, &ortho.bind_group, &[]);
-                                render_pass
-                                    .set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-                                render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-                                render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-                            }
-                        }
-                        Err(e) => {
-                            begin_render_pass(&mut encoder, &frame.view);
-                            print_err(&e) //TODO draw error text on screen
-                        }
-                    }
-                } else {
-                    begin_render_pass(&mut encoder, &frame.view);
+                // TODO too much args group them in Struct    
+                match draw_all_rects(
+                    &ed_model,
+                    &glyph_bounds_rects,
+                    &arena,
+                    &mut encoder,
+                    &frame.view,
+                    &gpu_device,
+                    &rect_pipeline,
+                    &ortho
+                ) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        print_err(&e);
+                        begin_render_pass(&mut encoder, &frame.view);
+                    },
                 }
 
                 // draw all text
@@ -265,6 +258,47 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     })
 }
 
+fn draw_all_rects(
+    ed_model: &Model,
+    glyph_bounds_rects: &Vec<Vec<Rect>>,
+    arena: &Bump,
+    encoder: &mut CommandEncoder,
+    texture_view: &TextureView,
+    gpu_device: &wgpu::Device,
+    rect_pipeline: &wgpu::RenderPipeline,
+    ortho: &OrthoResources
+) -> EdResult<()> {
+    let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
+
+    if let Some(selection) = ed_model.selection_opt {
+        let mut selection_rects =
+            create_selection_rects(selection, glyph_bounds_rects, &arena)?;
+
+        all_rects.append(&mut selection_rects);
+    }
+
+    all_rects.push(
+        make_caret_rect(ed_model.caret_pos, glyph_bounds_rects, ed_model.glyph_dim_rect_opt)?
+    );
+
+    let rect_buffers = create_rect_buffers(
+        gpu_device,
+        encoder,
+        &all_rects,
+    );
+
+    let mut render_pass = begin_render_pass(encoder, texture_view);
+
+    render_pass.set_pipeline(&rect_pipeline);
+    render_pass.set_bind_group(0, &ortho.bind_group, &[]);
+    render_pass
+        .set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+    render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+
+    Ok(())
+}
+
 fn begin_render_pass<'a>(
     encoder: &'a mut CommandEncoder,
     texture_view: &'a TextureView,
@@ -284,6 +318,43 @@ fn begin_render_pass<'a>(
             },
         }],
         depth_stencil_attachment: None,
+    })
+}
+
+fn make_caret_rect(
+    caret_pos: Position,
+    glyph_bound_rects: &[Vec<Rect>],
+    glyph_dim_rect_opt: Option<Rect>
+) -> EdResult<Rect> {
+    let mut glyph_rect = if let Some(glyph_dim_rect) = glyph_dim_rect_opt {
+        glyph_dim_rect
+    } else {
+        return Err(MissingGlyphDims {});
+    };
+
+    let caret_y = glyph_rect.top_left_coords.y + (caret_pos.line as f32) * glyph_rect.height;
+
+    if caret_pos.column > 0 && glyph_bound_rects.len() > caret_pos.line {
+        let indx = caret_pos.column - 1;
+        let glyph_rect_line = get_res(caret_pos.line, glyph_bound_rects)?;
+        
+        if glyph_rect_line.len() > indx {
+            glyph_rect = *get_res(indx, glyph_rect_line)?;
+        }
+    };
+
+    let caret_x = 
+        if caret_pos.column == 0 {
+            glyph_rect.top_left_coords.x
+        } else {
+            glyph_rect.top_left_coords.x + glyph_rect.width
+        };
+    
+    Ok(Rect {
+        top_left_coords: (caret_x, caret_y).into(),
+        height: glyph_rect.height,
+        width: 3.0,
+        color: CARET_COLOR
     })
 }
 
@@ -363,25 +434,25 @@ fn queue_all_text(
     let main_label = Text {
         position: (30.0, 30.0).into(),
         area_bounds,
-        color: (0.4666, 0.2, 1.0, 1.0).into(),
+        color: TXT_COLOR.into(),
         text: String::from("Enter some text:"),
-        size: 40.0,
+        size: CODE_FONT_SIZE,
         ..Default::default()
     };
 
     let code_text = Text {
-        position: (30.0, 90.0).into(),
+        position: (30.0, 90.0).into(),//TODO 30 90 should be an arg
         area_bounds,
-        color: (0.0, 0.05, 0.46, 1.0).into(),
+        color: CODE_COLOR.into(),
         text: lines.join(""),
-        size: 40.0,
+        size: CODE_FONT_SIZE,
         ..Default::default()
     };
 
     let caret_pos_label = Text {
         position: (30.0, 530.0).into(),
         area_bounds,
-        color: (0.4666, 0.2, 1.0, 1.0).into(),
+        color: TXT_COLOR.into(),
         text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
         size: 30.0,
         ..Default::default()
