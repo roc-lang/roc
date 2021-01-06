@@ -415,25 +415,21 @@ mod gen_list {
         );
     }
 
-    //
-    // "panicked at 'not yet implemented: Handle equals for builtin layouts Str == Str'"
-    //
-    // #[test]
-    // fn list_keep_if_str_is_hello() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             strIsHello : Str -> Bool
-    //             strIsHello = \str ->
-    //                 str == "Hello"
-    //
-    //             List.keepIf ["Hello", "Hello", "Goodbye"] strIsHello
-    //             "#
-    //         ),
-    //         RocList::from_slice(&["Hello", "Hello"]),
-    //         RocList<&'static str>
-    //     );
-    // }
+    #[test]
+    fn list_keep_if_str_is_hello() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                 List.keepIf ["x", "y", "x"] (\x -> x == "x")
+                 "#
+            ),
+            RocList::from_slice(&[
+                RocStr::from_slice("x".as_bytes()),
+                RocStr::from_slice("x".as_bytes())
+            ]),
+            RocList<RocStr>
+        );
+    }
 
     #[test]
     fn list_map_on_empty_list_with_int_layout() {
@@ -1277,7 +1273,7 @@ mod gen_list {
                 app "quicksort" provides [ main ] to "./platform"
 
 
-                swap : I64, I64, List a -> List a
+                swap : Int *, Int *, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -1400,7 +1396,7 @@ mod gen_list {
                         quicksortHelp list 0 (n - 1)
 
 
-                    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+                    quicksortHelp : List (Num a), Int *, Int * -> List (Num a)
                     quicksortHelp = \list, low, high ->
                         if low < high then
                             when partition low high list is
@@ -1412,7 +1408,7 @@ mod gen_list {
                             list
 
 
-                    swap : I64, I64, List a -> List a
+                    swap : Int *, Int *, List a -> List a
                     swap = \i, j, list ->
                         when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1423,7 +1419,7 @@ mod gen_list {
                             _ ->
                                 []
 
-                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+                    partition : Int *, Int *, List (Num a) -> [ Pair (Int *) (List (Num a)) ]
                     partition = \low, high, initialList ->
                         when List.get initialList high is
                             Ok pivot ->
@@ -1435,7 +1431,7 @@ mod gen_list {
                                 Pair (low - 1) initialList
 
 
-                    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+                    partitionHelp : Int *, Int *, List (Num a), Int *, (Num a) -> [ Pair (Int *) (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
                         if j < high then
                             when List.get list j is
@@ -1470,7 +1466,7 @@ mod gen_list {
                            quicksortHelp list 0 (List.len list - 1)
 
 
-                       quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+                       quicksortHelp : List (Num a), Int *, Int * -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
                                when partition low high list is
@@ -1482,7 +1478,7 @@ mod gen_list {
                                list
 
 
-                       swap : I64, I64, List a -> List a
+                       swap : Int *, Int *, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
                                Pair (Ok atI) (Ok atJ) ->
@@ -1493,7 +1489,7 @@ mod gen_list {
                                _ ->
                                    []
 
-                       partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+                       partition : Int *, Int *, List (Num a) -> [ Pair (Int *) (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
                                Ok pivot ->
@@ -1505,7 +1501,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]
+                       partitionHelp : Int *, Int *, List (Num a), Int *, Num a -> [ Pair (Int *) (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            # if j < high then
                            if False then
@@ -1543,7 +1539,7 @@ mod gen_list {
                            quicksortHelp list 0 (List.len list - 1)
 
 
-                       quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+                       quicksortHelp : List (Num a), Int *, Int * -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
                                when partition low high list is
@@ -1555,7 +1551,7 @@ mod gen_list {
                                list
 
 
-                       swap : I64, I64, List a -> List a
+                       swap : Int *, Int *, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
                                Pair (Ok atI) (Ok atJ) ->
@@ -1566,7 +1562,7 @@ mod gen_list {
                                _ ->
                                    []
 
-                       partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+                       partition : Int *, Int *, List (Num a) -> [ Pair (Int *) (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
                                Ok pivot ->
@@ -1578,7 +1574,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]
+                       partitionHelp : Int *, Int *, List (Num a), Int *, Num a -> [ Pair (Int *) (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            if j < high then
                                when List.get list j is
@@ -1706,5 +1702,55 @@ mod gen_list {
         assert_evals_to!("List.sum []", 0, i64);
         assert_evals_to!("List.sum [ 1, 2, 3 ]", 6, i64);
         assert_evals_to!("List.sum [ 1.1, 2.2, 3.3 ]", 6.6, f64);
+    }
+
+    #[test]
+    fn list_eq_empty() {
+        assert_evals_to!("[] == []", true, bool);
+        assert_evals_to!("[] != []", false, bool);
+    }
+
+    #[test]
+    fn list_eq_by_length() {
+        assert_evals_to!("[1] == []", false, bool);
+        assert_evals_to!("[] == [1]", false, bool);
+    }
+
+    #[test]
+    fn list_eq_compare_pointwise() {
+        assert_evals_to!("[1] == [1]", true, bool);
+        assert_evals_to!("[2] == [1]", false, bool);
+    }
+
+    #[test]
+    fn list_eq_nested() {
+        assert_evals_to!("[[1]] == [[1]]", true, bool);
+        assert_evals_to!("[[2]] == [[1]]", false, bool);
+    }
+
+    #[test]
+    fn list_neq_compare_pointwise() {
+        assert_evals_to!("[1] != [1]", false, bool);
+        assert_evals_to!("[2] != [1]", true, bool);
+    }
+
+    #[test]
+    fn list_neq_nested() {
+        assert_evals_to!("[[1]] != [[1]]", false, bool);
+        assert_evals_to!("[[2]] != [[1]]", true, bool);
+    }
+
+    #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+    fn cleanup_because_exception() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = [ 1,2 ]
+                5 + Num.maxInt + 3 + List.len x
+                   "#
+            ),
+            RocList::from_slice(&[false; 1]),
+            RocList<bool>
+        );
     }
 }

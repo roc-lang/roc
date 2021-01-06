@@ -1,4 +1,4 @@
-use crate::builtins::{num_binary64, num_floatingpoint, num_integer, num_num, num_signed64};
+use crate::builtins::{num_floatingpoint, num_integer, num_num};
 use crate::expr::{exists, Info};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
@@ -173,18 +173,19 @@ fn constrain_pattern(
             ));
         }
 
-        IntLiteral(_) => {
+        IntLiteral(inner_var, _) => {
             let (a, b, c, num_type) = unique_int(var_store);
+
             state.constraints.push(exists(
-                vec![a, b, c],
+                vec![*inner_var, a, b, c],
                 Constraint::Pattern(pattern.region, PatternCategory::Int, num_type, expected),
             ));
         }
-        FloatLiteral(_) => {
+        FloatLiteral(inner_var, _) => {
             let (a, b, c, num_type) = unique_float(var_store);
 
             state.constraints.push(exists(
-                vec![a, b, c],
+                vec![*inner_var, a, b, c],
                 Constraint::Pattern(pattern.region, PatternCategory::Float, num_type, expected),
             ));
         }
@@ -423,10 +424,9 @@ fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Variable, Type) 
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
+    let num_uvar4 = var_store.fresh();
 
-    let signed_64 = num_signed64();
-    let attr_signed_64 = attr_type(Bool::variable(num_uvar1), signed_64);
-    let integer = num_integer(attr_signed_64);
+    let integer = num_integer(Type::Variable(num_uvar4));
     let attr_int = attr_type(Bool::variable(num_uvar2), integer);
     let num = num_num(attr_int);
     let attr_num = attr_type(Bool::variable(num_uvar3), num);
@@ -438,10 +438,9 @@ fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Variable, Type
     let num_uvar1 = var_store.fresh();
     let num_uvar2 = var_store.fresh();
     let num_uvar3 = var_store.fresh();
+    let num_uvar4 = var_store.fresh();
 
-    let binary_64 = num_binary64();
-    let attr_binary_64 = attr_type(Bool::variable(num_uvar1), binary_64);
-    let fp = num_floatingpoint(attr_binary_64);
+    let fp = num_floatingpoint(Type::Variable(num_uvar4));
     let attr_fp = attr_type(Bool::variable(num_uvar2), fp);
     let num = num_num(attr_fp);
     let attr_num = attr_type(Bool::variable(num_uvar3), num);
@@ -478,7 +477,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Int(var, _) => {
+        Int(var, _, _) => {
             let (a, b, c, num_type) = unique_int(var_store);
 
             exists(
@@ -494,7 +493,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Float(var, _) => {
+        Float(var, _, _) => {
             let (a, b, c, num_type) = unique_float(var_store);
 
             exists(
@@ -532,7 +531,9 @@ pub fn constrain_expr(
                 ),
             )
         }
-        Record { record_var, fields } => {
+        Record {
+            record_var, fields, ..
+        } => {
             // NOTE: canonicalization guarantees at least one field
             // zero fields generates an EmptyRecord
             let mut field_types = SendMap::default();

@@ -135,7 +135,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [ Pair I64 I64 ]
+                x : [ Pair (Int *) (Int *) ]
                 x = Pair 0x2 0x3
 
                 when x is
@@ -152,7 +152,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [A I64, B I64]
+                x : [A (Int *), B (Int *)]
                 x = A 0x2
 
                 when x is
@@ -170,7 +170,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [A I64, B I64]
+                x : [A (Int *), B (Int *)]
                 x = B 0x3
 
                 when x is
@@ -293,7 +293,7 @@ mod gen_primitives {
             indoc!(
                 r#"
                 wrapper = \{} ->
-                    alwaysFloatIdentity : I64 -> (F64 -> F64)
+                    alwaysFloatIdentity : Int * -> (Float * -> Float *)
                     alwaysFloatIdentity = \_ ->
                         (\a -> a)
 
@@ -557,14 +557,14 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                len : LinkedList a -> I64
+                len : LinkedList a -> Int *
                 len = \list ->
                     when list is
                         Nil -> 0
                         Cons _ rest -> 1 + len rest
 
                 main =
-                    nil : LinkedList I64
+                    nil : LinkedList (Int *)
                     nil = Nil
 
                     len nil
@@ -584,10 +584,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList I64
+                nil : LinkedList (Int *)
                 nil = Nil
 
-                length : LinkedList a -> I64
+                length : LinkedList a -> Int *
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -611,10 +611,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                one : LinkedList I64
+                one : LinkedList (Int *)
                 one = Cons 1 Nil
 
-                length : LinkedList a -> I64
+                length : LinkedList a -> Int *
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -638,10 +638,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                one : LinkedList I64
+                one : LinkedList (Int *)
                 one = Cons 1 Nil
 
-                length : LinkedList a -> I64
+                length : LinkedList a -> Int *
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -665,10 +665,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                three : LinkedList I64
+                three : LinkedList (Int *)
                 three = Cons 3 (Cons 2 (Cons 1 Nil))
 
-                length : LinkedList a -> I64
+                length : LinkedList a -> Int *
                 length = \list ->
                     when list is
                         Nil -> 0
@@ -693,7 +693,7 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                three : LinkedList I64
+                three : LinkedList (Int *)
                 three = Cons 3 (Cons 2 (Cons 1 Nil))
 
 
@@ -721,10 +721,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                zero : LinkedList I64
+                zero : LinkedList (Int *)
                 zero = Nil
 
-                sum : LinkedList I64 -> I64
+                sum : LinkedList (Int *) -> Int *
                 sum = \list ->
                     when list is
                         Nil -> 0
@@ -748,7 +748,7 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                three : LinkedList I64
+                three : LinkedList (Int *)
                 three = Cons 3 (Cons 2 (Cons 1 Nil))
 
                 sum : LinkedList (Num a) -> Num a
@@ -779,7 +779,7 @@ mod gen_primitives {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe I64)
+                x : Maybe (Maybe (Int *))
                 x = Just (Just 41)
 
                 when x is
@@ -796,7 +796,7 @@ mod gen_primitives {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe I64)
+                x : Maybe (Maybe (Int *))
                 x = Just Nothing
 
                 when x is
@@ -814,7 +814,7 @@ mod gen_primitives {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe I64)
+                x : Maybe (Maybe (Int *))
                 x = Nothing
 
                 when x is
@@ -908,7 +908,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                foo : I64
+                foo : Int *
 
 
                 foo
@@ -1033,11 +1033,11 @@ mod gen_primitives {
                 runEffect : Effect a -> a
                 runEffect = \@Effect thunk -> thunk {}
 
-                foo : Effect F64
+                foo : Effect (Float *)
                 foo =
                     succeed 3.14
 
-                main : F64
+                main : Float *
                 main =
                     runEffect foo
 
@@ -1058,14 +1058,14 @@ mod gen_primitives {
                 # succeed : a -> ({} -> a)
                 succeed = \x -> \{} -> x
 
-                foo : {} -> F64
+                foo : {} -> Float *
                 foo =
                     succeed 3.14
 
                 # runEffect : ({} ->  a) -> a
                 runEffect = \thunk -> thunk {}
 
-                main : F64
+                main : Float *
                 main =
                     runEffect foo
                 "#
@@ -1145,7 +1145,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList I64
+                    myList : ConsList (Int *)
                     myList = empty
 
                     isEmpty myList
@@ -1176,7 +1176,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList I64
+                    myList : ConsList (Int *)
                     myList = Cons 0x1 Nil
 
                     isEmpty myList
@@ -1194,16 +1194,16 @@ mod gen_primitives {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                State a : { count : I64, x : a }
+                State a : { count : Int *, x : a }
 
-                foo : State a -> I64
+                foo : State a -> Int *
                 foo = \state ->
                     if state.count == 0 then
                         0
                     else
                         1 + foo { count: state.count - 1, x: state.x }
 
-                main : I64
+                main : Int *
                 main =
                     foo { count: 3, x: {} }
                 "#
@@ -1284,7 +1284,7 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree I64 {}
+                main : RedBlackTree (Int *) {}
                 main =
                     insert 0 {} Empty
                 "#
@@ -1325,7 +1325,7 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : RedBlackTree I64
+                main : RedBlackTree (Int *)
                 main =
                     balance Red 0 Empty Empty
                 "#
@@ -1348,7 +1348,7 @@ mod gen_primitives {
                 balance = \key, left ->
                     Node key left Empty
 
-                main : RedBlackTree I64
+                main : RedBlackTree (Int *)
                 main =
                     balance 0 Empty
                 "#
@@ -1395,7 +1395,7 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : RedBlackTree I64 I64
+                main : RedBlackTree (Int *) (Int *)
                 main =
                     balance Red 0 0 Empty Empty
                 "#
@@ -1445,7 +1445,7 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree I64 I64
+                main : RedBlackTree (Int *) (Int *)
                 main =
                     balance Red 0 0 Empty Empty
                 "#
@@ -1465,7 +1465,7 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                balance : ConsList I64 -> I64
+                balance : ConsList (Int *) -> Int *
                 balance = \right ->
                   when right is
                     Cons 1 foo ->
@@ -1474,7 +1474,7 @@ mod gen_primitives {
                             _ -> 3
                     _ -> 3
 
-                main : I64
+                main : Int *
                 main =
                     when balance Nil is
                         _ -> 3
@@ -1491,13 +1491,13 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                balance : ConsList I64 -> I64
+                balance : ConsList (Int *) -> Int *
                 balance = \right ->
                   when right is
                     Cons 1 (Cons 1 _) -> 3
                     _ -> 3
 
-                main : I64
+                main : Int *
                 main =
                     when balance Nil is
                         _ -> 3
@@ -1519,7 +1519,7 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                balance : ConsList I64 -> I64
+                balance : ConsList (Int *) -> Int *
                 balance = \right ->
                   when right is
                     Cons 1 foo ->
@@ -1528,7 +1528,7 @@ mod gen_primitives {
                             _ -> 3
                     _ -> 3
 
-                main : I64
+                main : Int *
                 main =
                     when balance Nil is
                         _ -> 3
@@ -1548,13 +1548,13 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                foo : ConsList I64 -> I64
+                foo : ConsList (Int *) -> Int *
                 foo = \list ->
                     when list is
                         Cons _ (Cons x _) -> x
                         _ -> 0
 
-                main : I64
+                main : Int *
                 main =
                     foo (Cons 1 (Cons 32 Nil))
                 "#
@@ -1571,15 +1571,15 @@ mod gen_primitives {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                BTree : [ Node BTree BTree, Leaf I64 ]
+                BTree : [ Node BTree BTree, Leaf (Int *) ]
 
-                foo : BTree -> I64
+                foo : BTree -> Int *
                 foo = \btree ->
                     when btree is
                         Node (Node (Leaf x) _) _ -> x
                         _ -> 0
 
-                main : I64
+                main : Int *
                 main =
                     foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
                 "#
@@ -1603,7 +1603,7 @@ mod gen_primitives {
                         A -> (\_ -> 3.14)
                         B -> (\_ -> 3.14)
 
-                main : F64
+                main : Float *
                 main =
                     (foo {}) 0
                 "#
@@ -1646,7 +1646,7 @@ mod gen_primitives {
                             Ok x -> transform x
                             Err e -> fail e
 
-                main : Task {} F64
+                main : Task {} (Float *)
                 main = after (always "foo") (\_ -> always {})
 
                 "#
@@ -1676,7 +1676,7 @@ mod gen_primitives {
                     @Effect inner
 
 
-                main : Task {} F64
+                main : Task {} (Float *)
                 main = always {}
                 "#
             ),
@@ -1707,7 +1707,7 @@ mod gen_primitives {
 
                 Task a err : Effect (Result a err)
 
-                always : a -> Task a F64
+                always : a -> Task a (Float *)
                 always = \x -> effectAlways (Ok x)
 
                 # the problem is that this restricts to `Task {} *`
@@ -1722,7 +1722,7 @@ mod gen_primitives {
                             # but here it must be `forall b. Task b {}`
                             Err e -> fail e
 
-                main : Task {} F64
+                main : Task {} (Float *)
                 main =
                     after (always "foo") (\_ -> always {})
                 "#
@@ -1774,7 +1774,7 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : Result I64 F64
+                x : Result (Int *) (Float *)
                 x = Ok 4
 
                 (Ok y) = x

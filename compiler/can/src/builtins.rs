@@ -212,7 +212,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
 /// Num.maxInt : Int
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
-    let body = Int(int_var, i64::MAX);
+    let int_percision_var = var_store.fresh();
+    let body = Int(int_var, int_percision_var, i64::MAX);
 
     Def {
         annotation: None,
@@ -226,7 +227,8 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.minInt : Int
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
-    let body = Int(int_var, i64::MIN);
+    let int_percision_var = var_store.fresh();
+    let body = Int(int_var, int_percision_var, i64::MIN);
 
     Def {
         annotation: None,
@@ -846,7 +848,7 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (arg_var, Int(var_store.fresh(), 1)),
+            (arg_var, Int(var_store.fresh(), var_store.fresh(), 1)),
             (
                 arg_var,
                 RunLowLevel {
@@ -930,6 +932,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
+    let percision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -943,7 +946,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (float_var, Var(Symbol::ARG_1)),
-                        (float_var, Float(unbound_zero_var, 0.0)),
+                        (float_var, Float(unbound_zero_var, percision_var, 0.0)),
                     ],
                     ret_var: bool_var,
                 },
@@ -1896,6 +1899,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
+    let percision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -1909,7 +1913,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (num_var, Float(unbound_zero_var, 0.0)),
+                        (num_var, Float(unbound_zero_var, percision_var, 0.0)),
                     ],
                     ret_var: bool_var,
                 },
@@ -1958,6 +1962,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
+    let unbound_zero_percision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -1971,7 +1976,10 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (num_var, Int(unbound_zero_var, 0)),
+                        (
+                            num_var,
+                            Int(unbound_zero_var, unbound_zero_percision_var, 0),
+                        ),
                     ],
                     ret_var: bool_var,
                 },
@@ -2025,6 +2033,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
     let zero_var = var_store.fresh();
+    let zero_percision_var = var_store.fresh();
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
@@ -2039,7 +2048,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, Int(zero_var, 0)),
+                        (len_var, Int(zero_var, zero_percision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2061,7 +2070,10 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         // List.#getUnsafe list 0
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
-                            args: vec![(list_var, Var(Symbol::ARG_1)), (len_var, Int(zero_var, 0))],
+                            args: vec![
+                                (list_var, Var(Symbol::ARG_1)),
+                                (len_var, Int(zero_var, zero_percision_var, 0)),
+                            ],
                             ret_var: list_elem_var,
                         },
                     ],
@@ -2102,6 +2114,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
     let num_var = var_store.fresh();
+    let num_percision_var = var_store.fresh();
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
@@ -2116,7 +2129,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, Int(num_var, 0)),
+                        (len_var, Int(num_var, num_percision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2155,7 +2168,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     ret_var: len_var,
                                                 },
                                             ),
-                                            (arg_var, Int(num_var, 1)),
+                                            (arg_var, Int(num_var, num_percision_var, 1)),
                                         ],
                                         ret_var: len_var,
                                     },
