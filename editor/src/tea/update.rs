@@ -11,23 +11,22 @@ pub fn move_caret_left(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) =
-        if old_selection_opt.is_some() && !shift_pressed{
-            match old_selection_opt {
-                Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
-                None => unreachable!(),
-            }
-        } else if old_col_nr == 0 {
-            if old_line_nr == 0 {
-                (0, 0)
-            } else if let Some(curr_line) = lines.get(old_line_nr - 1) {
-                (old_line_nr - 1, curr_line.len() - 1)
-            } else {
-                unreachable!()
-            }
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+        match old_selection_opt {
+            Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+            None => unreachable!(),
+        }
+    } else if old_col_nr == 0 {
+        if old_line_nr == 0 {
+            (0, 0)
+        } else if let Some(curr_line) = lines.get(old_line_nr - 1) {
+            (old_line_nr - 1, curr_line.len() - 1)
         } else {
-            (old_line_nr, old_col_nr - 1)
-        };
+            unreachable!()
+        }
+    } else {
+        (old_line_nr, old_col_nr - 1)
+    };
 
     let new_caret_pos = Position {
         line: line_nr,
@@ -84,31 +83,30 @@ pub fn move_caret_right(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) = 
-        if old_selection_opt.is_some() && !shift_pressed{
-            match old_selection_opt {
-                Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
-                None => unreachable!(),
-            }
-        } else if let Some(curr_line) = lines.get(old_line_nr) {
-            if let Some(last_char) = curr_line.chars().last() {
-                if is_newline(&last_char) {
-                    if old_col_nr + 1 > curr_line.len() - 1 {
-                        (old_line_nr + 1, 0)
-                    } else {
-                        (old_line_nr, old_col_nr + 1)
-                    }
-                } else if old_col_nr < curr_line.len() {
-                    (old_line_nr, old_col_nr + 1)
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+        match old_selection_opt {
+            Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
+            None => unreachable!(),
+        }
+    } else if let Some(curr_line) = lines.get(old_line_nr) {
+        if let Some(last_char) = curr_line.chars().last() {
+            if is_newline(&last_char) {
+                if old_col_nr + 1 > curr_line.len() - 1 {
+                    (old_line_nr + 1, 0)
                 } else {
-                    (old_line_nr, old_col_nr)
+                    (old_line_nr, old_col_nr + 1)
                 }
+            } else if old_col_nr < curr_line.len() {
+                (old_line_nr, old_col_nr + 1)
             } else {
                 (old_line_nr, old_col_nr)
             }
         } else {
-            unreachable!()
-        };
+            (old_line_nr, old_col_nr)
+        }
+    } else {
+        unreachable!()
+    };
 
     let new_caret_pos = Position {
         line: line_nr,
@@ -165,23 +163,22 @@ pub fn move_caret_up(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) = 
-        if old_selection_opt.is_some() && !shift_pressed{
-            match old_selection_opt {
-                Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
-                None => unreachable!(),
-            }
-        } else if old_line_nr == 0 {
-            (old_line_nr, 0)
-        } else if let Some(prev_line) = lines.get(old_line_nr - 1) {
-            if prev_line.len() <= old_col_nr {
-                (old_line_nr - 1, prev_line.len() - 1)
-            } else {
-                (old_line_nr - 1, old_col_nr)
-            }
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+        match old_selection_opt {
+            Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+            None => unreachable!(),
+        }
+    } else if old_line_nr == 0 {
+        (old_line_nr, 0)
+    } else if let Some(prev_line) = lines.get(old_line_nr - 1) {
+        if prev_line.len() <= old_col_nr {
+            (old_line_nr - 1, prev_line.len() - 1)
         } else {
-            unreachable!()
-        };
+            (old_line_nr - 1, old_col_nr)
+        }
+    } else {
+        unreachable!()
+    };
 
     let new_caret_pos = Position {
         line: line_nr,
@@ -229,8 +226,7 @@ pub fn move_caret_down(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) =
-    if old_selection_opt.is_some() && !shift_pressed{
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
         match old_selection_opt {
             Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
             None => unreachable!(),
