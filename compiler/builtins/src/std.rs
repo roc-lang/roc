@@ -3,8 +3,8 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, dict_type, float_type, int_type, list_type, num_type, ordering_type, result_type,
-    set_type, str_type,
+    bool_type, dict_type, float_type, int_type, list_type, nat_type, num_type, ordering_type,
+    result_type, set_type, str_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -509,10 +509,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![str_type(), str_type()], Box::new(bool_type())),
     );
 
-    // countGraphemes : Str -> Int a
+    // countGraphemes : Str -> Nat
     add_type(
         Symbol::STR_COUNT_GRAPHEMES,
-        top_level_function(vec![str_type()], Box::new(int_type(flex(TVAR1)))),
+        top_level_function(vec![str_type()], Box::new(nat_type())),
     );
 
     // fromInt : Int a -> Str
@@ -523,7 +523,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // List module
 
-    // get : List elem, Int -> Result elem [ OutOfBounds ]*
+    // get : List elem, Nat -> Result elem [ OutOfBounds ]*
     let index_out_of_bounds = SolvedType::TagUnion(
         vec![(TagName::Global("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -532,7 +532,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_GET,
         top_level_function(
-            vec![list_type(flex(TVAR1)), int_type(flex(TVAR2))],
+            vec![list_type(flex(TVAR1)), nat_type()],
             Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
         ),
     );
@@ -560,11 +560,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // set : List elem, Int a, elem -> List elem
+    // set : List elem, Nat, elem -> List elem
     add_type(
         Symbol::LIST_SET,
         top_level_function(
-            vec![list_type(flex(TVAR1)), int_type(flex(TVAR2)), flex(TVAR1)],
+            vec![list_type(flex(TVAR1)), nat_type(), flex(TVAR1)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );
@@ -679,11 +679,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![flex(TVAR1)], Box::new(list_type(flex(TVAR1)))),
     );
 
-    // repeat : Int a, elem -> List elem
+    // repeat : Nat, elem -> List elem
     add_type(
         Symbol::LIST_REPEAT,
         top_level_function(
-            vec![int_type(flex(TVAR1)), flex(TVAR2)],
+            vec![nat_type(), flex(TVAR2)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );
@@ -697,13 +697,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // len : List * -> Int a
+    // len : List * -> Nat
     add_type(
         Symbol::LIST_LEN,
-        top_level_function(
-            vec![list_type(flex(TVAR1))],
-            Box::new(int_type(flex(TVAR2))),
-        ),
+        top_level_function(vec![list_type(flex(TVAR1))], Box::new(nat_type())),
     );
 
     // isEmpty : List * -> Bool

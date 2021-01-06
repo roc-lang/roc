@@ -2983,7 +2983,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : Int a, Int *, List (Int b) -> [ Pair (Int a) (List (Int b)) ]
+                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -2995,7 +2995,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "Int a, Int *, List (Int b) -> [ Pair (Int a) (List (Int b)) ]",
+            "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
         );
     }
 
@@ -3005,7 +3005,7 @@ mod solve_expr {
             infer_eq_without_problem(
                 indoc!(
                     r#"
-                swap : Int *, Int *, List a -> List a
+                swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -3016,7 +3016,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : I64, I64, List (Int a) -> [ Pair I64 (List (Int a)) ]
+                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -3044,7 +3044,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "I64, I64, List (Int a) -> [ Pair I64 (List (Int a)) ]",
+                "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
             );
         });
     }
@@ -3085,7 +3085,7 @@ mod solve_expr {
                     List.get
                 "#
             ),
-            "List a, Int * -> Result a [ OutOfBounds ]*",
+            "List a, Nat -> Result a [ OutOfBounds ]*",
         );
     }
 
@@ -4106,7 +4106,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ partitionHelp ] to "./platform"
 
-                swap : Int *, Int *, List a -> List a
+                swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -4117,7 +4117,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -4133,7 +4133,7 @@ mod solve_expr {
                         Pair i list
                 "#
             ),
-            "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
+            "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
         );
     }
 
