@@ -4391,7 +4391,6 @@ fn from_can_when<'a>(
 
     crate::decision_tree::optimize_when(
         env,
-        procs,
         layout_cache,
         cond_symbol,
         cond_layout.clone(),

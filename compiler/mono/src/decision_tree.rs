@@ -1,7 +1,5 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
-use crate::ir::{
-    DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
-};
+use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Stmt, Wrapped};
 use crate::layout::{Builtin, Layout, LayoutCache};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -883,7 +881,6 @@ type StoresVec<'a> = bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>
 
 pub fn optimize_when<'a>(
     env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
@@ -921,7 +918,6 @@ pub fn optimize_when<'a>(
 
     decide_to_branching(
         env,
-        procs,
         layout_cache,
         cond_symbol,
         cond_layout,
@@ -1327,7 +1323,6 @@ fn compile_tests<'a>(
 #[allow(clippy::too_many_arguments, clippy::needless_collect)]
 fn decide_to_branching<'a>(
     env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
@@ -1359,7 +1354,6 @@ fn decide_to_branching<'a>(
 
             let pass_expr = decide_to_branching(
                 env,
-                procs,
                 layout_cache,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1370,7 +1364,6 @@ fn decide_to_branching<'a>(
 
             let fail_expr = decide_to_branching(
                 env,
-                procs,
                 layout_cache,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1418,7 +1411,6 @@ fn decide_to_branching<'a>(
 
             let default_branch = decide_to_branching(
                 env,
-                procs,
                 layout_cache,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1432,7 +1424,6 @@ fn decide_to_branching<'a>(
             for (test, decider) in tests {
                 let branch = decide_to_branching(
                     env,
-                    procs,
                     layout_cache,
                     cond_symbol,
                     cond_layout.clone(),
