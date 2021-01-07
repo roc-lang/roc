@@ -8,6 +8,11 @@
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
+extern crate pest;
+#[cfg(test)]
+#[macro_use]
+extern crate pest_derive;
+
 use crate::error::print_err;
 use crate::graphics::lowlevel::buffer::create_rect_buffers;
 use crate::graphics::lowlevel::ortho::{init_ortho, update_ortho_buffer, OrthoResources};

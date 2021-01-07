@@ -2672,6 +2672,8 @@ dependencies = [
  "log",
  "maplit",
  "page_size",
+ "pest",
+ "pest_derive",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
