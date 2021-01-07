@@ -754,6 +754,123 @@ pub enum Stmt<'a> {
     RuntimeError(&'a str),
 }
 
+enum CaseOfKnownConstructor<'a> {
+    Unknown,
+    SingleOption(&'a Stmt<'a>),
+    ReducedSet(&'a [(Pattern<'a>, Option<Stmt<'a>>, Stmt<'a>)]),
+}
+
+fn expr_can_reach_branch<'a>(
+    env: &mut Env<'a, '_>,
+    scope: &MutMap<Symbol, Expr<'a>>,
+    expr: &Expr<'a>,
+    pattern: &Pattern<'a>,
+) -> bool {
+    if matches!(pattern, Pattern::Underscore | Pattern::Identifier(_)) {
+        return true;
+    }
+
+    match expr {
+        Expr::Literal(literal) => literal_can_reach_branch(env, scope, literal, pattern),
+        Expr::Tag {
+            tag_id, arguments, ..
+        } => match pattern {
+            Pattern::AppliedTag {
+                tag_id: pat_id,
+                arguments: pat_arguments,
+                ..
+            } => {
+                // the branch not reachable if the tag ids don't match
+                if tag_id != pat_id {
+                    return false;
+                }
+
+                debug_assert_eq!(arguments.len(), pat_arguments.len());
+
+                // the branch is not reachable if any of the subpatterns is unreachable
+                for (arg_symbol, pat) in arguments.iter().zip(pat_arguments.iter()) {
+                    match scope.get(arg_symbol) {
+                        None => {
+                            // we don't know
+                            return true;
+                        }
+                        Some(arg) => {
+                            if !expr_can_reach_branch(env, scope, arg, &pat.0) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                true
+            }
+
+            _ => unreachable!(),
+        },
+
+        Expr::Struct(fields) => match pattern {
+            Pattern::RecordDestructure(destructs, _) => {
+                // the branch is not reachable if any of the subpatterns is unreachable
+                for (arg_symbol, pat) in fields.iter().zip(destructs.iter()) {
+                    match &pat.typ {
+                        DestructType::Required(_) => {
+                            // this field pattern is always reachable
+                            continue;
+                        }
+                        DestructType::Guard(pat) => {
+                            match scope.get(arg_symbol) {
+                                None => {
+                                    // we don't know
+                                    return true;
+                                }
+                                Some(arg) => {
+                                    if !expr_can_reach_branch(env, scope, arg, pat) {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                true
+            }
+
+            _ => unreachable!(),
+        },
+
+        _ => true,
+    }
+}
+
+fn literal_can_reach_branch<'a>(
+    env: &mut Env<'a, '_>,
+    scope: &MutMap<Symbol, Expr<'a>>,
+    literal: &Literal<'a>,
+    pattern: &Pattern<'a>,
+) -> bool {
+    debug_assert!(!matches!(pattern, Pattern::Underscore | Pattern::Identifier(_)));
+
+    match literal {
+        Literal::Int(v1) => matches!(pattern, Pattern::IntLiteral(v2) if *v1 as i128 == *v2),
+        Literal::Float(v1) => matches!(pattern, Pattern::FloatLiteral(v2) if *v1 == *v2 as f64),
+        Literal::Bool(v1) => matches!(pattern, Pattern::BitLiteral{value , .. } if *v1 == *value),
+        Literal::Byte(v1) => {
+            matches!(pattern, Pattern::EnumLiteral{tag_id , .. } if *v1 == *tag_id)
+        }
+        Literal::Str(v1) => matches!(pattern, Pattern::StrLiteral(v2) if v1 == &&**v2),
+    }
+}
+
+fn case_of_known_constructor<'a>(
+    env: &mut Env<'a, '_>,
+    scope: MutMap<Symbol, Expr<'a>>,
+    expr: &Expr<'a>,
+    branches: &'a [(Pattern<'a>, Option<Stmt<'a>>, Stmt<'a>)],
+) -> CaseOfKnownConstructor<'a> {
+    // let mut matrix = Vec::new_in(env.arena);
+    todo!();
+}
 impl<'a> Stmt<'a> {
     pub fn new(
         env: &mut Env<'a, '_>,
