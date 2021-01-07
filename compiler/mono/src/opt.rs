@@ -1,8 +1,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::ir::{
-    join_point_to_doc, symbol_to_doc, Call, CallType, DestructType, Expr, JoinPointId, Literal,
-    Param, Pattern, RecordDestruct, Wrapped,
+    join_point_to_doc, symbol_to_doc, Call, CallType, DestructType, Env, Expr, HostExposedLayouts,
+    JoinPointId, Literal, MonoProblem, Param, Pattern, RecordDestruct, SelfRecursive, Wrapped,
 };
 use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
@@ -10,7 +10,7 @@ use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::SolvedType;
@@ -19,11 +19,6 @@ use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum MonoProblem {
-    PatternProblem(crate::exhaustive::Error),
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
@@ -98,21 +93,6 @@ pub struct Proc<'a> {
     pub ret_layout: Layout<'a>,
     pub is_self_recursive: SelfRecursive,
     pub host_exposed_layouts: HostExposedLayouts<'a>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum HostExposedLayouts<'a> {
-    NotHostExposed,
-    HostExposed {
-        rigids: MutMap<Lowercase, Layout<'a>>,
-        aliases: MutMap<Symbol, Layout<'a>>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SelfRecursive {
-    NotSelfRecursive,
-    SelfRecursive(JoinPointId),
 }
 
 impl<'a> Proc<'a> {
@@ -511,6 +491,122 @@ impl<'a> Procs<'a> {
             }
         }
     }
+
+    pub fn to_mono_ir(mut self, env: &mut Env<'a, '_>) -> crate::ir::Procs<'a> {
+        let mut specialized: MutMap<(Symbol, Layout<'a>), crate::ir::InProgressProc> =
+            MutMap::default();
+
+        for (key, value) in self.specialized.drain() {
+            match value {
+                InProgressProc::InProgress => {
+                    panic!("converting to mono while proc is still in progress!")
+                }
+                Done(proc) => {
+                    specialized.insert(key, crate::ir::InProgressProc::Done(proc.to_mono_ir(env)));
+                }
+            }
+        }
+
+        crate::ir::Procs {
+            specialized,
+            ..Default::default()
+        }
+    }
+}
+
+impl<'a> Proc<'a> {
+    pub fn to_mono_ir(self, env: &mut Env<'a, '_>) -> crate::ir::Proc<'a> {
+        crate::ir::Proc {
+            name: self.name,
+            args: self.args,
+            body: self.body.to_mono_ir(env),
+            closure_data_layout: self.closure_data_layout,
+            ret_layout: self.ret_layout,
+            is_self_recursive: self.is_self_recursive,
+            host_exposed_layouts: self.host_exposed_layouts,
+        }
+    }
+}
+
+impl<'a> Stmt<'a> {
+    pub fn to_mono_ir(&self, env: &mut Env<'a, '_>) -> crate::ir::Stmt<'a> {
+        use crate::ir::Stmt as Mono;
+        use Stmt::*;
+
+        match self {
+            Let(s, e, l, nested) => {
+                Mono::Let(*s, e.clone(), l.clone(), nested.to_mono_ir_alloc(env))
+            }
+            Invoke {
+                symbol,
+                call,
+                layout,
+                pass,
+                fail,
+            } => Mono::Invoke {
+                symbol: *symbol,
+                call: call.clone(),
+                layout: layout.clone(),
+                pass: pass.to_mono_ir_alloc(env),
+                fail: fail.to_mono_ir_alloc(env),
+            },
+            RuntimeError(s) => Mono::RuntimeError(s),
+            Rethrow => Mono::Rethrow,
+            Ret(s) => Mono::Ret(*s),
+            Inc(s, nested) => Mono::Inc(*s, nested.to_mono_ir_alloc(env)),
+            Dec(s, nested) => Mono::Dec(*s, nested.to_mono_ir_alloc(env)),
+            Switch {
+                cond_symbol,
+                cond_layout,
+                branches,
+                ret_layout,
+            } => {
+                // actually turn patterns into branches and field access
+                let mut layout_cache = crate::layout::LayoutCache::default();
+                let mut opt_branches: bumpalo::collections::Vec<
+                    'a,
+                    (
+                        Pattern<'a>,
+                        crate::decision_tree::Guard<'a>,
+                        crate::ir::Stmt<'a>,
+                    ),
+                > = Vec::with_capacity_in(branches.len(), env.arena);
+
+                for (pattern, opt_guard, body) in branches.iter() {
+                    opt_branches.push((
+                        pattern.clone(),
+                        crate::decision_tree::Guard::NoGuard,
+                        body.to_mono_ir(env),
+                    ));
+                }
+
+                crate::decision_tree::optimize_when(
+                    env,
+                    &mut layout_cache,
+                    *cond_symbol,
+                    cond_layout.clone(),
+                    ret_layout.clone(),
+                    opt_branches,
+                )
+            }
+            Join {
+                id,
+                parameters,
+                continuation,
+                remainder,
+            } => Mono::Join {
+                id: *id,
+                parameters,
+                continuation: continuation.to_mono_ir_alloc(env),
+                remainder: remainder.to_mono_ir_alloc(env),
+            },
+            Jump(id, params) => Mono::Jump(*id, params),
+        }
+    }
+
+    fn to_mono_ir_alloc(&self, env: &mut Env<'a, '_>) -> &'a crate::ir::Stmt<'a> {
+        env.arena.alloc(self.to_mono_ir(env))
+    }
 }
 
 fn add_pending<'a>(
@@ -571,28 +667,6 @@ impl<'a> Specializations<'a> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-}
-
-pub struct Env<'a, 'i> {
-    pub arena: &'a Bump,
-    pub subs: &'i mut Subs,
-    pub problems: &'i mut std::vec::Vec<MonoProblem>,
-    pub home: ModuleId,
-    pub ident_ids: &'i mut IdentIds,
-}
-
-impl<'a, 'i> Env<'a, 'i> {
-    pub fn unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.ident_ids.gen_unique();
-
-        self.home.register_debug_idents(&self.ident_ids);
-
-        Symbol::new(self.home, ident_id)
-    }
-
-    pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        symbol.module_id() != self.home && !symbol.is_builtin()
     }
 }
 
