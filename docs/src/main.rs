@@ -132,6 +132,7 @@ fn files_to_documentations(
             std_lib.clone(),
             src_dir,
             MutMap::default(),
+            8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
         )
         .expect("TODO gracefully handle load failing");
         files_docs.extend(loaded.documentation.drain().map(|x| x.1));

@@ -16,6 +16,357 @@ mod gen_num {
     use roc_std::RocOrder;
 
     #[test]
+    fn nat_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : Nat
+                    i = 1
+
+                    i
+                "#
+            ),
+            1,
+            usize
+        );
+    }
+
+    #[test]
+    fn i128_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I128
+                    i = 128
+
+                    i
+                "#
+            ),
+            128,
+            i128
+        );
+    }
+    #[test]
+    fn i64_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I64
+                    i = 64
+
+                    i
+                "#
+            ),
+            64,
+            i64
+        );
+    }
+    #[test]
+    fn i32_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I32
+                    i = 32
+
+                    i
+                "#
+            ),
+            32,
+            i32
+        );
+    }
+    #[test]
+    fn i16_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I16
+                    i = 16
+
+                    i
+                "#
+            ),
+            16,
+            i16
+        );
+    }
+    #[test]
+    fn i8_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I8
+                    i = 8
+
+                    i
+                "#
+            ),
+            8,
+            i8
+        );
+    }
+
+    #[test]
+    fn i128_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I128
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i128
+        );
+    }
+    #[test]
+    fn i64_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I64
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i64
+        );
+    }
+    #[test]
+    fn i32_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I32
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i32
+        );
+    }
+    #[test]
+    fn i16_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I16
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i16
+        );
+    }
+    #[test]
+    fn i8_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I8
+                    f = 0xA
+
+                    f
+                "#
+            ),
+            0xA,
+            i8
+        );
+    }
+
+    #[test]
+    fn u128_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U128
+                    i = 128
+
+                    i
+                "#
+            ),
+            128,
+            u128
+        );
+    }
+    #[test]
+    fn u64_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U64
+                    i = 64
+
+                    i
+                "#
+            ),
+            64,
+            u64
+        );
+    }
+    #[test]
+    fn u32_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U32
+                    i = 32
+
+                    i
+                "#
+            ),
+            32,
+            u32
+        );
+    }
+    #[test]
+    fn u16_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U16
+                    i = 16
+
+                    i
+                "#
+            ),
+            16,
+            u16
+        );
+    }
+    #[test]
+    fn u8_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U8
+                    i = 8
+
+                    i
+                "#
+            ),
+            8,
+            u8
+        );
+    }
+
+    #[test]
+    fn u128_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U128
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i128
+        );
+    }
+    #[test]
+    fn u64_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U64
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            u64
+        );
+    }
+    #[test]
+    fn u32_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U32
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            u32
+        );
+    }
+    #[test]
+    fn u16_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U16
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            u16
+        );
+    }
+    #[test]
+    fn u8_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U8
+                    f = 0xA
+
+                    f
+                "#
+            ),
+            0xA,
+            u8
+        );
+    }
+
+    #[test]
+    fn f64_float_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : F64
+                    f = 3.6
+
+                    f
+                "#
+            ),
+            3.6,
+            f64
+        );
+    }
+    #[test]
+    fn f32_float_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : F32
+                    f = 3.6
+
+                    f
+                "#
+            ),
+            3.6,
+            f32
+        );
+    }
+
+    #[test]
     fn f64_sqrt() {
         // FIXME this works with normal types, but fails when checking uniqueness types
         assert_evals_to!(
