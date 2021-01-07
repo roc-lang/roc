@@ -484,6 +484,34 @@ fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
     }
 }
 
+pub fn int_with_precision<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: i128,
+    precision: &Builtin,
+) -> IntValue<'ctx> {
+    match precision {
+        Builtin::Usize => ptr_int(env.context, env.ptr_bytes).const_int(value as u64, false),
+        Builtin::Int128 => const_i128(env, value),
+        Builtin::Int64 => env.context.i64_type().const_int(value as u64, false),
+        Builtin::Int32 => env.context.i32_type().const_int(value as u64, false),
+        Builtin::Int16 => env.context.i16_type().const_int(value as u64, false),
+        Builtin::Int8 => env.context.i8_type().const_int(value as u64, false),
+        _ => panic!("Invalid layout for int literal = {:?}", precision),
+    }
+}
+
+pub fn float_with_precision<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: f64,
+    precision: &Builtin,
+) -> FloatValue<'ctx> {
+    match precision {
+        Builtin::Float64 => env.context.f64_type().const_float(value),
+        Builtin::Float32 => env.context.f32_type().const_float(value),
+        _ => panic!("Invalid layout for float literal = {:?}", precision),
+    }
+}
+
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'_>,
@@ -492,22 +520,16 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
     use roc_mono::ir::Literal::*;
 
     match literal {
-        Int(int) =>
-            (match layout {
-                Layout::Builtin(Builtin::Usize) => ptr_int(env.context, env.ptr_bytes),
-                Layout::Builtin(Builtin::Int128) => env.context.i128_type(), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
-                Layout::Builtin(Builtin::Int64) => env.context.i64_type(),
-                Layout::Builtin(Builtin::Int32) => env.context.i32_type(),
-                Layout::Builtin(Builtin::Int16) => env.context.i16_type(),
-                Layout::Builtin(Builtin::Int8) => env.context.i8_type(),
-                _ => panic!("Invalid layout for int literal = {:?}", layout),
-            }).const_int(*int as u64, false).into(),
-        Float(num) =>
-            (match layout {
-                Layout::Builtin(Builtin::Float64) => env.context.f64_type(),
-                Layout::Builtin(Builtin::Float32) => env.context.f32_type(),
-                _ => panic!("Invalid layout for float literal = {:?}", layout),
-            }).const_float(*num).into(),
+        Int(int) => match layout {
+            Layout::Builtin(builtin) => int_with_precision(env, *int as i128, builtin).into(),
+            _ => panic!("Invalid layout for int literal = {:?}", layout),
+        },
+
+        Float(float) => match layout {
+            Layout::Builtin(builtin) => float_with_precision(env, *float, builtin).into(),
+            _ => panic!("Invalid layout for float literal = {:?}", layout),
+        },
+
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
@@ -1783,6 +1805,22 @@ struct SwitchArgsIr<'a, 'ctx> {
     pub ret_type: BasicTypeEnum<'ctx>,
 }
 
+fn const_i128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: i128) -> IntValue<'ctx> {
+    // TODO verify the order [a, b] is correct for larger numbers when we can parse them
+    debug_assert!(value <= i64::MAX as i128);
+
+    // truncate the lower 64 bits
+    let value = value as u128;
+    let a = value as u64;
+
+    // get the upper 64 bits
+    let b = (value >> 64) as u64;
+
+    env.context
+        .i128_type()
+        .const_int_arbitrary_precision(&[a, b])
+}
+
 fn build_switch_ir<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1860,7 +1898,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 ptr_int(env.context, env.ptr_bytes).const_int(*int as u64, false)
             }
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Int128) => context.i128_type().const_int(*int as u64, false), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
+            Layout::Builtin(Builtin::Int128) => const_i128(env, *int as i128),
             Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),

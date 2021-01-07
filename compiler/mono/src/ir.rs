@@ -912,11 +912,6 @@ pub enum CallType<'a> {
     },
 }
 
-// x = f a b c; S
-//
-//
-// invoke x = f a b c in S else Rethrow
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -4788,8 +4783,8 @@ fn store_pattern<'a>(
         Underscore => {
             // do nothing
         }
-        IntLiteral(_, _)
-        | FloatLiteral(_, _)
+        IntLiteral(_)
+        | FloatLiteral(_)
         | EnumLiteral { .. }
         | BitLiteral { .. }
         | StrLiteral(_) => {}
@@ -4828,8 +4823,8 @@ fn store_pattern<'a>(
                     Underscore => {
                         // ignore
                     }
-                    IntLiteral(_, _)
-                    | FloatLiteral(_, _)
+                    IntLiteral(_)
+                    | FloatLiteral(_)
                     | EnumLiteral { .. }
                     | BitLiteral { .. }
                     | StrLiteral(_) => {}
@@ -4923,8 +4918,8 @@ fn store_record_destruct<'a>(
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
-            IntLiteral(_, _)
-            | FloatLiteral(_, _)
+            IntLiteral(_)
+            | FloatLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5668,8 +5663,8 @@ fn call_by_name<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
-    IntLiteral(Variable, i64),
-    FloatLiteral(Variable, u64),
+    IntLiteral(i128),
+    FloatLiteral(u64),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -5802,10 +5797,8 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(precision_var, int) => Ok(Pattern::IntLiteral(*precision_var, *int)),
-        FloatLiteral(precision_var, float) => {
-            Ok(Pattern::FloatLiteral(*precision_var, f64::to_bits(*float)))
-        }
+        IntLiteral(_, int) => Ok(Pattern::IntLiteral(*int as i128)),
+        FloatLiteral(_, float) => Ok(Pattern::FloatLiteral(f64::to_bits(*float))),
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
@@ -5818,10 +5811,10 @@ fn from_can_pattern_help<'a>(
         }
         NumLiteral(var, num) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*var, *num)),
-                IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*var, *num)),
-                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*var, *num as u64)),
-                IntOrFloat::DecimalFloatType(_) => Ok(Pattern::FloatLiteral(*var, *num as u64)),
+                IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
+                IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
+                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
+                IntOrFloat::DecimalFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
             }
         }
 
