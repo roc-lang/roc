@@ -1061,7 +1061,7 @@ fn pattern_to_when<'a>(
             (symbol, Located::at_zero(wrapped_body))
         }
 
-        IntLiteral(_) | NumLiteral(_, _) | FloatLiteral(_) | StrLiteral(_) => {
+        IntLiteral(_, _) | NumLiteral(_, _) | FloatLiteral(_, _) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -1926,14 +1926,14 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, num) => Stmt::Let(
+        Int(_, _, num) => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Int(num)),
             Layout::Builtin(Builtin::Int64),
             hole,
         ),
 
-        Float(_, num) => Stmt::Let(
+        Float(_, _, num) => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Float(num)),
             Layout::Builtin(Builtin::Float64),
@@ -5194,8 +5194,8 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(v) => Ok(Pattern::IntLiteral(*v)),
-        FloatLiteral(v) => Ok(Pattern::FloatLiteral(f64::to_bits(*v))),
+        IntLiteral(_, v) => Ok(Pattern::IntLiteral(*v as i128)),
+        FloatLiteral(_, v) => Ok(Pattern::FloatLiteral(f64::to_bits(*v))),
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
@@ -5208,7 +5208,7 @@ fn from_can_pattern_help<'a>(
             Err(RuntimeError::UnsupportedPattern(*region))
         }
         NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
-            IntOrFloat::IntType => Ok(Pattern::IntLiteral(*num)),
+            IntOrFloat::IntType => Ok(Pattern::IntLiteral(*num as i128)),
             IntOrFloat::FloatType => Ok(Pattern::FloatLiteral(*num as u64)),
         },
 
