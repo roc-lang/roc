@@ -66,7 +66,7 @@ pub enum Test<'a> {
         union: crate::exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i64),
+    IsInt(i128),
     // float patterns are stored as u64 so they are comparable/hashable
     IsFloat(u64),
     IsStr(Box<str>),
@@ -445,10 +445,10 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                         num_alts: union.alternatives.len(),
                     });
                 }
-                IntLiteral(_, v) => {
+                IntLiteral(v) => {
                     all_tests.push(guarded(IsInt(*v)));
                 }
-                FloatLiteral(_, v) => {
+                FloatLiteral(v) => {
                     all_tests.push(IsFloat(*v));
                 }
                 StrLiteral(v) => {
@@ -636,7 +636,7 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        IntLiteral(_, int) => match test {
+        IntLiteral(int) => match test {
             IsInt(is_int) if int == *is_int => {
                 start.extend(end);
                 Some(Branch {
@@ -647,7 +647,7 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        FloatLiteral(_, float) => match test {
+        FloatLiteral(float) => match test {
             IsFloat(test_float) if float == *test_float => {
                 start.extend(end);
                 Some(Branch {
@@ -740,8 +740,8 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | AppliedTag { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
-        | IntLiteral(_, _)
-        | FloatLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
         | StrLiteral(_) => true,
     }
 }
@@ -1092,7 +1092,9 @@ fn test_to_equality<'a>(
             )
         }
         Test::IsInt(test_int) => {
-            let lhs = Expr::Literal(Literal::Int(test_int));
+            // TODO don't downcast i128 here
+            debug_assert!(test_int <= i64::MAX as i128);
+            let lhs = Expr::Literal(Literal::Int(test_int as i64));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
 
