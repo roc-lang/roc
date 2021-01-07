@@ -762,7 +762,7 @@ pub enum Stmt<'a> {
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
-    Unreachable,
+    Rethrow,
     Inc(Symbol, &'a Stmt<'a>),
     Dec(Symbol, &'a Stmt<'a>),
     Join {
@@ -910,11 +910,6 @@ pub enum CallType<'a> {
         op: LowLevel,
     },
 }
-
-// x = f a b c; S
-//
-//
-// invoke x = f a b c in S else Unreachable
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
@@ -1133,7 +1128,7 @@ impl<'a> Stmt<'a> {
                 symbol,
                 call,
                 pass,
-                fail: Stmt::Unreachable,
+                fail: Stmt::Rethrow,
                 ..
             } => alloc
                 .text("let ")
@@ -1166,7 +1161,7 @@ impl<'a> Stmt<'a> {
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
 
-            Unreachable => alloc.text("unreachable;"),
+            Rethrow => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -4572,7 +4567,7 @@ fn substitute_in_stmt_help<'a>(
             }
         }
 
-        Unreachable => None,
+        Rethrow => None,
 
         RuntimeError(_) => None,
     }
@@ -5293,7 +5288,7 @@ fn build_call<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     if can_throw_exception(&call) {
-        let fail = env.arena.alloc(Stmt::Unreachable);
+        let fail = env.arena.alloc(Stmt::Rethrow);
         Stmt::Invoke {
             symbol: assigned,
             call,

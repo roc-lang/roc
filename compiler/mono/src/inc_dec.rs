@@ -50,7 +50,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 result.insert(*symbol);
             }
 
-            Unreachable => {}
+            Rethrow => {}
 
             Inc(symbol, cont) | Dec(symbol, cont) => {
                 result.insert(*symbol);
@@ -792,7 +792,7 @@ impl<'a> Context<'a> {
                 }
             }
 
-            Unreachable => (stmt, MutSet::default()),
+            Rethrow => (stmt, MutSet::default()),
 
             Jump(j, xs) => {
                 let empty = MutSet::default();
@@ -953,7 +953,7 @@ pub fn collect_stmt(
             vars
         }
 
-        Unreachable => vars,
+        Rethrow => vars,
 
         RuntimeError(_) => vars,
     }
