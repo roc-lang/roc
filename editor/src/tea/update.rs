@@ -12,7 +12,12 @@ pub fn move_caret_left(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) = if old_col_nr == 0 {
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+        match old_selection_opt {
+            Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+            None => unreachable!(),
+        }
+    } else if old_col_nr == 0 {
         if old_line_nr == 0 {
             (0, 0)
         } else if let Some(curr_line) = lines.get(old_line_nr - 1) {
@@ -31,13 +36,24 @@ pub fn move_caret_left(
 
     let new_selection_opt = if shift_pressed {
         if let Some(old_selection) = old_selection_opt {
-            Some(RawSelection {
-                start_pos: Position {
-                    line: line_nr,
-                    column: col_nr,
-                },
-                end_pos: old_selection.end_pos,
-            })
+            if old_caret_pos >= old_selection.end_pos {
+                if new_caret_pos == old_selection.start_pos {
+                    None
+                } else {
+                    Some(RawSelection {
+                        start_pos: old_selection.start_pos,
+                        end_pos: new_caret_pos,
+                    })
+                }
+            } else {
+                Some(RawSelection {
+                    start_pos: Position {
+                        line: line_nr,
+                        column: col_nr,
+                    },
+                    end_pos: old_selection.end_pos,
+                })
+            }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
             Some(RawSelection {
                 start_pos: Position {
@@ -68,7 +84,12 @@ pub fn move_caret_right(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) = if let Some(curr_line) = lines.get(old_line_nr) {
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+        match old_selection_opt {
+            Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
+            None => unreachable!(),
+        }
+    } else if let Some(curr_line) = lines.get(old_line_nr) {
         if let Some(last_char) = curr_line.chars().last() {
             if is_newline(&last_char) {
                 if old_col_nr + 1 > curr_line.len() - 1 {
@@ -95,13 +116,24 @@ pub fn move_caret_right(
 
     let new_selection_opt = if shift_pressed {
         if let Some(old_selection) = old_selection_opt {
-            Some(RawSelection {
-                start_pos: old_selection.start_pos,
-                end_pos: Position {
-                    line: line_nr,
-                    column: col_nr,
-                },
-            })
+            if old_caret_pos <= old_selection.start_pos {
+                if new_caret_pos == old_selection.end_pos {
+                    None
+                } else {
+                    Some(RawSelection {
+                        start_pos: new_caret_pos,
+                        end_pos: old_selection.end_pos,
+                    })
+                }
+            } else {
+                Some(RawSelection {
+                    start_pos: old_selection.start_pos,
+                    end_pos: Position {
+                        line: line_nr,
+                        column: col_nr,
+                    },
+                })
+            }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
             Some(RawSelection {
                 start_pos: Position {
@@ -132,10 +164,15 @@ pub fn move_caret_up(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) = if old_line_nr == 0 {
-        (old_line_nr, old_col_nr)
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+        match old_selection_opt {
+            Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+            None => unreachable!(),
+        }
+    } else if old_line_nr == 0 {
+        (old_line_nr, 0)
     } else if let Some(prev_line) = lines.get(old_line_nr - 1) {
-        if prev_line.len() < old_col_nr {
+        if prev_line.len() <= old_col_nr {
             (old_line_nr - 1, prev_line.len() - 1)
         } else {
             (old_line_nr - 1, old_col_nr)
@@ -151,10 +188,21 @@ pub fn move_caret_up(
 
     let new_selection_opt = if shift_pressed {
         if let Some(old_selection) = old_selection_opt {
-            Some(RawSelection {
-                start_pos: new_caret_pos,
-                end_pos: old_selection.end_pos,
-            })
+            if old_selection.end_pos <= old_caret_pos {
+                if new_caret_pos == old_selection.start_pos {
+                    None
+                } else {
+                    Some(RawSelection {
+                        start_pos: min(old_selection.start_pos, new_caret_pos),
+                        end_pos: max(old_selection.start_pos, new_caret_pos),
+                    })
+                }
+            } else {
+                Some(RawSelection {
+                    start_pos: new_caret_pos,
+                    end_pos: old_selection.end_pos,
+                })
+            }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
             Some(RawSelection {
                 start_pos: min(old_caret_pos, new_caret_pos),
@@ -179,10 +227,19 @@ pub fn move_caret_down(
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
-    let (line_nr, col_nr) = if old_line_nr + 1 >= lines.len() {
-        (old_line_nr, old_col_nr)
+    let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+        match old_selection_opt {
+            Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
+            None => unreachable!(),
+        }
+    } else if old_line_nr + 1 >= lines.len() {
+        if let Some(curr_line) = lines.get(old_line_nr) {
+            (old_line_nr, curr_line.len())
+        } else {
+            unreachable!()
+        }
     } else if let Some(next_line) = lines.get(old_line_nr + 1) {
-        if next_line.len() < old_col_nr {
+        if next_line.len() <= old_col_nr {
             if let Some(last_char) = next_line.chars().last() {
                 if is_newline(&last_char) {
                     (old_line_nr + 1, next_line.len() - 1)
@@ -206,10 +263,21 @@ pub fn move_caret_down(
 
     let new_selection_opt = if shift_pressed {
         if let Some(old_selection) = old_selection_opt {
-            Some(RawSelection {
-                start_pos: old_selection.start_pos,
-                end_pos: new_caret_pos,
-            })
+            if old_caret_pos <= old_selection.start_pos {
+                if new_caret_pos == old_selection.end_pos {
+                    None
+                } else {
+                    Some(RawSelection {
+                        start_pos: min(old_selection.end_pos, new_caret_pos),
+                        end_pos: max(old_selection.end_pos, new_caret_pos),
+                    })
+                }
+            } else {
+                Some(RawSelection {
+                    start_pos: old_selection.start_pos,
+                    end_pos: new_caret_pos,
+                })
+            }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
             Some(RawSelection {
                 start_pos: min(old_caret_pos, new_caret_pos),

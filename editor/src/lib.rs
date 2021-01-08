@@ -8,6 +8,11 @@
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
+extern crate pest;
+#[cfg(test)]
+#[macro_use]
+extern crate pest_derive;
+
 use crate::error::EdError::MissingGlyphDims;
 use crate::error::{print_err, EdResult};
 use crate::graphics::colors::{CARET_COLOR, CODE_COLOR, TXT_COLOR};

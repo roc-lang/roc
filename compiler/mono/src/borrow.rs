@@ -170,7 +170,7 @@ impl<'a> ParamMap<'a> {
                 }
                 Inc(_, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
 
-                Ret(_) | Unreachable | Jump(_, _) | RuntimeError(_) => {
+                Ret(_) | Rethrow | Jump(_, _) | RuntimeError(_) => {
                     // these are terminal, do nothing
                 }
             }
@@ -515,7 +515,7 @@ impl<'a> BorrowInfState<'a> {
             }
             Inc(_, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | RuntimeError(_) | Unreachable => {
+            Ret(_) | RuntimeError(_) | Rethrow => {
                 // these are terminal, do nothing
             }
         }
