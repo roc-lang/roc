@@ -8,6 +8,8 @@ use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use itertools::Itertools;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
+use bumpalo::collections::Vec as BumpVec;
+use bumpalo::Bump;
 
 #[derive(Debug)]
 pub struct Text {
@@ -83,39 +85,41 @@ fn section_from_text(
     )
 }
 
-// returns bounding boxes for every glyph
-pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Vec<Vec<Rect>> {
+// returns glyphs per line
+pub fn queue_text_draw<'a>(text: &Text, glyph_brush: &mut GlyphBrush<()>, arena: &'a Bump, selectable: bool) -> Option<BumpVec<'a, usize>> {
     let layout = layout_from_text(text);
 
     let section = section_from_text(text, layout);
 
     glyph_brush.queue(section.clone());
 
-    let glyph_section_iter = glyph_brush.glyphs_custom_layout(section, &layout);
+    if selectable {
+        let mut glyphs_per_line: BumpVec<usize> = BumpVec::new_in(arena);
 
-    glyph_section_iter
-        .map(glyph_to_rect)
-        .group_by(|rect| rect.top_left_coords.y)
-        .into_iter()
-        .map(|(_y_coord, rect_group)| {
-            let mut rects_vec = rect_group.collect::<Vec<Rect>>();
-            let last_rect_opt = rects_vec.last().cloned();
-            // add extra rect to make it easy to highlight the newline character
-            if let Some(last_rect) = last_rect_opt {
-                rects_vec.push(Rect {
-                    top_left_coords: [
-                        last_rect.top_left_coords.x + last_rect.width,
-                        last_rect.top_left_coords.y,
-                    ]
-                    .into(),
-                    width: last_rect.width,
-                    height: last_rect.height,
-                    color: last_rect.color,
-                });
+        let glyph_section_iter = glyph_brush.glyphs_custom_layout(section, &layout);
+    
+        let first_glyph_opt = glyph_section_iter.next();
+    
+        if let Some(first_glyph) = first_glyph_opt {
+            let mut line_y_coord = first_glyph.glyph.scale.y;
+            let mut glyphs_on_line = 0;
+    
+            for glyph in glyph_section_iter {
+                let curr_y_coord = glyph.glyph.scale.y;
+                if curr_y_coord != line_y_coord {
+                    line_y_coord = curr_y_coord;
+                    glyphs_per_line.push(glyphs_on_line);
+                    glyphs_on_line = 0;
+                } else {
+                    glyphs_on_line += 1;
+                }
             }
-            rects_vec
-        })
-        .collect()
+        }
+    
+        Some(glyphs_per_line)
+    } else {
+        None
+    }
 }
 
 fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {

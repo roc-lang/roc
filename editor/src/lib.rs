@@ -13,7 +13,8 @@ extern crate pest;
 #[macro_use]
 extern crate pest_derive;
 
-use crate::error::EdError::MissingGlyphDims;
+use crate::error::EdError::{MissingGlyphDims};
+use crate::error::{EmptyGlyphsPerLine};
 use crate::error::{print_err, EdResult};
 use crate::graphics::colors::{CARET_COLOR, CODE_COLOR, TXT_COLOR};
 use crate::graphics::lowlevel::buffer::create_rect_buffers;
@@ -41,6 +42,7 @@ use winit::dpi::PhysicalSize;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
+use snafu::ensure;
 
 pub mod error;
 pub mod graphics;
@@ -216,7 +218,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     .output;
 
                 let glyph_bounds_rects =
-                    queue_all_text(&size, &ed_model.lines, ed_model.caret_pos, &mut glyph_brush);
+                    queue_all_text(&size, &ed_model.lines, ed_model.caret_pos, &mut glyph_brush, &arena);
 
                 match draw_all_rects(
                     &ed_model,
@@ -331,7 +333,7 @@ fn make_caret_rect(
     let mut glyph_rect = if let Some(glyph_dim_rect) = glyph_dim_rect_opt {
         glyph_dim_rect
     } else {
-        return Err(MissingGlyphDims {});
+        return Err(MissingGlyphDims{});
     };
 
     let caret_y = glyph_rect.top_left_coords.y + (caret_pos.line as f32) * glyph_rect.height;
@@ -360,12 +362,13 @@ fn make_caret_rect(
 }
 
 // returns bounding boxes for every glyph
-fn queue_all_text(
+fn queue_all_text<'a>(
     size: &PhysicalSize<u32>,
     lines: &[String],
     caret_pos: Position,
     glyph_brush: &mut GlyphBrush<()>,
-) -> Vec<Vec<Rect>> {
+    arena: &'a Bump
+) -> EdResult<BumpVec<'a, usize>> {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
     let main_label = Text {
@@ -395,9 +398,11 @@ fn queue_all_text(
         ..Default::default()
     };
 
-    queue_text_draw(&main_label, glyph_brush);
+    queue_text_draw(&main_label, glyph_brush, arena, false);
 
-    queue_text_draw(&caret_pos_label, glyph_brush);
+    queue_text_draw(&caret_pos_label, glyph_brush, arena, false);
 
-    queue_text_draw(&code_text, glyph_brush)
+    let glyphs_per_line_opt = queue_text_draw(&code_text, glyph_brush, arena, true);
+
+    ensure!(glyphs_per_line_opt.is_some(), EmptyGlyphsPerLine{})
 }
