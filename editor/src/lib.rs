@@ -8,27 +8,31 @@
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-use crate::error::{print_err, EdResult};
 use crate::error::EdError::MissingGlyphDims;
-use crate::vec_result::{get_res};
+use crate::error::{print_err, EdResult};
+use crate::graphics::colors::{CARET_COLOR, CODE_COLOR, TXT_COLOR};
 use crate::graphics::lowlevel::buffer::create_rect_buffers;
-use crate::graphics::lowlevel::ortho::{init_ortho, update_ortho_buffer, OrthoResources};
-use crate::graphics::lowlevel::vertex::Vertex;
+use crate::graphics::lowlevel::ortho::update_ortho_buffer;
+use crate::graphics::lowlevel::pipelines;
 use crate::graphics::primitives::rect::Rect;
-use crate::graphics::primitives::text::{build_glyph_brush, queue_text_draw, Text, example_code_glyph_rect};
-use crate::graphics::colors::{TXT_COLOR, CODE_COLOR, CARET_COLOR};
-use crate::graphics::style::{CODE_FONT_SIZE};
+use crate::graphics::primitives::text::{
+    build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text,
+};
+use crate::graphics::style::CODE_FONT_SIZE;
 use crate::selection::create_selection_rects;
-use crate::tea::{model, update};
-use crate::tea::model::Model;
-use crate::util::is_newline;
-use model::{Position};
-use bumpalo::Bump;
+use crate::tea::ed_model::EdModel;
+use crate::tea::{ed_model, update};
+use crate::vec_result::get_res;
 use bumpalo::collections::Vec as BumpVec;
+use bumpalo::Bump;
+use ed_model::Position;
+use pipelines::RectResources;
 use std::error::Error;
 use std::io;
 use std::path::Path;
 use wgpu::{CommandEncoder, RenderPass, TextureView};
+use wgpu_glyph::GlyphBrush;
+use winit::dpi::PhysicalSize;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
@@ -109,12 +113,12 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
 
-    let (rect_pipeline, ortho) = make_rect_pipeline(&gpu_device, &swap_chain_descr);
+    let rect_resources = pipelines::make_rect_pipeline(&gpu_device, &swap_chain_descr);
 
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let mut ed_model = model::init_model();
+    let mut ed_model = ed_model::init_model();
     ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(&mut glyph_brush));
     let mut keyboard_modifiers = ModifiersState::empty();
 
@@ -161,7 +165,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     size.width,
                     size.height,
                     &gpu_device,
-                    &ortho.buffer,
+                    &rect_resources.ortho.buffer,
                     &cmd_queue,
                 );
             }
@@ -170,7 +174,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                update_text_state(&mut ed_model, &ch);
+                update::update_text_state(&mut ed_model, &ch);
             }
             //Keyboard Input
             Event::WindowEvent {
@@ -209,7 +213,6 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 let glyph_bounds_rects =
                     queue_all_text(&size, &ed_model.lines, ed_model.caret_pos, &mut glyph_brush);
 
-                // TODO too much args group them in Struct    
                 match draw_all_rects(
                     &ed_model,
                     &glyph_bounds_rects,
@@ -217,14 +220,13 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     &mut encoder,
                     &frame.view,
                     &gpu_device,
-                    &rect_pipeline,
-                    &ortho
+                    &rect_resources,
                 ) {
                     Ok(()) => (),
                     Err(e) => {
                         print_err(&e);
                         begin_render_pass(&mut encoder, &frame.view);
-                    },
+                    }
                 }
 
                 // draw all text
@@ -259,40 +261,35 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 }
 
 fn draw_all_rects(
-    ed_model: &Model,
-    glyph_bounds_rects: &Vec<Vec<Rect>>,
+    ed_model: &EdModel,
+    glyph_bounds_rects: &[Vec<Rect>],
     arena: &Bump,
     encoder: &mut CommandEncoder,
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
-    rect_pipeline: &wgpu::RenderPipeline,
-    ortho: &OrthoResources
+    rect_resources: &RectResources,
 ) -> EdResult<()> {
     let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
 
     if let Some(selection) = ed_model.selection_opt {
-        let mut selection_rects =
-            create_selection_rects(selection, glyph_bounds_rects, &arena)?;
+        let mut selection_rects = create_selection_rects(selection, glyph_bounds_rects, &arena)?;
 
         all_rects.append(&mut selection_rects);
     }
 
-    all_rects.push(
-        make_caret_rect(ed_model.caret_pos, glyph_bounds_rects, ed_model.glyph_dim_rect_opt)?
-    );
+    all_rects.push(make_caret_rect(
+        ed_model.caret_pos,
+        glyph_bounds_rects,
+        ed_model.glyph_dim_rect_opt,
+    )?);
 
-    let rect_buffers = create_rect_buffers(
-        gpu_device,
-        encoder,
-        &all_rects,
-    );
+    let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
 
     let mut render_pass = begin_render_pass(encoder, texture_view);
 
-    render_pass.set_pipeline(&rect_pipeline);
-    render_pass.set_bind_group(0, &ortho.bind_group, &[]);
-    render_pass
-        .set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+    render_pass.set_pipeline(&rect_resources.pipeline);
+    render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
+    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
     render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
     render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
 
@@ -324,7 +321,7 @@ fn begin_render_pass<'a>(
 fn make_caret_rect(
     caret_pos: Position,
     glyph_bound_rects: &[Vec<Rect>],
-    glyph_dim_rect_opt: Option<Rect>
+    glyph_dim_rect_opt: Option<Rect>,
 ) -> EdResult<Rect> {
     let mut glyph_rect = if let Some(glyph_dim_rect) = glyph_dim_rect_opt {
         glyph_dim_rect
@@ -337,97 +334,32 @@ fn make_caret_rect(
     if caret_pos.column > 0 && glyph_bound_rects.len() > caret_pos.line {
         let indx = caret_pos.column - 1;
         let glyph_rect_line = get_res(caret_pos.line, glyph_bound_rects)?;
-        
+
         if glyph_rect_line.len() > indx {
             glyph_rect = *get_res(indx, glyph_rect_line)?;
         }
     };
 
-    let caret_x = 
-        if caret_pos.column == 0 {
-            glyph_rect.top_left_coords.x
-        } else {
-            glyph_rect.top_left_coords.x + glyph_rect.width
-        };
-    
+    let caret_x = if caret_pos.column == 0 {
+        glyph_rect.top_left_coords.x
+    } else {
+        glyph_rect.top_left_coords.x + glyph_rect.width
+    };
+
     Ok(Rect {
         top_left_coords: (caret_x, caret_y).into(),
         height: glyph_rect.height,
         width: 3.0,
-        color: CARET_COLOR
-    })
-}
-
-fn make_rect_pipeline(
-    gpu_device: &wgpu::Device,
-    swap_chain_descr: &wgpu::SwapChainDescriptor,
-) -> (wgpu::RenderPipeline, OrthoResources) {
-    let ortho = init_ortho(swap_chain_descr.width, swap_chain_descr.height, gpu_device);
-
-    let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        bind_group_layouts: &[&ortho.bind_group_layout],
-        push_constant_ranges: &[],
-        label: Some("Rectangle pipeline layout"),
-    });
-    let pipeline = create_render_pipeline(
-        &gpu_device,
-        &pipeline_layout,
-        swap_chain_descr.format,
-        &[Vertex::DESC],
-        wgpu::include_spirv!("graphics/shaders/rect.vert.spv"),
-        wgpu::include_spirv!("graphics/shaders/rect.frag.spv"),
-    );
-
-    (pipeline, ortho)
-}
-
-fn create_render_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    color_format: wgpu::TextureFormat,
-    vertex_descs: &[wgpu::VertexBufferDescriptor],
-    vs_src: wgpu::ShaderModuleSource,
-    fs_src: wgpu::ShaderModuleSource,
-) -> wgpu::RenderPipeline {
-    let vs_module = device.create_shader_module(vs_src);
-    let fs_module = device.create_shader_module(fs_src);
-
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render pipeline"),
-        layout: Some(&layout),
-        vertex_stage: wgpu::ProgrammableStageDescriptor {
-            module: &vs_module,
-            entry_point: "main",
-        },
-        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
-            module: &fs_module,
-            entry_point: "main",
-        }),
-        rasterization_state: None,
-        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: &[wgpu::ColorStateDescriptor {
-            format: color_format,
-            color_blend: wgpu::BlendDescriptor::REPLACE,
-            alpha_blend: wgpu::BlendDescriptor::REPLACE,
-            write_mask: wgpu::ColorWrite::ALL,
-        }],
-        depth_stencil_state: None,
-        sample_count: 1,
-        sample_mask: !0,
-        alpha_to_coverage_enabled: false,
-        vertex_state: wgpu::VertexStateDescriptor {
-            index_format: wgpu::IndexFormat::Uint32,
-            vertex_buffers: vertex_descs,
-        },
+        color: CARET_COLOR,
     })
 }
 
 // returns bounding boxes for every glyph
 fn queue_all_text(
-    size: &winit::dpi::PhysicalSize<u32>,
+    size: &PhysicalSize<u32>,
     lines: &[String],
     caret_pos: Position,
-    glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
+    glyph_brush: &mut GlyphBrush<()>,
 ) -> Vec<Vec<Rect>> {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
@@ -441,7 +373,7 @@ fn queue_all_text(
     };
 
     let code_text = Text {
-        position: (30.0, 90.0).into(),//TODO 30 90 should be an arg
+        position: (30.0, 90.0).into(), //TODO 30 90 should be an arg
         area_bounds,
         color: CODE_COLOR.into(),
         text: lines.join(""),
@@ -463,54 +395,4 @@ fn queue_all_text(
     queue_text_draw(&caret_pos_label, glyph_brush);
 
     queue_text_draw(&code_text, glyph_brush)
-}
-
-fn update_text_state(ed_model: &mut model::Model, received_char: &char) {
-    ed_model.selection_opt = None;
-
-    match received_char {
-        '\u{8}' | '\u{7f}' => {
-            // In Linux, we get a '\u{8}' when you press backspace,
-            // but in macOS we get '\u{7f}'.
-            if let Some(last_line) = ed_model.lines.last_mut() {
-                if !last_line.is_empty() {
-                    last_line.pop();
-                } else if ed_model.lines.len() > 1 {
-                    ed_model.lines.pop();
-                }
-                ed_model.caret_pos =
-                    update::move_caret_left(ed_model.caret_pos, None, false, &ed_model.lines).0;
-            }
-        }
-        '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
-            // These are private use characters; ignore them.
-            // See http://www.unicode.org/faq/private_use.html
-        }
-        ch if is_newline(ch) => {
-            if let Some(last_line) = ed_model.lines.last_mut() {
-                last_line.push(*received_char)
-            }
-            ed_model.lines.push(String::new());
-            ed_model.caret_pos = Position {
-                line: ed_model.caret_pos.line + 1,
-                column: 0,
-            };
-
-            ed_model.selection_opt = None;
-        }
-        _ => {
-            let nr_lines = ed_model.lines.len();
-
-            if let Some(last_line) = ed_model.lines.last_mut() {
-                last_line.push(*received_char);
-
-                ed_model.caret_pos = Position {
-                    line: nr_lines - 1,
-                    column: last_line.len(),
-                };
-
-                ed_model.selection_opt = None;
-            }
-        }
-    }
 }

@@ -1,7 +1,7 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
 
-use crate::graphics::primitives::rect::Rect;
+use super::rect::Rect;
 use crate::graphics::colors::CODE_COLOR;
 use crate::graphics::style::CODE_FONT_SIZE;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
@@ -34,10 +34,10 @@ impl Default for Text {
     }
 }
 
-// necessary to get dimensions for caret 
+// necessary to get dimensions for caret
 pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
     let code_text = Text {
-        position: (30.0, 90.0).into(),//TODO 30.0 90.0 should be an arg
+        position: (30.0, 90.0).into(), //TODO 30.0 90.0 should be an arg
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
         color: CODE_COLOR.into(),
         text: "a".to_owned(),
@@ -66,7 +66,10 @@ fn layout_from_text(text: &Text) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBr
     })
 }
 
-fn section_from_text(text: &Text, layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>) -> wgpu_glyph::Section {
+fn section_from_text(
+    text: &Text,
+    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
+) -> wgpu_glyph::Section {
     Section {
         screen_position: text.position.into(),
         bounds: text.area_bounds.into(),

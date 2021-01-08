@@ -66,6 +66,7 @@ pub fn update_ortho_buffer(
     cmd_queue.submit(Some(encoder.finish()));
 }
 
+#[derive(Debug)]
 pub struct OrthoResources {
     pub buffer: Buffer,
     pub bind_group_layout: BindGroupLayout,

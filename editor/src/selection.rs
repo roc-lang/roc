@@ -1,7 +1,7 @@
 use crate::error::{EdResult, InvalidSelection};
 use crate::graphics::colors;
 use crate::graphics::primitives::rect::Rect;
-use crate::tea::model::RawSelection;
+use crate::tea::ed_model::RawSelection;
 use crate::vec_result::get_res;
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
