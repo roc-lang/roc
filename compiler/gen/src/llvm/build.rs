@@ -1027,7 +1027,87 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 internal_type,
             )
         }
-        Tag { .. } => unreachable!("tags should have a union layout"),
+        Tag {
+            arguments,
+            tag_layout: Layout::RecursiveUnion(fields),
+            union_size,
+            tag_id,
+            tag_name,
+            ..
+        } => {
+            let tag_layout = Layout::Union(fields);
+
+            debug_assert!(*union_size > 1);
+            let ptr_size = env.ptr_bytes;
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
+                // closures ignore (and do not store) the discriminant
+                &fields[*tag_id as usize][1..]
+            } else {
+                &fields[*tag_id as usize]
+            };
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, val_layout) = load_symbol_and_layout(env, scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        let ptr = allocate_with_refcount(env, &tag_layout, val);
+
+                        let ptr = cast_basic_basic(
+                            builder,
+                            ptr.into(),
+                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr = reserve_with_refcount(env, &tag_layout);
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = cast_basic_basic(
+                builder,
+                data_ptr.into(),
+                struct_type.ptr_type(AddressSpace::Generic).into(),
+            )
+            .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+
+        Tag { .. } => unreachable!("tags should have a Union or RecursiveUnion layout"),
 
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
@@ -1178,12 +1258,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     }
 }
 
-pub fn allocate_with_refcount<'a, 'ctx, 'env>(
+pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
-    value: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
-    let builder = env.builder;
     let ctx = env.context;
 
     let len_type = env.ptr_int();
@@ -1193,10 +1271,18 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
     let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
 
-    let data_ptr = allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1);
+    allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1)
+}
+
+pub fn allocate_with_refcount<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    value: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let data_ptr = reserve_with_refcount(env, layout);
 
     // store the value in the pointer
-    builder.build_store(data_ptr, value);
+    env.builder.build_store(data_ptr, value);
 
     data_ptr
 }

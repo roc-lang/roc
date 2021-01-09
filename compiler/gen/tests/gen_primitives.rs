@@ -564,7 +564,7 @@ mod gen_primitives {
                         Cons _ rest -> 1 + len rest
 
                 main =
-                    nil : LinkedList (Int *)
+                    nil : LinkedList {}
                     nil = Nil
 
                     len nil
