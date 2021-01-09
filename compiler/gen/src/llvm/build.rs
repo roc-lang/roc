@@ -1228,10 +1228,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     )
                     .into_pointer_value();
 
-                    builder
-                        .build_struct_gep(ptr, *index as u32, "struct_gep")
+                    let elem_ptr = builder
+                        .build_struct_gep(ptr, *index as u32, "at_index_struct_gep")
                         .unwrap()
-                        .into()
+                        .into();
+
+                    builder.build_load(elem_ptr, "load_at_index_ptr")
                 }
                 _ => panic!("cannot look up index in {:?}", argument),
             }
