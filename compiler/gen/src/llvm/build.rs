@@ -1067,11 +1067,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     field_types.push(field_type);
 
                     if let Layout::RecursivePointer = tag_field_layout {
-                        let ptr = allocate_with_refcount(env, &tag_layout, val);
+                        debug_assert!(val.is_pointer_value());
 
+                        // we store recursive pointers as `i64*`
                         let ptr = cast_basic_basic(
                             builder,
-                            ptr.into(),
+                            val,
                             ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
                         );
 
