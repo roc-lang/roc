@@ -1172,6 +1172,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             field_layouts,
             ..
         } => {
+            use BasicValueEnum::*;
+
             let builder = env.builder;
 
             // Determine types, assumes the descriminant is in the field layouts
@@ -1191,28 +1193,47 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 .struct_type(field_types.into_bump_slice(), false);
 
             // cast the argument bytes into the desired shape for this tag
-            let argument = load_symbol(env, scope, structure).into_struct_value();
+            let argument = load_symbol(env, scope, structure);
 
-            let struct_value = cast_struct_struct(builder, argument, struct_type);
+            match argument {
+                StructValue(value) => {
+                    let struct_value = cast_struct_struct(builder, value, struct_type);
 
-            let result = builder
-                .build_extract_value(struct_value, *index as u32, "")
-                .expect("desired field did not decode");
+                    let result = builder
+                        .build_extract_value(struct_value, *index as u32, "")
+                        .expect("desired field did not decode");
 
-            if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
-                let struct_layout = Layout::Struct(field_layouts);
-                let desired_type = block_of_memory(env.context, &struct_layout, env.ptr_bytes);
+                    if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
+                        let struct_layout = Layout::Struct(field_layouts);
+                        let desired_type =
+                            block_of_memory(env.context, &struct_layout, env.ptr_bytes);
 
-                // the value is a pointer to the actual value; load that value!
-                use inkwell::types::BasicType;
-                let ptr = cast_basic_basic(
-                    builder,
-                    result,
-                    desired_type.ptr_type(AddressSpace::Generic).into(),
-                );
-                builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
-            } else {
-                result
+                        // the value is a pointer to the actual value; load that value!
+                        use inkwell::types::BasicType;
+                        let ptr = cast_basic_basic(
+                            builder,
+                            result,
+                            desired_type.ptr_type(AddressSpace::Generic).into(),
+                        );
+                        builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
+                    } else {
+                        result
+                    }
+                }
+                PointerValue(value) => {
+                    let ptr = cast_basic_basic(
+                        builder,
+                        value.into(),
+                        struct_type.ptr_type(AddressSpace::Generic).into(),
+                    )
+                    .into_pointer_value();
+
+                    builder
+                        .build_struct_gep(ptr, *index as u32, "struct_gep")
+                        .unwrap()
+                        .into()
+                }
+                _ => panic!("cannot look up index in {:?}", argument),
             }
         }
         EmptyArray => empty_polymorphic_list(env),
