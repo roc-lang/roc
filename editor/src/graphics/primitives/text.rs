@@ -3,13 +3,10 @@
 
 use super::rect::Rect;
 use crate::graphics::colors::CODE_COLOR;
-use crate::graphics::style::CODE_FONT_SIZE;
+use crate::graphics::style::{CODE_FONT_SIZE, CODE_TXT_XY};
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
-use itertools::Itertools;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
-use bumpalo::collections::Vec as BumpVec;
-use bumpalo::Bump;
 
 #[derive(Debug)]
 pub struct Text {
@@ -39,7 +36,7 @@ impl Default for Text {
 // necessary to get dimensions for caret
 pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
     let code_text = Text {
-        position: (30.0, 90.0).into(), //TODO 30.0 90.0 should be an arg
+        position: CODE_TXT_XY.into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
         color: CODE_COLOR.into(),
         text: "a".to_owned(),
@@ -86,40 +83,12 @@ fn section_from_text(
 }
 
 // returns glyphs per line
-pub fn queue_text_draw<'a>(text: &Text, glyph_brush: &mut GlyphBrush<()>, arena: &'a Bump, selectable: bool) -> Option<BumpVec<'a, usize>> {
+pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
     let layout = layout_from_text(text);
 
     let section = section_from_text(text, layout);
 
     glyph_brush.queue(section.clone());
-
-    if selectable {
-        let mut glyphs_per_line: BumpVec<usize> = BumpVec::new_in(arena);
-
-        let glyph_section_iter = glyph_brush.glyphs_custom_layout(section, &layout);
-    
-        let first_glyph_opt = glyph_section_iter.next();
-    
-        if let Some(first_glyph) = first_glyph_opt {
-            let mut line_y_coord = first_glyph.glyph.scale.y;
-            let mut glyphs_on_line = 0;
-    
-            for glyph in glyph_section_iter {
-                let curr_y_coord = glyph.glyph.scale.y;
-                if curr_y_coord != line_y_coord {
-                    line_y_coord = curr_y_coord;
-                    glyphs_per_line.push(glyphs_on_line);
-                    glyphs_on_line = 0;
-                } else {
-                    glyphs_on_line += 1;
-                }
-            }
-        }
-    
-        Some(glyphs_per_line)
-    } else {
-        None
-    }
 }
 
 fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
@@ -144,7 +113,7 @@ pub fn glyph_top_y(glyph: &Glyph) -> f32 {
 }
 
 pub fn glyph_width(glyph: &Glyph) -> f32 {
-    glyph.scale.x * 0.5
+    glyph.scale.x * 0.4765
 }
 
 pub fn build_glyph_brush(
