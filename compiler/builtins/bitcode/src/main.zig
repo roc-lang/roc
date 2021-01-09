@@ -25,6 +25,7 @@ comptime {
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strEqual, "equal");
+    exportStrFn(str.isValidUnicode, "is_valid_unicode");
 }
 
 // Export helpers - Must be run inside a comptime

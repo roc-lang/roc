@@ -97,6 +97,12 @@ pub const RocStr = extern struct {
         }
     }
 
+    pub fn toSlice(self: RocStr) []u8 {
+        const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
+        const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
+        return str_bytes;
+    }
+
     // This takes ownership of the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn withCapacity(length: usize) RocStr {
@@ -941,4 +947,43 @@ test "RocStr.joinWith: result is big" {
     defer result.deinit(testing.allocator);
 
     expect(roc_result.eq(result));
+}
+
+pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
+    const bytes: []u8 = ptr[0..len];
+    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{ bytes });
+}
+
+test "isValidUnicode: ascii" {
+    const str_len = 3;
+    var str: [str_len]u8 = "abc".*;
+    const str_ptr: [*]u8 = &str;
+
+    expectEqual(isValidUnicode(str_ptr, str_len), true);
+}
+
+test "isValidUnicode: unicode" {
+    const str_len = 10;
+    var str: [str_len]u8 = "aœb∆c¬".*;
+    const str_ptr: [*]u8 = &str;
+
+    expectEqual(isValidUnicode(str_ptr, str_len), true);
+}
+
+test "isValidUnicode: grapheme" {
+    // https://doc.rust-lang.org/std/str/fn.from_utf8.html#examples
+    const str_len = 4;
+    var str: [str_len]u8 = [_]u8{240, 159, 146, 150};
+    const str_ptr: [*]u8 = &str;
+
+    expectEqual(isValidUnicode(str_ptr, str_len), true);
+}
+
+test "isValidUnicode: invalid" {
+    // https://doc.rust-lang.org/std/str/fn.from_utf8.html#examples
+    const str_len = 4;
+    var str: [str_len]u8 = [_]u8{0, 159, 146, 150};
+    const str_ptr: [*]u8 = &str;
+
+    expectEqual(isValidUnicode(str_ptr, str_len), false);
 }
