@@ -960,15 +960,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     field_types.push(field_type);
 
                     if let Layout::RecursivePointer = tag_field_layout {
-                        let ptr = allocate_with_refcount(env, &tag_layout, val);
-
-                        let ptr = cast_basic_basic(
-                            builder,
-                            ptr.into(),
-                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        panic!(
+                            r"non-recursive tag unions cannot directly contain a recursive pointer"
                         );
-
-                        field_vals.push(ptr);
                     } else {
                         // this check fails for recursive tag unions, but can be helpful while debugging
                         debug_assert_eq!(tag_field_layout, val_layout);
