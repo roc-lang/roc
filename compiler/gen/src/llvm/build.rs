@@ -808,6 +808,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
     use roc_mono::ir::Expr::*;
 
     match expr {
@@ -1190,6 +1191,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // cast the argument bytes into the desired shape for this tag
             let argument = load_symbol(env, scope, structure);
 
+            let struct_layout = Layout::Struct(field_layouts);
             match argument {
                 StructValue(value) => {
                     let struct_value = cast_struct_struct(builder, value, struct_type);
@@ -1199,12 +1201,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .expect("desired field did not decode");
 
                     if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
-                        let struct_layout = Layout::Struct(field_layouts);
                         let desired_type =
                             block_of_memory(env.context, &struct_layout, env.ptr_bytes);
 
                         // the value is a pointer to the actual value; load that value!
-                        use inkwell::types::BasicType;
                         let ptr = cast_basic_basic(
                             builder,
                             result,
@@ -1228,7 +1228,21 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .unwrap()
                         .into();
 
-                    builder.build_load(elem_ptr, "load_at_index_ptr")
+                    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+
+                    if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
+                        // a recursive field is stored as a `i64*`, to use it we must cast it to
+                        // a pointer to the block of memory representation
+                        cast_basic_basic(
+                            builder,
+                            result,
+                            block_of_memory(env.context, &struct_layout, env.ptr_bytes)
+                                .ptr_type(AddressSpace::Generic)
+                                .into(),
+                        )
+                    } else {
+                        result
+                    }
                 }
                 _ => panic!("cannot look up index in {:?}", argument),
             }
