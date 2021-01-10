@@ -343,7 +343,11 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
         }
 
         RecursiveUnion(tags) => {
-            build_dec_union(env, layout_ids, tags, value);
+            debug_assert!(value.is_pointer_value());
+            let stack_value = env
+                .builder
+                .build_load(value.into_pointer_value(), "load_head");
+            build_dec_union(env, layout_ids, tags, stack_value);
         }
 
         FunctionPointer(_, _) | Pointer(_) => {}
@@ -427,7 +431,11 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
         }
 
         RecursiveUnion(tags) => {
-            build_inc_union(env, layout_ids, tags, value);
+            debug_assert!(value.is_pointer_value());
+            let stack_value = env
+                .builder
+                .build_load(value.into_pointer_value(), "load_head");
+            build_inc_union(env, layout_ids, tags, stack_value);
         }
         Closure(_, closure_layout, _) => {
             if closure_layout.contains_refcounted() {
