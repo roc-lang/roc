@@ -4802,6 +4802,12 @@ fn store_pattern<'a>(
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
                 let index = if write_tag { index + 1 } else { index };
 
+                let mut arg_layout = arg_layout;
+
+                if let Layout::RecursivePointer = arg_layout {
+                    arg_layout = layout;
+                }
+
                 let load = Expr::AccessAtIndex {
                     wrapped,
                     index: index as u64,
