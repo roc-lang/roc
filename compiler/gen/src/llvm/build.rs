@@ -1572,6 +1572,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let mut stack = Vec::with_capacity_in(queue.len(), env.arena);
 
             for (symbol, expr, layout) in queue {
+                debug_assert!(layout != &Layout::RecursivePointer);
                 let context = &env.context;
 
                 let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
