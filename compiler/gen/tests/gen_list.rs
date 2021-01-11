@@ -28,11 +28,6 @@ mod gen_list {
     }
 
     #[test]
-    fn int_singleton_list_literal() {
-        assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
-    }
-
-    #[test]
     fn int_list_literal() {
         assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
         assert_evals_to!(
@@ -64,19 +59,6 @@ mod gen_list {
         assert_evals_to!(
             "[ True, False, True ]",
             RocList::from_slice(&[true, false, true]),
-            RocList<bool>
-        );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                   false : Bool
-                   false = False
-
-                   [false ]
-                   "#
-            ),
-            RocList::from_slice(&[false; 1]),
             RocList<bool>
         );
 

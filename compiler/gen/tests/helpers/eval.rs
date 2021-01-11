@@ -19,7 +19,7 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: roc_builtins::std::StdLib,
+    stdlib: &'a roc_builtins::std::StdLib,
     leak: bool,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
@@ -309,12 +309,10 @@ macro_rules! assert_opt_evals_to {
 
         let context = Context::create();
 
-        // don't use uniqueness types any more
-        // let stdlib = roc_builtins::unique::uniq_stdlib();
         let stdlib = roc_builtins::std::standard_stdlib();
 
         let (main_fn_name, errors, lib) =
-            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
+            $crate::helpers::eval::helper(&arena, $src, &stdlib, $leak, &context);
 
         let transform = |success| {
             let expected = $expected;
@@ -342,7 +340,7 @@ macro_rules! assert_llvm_evals_to {
         let stdlib = roc_builtins::std::standard_stdlib();
 
         let (main_fn_name, errors, lib) =
-            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
+            $crate::helpers::eval::helper(&arena, $src, &stdlib, $leak, &context);
 
         let transform = |success| {
             let expected = $expected;
