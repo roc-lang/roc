@@ -1190,6 +1190,9 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
                 // Because it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
             } else if field_layout.contains_refcounted() {
+                // TODO this loads the whole field onto the stack;
+                // that's wasteful if e.g. the field is a big record, where only
+                // some fields are actually refcounted.
                 let elem_pointer = env
                     .builder
                     .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
