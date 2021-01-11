@@ -3,10 +3,9 @@
 
 use super::rect::Rect;
 use crate::graphics::colors::CODE_COLOR;
-use crate::graphics::style::CODE_FONT_SIZE;
+use crate::graphics::style::{CODE_FONT_SIZE, CODE_TXT_XY};
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
-use itertools::Itertools;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 
 #[derive(Debug)]
@@ -37,7 +36,7 @@ impl Default for Text {
 // necessary to get dimensions for caret
 pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
     let code_text = Text {
-        position: (30.0, 90.0).into(), //TODO 30.0 90.0 should be an arg
+        position: CODE_TXT_XY.into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
         color: CODE_COLOR.into(),
         text: "a".to_owned(),
@@ -83,39 +82,13 @@ fn section_from_text(
     )
 }
 
-// returns bounding boxes for every glyph
-pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) -> Vec<Vec<Rect>> {
+// returns glyphs per line
+pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
     let layout = layout_from_text(text);
 
     let section = section_from_text(text, layout);
 
     glyph_brush.queue(section.clone());
-
-    let glyph_section_iter = glyph_brush.glyphs_custom_layout(section, &layout);
-
-    glyph_section_iter
-        .map(glyph_to_rect)
-        .group_by(|rect| rect.top_left_coords.y)
-        .into_iter()
-        .map(|(_y_coord, rect_group)| {
-            let mut rects_vec = rect_group.collect::<Vec<Rect>>();
-            let last_rect_opt = rects_vec.last().cloned();
-            // add extra rect to make it easy to highlight the newline character
-            if let Some(last_rect) = last_rect_opt {
-                rects_vec.push(Rect {
-                    top_left_coords: [
-                        last_rect.top_left_coords.x + last_rect.width,
-                        last_rect.top_left_coords.y,
-                    ]
-                    .into(),
-                    width: last_rect.width,
-                    height: last_rect.height,
-                    color: last_rect.color,
-                });
-            }
-            rects_vec
-        })
-        .collect()
 }
 
 fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
@@ -140,7 +113,7 @@ pub fn glyph_top_y(glyph: &Glyph) -> f32 {
 }
 
 pub fn glyph_width(glyph: &Glyph) -> f32 {
-    glyph.scale.x * 0.5
+    glyph.scale.x * 0.4765
 }
 
 pub fn build_glyph_brush(

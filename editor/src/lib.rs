@@ -24,12 +24,13 @@ use crate::graphics::primitives::text::{
     build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text,
 };
 use crate::graphics::style::CODE_FONT_SIZE;
+use crate::graphics::style::CODE_TXT_XY;
 use crate::selection::create_selection_rects;
 use crate::tea::ed_model::EdModel;
 use crate::tea::{ed_model, update};
-use crate::vec_result::get_res;
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
+use cgmath::Vector2;
 use ed_model::Position;
 use pipelines::RectResources;
 use std::error::Error;
@@ -215,12 +216,17 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
 
-                let glyph_bounds_rects =
-                    queue_all_text(&size, &ed_model.lines, ed_model.caret_pos, &mut glyph_brush);
+                queue_all_text(
+                    &size,
+                    &ed_model.lines,
+                    ed_model.caret_pos,
+                    CODE_TXT_XY.into(),
+                    &mut glyph_brush,
+                );
 
                 match draw_all_rects(
                     &ed_model,
-                    &glyph_bounds_rects,
+                    &ed_model.glyph_dim_rect_opt,
                     &arena,
                     &mut encoder,
                     &frame.view,
@@ -267,7 +273,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
 fn draw_all_rects(
     ed_model: &EdModel,
-    glyph_bounds_rects: &[Vec<Rect>],
+    glyph_dim_rect_opt: &Option<Rect>,
     arena: &Bump,
     encoder: &mut CommandEncoder,
     texture_view: &TextureView,
@@ -276,17 +282,20 @@ fn draw_all_rects(
 ) -> EdResult<()> {
     let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
 
+    let glyph_rect = if let Some(glyph_dim_rect) = glyph_dim_rect_opt {
+        glyph_dim_rect
+    } else {
+        return Err(MissingGlyphDims {});
+    };
+
     if let Some(selection) = ed_model.selection_opt {
-        let mut selection_rects = create_selection_rects(selection, glyph_bounds_rects, &arena)?;
+        let mut selection_rects =
+            create_selection_rects(selection, &ed_model.lines, glyph_rect, &arena)?;
 
         all_rects.append(&mut selection_rects);
     }
 
-    all_rects.push(make_caret_rect(
-        ed_model.caret_pos,
-        glyph_bounds_rects,
-        ed_model.glyph_dim_rect_opt,
-    )?);
+    all_rects.push(make_caret_rect(ed_model.caret_pos, glyph_rect)?);
 
     let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
 
@@ -323,38 +332,17 @@ fn begin_render_pass<'a>(
     })
 }
 
-fn make_caret_rect(
-    caret_pos: Position,
-    glyph_bound_rects: &[Vec<Rect>],
-    glyph_dim_rect_opt: Option<Rect>,
-) -> EdResult<Rect> {
-    let mut glyph_rect = if let Some(glyph_dim_rect) = glyph_dim_rect_opt {
-        glyph_dim_rect
-    } else {
-        return Err(MissingGlyphDims {});
-    };
+fn make_caret_rect(caret_pos: Position, glyph_dim_rect: &Rect) -> EdResult<Rect> {
+    let caret_y =
+        glyph_dim_rect.top_left_coords.y + (caret_pos.line as f32) * glyph_dim_rect.height;
 
-    let caret_y = glyph_rect.top_left_coords.y + (caret_pos.line as f32) * glyph_rect.height;
-
-    if caret_pos.column > 0 && glyph_bound_rects.len() > caret_pos.line {
-        let indx = caret_pos.column - 1;
-        let glyph_rect_line = get_res(caret_pos.line, glyph_bound_rects)?;
-
-        if glyph_rect_line.len() > indx {
-            glyph_rect = *get_res(indx, glyph_rect_line)?;
-        }
-    };
-
-    let caret_x = if caret_pos.column == 0 {
-        glyph_rect.top_left_coords.x
-    } else {
-        glyph_rect.top_left_coords.x + glyph_rect.width
-    };
+    let caret_x =
+        glyph_dim_rect.top_left_coords.x + glyph_dim_rect.width * (caret_pos.column as f32);
 
     Ok(Rect {
         top_left_coords: (caret_x, caret_y).into(),
-        height: glyph_rect.height,
-        width: 3.0,
+        height: glyph_dim_rect.height,
+        width: 2.0,
         color: CARET_COLOR,
     })
 }
@@ -364,8 +352,9 @@ fn queue_all_text(
     size: &PhysicalSize<u32>,
     lines: &[String],
     caret_pos: Position,
+    code_coords: Vector2<f32>,
     glyph_brush: &mut GlyphBrush<()>,
-) -> Vec<Vec<Rect>> {
+) {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
     let main_label = Text {
@@ -378,7 +367,7 @@ fn queue_all_text(
     };
 
     let code_text = Text {
-        position: (30.0, 90.0).into(), //TODO 30 90 should be an arg
+        position: code_coords,
         area_bounds,
         color: CODE_COLOR.into(),
         text: lines.join(""),
@@ -387,7 +376,7 @@ fn queue_all_text(
     };
 
     let caret_pos_label = Text {
-        position: (30.0, 530.0).into(),
+        position: (30.0, (size.height as f32) - 45.0).into(),
         area_bounds,
         color: TXT_COLOR.into(),
         text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
@@ -399,5 +388,5 @@ fn queue_all_text(
 
     queue_text_draw(&caret_pos_label, glyph_brush);
 
-    queue_text_draw(&code_text, glyph_brush)
+    queue_text_draw(&code_text, glyph_brush);
 }

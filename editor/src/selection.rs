@@ -43,7 +43,8 @@ fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
 
 pub fn create_selection_rects<'a>(
     raw_sel: RawSelection,
-    glyph_bound_rects: &[Vec<Rect>],
+    lines: &[String],
+    glyph_dim_rect: &Rect,
     arena: &'a Bump,
 ) -> EdResult<BumpVec<'a, Rect>> {
     let valid_sel = validate_selection(raw_sel)?;
@@ -51,25 +52,17 @@ pub fn create_selection_rects<'a>(
 
     let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
 
+    let height = glyph_dim_rect.height;
+    let start_y = glyph_dim_rect.top_left_coords.y + height * (start_pos.line as f32);
+    let line_start_x = glyph_dim_rect.top_left_coords.x;
+
     if start_pos.line == end_pos.line {
-        let start_glyph_rect = get_res(
-            start_pos.column,
-            get_res(start_pos.line, glyph_bound_rects)?,
-        )?;
-
-        let stop_glyph_rect = get_res(
-            end_pos.column - 1,
-            get_res(end_pos.line, glyph_bound_rects)?,
-        )?;
-
-        let top_left_coords = start_glyph_rect.top_left_coords;
-
-        let height = start_glyph_rect.height;
-        let width = (stop_glyph_rect.top_left_coords.x - start_glyph_rect.top_left_coords.x)
-            + stop_glyph_rect.width;
+        let width = ((end_pos.column as f32) * glyph_dim_rect.width)
+            - ((start_pos.column as f32) * glyph_dim_rect.width);
+        let sel_rect_x = line_start_x + ((start_pos.column as f32) * glyph_dim_rect.width);
 
         all_rects.push(Rect {
-            top_left_coords,
+            top_left_coords: (sel_rect_x, start_y).into(),
             width,
             height,
             color: colors::SELECT_COLOR,
@@ -78,21 +71,14 @@ pub fn create_selection_rects<'a>(
         Ok(all_rects)
     } else {
         // first line
-        let start_line = get_res(start_pos.line, glyph_bound_rects)?;
+        let end_col = get_res(start_pos.line, lines)?.len();
+        let width = ((end_col as f32) * glyph_dim_rect.width)
+            - ((start_pos.column as f32) * glyph_dim_rect.width);
 
-        let start_glyph_rect = get_res(start_pos.column, start_line)?;
-
-        let start_line_last_glyph_rect = get_res(start_line.len() - 1, start_line)?;
-
-        let top_left_coords = start_glyph_rect.top_left_coords;
-
-        let height = start_glyph_rect.height;
-        let width = (start_line_last_glyph_rect.top_left_coords.x
-            - start_glyph_rect.top_left_coords.x)
-            + start_line_last_glyph_rect.width;
+        let sel_rect_x = line_start_x + ((start_pos.column as f32) * glyph_dim_rect.width);
 
         all_rects.push(Rect {
-            top_left_coords,
+            top_left_coords: (sel_rect_x, start_y).into(),
             width,
             height,
             color: colors::SELECT_COLOR,
@@ -103,21 +89,14 @@ pub fn create_selection_rects<'a>(
         let first_mid_line = start_pos.line + 1;
 
         for i in first_mid_line..(first_mid_line + nr_mid_lines) {
-            let mid_line = get_res(i, glyph_bound_rects)?;
+            let mid_line_len = get_res(i, lines)?.len();
 
-            let mid_line_first_glyph_rect = get_res(0, mid_line)?;
+            let width = (mid_line_len as f32) * glyph_dim_rect.width;
 
-            let mid_line_last_glyph_rect = get_res(mid_line.len() - 1, mid_line)?;
-
-            let top_left_coords = mid_line_first_glyph_rect.top_left_coords;
-
-            let height = mid_line_first_glyph_rect.height;
-            let width = (mid_line_last_glyph_rect.top_left_coords.x
-                - mid_line_first_glyph_rect.top_left_coords.x)
-                + mid_line_last_glyph_rect.width;
+            let sel_rect_y = start_y + ((i - start_pos.line) as f32) * glyph_dim_rect.height;
 
             all_rects.push(Rect {
-                top_left_coords,
+                top_left_coords: (line_start_x, sel_rect_y).into(),
                 width,
                 height,
                 color: colors::SELECT_COLOR,
@@ -126,21 +105,13 @@ pub fn create_selection_rects<'a>(
 
         //last line
         if end_pos.column > 0 {
-            let stop_line = get_res(end_pos.line, glyph_bound_rects)?;
+            let sel_rect_y =
+                start_y + ((end_pos.line - start_pos.line) as f32) * glyph_dim_rect.height;
 
-            let stop_line_first_glyph_rect = get_res(0, stop_line)?;
-
-            let stop_glyph_rect = get_res(end_pos.column - 1, stop_line)?;
-
-            let top_left_coords = stop_line_first_glyph_rect.top_left_coords;
-
-            let height = stop_glyph_rect.height;
-            let width = (stop_glyph_rect.top_left_coords.x
-                - stop_line_first_glyph_rect.top_left_coords.x)
-                + stop_glyph_rect.width;
+            let width = (end_pos.column as f32) * glyph_dim_rect.width;
 
             all_rects.push(Rect {
-                top_left_coords,
+                top_left_coords: (line_start_x, sel_rect_y).into(),
                 width,
                 height,
                 color: colors::SELECT_COLOR,
