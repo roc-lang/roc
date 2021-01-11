@@ -9,10 +9,10 @@ use snafu::ensure;
 
 //using the "parse don't validate" pattern
 struct ValidSelection {
-    selection: RawSelection,
+    pub selection: RawSelection,
 }
 
-fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
+pub fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
     let RawSelection { start_pos, end_pos } = selection;
 
     ensure!(

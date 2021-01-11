@@ -28,6 +28,8 @@ use crate::graphics::style::CODE_TXT_XY;
 use crate::selection::create_selection_rects;
 use crate::tea::ed_model::EdModel;
 use crate::tea::{ed_model, update};
+use crate::tea::app_model::AppModel;
+use crate::vec_result::get_res;
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use cgmath::Vector2;
@@ -51,24 +53,37 @@ mod selection;
 mod tea;
 mod util;
 mod vec_result;
+mod text_buffer;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
-pub fn launch(_filepaths: &[&Path]) -> io::Result<()> {
-    // TODO do any initialization here
+pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
+    //TODO support using multiple filepaths
+    let first_path_opt = if filepaths.len() > 0 {
+        match get_res(0, filepaths) {
+            Ok(path_ref_ref) => Some(*path_ref_ref),
+            Err(e) => {
+                eprintln!("{}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    run_event_loop().expect("Error running event loop");
+    run_event_loop(first_path_opt).expect("Error running event loop");
 
     Ok(())
 }
 
-fn run_event_loop() -> Result<(), Box<dyn Error>> {
+fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
     let event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
+        .with_inner_size(PhysicalSize::new(1000.0, 800.0))
         .build(&event_loop)
         .unwrap();
 
@@ -124,8 +139,31 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let mut ed_model = ed_model::init_model();
-    ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(&mut glyph_brush));
+    let mut ed_model_opt = 
+        if let Some(file_path) = file_path_opt {
+            let ed_model_res = 
+                ed_model::init_model(file_path);
+
+            match ed_model_res {
+                Ok(ed_model) => {
+                    ed_model.glyph_dim_rect_opt = 
+                        Some(example_code_glyph_rect(&mut glyph_brush));
+
+                    Some(ed_model)
+                },
+                Err(e) => {
+                    print_err(&e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+    let mut app_model = AppModel {
+        ed_model_opt
+    };
+
     let mut keyboard_modifiers = ModifiersState::empty();
 
     let arena = Bump::new();
@@ -180,7 +218,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                update::update_text_state(&mut ed_model, &ch);
+                update::handle_new_char(&mut app_model, &ch);
             }
             //Keyboard Input
             Event::WindowEvent {

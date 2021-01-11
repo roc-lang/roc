@@ -19,13 +19,23 @@ pub enum EdError {
         vec_len: usize,
         backtrace: Backtrace,
     },
-    #[snafu(display("InvalidSelection: {}", err_msg))]
+    #[snafu(display("InvalidSelection: {}.", err_msg))]
     InvalidSelection {
         err_msg: String,
         backtrace: Backtrace,
     },
     #[snafu(display("MissingGlyphDims: glyph_dim_rect_opt was None for model. It needs to be set using the example_code_glyph_rect function."))]
     MissingGlyphDims {},
+    #[snafu(display("FileOpenFailed: failed to open file with path {} with the following error: {}.", path_str, err_msg))]
+    FileOpenFailed {
+        path_str: String,
+        err_msg: String
+    },
+    #[snafu(display("TextBufReadFailed: the file {} could be opened but we encountered the following error while trying to read it: {}.", path_str, err_msg))]
+    TextBufReadFailed {
+        path_str: String,
+        err_msg: String
+    }
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;

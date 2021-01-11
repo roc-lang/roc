@@ -1,7 +1,7 @@
 pub mod ast;
 mod def;
 mod expr;
-pub mod file;
+pub mod roc_file;
 mod module;
 mod pattern;
 mod pool;

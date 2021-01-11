@@ -68,6 +68,7 @@ snafu = { version = "0.6", features = ["backtraces"] }
 colored = "2"
 pest = "2.1"
 pest_derive = "2.1"
+ropey = "1.2.0"
 
 
 [dependencies.bytemuck]
