@@ -429,10 +429,7 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
 
         RecursiveUnion(tags) => {
             debug_assert!(value.is_pointer_value());
-            let stack_value = env
-                .builder
-                .build_load(value.into_pointer_value(), "load_head");
-            build_inc_union(env, layout_ids, tags, stack_value);
+            build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value());
         }
         Closure(_, closure_layout, _) => {
             if closure_layout.contains_refcounted() {
@@ -1174,18 +1171,16 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-                let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
-                let recursive_field_ptr =
-                    cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type).into_pointer_value();
-
-                let recursive_field = env
-                    .builder
-                    .build_load(recursive_field_ptr, "load_recursive_field");
+                let union_type =
+                    basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+                let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
 
                 // recursively decrement the field
-                let call =
-                    env.builder
-                        .build_call(fn_val, &[recursive_field], "recursive_tag_decrement");
+                let call = env.builder.build_call(
+                    fn_val,
+                    &[recursive_field_ptr],
+                    "recursive_tag_decrement",
+                );
 
                 // Because it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
@@ -1219,23 +1214,7 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
     env.builder.position_at_end(before_block);
 
     // read the tag_id
-    let current_tag_id = {
-        // Assumption: the tag is the first thing stored
-        // so cast the pointer to the data to a `i64*`
-        let tag_ptr = cast_basic_basic(
-            env.builder,
-            value_ptr.into(),
-            env.context
-                .i64_type()
-                .ptr_type(AddressSpace::Generic)
-                .into(),
-        )
-        .into_pointer_value();
-
-        env.builder
-            .build_load(tag_ptr, "load_tag_id")
-            .into_int_value()
-    };
+    let current_tag_id = rec_union_read_tag(env, value_ptr);
 
     // switch on it
     env.builder
@@ -1415,6 +1394,213 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
+pub fn build_inc_rec_union<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    fields: &'a [&'a [Layout<'a>]],
+    value: PointerValue<'ctx>,
+) {
+    let layout = Layout::RecursiveUnion(fields);
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::INC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_header(env, &layout, &fn_name);
+
+            build_inc_rec_union_help(env, layout_ids, fields, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+    let call = env
+        .builder
+        .build_call(function, &[value.into()], "increment_union");
+
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+fn rec_union_read_tag<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value_ptr: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    // Assumption: the tag is the first thing stored
+    // so cast the pointer to the data to a `i64*`
+    let tag_ptr = cast_basic_basic(
+        env.builder,
+        value_ptr.into(),
+        env.context
+            .i64_type()
+            .ptr_type(AddressSpace::Generic)
+            .into(),
+    )
+    .into_pointer_value();
+
+    env.builder
+        .build_load(tag_ptr, "load_tag_id")
+        .into_int_value()
+}
+
+pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    tags: &[&[Layout<'a>]],
+    fn_val: FunctionValue<'ctx>,
+) {
+    debug_assert!(!tags.is_empty());
+
+    use inkwell::types::BasicType;
+
+    let context = &env.context;
+    let builder = env.builder;
+
+    // Add a basic block for the entry point
+    let entry = context.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&context, loc);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let parent = fn_val;
+
+    let layout = Layout::RecursiveUnion(tags);
+    let before_block = env.builder.get_insert_block().expect("to be in a function");
+
+    debug_assert!(arg_val.is_pointer_value());
+    let value_ptr = arg_val.into_pointer_value();
+
+    // read the tag_id
+    let tag_id = rec_union_read_tag(env, value_ptr);
+
+    let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
+
+    // next, make a jump table for all possible values of the tag_id
+    let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+    let merge_block = env.context.append_basic_block(parent, "increment_merge");
+
+    for (tag_id, field_layouts) in tags.iter().enumerate() {
+        // if none of the fields are or contain anything refcounted, just move on
+        if !field_layouts
+            .iter()
+            .any(|x| x.is_refcounted() || x.contains_refcounted())
+        {
+            continue;
+        }
+
+        let block = env.context.append_basic_block(parent, "tag_id_increment");
+        env.builder.position_at_end(block);
+
+        let wrapper_type = basic_type_from_layout(
+            env.arena,
+            env.context,
+            &Layout::Struct(field_layouts),
+            env.ptr_bytes,
+        );
+
+        // cast the opaque pointer to a pointer of the correct shape
+        let struct_ptr = cast_basic_basic(
+            env.builder,
+            value_ptr.into(),
+            wrapper_type.ptr_type(AddressSpace::Generic).into(),
+        )
+        .into_pointer_value();
+
+        for (i, field_layout) in field_layouts.iter().enumerate() {
+            if let Layout::RecursivePointer = field_layout {
+                // this field has type `*i64`, but is really a pointer to the data we want
+                let elem_pointer = env
+                    .builder
+                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .unwrap();
+
+                let ptr_as_i64_ptr = env
+                    .builder
+                    .build_load(elem_pointer, "load_recursive_pointer");
+
+                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
+
+                // therefore we must cast it to our desired type
+                let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+                let recursive_field_ptr = cast_basic_basic(
+                    env.builder,
+                    ptr_as_i64_ptr,
+                    union_type.ptr_type(AddressSpace::Generic).into(),
+                );
+
+                // recursively increment the field
+                let call = env.builder.build_call(
+                    fn_val,
+                    &[recursive_field_ptr],
+                    "recursive_tag_increment",
+                );
+
+                // Because it's an internal-only function, use the fast calling convention.
+                call.set_call_convention(FAST_CALL_CONV);
+            } else if field_layout.contains_refcounted() {
+                let elem_pointer = env
+                    .builder
+                    .build_struct_gep(struct_ptr, i as u32, "gep_field")
+                    .unwrap();
+
+                let field = env.builder.build_load(elem_pointer, "load_field");
+
+                increment_refcount_layout(env, parent, layout_ids, field, field_layout);
+            }
+        }
+
+        env.builder.build_unconditional_branch(merge_block);
+
+        cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+    }
+
+    env.builder.position_at_end(before_block);
+
+    env.builder
+        .build_switch(tag_id_u8.into_int_value(), merge_block, &cases);
+
+    env.builder.position_at_end(merge_block);
+
+    // increment this cons cell
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    refcount_ptr.increment(env);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
 pub fn build_inc_union<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1487,25 +1673,11 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
     );
     builder.set_current_debug_location(&context, loc);
 
-    let mut scope = Scope::default();
-
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
-    let layout = Layout::Union(tags);
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
     set_name(arg_val, arg_symbol.ident_string(&env.interns));
-
-    let alloca = create_entry_block_alloca(
-        env,
-        fn_val,
-        arg_val.get_type(),
-        arg_symbol.ident_string(&env.interns),
-    );
-
-    builder.build_store(alloca, arg_val);
-
-    scope.insert(arg_symbol, (layout.clone(), alloca));
 
     let parent = fn_val;
 
