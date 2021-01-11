@@ -1,7 +1,7 @@
 use crate::error::{EdResult, InvalidSelection};
 use crate::graphics::colors;
 use crate::graphics::primitives::rect::Rect;
-use crate::tea::model::RawSelection;
+use crate::tea::ed_model::RawSelection;
 use crate::vec_result::get_res;
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
@@ -72,7 +72,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords,
             width,
             height,
-            color: colors::WHITE,
+            color: colors::SELECT_COLOR,
         });
 
         Ok(all_rects)
@@ -95,7 +95,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords,
             width,
             height,
-            color: colors::WHITE,
+            color: colors::SELECT_COLOR,
         });
 
         //middle lines
@@ -120,7 +120,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords,
                 width,
                 height,
-                color: colors::WHITE,
+                color: colors::SELECT_COLOR,
             });
         }
 
@@ -143,7 +143,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords,
                 width,
                 height,
-                color: colors::WHITE,
+                color: colors::SELECT_COLOR,
             });
         }
 
@@ -154,7 +154,7 @@ pub fn create_selection_rects<'a>(
 #[cfg(test)]
 mod test_parse {
     use crate::error::{EdResult, OutOfBounds};
-    use crate::tea::model::{Position, RawSelection};
+    use crate::tea::ed_model::{Position, RawSelection};
     use crate::tea::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up};
     use crate::vec_result::get_res;
     use core::cmp::Ordering;

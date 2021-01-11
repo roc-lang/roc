@@ -24,6 +24,8 @@ pub enum EdError {
         err_msg: String,
         backtrace: Backtrace,
     },
+    #[snafu(display("MissingGlyphDims: glyph_dim_rect_opt was None for model. It needs to be set using the example_code_glyph_rect function."))]
+    MissingGlyphDims {},
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;

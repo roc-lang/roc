@@ -1,4 +1,4 @@
-use crate::tea::model::Model;
+use crate::tea::ed_model::EdModel;
 use crate::tea::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up};
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
@@ -6,7 +6,7 @@ pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
     modifiers: ModifiersState,
-    model: &mut Model,
+    model: &mut EdModel,
 ) {
     use winit::event::VirtualKeyCode::*;
 

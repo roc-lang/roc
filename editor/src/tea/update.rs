@@ -1,4 +1,5 @@
-use crate::tea::model::{Position, RawSelection};
+use super::ed_model::EdModel;
+use super::ed_model::{Position, RawSelection};
 use crate::util::is_newline;
 use std::cmp::{max, min};
 
@@ -290,4 +291,54 @@ pub fn move_caret_down(
     };
 
     (new_caret_pos, new_selection_opt)
+}
+
+pub fn update_text_state(ed_model: &mut EdModel, received_char: &char) {
+    ed_model.selection_opt = None;
+
+    match received_char {
+        '\u{8}' | '\u{7f}' => {
+            // In Linux, we get a '\u{8}' when you press backspace,
+            // but in macOS we get '\u{7f}'.
+            if let Some(last_line) = ed_model.lines.last_mut() {
+                if !last_line.is_empty() {
+                    last_line.pop();
+                } else if ed_model.lines.len() > 1 {
+                    ed_model.lines.pop();
+                }
+                ed_model.caret_pos =
+                    move_caret_left(ed_model.caret_pos, None, false, &ed_model.lines).0;
+            }
+        }
+        '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
+            // These are private use characters; ignore them.
+            // See http://www.unicode.org/faq/private_use.html
+        }
+        ch if is_newline(ch) => {
+            if let Some(last_line) = ed_model.lines.last_mut() {
+                last_line.push(*received_char)
+            }
+            ed_model.lines.push(String::new());
+            ed_model.caret_pos = Position {
+                line: ed_model.caret_pos.line + 1,
+                column: 0,
+            };
+
+            ed_model.selection_opt = None;
+        }
+        _ => {
+            let nr_lines = ed_model.lines.len();
+
+            if let Some(last_line) = ed_model.lines.last_mut() {
+                last_line.push(*received_char);
+
+                ed_model.caret_pos = Position {
+                    line: nr_lines - 1,
+                    column: last_line.len(),
+                };
+
+                ed_model.selection_opt = None;
+            }
+        }
+    }
 }
