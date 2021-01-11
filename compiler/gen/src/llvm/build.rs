@@ -1225,8 +1225,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let elem_ptr = builder
                         .build_struct_gep(ptr, *index as u32, "at_index_struct_gep")
-                        .unwrap()
-                        .into();
+                        .unwrap();
 
                     let result = builder.build_load(elem_ptr, "load_at_index_ptr");
 
