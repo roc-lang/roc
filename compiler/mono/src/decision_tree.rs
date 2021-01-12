@@ -1631,32 +1631,37 @@ fn count_targets(decision_tree: &Decider<u64>) -> MutMap<u64, u64> {
     result
 }
 
-fn count_targets_help(decision_tree: &Decider<u64>, targets: &mut MutMap<u64, u64>) {
+fn count_targets_help(initial: &Decider<u64>, targets: &mut MutMap<u64, u64>) {
     use Decider::*;
-    match decision_tree {
-        Leaf(target) => match targets.get_mut(target) {
-            None => {
-                targets.insert(*target, 1);
+
+    let mut stack = vec![initial];
+
+    while let Some(decision_tree) = stack.pop() {
+        match decision_tree {
+            Leaf(target) => match targets.get_mut(target) {
+                None => {
+                    targets.insert(*target, 1);
+                }
+                Some(current) => {
+                    *current += 1;
+                }
+            },
+
+            Chain {
+                success, failure, ..
+            } => {
+                stack.push(success);
+                stack.push(failure);
             }
-            Some(current) => {
-                *current += 1;
-            }
-        },
 
-        Chain {
-            success, failure, ..
-        } => {
-            count_targets_help(success, targets);
-            count_targets_help(failure, targets);
-        }
+            FanOut {
+                tests, fallback, ..
+            } => {
+                stack.push(fallback);
 
-        FanOut {
-            tests, fallback, ..
-        } => {
-            count_targets_help(fallback, targets);
-
-            for (_, decider) in tests {
-                count_targets_help(decider, targets);
+                for (_, decider) in tests {
+                    stack.push(decider);
+                }
             }
         }
     }
