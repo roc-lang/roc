@@ -10,13 +10,15 @@ use snafu::{Backtrace, ErrorCompat, Snafu};
 #[snafu(visibility(pub))]
 pub enum EdError {
     #[snafu(display(
-        "OutOfBounds: index {} was out of bounds for Vec with length {}.",
+        "OutOfBounds: index {} was out of bounds for {} with length {}.",
         index,
-        vec_len
+        collection_name,
+        len
     ))]
     OutOfBounds {
         index: usize,
-        vec_len: usize,
+        collection_name: String,
+        len: usize,
         backtrace: Backtrace,
     },
     #[snafu(display("InvalidSelection: {}.", err_msg))]
@@ -25,11 +27,13 @@ pub enum EdError {
         backtrace: Backtrace,
     },
     #[snafu(display("MissingGlyphDims: glyph_dim_rect_opt was None for model. It needs to be set using the example_code_glyph_rect function."))]
-    MissingGlyphDims {},
+    MissingGlyphDims {
+        backtrace: Backtrace,
+    },
     #[snafu(display("FileOpenFailed: failed to open file with path {} with the following error: {}.", path_str, err_msg))]
     FileOpenFailed {
         path_str: String,
-        err_msg: String
+        err_msg: String,
     },
     #[snafu(display("TextBufReadFailed: the file {} could be opened but we encountered the following error while trying to read it: {}.", path_str, err_msg))]
     TextBufReadFailed {

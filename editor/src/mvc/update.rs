@@ -1,14 +1,18 @@
-use super::ed_model::EdModel;
 use super::ed_model::{Position, RawSelection};
+use crate::text_buffer::TextBuffer;
 use crate::util::is_newline;
-use crate::tea::app_model::AppModel;
+use super::app_model::AppModel;
+use crate::error::EdResult;
 use std::cmp::{max, min};
+
+pub type MoveCaretFun =
+    fn(Position, Option<RawSelection>, bool, &TextBuffer) -> (Position, Option<RawSelection>);
 
 pub fn move_caret_left(
     old_caret_pos: Position,
     old_selection_opt: Option<RawSelection>,
     shift_pressed: bool,
-    lines: &[String],
+    text_buf: &TextBuffer,
 ) -> (Position, Option<RawSelection>) {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
@@ -21,8 +25,8 @@ pub fn move_caret_left(
     } else if old_col_nr == 0 {
         if old_line_nr == 0 {
             (0, 0)
-        } else if let Some(curr_line) = lines.get(old_line_nr - 1) {
-            (old_line_nr - 1, curr_line.len() - 1)
+        } else if let Some(curr_line_len) = text_buf.line_len(old_line_nr - 1) {
+            (old_line_nr - 1, curr_line_len - 1)
         } else {
             unreachable!()
         }
@@ -80,7 +84,7 @@ pub fn move_caret_right(
     old_caret_pos: Position,
     old_selection_opt: Option<RawSelection>,
     shift_pressed: bool,
-    lines: &[String],
+    text_buf: &TextBuffer,
 ) -> (Position, Option<RawSelection>) {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
@@ -90,7 +94,7 @@ pub fn move_caret_right(
             Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
             None => unreachable!(),
         }
-    } else if let Some(curr_line) = lines.get(old_line_nr) {
+    } else if let Some(curr_line) = text_buf.line(old_line_nr) {
         if let Some(last_char) = curr_line.chars().last() {
             if is_newline(&last_char) {
                 if old_col_nr + 1 > curr_line.len() - 1 {
@@ -160,7 +164,7 @@ pub fn move_caret_up(
     old_caret_pos: Position,
     old_selection_opt: Option<RawSelection>,
     shift_pressed: bool,
-    lines: &[String],
+    text_buf: &TextBuffer,
 ) -> (Position, Option<RawSelection>) {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
@@ -172,9 +176,9 @@ pub fn move_caret_up(
         }
     } else if old_line_nr == 0 {
         (old_line_nr, 0)
-    } else if let Some(prev_line) = lines.get(old_line_nr - 1) {
-        if prev_line.len() <= old_col_nr {
-            (old_line_nr - 1, prev_line.len() - 1)
+    } else if let Some(prev_line_len) = text_buf.line_len(old_line_nr - 1) {
+        if prev_line_len <= old_col_nr {
+            (old_line_nr - 1, prev_line_len - 1)
         } else {
             (old_line_nr - 1, old_col_nr)
         }
@@ -223,7 +227,7 @@ pub fn move_caret_down(
     old_caret_pos: Position,
     old_selection_opt: Option<RawSelection>,
     shift_pressed: bool,
-    lines: &[String],
+    text_buf: &TextBuffer,
 ) -> (Position, Option<RawSelection>) {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
@@ -233,13 +237,13 @@ pub fn move_caret_down(
             Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
             None => unreachable!(),
         }
-    } else if old_line_nr + 1 >= lines.len() {
-        if let Some(curr_line) = lines.get(old_line_nr) {
-            (old_line_nr, curr_line.len())
+    } else if old_line_nr + 1 >= text_buf.nr_of_lines() {
+        if let Some(curr_line_len) = text_buf.line_len(old_line_nr) {
+            (old_line_nr, curr_line_len)
         } else {
             unreachable!()
         }
-    } else if let Some(next_line) = lines.get(old_line_nr + 1) {
+    } else if let Some(next_line) = text_buf.line(old_line_nr + 1) {
         if next_line.len() <= old_col_nr {
             if let Some(last_char) = next_line.chars().last() {
                 if is_newline(&last_char) {
@@ -294,54 +298,49 @@ pub fn move_caret_down(
     (new_caret_pos, new_selection_opt)
 }
 
-pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) {
-    if let Some(ed_model) = app_model.ed_model_opt {
+pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResult<()> {
+    if let Some(ref mut ed_model) = app_model.ed_model_opt {
         ed_model.selection_opt = None;
+        let old_caret_pos = ed_model.caret_pos;
 
         match received_char {
             '\u{8}' | '\u{7f}' => {
                 // On Linux, '\u{8}' is backspace,
                 // on macOS '\u{7f}'.
-                if let Some(last_line) = ed_model.lines.last_mut() {
-                    if !last_line.is_empty() {
-                        last_line.pop();
-                    } else if ed_model.lines.len() > 1 {
-                        ed_model.lines.pop();
-                    }
+                if let Some(selection) = ed_model.selection_opt {
+                    ed_model.text_buf.del_selection(selection)?;
+                    ed_model.caret_pos = selection.start_pos;
+                } else {
+                    ed_model.text_buf.pop_char(old_caret_pos);
+
                     ed_model.caret_pos =
-                        move_caret_left(ed_model.caret_pos, None, false, &ed_model.lines).0;
+                        move_caret_left(old_caret_pos, None, false, &ed_model.text_buf).0;
                 }
+            }
+            ch if is_newline(ch) => {
+                ed_model.text_buf.insert_char(old_caret_pos, ch)?;
+                ed_model.caret_pos = Position {
+                    line: old_caret_pos.line + 1,
+                    column: 0,
+                };
             }
             '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
                 // These are private use characters; ignore them.
                 // See http://www.unicode.org/faq/private_use.html
             }
-            ch if is_newline(ch) => {
-                if let Some(last_line) = ed_model.lines.last_mut() {
-                    last_line.push(*received_char)
-                }
-                ed_model.lines.push(String::new());
+            _ => {
+                ed_model.text_buf.insert_char(old_caret_pos, received_char)?;
+
                 ed_model.caret_pos = Position {
-                    line: ed_model.caret_pos.line + 1,
-                    column: 0,
+                    line: old_caret_pos.line,
+                    column: old_caret_pos.column + 1,
                 };
 
-                ed_model.selection_opt = None;
-            }
-            _ => {
-                let nr_lines = ed_model.lines.len();
-
-                if let Some(last_line) = ed_model.lines.last_mut() {
-                    last_line.push(*received_char);
-
-                    ed_model.caret_pos = Position {
-                        line: nr_lines - 1,
-                        column: last_line.len(),
-                    };
-
-                    ed_model.selection_opt = None;
-                }
             }
         }
+
+        ed_model.selection_opt = None;
     }
+
+    Ok(())
 }

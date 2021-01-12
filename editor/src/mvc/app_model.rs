@@ -1,5 +1,5 @@
 
-use crate::tea::ed_model::EdModel;
+use super::ed_model::EdModel;
 
 #[derive(Debug)]
 pub struct AppModel {

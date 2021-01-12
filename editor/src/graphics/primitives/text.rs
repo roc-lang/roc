@@ -2,7 +2,7 @@
 // by Benjamin Hansen, licensed under the MIT license
 
 use super::rect::Rect;
-use crate::graphics::colors::CODE_COLOR;
+use crate::graphics::colors::{CODE_COLOR, WHITE};
 use crate::graphics::style::{CODE_FONT_SIZE, CODE_TXT_XY};
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
@@ -102,7 +102,7 @@ fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
         top_left_coords: [position.x, top_y].into(),
         width,
         height,
-        color: [1.0, 1.0, 1.0],
+        color: WHITE,
     }
 }
 

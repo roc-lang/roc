@@ -11,6 +11,7 @@ pub struct EdModel {
     pub caret_pos: Position,
     pub selection_opt: Option<RawSelection>,
     pub glyph_dim_rect_opt: Option<Rect>,
+    pub has_focus: bool
 }
 
 pub fn init_model(file_path: &Path) -> EdResult<EdModel> {
@@ -19,10 +20,10 @@ pub fn init_model(file_path: &Path) -> EdResult<EdModel> {
         caret_pos: Position { line: 0, column: 0 },
         selection_opt: None,
         glyph_dim_rect_opt: None,
+        has_focus: true
     })
 }
 
-//Is model.rs the right place for these structs?
 #[derive(Debug, Copy, Clone)]
 pub struct Position {
     pub line: usize,

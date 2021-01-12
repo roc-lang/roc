@@ -1,12 +1,12 @@
-use crate::tea::ed_model::EdModel;
-use crate::tea::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up};
+use crate::mvc::ed_model::EdModel;
+use crate::mvc::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun};
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
 pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
     modifiers: ModifiersState,
-    model: &mut EdModel,
+    ed_model: &mut EdModel,
 ) {
     use winit::event::VirtualKeyCode::*;
 
@@ -16,44 +16,16 @@ pub fn handle_keydown(
 
     match virtual_keycode {
         Left => {
-            let (new_caret_pos, new_selection_opt) = move_caret_left(
-                model.caret_pos,
-                model.selection_opt,
-                modifiers.shift(),
-                &model.lines,
-            );
-            model.caret_pos = new_caret_pos;
-            model.selection_opt = new_selection_opt;
+            handle_arrow(move_caret_left, &modifiers, ed_model)
         }
         Up => {
-            let (new_caret_pos, new_selection_opt) = move_caret_up(
-                model.caret_pos,
-                model.selection_opt,
-                modifiers.shift(),
-                &model.lines,
-            );
-            model.caret_pos = new_caret_pos;
-            model.selection_opt = new_selection_opt;
+            handle_arrow(move_caret_up, &modifiers, ed_model)
         }
         Right => {
-            let (new_caret_pos, new_selection_opt) = move_caret_right(
-                model.caret_pos,
-                model.selection_opt,
-                modifiers.shift(),
-                &model.lines,
-            );
-            model.caret_pos = new_caret_pos;
-            model.selection_opt = new_selection_opt;
+            handle_arrow(move_caret_right, &modifiers, ed_model)
         }
         Down => {
-            let (new_caret_pos, new_selection_opt) = move_caret_down(
-                model.caret_pos,
-                model.selection_opt,
-                modifiers.shift(),
-                &model.lines,
-            );
-            model.caret_pos = new_caret_pos;
-            model.selection_opt = new_selection_opt;
+            handle_arrow(move_caret_down, &modifiers, ed_model)
         }
         Copy => {
             todo!("copy");
@@ -66,6 +38,17 @@ pub fn handle_keydown(
         }
         _ => {}
     }
+}
+
+fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) {
+    let (new_caret_pos, new_selection_opt) = move_caret_fun(
+        ed_model.caret_pos,
+        ed_model.selection_opt,
+        modifiers.shift(),
+        &ed_model.text_buf,
+    );
+    ed_model.caret_pos = new_caret_pos;
+    ed_model.selection_opt = new_selection_opt;
 }
 
 // pub fn handle_text_input(

@@ -13,24 +13,20 @@ extern crate pest;
 #[macro_use]
 extern crate pest_derive;
 
-use crate::error::EdError::MissingGlyphDims;
 use crate::error::{print_err, EdResult};
-use crate::graphics::colors::{CARET_COLOR, CODE_COLOR, TXT_COLOR};
+use crate::graphics::colors::{CODE_COLOR, TXT_COLOR};
 use crate::graphics::lowlevel::buffer::create_rect_buffers;
 use crate::graphics::lowlevel::ortho::update_ortho_buffer;
 use crate::graphics::lowlevel::pipelines;
-use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text::{
     build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text,
 };
 use crate::graphics::style::CODE_FONT_SIZE;
 use crate::graphics::style::CODE_TXT_XY;
-use crate::selection::create_selection_rects;
-use crate::tea::ed_model::EdModel;
-use crate::tea::{ed_model, update};
-use crate::tea::app_model::AppModel;
+use crate::mvc::ed_model::EdModel;
+use crate::mvc::{ed_model, update, ed_view};
+use crate::mvc::app_model::AppModel;
 use crate::vec_result::get_res;
-use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use ed_model::Position;
@@ -50,7 +46,7 @@ pub mod graphics;
 mod keyboard_input;
 pub mod lang;
 mod selection;
-mod tea;
+mod mvc;
 mod util;
 mod vec_result;
 mod text_buffer;
@@ -59,7 +55,7 @@ mod text_buffer;
 /// or if you provide it 1 or more files or directories to open on launch.
 pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
     //TODO support using multiple filepaths
-    let first_path_opt = if filepaths.len() > 0 {
+    let first_path_opt = if !filepaths.is_empty(){
         match get_res(0, filepaths) {
             Ok(path_ref_ref) => Some(*path_ref_ref),
             Err(e) => {
@@ -120,7 +116,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let local_spawner = local_pool.spawner();
 
     // Prepare swap chain
-    let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let render_format = wgpu::TextureFormat::Bgra8Unorm;
     let mut size = window.inner_size();
 
     let swap_chain_descr = wgpu::SwapChainDescriptor {
@@ -139,13 +135,13 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let mut ed_model_opt = 
+    let ed_model_opt = 
         if let Some(file_path) = file_path_opt {
             let ed_model_res = 
                 ed_model::init_model(file_path);
 
             match ed_model_res {
-                Ok(ed_model) => {
+                Ok(mut ed_model) => {
                     ed_model.glyph_dim_rect_opt = 
                         Some(example_code_glyph_rect(&mut glyph_brush));
 
@@ -218,7 +214,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                update::handle_new_char(&mut app_model, &ch);
+                if let Err(e) = update::handle_new_char(&mut app_model, &ch) {
+                    print_err(&e)
+                }
             }
             //Keyboard Input
             Event::WindowEvent {
@@ -226,12 +224,16 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 ..
             } => {
                 if let Some(virtual_keycode) = input.virtual_keycode {
-                    keyboard_input::handle_keydown(
-                        input.state,
-                        virtual_keycode,
-                        keyboard_modifiers,
-                        &mut ed_model,
-                    );
+                    if let Some(ref mut ed_model) = app_model.ed_model_opt {
+                        if ed_model.has_focus {
+                            keyboard_input::handle_keydown(
+                                input.state,
+                                virtual_keycode,
+                                keyboard_modifiers,
+                                ed_model,
+                            );
+                        }
+                    }
                 }
             }
             //Modifiers Changed
@@ -254,17 +256,20 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
 
-                queue_all_text(
-                    &size,
-                    &ed_model.lines,
-                    ed_model.caret_pos,
-                    CODE_TXT_XY.into(),
-                    &mut glyph_brush,
-                );
+                if let Some(ed_model) = &app_model.ed_model_opt {
+                    //TODO don't pass invisible lines
+                    //TODO show text if no file was opened
+                    queue_all_text(
+                        &size,
+                        &ed_model.text_buf.all_lines(),
+                        ed_model.caret_pos,
+                        CODE_TXT_XY.into(),
+                        &mut glyph_brush,
+                    );
+                }   
 
                 match draw_all_rects(
-                    &ed_model,
-                    &ed_model.glyph_dim_rect_opt,
+                    &app_model.ed_model_opt,
                     &arena,
                     &mut encoder,
                     &frame.view,
@@ -310,40 +315,29 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 }
 
 fn draw_all_rects(
-    ed_model: &EdModel,
-    glyph_dim_rect_opt: &Option<Rect>,
+    ed_model_opt: &Option<EdModel>,
     arena: &Bump,
     encoder: &mut CommandEncoder,
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
 ) -> EdResult<()> {
-    let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
+    if let Some(ed_model) = ed_model_opt {
+        let all_rects = ed_view::create_ed_rects(ed_model, arena)?;
 
-    let glyph_rect = if let Some(glyph_dim_rect) = glyph_dim_rect_opt {
-        glyph_dim_rect
+        let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
+
+        let mut render_pass = begin_render_pass(encoder, texture_view);
+
+        render_pass.set_pipeline(&rect_resources.pipeline);
+        render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+        render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
     } else {
-        return Err(MissingGlyphDims {});
-    };
-
-    if let Some(selection) = ed_model.selection_opt {
-        let mut selection_rects =
-            create_selection_rects(selection, &ed_model.lines, glyph_rect, &arena)?;
-
-        all_rects.append(&mut selection_rects);
+        // need to begin render pass to clear screen
+        begin_render_pass(encoder, texture_view);
     }
-
-    all_rects.push(make_caret_rect(ed_model.caret_pos, glyph_rect)?);
-
-    let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
-
-    let mut render_pass = begin_render_pass(encoder, texture_view);
-
-    render_pass.set_pipeline(&rect_resources.pipeline);
-    render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
-    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-    render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
 
     Ok(())
 }
@@ -358,9 +352,9 @@ fn begin_render_pass<'a>(
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
+                    r: 0.1,
+                    g: 0.2,
+                    b: 0.3,
                     a: 1.0,
                 }),
                 store: true,
@@ -370,45 +364,21 @@ fn begin_render_pass<'a>(
     })
 }
 
-fn make_caret_rect(caret_pos: Position, glyph_dim_rect: &Rect) -> EdResult<Rect> {
-    let caret_y =
-        glyph_dim_rect.top_left_coords.y + (caret_pos.line as f32) * glyph_dim_rect.height;
-
-    let caret_x =
-        glyph_dim_rect.top_left_coords.x + glyph_dim_rect.width * (caret_pos.column as f32);
-
-    Ok(Rect {
-        top_left_coords: (caret_x, caret_y).into(),
-        height: glyph_dim_rect.height,
-        width: 2.0,
-        color: CARET_COLOR,
-    })
-}
-
 // returns bounding boxes for every glyph
 fn queue_all_text(
     size: &PhysicalSize<u32>,
-    lines: &[String],
+    editor_lines: &str,
     caret_pos: Position,
     code_coords: Vector2<f32>,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
-    let main_label = Text {
-        position: (30.0, 30.0).into(),
-        area_bounds,
-        color: TXT_COLOR.into(),
-        text: String::from("Enter some text:"),
-        size: CODE_FONT_SIZE,
-        ..Default::default()
-    };
-
     let code_text = Text {
         position: code_coords,
         area_bounds,
         color: CODE_COLOR.into(),
-        text: lines.join(""),
+        text: editor_lines.to_owned(),
         size: CODE_FONT_SIZE,
         ..Default::default()
     };
@@ -421,8 +391,6 @@ fn queue_all_text(
         size: 30.0,
         ..Default::default()
     };
-
-    queue_text_draw(&main_label, glyph_brush);
 
     queue_text_draw(&caret_pos_label, glyph_brush);
 
