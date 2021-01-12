@@ -243,7 +243,11 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 }
 
-pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
+pub fn module_from_builtins<'ctx>(
+    ctx: &'ctx Context,
+    module_name: &str,
+    ptr_size: u32,
+) -> Module<'ctx> {
     let bitcode_bytes = bitcode::get_bytes();
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
@@ -252,12 +256,12 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
 
     // Add LLVM intrinsics.
-    add_intrinsics(ctx, &module);
+    add_intrinsics(ctx, &module, ptr_size);
 
     module
 }
 
-fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
+fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>, ptr_size: u32) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
@@ -268,6 +272,15 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i32_type = ctx.i32_type();
     let i8_type = ctx.i8_type();
     let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
+
+    let byte_slice_type =
+        ctx.struct_type(&[i8_ptr_type.into(), ptr_int(ctx, ptr_size).into()], false);
+
+    add_intrinsic(
+        module,
+        ZIG_WYHASH_BYTES,
+        i64_type.fn_type(&[i64_type.into(), byte_slice_type.into()], false),
+    );
 
     add_intrinsic(
         module,
@@ -364,6 +377,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     });
 }
 
+pub static ZIG_WYHASH_BYTES: &str = "wyhash_hash";
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";

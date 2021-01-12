@@ -74,9 +74,10 @@ pub fn gen_from_mono_module(
     }
 
     // Generate the binary
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
     let context = Context::create();
-    let module = arena.alloc(module_from_builtins(&context, "app"));
+    let module = arena.alloc(module_from_builtins(&context, "app", ptr_bytes));
 
     // strip Zig debug stuff
     // module.strip_debug_info();
@@ -93,8 +94,6 @@ pub fn gen_from_mono_module(
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
-
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
     // Compile and add all the Procs before adding main
     let env = roc_gen::llvm::build::Env {
