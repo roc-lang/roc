@@ -137,7 +137,10 @@ pub fn basic_type_from_layout<'ctx>(
 
             basic_type_from_record(arena, context, sorted_fields, ptr_bytes)
         }
-        RecursiveUnion(_) | Union(_) => block_of_memory(context, layout, ptr_bytes),
+        RecursiveUnion(_) => block_of_memory(context, layout, ptr_bytes)
+            .ptr_type(AddressSpace::Generic)
+            .into(),
+        Union(_) => block_of_memory(context, layout, ptr_bytes),
         RecursivePointer => {
             // TODO make this dynamic
             context
