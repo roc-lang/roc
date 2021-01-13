@@ -318,8 +318,6 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     ) {
         if dst == src1 {
             sub_reg64_reg64(buf, dst, src2);
-        } else if dst == src2 {
-            sub_reg64_reg64(buf, dst, src1);
         } else {
             mov_reg64_reg64(buf, dst, src1);
             sub_reg64_reg64(buf, dst, src2);
