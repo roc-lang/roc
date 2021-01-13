@@ -4,7 +4,7 @@ use std::vec::Vec;
 
 /// In the build script for the builtins module, we compile the builtins bitcode and set
 /// BUILTINS_BC to the path to the compiled output.
-const PATH: &'static str = env!(
+const PATH: &str = env!(
     "BUILTINS_BC",
     "Env var BUILTINS_BC not found. Is there a problem with the build script?"
 );
