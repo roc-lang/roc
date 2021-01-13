@@ -1,5 +1,7 @@
 use crate::mvc::ed_model::EdModel;
-use crate::mvc::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun};
+use crate::mvc::update::{
+    move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
+};
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
 pub fn handle_keydown(
@@ -15,18 +17,10 @@ pub fn handle_keydown(
     }
 
     match virtual_keycode {
-        Left => {
-            handle_arrow(move_caret_left, &modifiers, ed_model)
-        }
-        Up => {
-            handle_arrow(move_caret_up, &modifiers, ed_model)
-        }
-        Right => {
-            handle_arrow(move_caret_right, &modifiers, ed_model)
-        }
-        Down => {
-            handle_arrow(move_caret_down, &modifiers, ed_model)
-        }
+        Left => handle_arrow(move_caret_left, &modifiers, ed_model),
+        Up => handle_arrow(move_caret_up, &modifiers, ed_model),
+        Right => handle_arrow(move_caret_right, &modifiers, ed_model),
+        Down => handle_arrow(move_caret_down, &modifiers, ed_model),
         Copy => {
             todo!("copy");
         }

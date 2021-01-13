@@ -23,9 +23,10 @@ use crate::graphics::primitives::text::{
 };
 use crate::graphics::style::CODE_FONT_SIZE;
 use crate::graphics::style::CODE_TXT_XY;
-use crate::mvc::ed_model::EdModel;
-use crate::mvc::{ed_model, update, ed_view};
 use crate::mvc::app_model::AppModel;
+use crate::mvc::ed_model::EdModel;
+use crate::mvc::{ed_model, ed_view, update};
+use crate::resources::strings::NOTHING_OPENED;
 use crate::vec_result::get_res;
 use bumpalo::Bump;
 use cgmath::Vector2;
@@ -45,17 +46,18 @@ pub mod error;
 pub mod graphics;
 mod keyboard_input;
 pub mod lang;
-mod selection;
 mod mvc;
+mod resources;
+mod selection;
+mod text_buffer;
 mod util;
 mod vec_result;
-mod text_buffer;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
 pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
     //TODO support using multiple filepaths
-    let first_path_opt = if !filepaths.is_empty(){
+    let first_path_opt = if !filepaths.is_empty() {
         match get_res(0, filepaths) {
             Ok(path_ref_ref) => Some(*path_ref_ref),
             Err(e) => {
@@ -135,30 +137,25 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let ed_model_opt = 
-        if let Some(file_path) = file_path_opt {
-            let ed_model_res = 
-                ed_model::init_model(file_path);
+    let ed_model_opt = if let Some(file_path) = file_path_opt {
+        let ed_model_res = ed_model::init_model(file_path);
 
-            match ed_model_res {
-                Ok(mut ed_model) => {
-                    ed_model.glyph_dim_rect_opt = 
-                        Some(example_code_glyph_rect(&mut glyph_brush));
+        match ed_model_res {
+            Ok(mut ed_model) => {
+                ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(&mut glyph_brush));
 
-                    Some(ed_model)
-                },
-                Err(e) => {
-                    print_err(&e);
-                    None
-                }
+                Some(ed_model)
             }
-        } else {
-            None
-        };
-
-    let mut app_model = AppModel {
-        ed_model_opt
+            Err(e) => {
+                print_err(&e);
+                None
+            }
+        }
+    } else {
+        None
     };
+
+    let mut app_model = AppModel { ed_model_opt };
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
@@ -258,15 +255,16 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                 if let Some(ed_model) = &app_model.ed_model_opt {
                     //TODO don't pass invisible lines
-                    //TODO show text if no file was opened
-                    queue_all_text(
+                    queue_editor_text(
                         &size,
                         &ed_model.text_buf.all_lines(),
                         ed_model.caret_pos,
                         CODE_TXT_XY.into(),
                         &mut glyph_brush,
                     );
-                }   
+                } else {
+                    queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
+                }
 
                 match draw_all_rects(
                     &app_model.ed_model_opt,
@@ -365,7 +363,7 @@ fn begin_render_pass<'a>(
 }
 
 // returns bounding boxes for every glyph
-fn queue_all_text(
+fn queue_editor_text(
     size: &PhysicalSize<u32>,
     editor_lines: &str,
     caret_pos: Position,
@@ -393,6 +391,26 @@ fn queue_all_text(
     };
 
     queue_text_draw(&caret_pos_label, glyph_brush);
+
+    queue_text_draw(&code_text, glyph_brush);
+}
+
+fn queue_no_file_text(
+    size: &PhysicalSize<u32>,
+    text: &str,
+    text_coords: Vector2<f32>,
+    glyph_brush: &mut GlyphBrush<()>,
+) {
+    let area_bounds = (size.width as f32, size.height as f32).into();
+
+    let code_text = Text {
+        position: text_coords,
+        area_bounds,
+        color: CODE_COLOR.into(),
+        text: text.to_owned(),
+        size: CODE_FONT_SIZE,
+        ..Default::default()
+    };
 
     queue_text_draw(&code_text, glyph_brush);
 }

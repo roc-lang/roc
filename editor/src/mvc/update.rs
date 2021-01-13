@@ -1,9 +1,9 @@
-use super::ed_model::{Position, RawSelection};
-use crate::text_buffer::TextBuffer;
-use crate::util::is_newline;
 use super::app_model::AppModel;
 use super::ed_model::EdModel;
+use super::ed_model::{Position, RawSelection};
 use crate::error::EdResult;
+use crate::text_buffer::TextBuffer;
+use crate::util::is_newline;
 use std::cmp::{max, min};
 
 pub type MoveCaretFun =
@@ -299,7 +299,7 @@ pub fn move_caret_down(
     (new_caret_pos, new_selection_opt)
 }
 
-fn del_selection(selection: RawSelection, ed_model: &mut EdModel)  -> EdResult<()> {
+fn del_selection(selection: RawSelection, ed_model: &mut EdModel) -> EdResult<()> {
     ed_model.text_buf.del_selection(selection)?;
     ed_model.caret_pos = selection.start_pos;
 
@@ -343,12 +343,16 @@ pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResu
             _ => {
                 if let Some(selection) = ed_model.selection_opt {
                     del_selection(selection, ed_model)?;
-                    ed_model.text_buf.insert_char(ed_model.caret_pos, received_char)?;
+                    ed_model
+                        .text_buf
+                        .insert_char(ed_model.caret_pos, received_char)?;
 
                     ed_model.caret_pos =
                         move_caret_right(ed_model.caret_pos, None, false, &ed_model.text_buf).0;
                 } else {
-                    ed_model.text_buf.insert_char(old_caret_pos, received_char)?;
+                    ed_model
+                        .text_buf
+                        .insert_char(old_caret_pos, received_char)?;
 
                     ed_model.caret_pos = Position {
                         line: old_caret_pos.line,
@@ -364,16 +368,19 @@ pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResu
     Ok(())
 }
 
-
 #[cfg(test)]
 mod test_update {
-    use crate::selection::test_selection::{convert_dsl_to_selection, convert_selection_to_dsl, text_buffer_from_dsl_str, all_lines_vec};
-    use crate::mvc::ed_model::{Position, EdModel, RawSelection};
     use crate::mvc::app_model::AppModel;
-    use crate::mvc::update::{handle_new_char};
+    use crate::mvc::ed_model::{EdModel, Position, RawSelection};
+    use crate::mvc::update::handle_new_char;
+    use crate::selection::test_selection::{
+        all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, text_buffer_from_dsl_str,
+    };
     use crate::text_buffer::TextBuffer;
 
-    fn gen_caret_text_buf(lines: &[&str]) -> Result<(Position, Option<RawSelection>, TextBuffer), String> {
+    fn gen_caret_text_buf(
+        lines: &[&str],
+    ) -> Result<(Position, Option<RawSelection>, TextBuffer), String> {
         let lines_string_slice: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         let (selection_opt, caret_pos) = convert_dsl_to_selection(&lines_string_slice)?;
         let text_buf = text_buffer_from_dsl_str(&lines_string_slice);
@@ -381,17 +388,19 @@ mod test_update {
         Ok((caret_pos, selection_opt, text_buf))
     }
 
-    fn mock_app_model(text_buf: TextBuffer, caret_pos: Position, selection_opt: Option<RawSelection>) -> AppModel {
+    fn mock_app_model(
+        text_buf: TextBuffer,
+        caret_pos: Position,
+        selection_opt: Option<RawSelection>,
+    ) -> AppModel {
         AppModel {
-            ed_model_opt: Some(
-                EdModel{
-                    text_buf,
-                    caret_pos,
-                    selection_opt,
-                    glyph_dim_rect_opt: None,
-                    has_focus: true
-                }
-            )
+            ed_model_opt: Some(EdModel {
+                text_buf,
+                caret_pos,
+                selection_opt,
+                glyph_dim_rect_opt: None,
+                has_focus: true,
+            }),
         }
     }
 
@@ -401,7 +410,7 @@ mod test_update {
         new_char: char,
     ) -> Result<(), String> {
         let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
-        
+
         let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt);
 
         if let Err(e) = handle_new_char(&mut app_model, &new_char) {
@@ -410,7 +419,12 @@ mod test_update {
 
         if let Some(ed_model) = app_model.ed_model_opt {
             let mut actual_lines = all_lines_vec(&ed_model.text_buf);
-            let dsl_slice = convert_selection_to_dsl(ed_model.selection_opt, ed_model.caret_pos, &mut actual_lines).unwrap();
+            let dsl_slice = convert_selection_to_dsl(
+                ed_model.selection_opt,
+                ed_model.caret_pos,
+                &mut actual_lines,
+            )
+            .unwrap();
             assert_eq!(dsl_slice, expected_post_lines_str);
         } else {
             panic!("Mock AppModel did not have an EdModel.");
@@ -421,182 +435,109 @@ mod test_update {
 
     #[test]
     fn insert_new_char_simple() -> Result<(), String> {
-        assert_insert(
-            &["|"], &["a|"], 'a'
-        )?;
-        assert_insert(
-            &["|"], &[" |"], ' '
-        )?;
-        assert_insert(
-            &["a|"], &["aa|"], 'a'
-        )?;
-        assert_insert(
-            &["a|"], &["a |"], ' '
-        )?;
-        assert_insert(
-            &["a|\n", ""], &["ab|\n", ""], 'b'
-        )?;
-        assert_insert(
-            &["a|\n", ""], &["ab|\n", ""], 'b'
-        )?;
-        assert_insert(
-            &["a\n", "|"], &["a\n", "b|"], 'b'
-        )?;
-        assert_insert(
-            &["a\n", "b\n", "c|"], &["a\n", "b\n", "cd|"], 'd'
-        )?;
-        
-        Ok(())  
+        assert_insert(&["|"], &["a|"], 'a')?;
+        assert_insert(&["|"], &[" |"], ' ')?;
+        assert_insert(&["a|"], &["aa|"], 'a')?;
+        assert_insert(&["a|"], &["a |"], ' ')?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
+        assert_insert(&["a\n", "|"], &["a\n", "b|"], 'b')?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "cd|"], 'd')?;
+
+        Ok(())
     }
 
     #[test]
     fn insert_new_char_mid() -> Result<(), String> {
-        assert_insert(
-            &["ab|d"], &["abc|d"], 'c'
-        )?;
-        assert_insert(
-            &["a|cd"], &["ab|cd"], 'b'
-        )?;
-        assert_insert(
-            &["abc\n", "|e"], &["abc\n", "d|e"], 'd'
-        )?;
-        assert_insert(
-            &["abc\n", "def\n", "| "], &["abc\n", "def\n", "g| "], 'g'
-        )?;
-        assert_insert(
-            &["abc\n", "def\n", "| "], &["abc\n", "def\n", " | "], ' '
-        )?;
+        assert_insert(&["ab|d"], &["abc|d"], 'c')?;
+        assert_insert(&["a|cd"], &["ab|cd"], 'b')?;
+        assert_insert(&["abc\n", "|e"], &["abc\n", "d|e"], 'd')?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", "g| "], 'g')?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", " | "], ' ')?;
 
-        
-        Ok(())  
+        Ok(())
     }
 
     #[test]
     fn simple_backspace() -> Result<(), String> {
-        assert_insert(
-            &["|"], &["|"], '\u{8}'
-        )?;
-        assert_insert(
-            &[" |"], &["|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["a|"], &["|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["ab|"], &["a|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["a|\n", ""], &["|\n", ""], '\u{8}'
-        )?;
-        assert_insert(
-            &["ab|\n", ""], &["a|\n", ""], '\u{8}'
-        )?;
-        assert_insert(
-            &["a\n", "|"], &["a|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["a\n", "b\n", "c|"], &["a\n", "b\n", "|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["a\n", "b\n", "|"], &["a\n", "b|"], '\u{8}'
-        )?;
-        
-        Ok(())  
+        assert_insert(&["|"], &["|"], '\u{8}')?;
+        assert_insert(&[" |"], &["|"], '\u{8}')?;
+        assert_insert(&["a|"], &["|"], '\u{8}')?;
+        assert_insert(&["ab|"], &["a|"], '\u{8}')?;
+        assert_insert(&["a|\n", ""], &["|\n", ""], '\u{8}')?;
+        assert_insert(&["ab|\n", ""], &["a|\n", ""], '\u{8}')?;
+        assert_insert(&["a\n", "|"], &["a|"], '\u{8}')?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "|"], '\u{8}')?;
+        assert_insert(&["a\n", "b\n", "|"], &["a\n", "b|"], '\u{8}')?;
+
+        Ok(())
     }
 
     #[test]
     fn selection_backspace() -> Result<(), String> {
+        assert_insert(&["[a]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[a]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[aa]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[b c]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[abc]|\n", ""], &["|\n", ""], '\u{8}')?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "|"], '\u{8}')?;
+        assert_insert(&["[a\n", "abc]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "|"], '\u{8}')?;
         assert_insert(
-            &["[a]|"], &["|"], '\u{8}'
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            &["abc\n", "d|\n", "jkl"],
+            '\u{8}',
         )?;
         assert_insert(
-            &["a[a]|"], &["a|"], '\u{8}'
+            &["abc\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "|\n", "jkl"],
+            '\u{8}',
         )?;
         assert_insert(
-            &["[aa]|"], &["|"], '\u{8}'
+            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "\n", "|\n", "jkl"],
+            '\u{8}',
         )?;
         assert_insert(
-            &["a[b c]|"], &["a|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["[abc]|\n", ""], &["|\n", ""], '\u{8}'
-        )?;
-        assert_insert(
-            &["a\n", "[abc]|"], &["a\n","|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["[a\n", "abc]|"], &["|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["a[b\n", "cdef ghij]|"], &["a|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["[a\n", "b\n", "c]|"], &["|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["a\n", "[b\n", "]|"], &["a\n", "|"], '\u{8}'
-        )?;
-        assert_insert(
-            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"], &["abc\n", "d|\n", "jkl"], '\u{8}'
-        )?;
-        assert_insert(
-            &["abc\n", "[def\n", "ghi]|\n", "jkl"], &["abc\n", "|\n", "jkl"], '\u{8}'
-        )?;
-        assert_insert(
-            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"], &["abc\n", "\n", "|\n", "jkl"], '\u{8}'
-        )?;
-        assert_insert(
-            &["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["|"], '\u{8}'
+            &["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"],
+            &["|"],
+            '\u{8}',
         )?;
 
-        Ok(())  
+        Ok(())
     }
 
     #[test]
     fn insert_with_selection() -> Result<(), String> {
+        assert_insert(&["[a]|"], &["z|"], 'z')?;
+        assert_insert(&["a[a]|"], &["az|"], 'z')?;
+        assert_insert(&["[aa]|"], &["z|"], 'z')?;
+        assert_insert(&["a[b c]|"], &["az|"], 'z')?;
+        assert_insert(&["[abc]|\n", ""], &["z|\n", ""], 'z')?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "z|"], 'z')?;
+        assert_insert(&["[a\n", "abc]|"], &["z|"], 'z')?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["az|"], 'z')?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["z|"], 'z')?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "z|"], 'z')?;
         assert_insert(
-            &["[a]|"], &["z|"], 'z'
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            &["abc\n", "dz|\n", "jkl"],
+            'z',
         )?;
         assert_insert(
-            &["a[a]|"], &["az|"], 'z'
+            &["abc\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "z|\n", "jkl"],
+            'z',
         )?;
         assert_insert(
-            &["[aa]|"], &["z|"], 'z'
+            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "\n", "z|\n", "jkl"],
+            'z',
         )?;
-        assert_insert(
-            &["a[b c]|"], &["az|"], 'z'
-        )?;
-        assert_insert(
-            &["[abc]|\n", ""], &["z|\n", ""], 'z'
-        )?;
-        assert_insert(
-            &["a\n", "[abc]|"], &["a\n","z|"], 'z'
-        )?;
-        assert_insert(
-            &["[a\n", "abc]|"], &["z|"], 'z'
-        )?;
-        assert_insert(
-            &["a[b\n", "cdef ghij]|"], &["az|"], 'z'
-        )?;
-        assert_insert(
-            &["[a\n", "b\n", "c]|"], &["z|"], 'z'
-        )?;
-        assert_insert(
-            &["a\n", "[b\n", "]|"], &["a\n", "z|"], 'z'
-        )?;
-        assert_insert(
-            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"], &["abc\n", "dz|\n", "jkl"], 'z'
-        )?;
-        assert_insert(
-            &["abc\n", "[def\n", "ghi]|\n", "jkl"], &["abc\n", "z|\n", "jkl"], 'z'
-        )?;
-        assert_insert(
-            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"], &["abc\n", "\n", "z|\n", "jkl"], 'z'
-        )?;
-        assert_insert(
-            &["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["z|"], 'z'
-        )?;
+        assert_insert(&["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["z|"], 'z')?;
 
-        Ok(())  
+        Ok(())
     }
 }

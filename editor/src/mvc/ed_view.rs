@@ -1,19 +1,16 @@
-
 use super::ed_model::{EdModel, Position};
-use crate::graphics::primitives::rect::Rect;
 use crate::error::{EdResult, MissingGlyphDims};
+use crate::graphics::colors::CARET_COLOR;
+use crate::graphics::primitives::rect::Rect;
 use crate::selection::create_selection_rects;
-use crate::graphics::colors::{CARET_COLOR};
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
-use snafu::{ensure};
+use snafu::ensure;
 
 //TODO add editor text here as well
 
 pub fn create_ed_rects<'a>(ed_model: &EdModel, arena: &'a Bump) -> EdResult<BumpVec<'a, Rect>> {
-    ensure!(ed_model.glyph_dim_rect_opt.is_some(),
-        MissingGlyphDims {}
-    );
+    ensure!(ed_model.glyph_dim_rect_opt.is_some(), MissingGlyphDims {});
 
     let glyph_rect = ed_model.glyph_dim_rect_opt.unwrap();
 

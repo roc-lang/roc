@@ -126,13 +126,15 @@ pub fn create_selection_rects<'a>(
 pub mod test_selection {
     use crate::error::{EdResult, OutOfBounds};
     use crate::mvc::ed_model::{Position, RawSelection};
-    use crate::mvc::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun};
-    use crate::vec_result::get_res;
+    use crate::mvc::update::{
+        move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
+    };
     use crate::text_buffer::TextBuffer;
+    use crate::vec_result::get_res;
     use core::cmp::Ordering;
     use pest::Parser;
-    use snafu::OptionExt;
     use ropey::Rope;
+    use snafu::OptionExt;
     use std::collections::HashMap;
     use std::slice::SliceIndex;
 
@@ -201,10 +203,10 @@ pub mod test_selection {
     ) -> EdResult<&mut <usize as SliceIndex<[T]>>::Output> {
         let vec_len = vec.len();
 
-        let elt_ref = vec.get_mut(index).context(OutOfBounds { 
+        let elt_ref = vec.get_mut(index).context(OutOfBounds {
             index,
             collection_name: "Slice",
-            len: vec_len 
+            len: vec_len,
         })?;
 
         Ok(elt_ref)
@@ -223,7 +225,7 @@ pub mod test_selection {
                 .iter()
                 .map(|line| line.replace(&['[', ']', '|'][..], ""))
                 .collect::<Vec<String>>()
-                .join("")
+                .join(""),
         )
     }
 
@@ -358,8 +360,7 @@ pub mod test_selection {
 
         let (sel_opt, caret_pos) = convert_dsl_to_selection(&pre_lines)?;
 
-        let clean_text_buf = 
-            text_buffer_from_dsl_str(&pre_lines);
+        let clean_text_buf = text_buffer_from_dsl_str(&pre_lines);
 
         let (new_caret_pos, new_sel_opt) =
             move_fun(caret_pos, sel_opt, shift_pressed, &clean_text_buf);

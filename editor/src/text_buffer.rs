@@ -1,17 +1,15 @@
-
 // Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
 
+use crate::error::EdError::{FileOpenFailed, TextBufReadFailed};
 use crate::error::EdResult;
 use crate::error::OutOfBounds;
-use crate::error::EdError::{TextBufReadFailed, FileOpenFailed};
 use crate::mvc::ed_model::{Position, RawSelection};
-use crate::selection::{validate_selection};
+use crate::selection::validate_selection;
+use ropey::Rope;
+use snafu::{ensure, OptionExt};
 use std::fs::File;
 use std::io;
 use std::path::Path;
-use ropey::{Rope};
-use snafu::{ensure, OptionExt};
-
 
 #[derive(Debug)]
 pub struct TextBuffer {
@@ -20,14 +18,17 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
-    pub fn insert_char(&mut self, caret_pos: Position, new_char: &char)  -> EdResult<()> {
+    pub fn insert_char(&mut self, caret_pos: Position, new_char: &char) -> EdResult<()> {
         let char_indx = self.pos_to_char_indx(caret_pos);
 
-        ensure!(char_indx <= self.text_rope.len_chars(), OutOfBounds{
-            index: char_indx,
-            collection_name: "Rope",
-            len: self.text_rope.len_chars()
-        });
+        ensure!(
+            char_indx <= self.text_rope.len_chars(),
+            OutOfBounds {
+                index: char_indx,
+                collection_name: "Rope",
+                len: self.text_rope.len_chars()
+            }
+        );
 
         self.text_rope.insert(char_indx, &new_char.to_string());
 
@@ -41,18 +42,21 @@ impl TextBuffer {
             self.text_rope.remove((char_indx - 1)..char_indx);
         }
     }
-    
+
     pub fn del_selection(&mut self, raw_sel: RawSelection) -> EdResult<()> {
         let (start_char_indx, end_char_indx) = self.sel_to_tup(raw_sel)?;
 
-        ensure!(end_char_indx <= self.text_rope.len_chars(), OutOfBounds{
-            index: end_char_indx,
-            collection_name: "Rope",
-            len: self.text_rope.len_chars()
-        });
+        ensure!(
+            end_char_indx <= self.text_rope.len_chars(),
+            OutOfBounds {
+                index: end_char_indx,
+                collection_name: "Rope",
+                len: self.text_rope.len_chars()
+            }
+        );
 
         self.text_rope.remove(start_char_indx..end_char_indx);
-        
+
         Ok(())
     }
 
@@ -76,7 +80,7 @@ impl TextBuffer {
         self.line_len(line_nr).context(OutOfBounds {
             index: line_nr,
             collection_name: "Rope",
-            len: self.text_rope.len_lines()
+            len: self.text_rope.len_lines(),
         })
     }
 
@@ -132,20 +136,16 @@ fn rope_from_path(path: &Path) -> EdResult<Rope> {
         Ok(file) => {
             let buf_reader = &mut io::BufReader::new(file);
             match Rope::from_reader(buf_reader) {
-                Ok(rope) => 
-                    Ok(rope),
-                Err(e) =>
-                    Err(TextBufReadFailed {
-                        path_str: path_to_string(path),
-                        err_msg: e.to_string()
-                    })
+                Ok(rope) => Ok(rope),
+                Err(e) => Err(TextBufReadFailed {
+                    path_str: path_to_string(path),
+                    err_msg: e.to_string(),
+                }),
             }
         }
-        Err(e) => {
-            Err(FileOpenFailed {
-                path_str: path_to_string(path),
-                err_msg: e.to_string()
-            })
-        }
+        Err(e) => Err(FileOpenFailed {
+            path_str: path_to_string(path),
+            err_msg: e.to_string(),
+        }),
     }
 }
