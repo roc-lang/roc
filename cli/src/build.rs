@@ -34,7 +34,6 @@ pub fn build_file(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
 
-    // Release builds use uniqueness optimizations
     let stdlib = match opt_level {
         OptLevel::Normal => roc_builtins::std::standard_stdlib(),
         OptLevel::Optimize => roc_builtins::std::standard_stdlib(),
@@ -42,7 +41,7 @@ pub fn build_file(
     let loaded = roc_load::file::load_and_monomorphize(
         &arena,
         roc_file_path.clone(),
-        stdlib,
+        &stdlib,
         src_dir.as_path(),
         subs_by_module,
         ptr_bytes,
