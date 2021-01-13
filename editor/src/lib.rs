@@ -257,7 +257,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     //TODO don't pass invisible lines
                     queue_editor_text(
                         &size,
-                        &ed_model.text_buf.all_lines(),
+                        &ed_model.text_buf.all_lines(&arena),
                         ed_model.caret_pos,
                         CODE_TXT_XY.into(),
                         &mut glyph_brush,

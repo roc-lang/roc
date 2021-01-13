@@ -5,6 +5,8 @@ use crate::error::EdResult;
 use crate::error::OutOfBounds;
 use crate::mvc::ed_model::{Position, RawSelection};
 use crate::selection::validate_selection;
+use bumpalo::collections::String as BumpString;
+use bumpalo::Bump;
 use ropey::Rope;
 use snafu::{ensure, OptionExt};
 use std::fs::File;
@@ -90,8 +92,8 @@ impl TextBuffer {
 
     // expensive function, don't use it if it can be done with a specialized, more efficient function
     // TODO use bump allocation here
-    pub fn all_lines(&self) -> String {
-        let mut lines = String::new();
+    pub fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a> {
+        let mut lines = BumpString::with_capacity_in(self.text_rope.len_chars(), arena);
 
         for line in self.text_rope.lines() {
             lines.extend(line.as_str());
