@@ -913,8 +913,9 @@ pub fn optimize_when<'a>(
     for (index, branch) in indexed_branches.into_iter() {
         let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
 
-        if let Some(jump) = opt_jump {
-            jumps.push(jump);
+        if let Some((index, body)) = opt_jump {
+            let id = JoinPointId(env.unique_symbol());
+            jumps.push((index, id, body));
         }
 
         choices.insert(branch_index, choice);
@@ -1336,7 +1337,7 @@ fn decide_to_branching<'a>(
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
     decider: Decider<'a, Choice<'a>>,
-    jumps: &Vec<(u64, Stmt<'a>)>,
+    jumps: &Vec<(u64, JoinPointId, Stmt<'a>)>,
 ) -> Stmt<'a> {
     use Choice::*;
     use Decider::*;
@@ -1345,9 +1346,9 @@ fn decide_to_branching<'a>(
 
     match decider {
         Leaf(Jump(label)) => {
-            let (_, expr) = jumps
+            let (_, _, expr) = jumps
                 .iter()
-                .find(|(l, _)| l == &label)
+                .find(|(l, _, _)| l == &label)
                 .expect("jump not in list of jumps");
             expr.clone()
         }
