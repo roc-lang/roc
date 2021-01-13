@@ -1803,4 +1803,49 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn case_or_pattern() {
+        // the `0` branch body should only be generated once in the future
+        // it is currently duplicated
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Red, Green, Blue ]
+                x = Red
+
+                when x is
+                    Red | Green -> 0
+                    Blue -> 1
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn case_jump() {
+        // the decision tree will generate a jump to the `1` branch here
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                x : ConsList I64
+                x = Nil
+
+                main =
+                    when Pair x x is
+                        Pair Nil _ -> 1
+                        Pair _ Nil -> 2
+                        Pair (Cons a _) (Cons b _) -> a + b + 3
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 }
