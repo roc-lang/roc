@@ -23,7 +23,7 @@ impl TextBuffer {
     pub fn insert_char(&mut self, caret_pos: Position, new_char: &char)  -> EdResult<()> {
         let char_indx = self.pos_to_char_indx(caret_pos);
 
-        ensure!(char_indx > self.text_rope.len_chars(), OutOfBounds{
+        ensure!(char_indx <= self.text_rope.len_chars(), OutOfBounds{
             index: char_indx,
             collection_name: "Rope",
             len: self.text_rope.len_chars()
@@ -35,16 +35,17 @@ impl TextBuffer {
     }
 
     pub fn pop_char(&mut self, caret_pos: Position) {
-        let char_indx = self.pos_to_char_indx(caret_pos) - 1;
-        if char_indx < self.text_rope.len_chars() {
-            self.text_rope.remove(char_indx..char_indx);
+        let char_indx = self.pos_to_char_indx(caret_pos);
+
+        if (char_indx > 0) && char_indx <= self.text_rope.len_chars() {
+            self.text_rope.remove((char_indx - 1)..char_indx);
         }
     }
     
     pub fn del_selection(&mut self, raw_sel: RawSelection) -> EdResult<()> {
         let (start_char_indx, end_char_indx) = self.sel_to_tup(raw_sel)?;
 
-        ensure!(end_char_indx < self.text_rope.len_chars(), OutOfBounds{
+        ensure!(end_char_indx <= self.text_rope.len_chars(), OutOfBounds{
             index: end_char_indx,
             collection_name: "Rope",
             len: self.text_rope.len_chars()
@@ -102,7 +103,7 @@ impl TextBuffer {
     fn sel_to_tup(&self, raw_sel: RawSelection) -> EdResult<(usize, usize)> {
         let valid_sel = validate_selection(raw_sel)?;
         let start_char_indx = self.pos_to_char_indx(valid_sel.selection.start_pos);
-        let end_char_indx = self.pos_to_char_indx(valid_sel.selection.start_pos);
+        let end_char_indx = self.pos_to_char_indx(valid_sel.selection.end_pos);
 
         Ok((start_char_indx, end_char_indx))
     }

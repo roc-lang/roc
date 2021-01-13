@@ -123,7 +123,7 @@ pub fn create_selection_rects<'a>(
 }
 
 #[cfg(test)]
-mod test_parse {
+pub mod test_selection {
     use crate::error::{EdResult, OutOfBounds};
     use crate::mvc::ed_model::{Position, RawSelection};
     use crate::mvc::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun};
@@ -141,7 +141,7 @@ mod test_parse {
     pub struct LineParser;
 
     // show selection and caret position as symbols in lines for easy testing
-    fn convert_selection_to_dsl(
+    pub fn convert_selection_to_dsl(
         raw_sel_opt: Option<RawSelection>,
         caret_pos: Position,
         lines: &mut [String],
@@ -217,6 +217,16 @@ mod test_parse {
         }
     }
 
+    pub fn text_buffer_from_dsl_str(lines: &[String]) -> TextBuffer {
+        text_buffer_from_str(
+            &lines
+                .iter()
+                .map(|line| line.replace(&['[', ']', '|'][..], ""))
+                .collect::<Vec<String>>()
+                .join("")
+        )
+    }
+
     pub fn all_lines_vec(text_buf: &TextBuffer) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
 
@@ -235,7 +245,7 @@ mod test_parse {
     }
 
     // Retrieve selection and position from formatted string
-    fn convert_dsl_to_selection(
+    pub fn convert_dsl_to_selection(
         lines: &[String],
     ) -> Result<(Option<RawSelection>, Position), String> {
         let lines_str: String = lines.join("");
@@ -349,13 +359,7 @@ mod test_parse {
         let (sel_opt, caret_pos) = convert_dsl_to_selection(&pre_lines)?;
 
         let clean_text_buf = 
-            text_buffer_from_str(
-                &pre_lines
-                    .into_iter()
-                    .map(|line| line.replace(&['[', ']', '|'][..], ""))
-                    .collect::<Vec<String>>()
-                    .join("")
-            );
+            text_buffer_from_dsl_str(&pre_lines);
 
         let (new_caret_pos, new_sel_opt) =
             move_fun(caret_pos, sel_opt, shift_pressed, &clean_text_buf);

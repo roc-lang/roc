@@ -79,7 +79,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(1000.0, 800.0))
+        .with_inner_size(PhysicalSize::new(1200.0, 1000.0))
         .build(&event_loop)
         .unwrap();
 
@@ -384,11 +384,11 @@ fn queue_all_text(
     };
 
     let caret_pos_label = Text {
-        position: (30.0, (size.height as f32) - 45.0).into(),
+        position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
         area_bounds,
         color: TXT_COLOR.into(),
         text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
-        size: 30.0,
+        size: 25.0,
         ..Default::default()
     };
 
