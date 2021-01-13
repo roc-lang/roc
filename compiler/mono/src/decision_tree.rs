@@ -923,7 +923,7 @@ pub fn optimize_when<'a>(
 
     let choice_decider = insert_choices(&choices, decider);
 
-    decide_to_branching(
+    let mut stmt = decide_to_branching(
         env,
         procs,
         layout_cache,
@@ -932,7 +932,18 @@ pub fn optimize_when<'a>(
         ret_layout,
         choice_decider,
         &jumps,
-    )
+    );
+
+    for (_, id, body) in jumps.into_iter() {
+        stmt = Stmt::Join {
+            id,
+            parameters: &[],
+            continuation: env.arena.alloc(body),
+            remainder: env.arena.alloc(stmt),
+        };
+    }
+
+    stmt
 }
 
 #[derive(Debug)]
@@ -1346,11 +1357,11 @@ fn decide_to_branching<'a>(
 
     match decider {
         Leaf(Jump(label)) => {
-            let (_, _, expr) = jumps
-                .iter()
-                .find(|(l, _, _)| l == &label)
+            let index = jumps
+                .binary_search_by_key(&label, |ref r| r.0)
                 .expect("jump not in list of jumps");
-            expr.clone()
+
+            Stmt::Jump(jumps[index].1, &[])
         }
         Leaf(Inline(expr)) => expr,
         Chain {
