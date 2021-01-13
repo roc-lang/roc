@@ -310,6 +310,22 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
+    fn sub_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GPReg,
+        src1: X86_64GPReg,
+        src2: X86_64GPReg,
+    ) {
+        if dst == src1 {
+            sub_reg64_reg64(buf, dst, src2);
+        } else if dst == src2 {
+            sub_reg64_reg64(buf, dst, src1);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            sub_reg64_reg64(buf, dst, src2);
+        }
+    }
+    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
@@ -377,6 +393,16 @@ fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, 0x01, 0xC0 + dst_mod + src_mod]);
+}
+
+/// `SUB r/m64,r64` -> Sub r64 to r/m64.
+#[inline(always)]
+fn sub_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
+    let dst_mod = dst as u8 % 8;
+    let src_mod = (src as u8 % 8) << 3;
+    buf.extend(&[rex, 0x29, 0xC0 + dst_mod + src_mod]);
 }
 
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
