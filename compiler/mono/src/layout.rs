@@ -158,7 +158,13 @@ impl<'a> ClosureLayout<'a> {
 
                         Ok(Some(closure_layout))
                     }
-                    Wrapped(tags) => {
+                    Wrapped {
+                        sorted_tag_layouts: tags,
+                        is_recursive,
+                    } => {
+                        // TODO handle recursive closures
+                        debug_assert!(!is_recursive);
+
                         let closure_layout =
                             ClosureLayout::from_tag_union(arena, tags.into_bump_slice());
 
@@ -1095,10 +1101,16 @@ pub enum UnionVariant<'a> {
     Never,
     Unit,
     UnitWithArguments,
-    BoolUnion { ttrue: TagName, ffalse: TagName },
+    BoolUnion {
+        ttrue: TagName,
+        ffalse: TagName,
+    },
     ByteUnion(Vec<'a, TagName>),
     Unwrapped(Vec<'a, Layout<'a>>),
-    Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
+    Wrapped {
+        sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
+        is_recursive: bool,
+    },
 }
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
@@ -1277,7 +1289,10 @@ pub fn union_sorted_tags_help<'a>(
 
                     UnionVariant::ByteUnion(tag_names)
                 }
-                _ => UnionVariant::Wrapped(answer),
+                _ => UnionVariant::Wrapped {
+                    sorted_tag_layouts: answer,
+                    is_recursive: opt_rec_var.is_some(),
+                },
             }
         }
     }
@@ -1316,13 +1331,21 @@ pub fn layout_from_tag_union<'a>(
                         Layout::Struct(field_layouts.into_bump_slice())
                     }
                 }
-                Wrapped(tags) => {
+                Wrapped {
+                    sorted_tag_layouts: tags,
+                    is_recursive,
+                } => {
                     let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
                     for (_, tag_layout) in tags {
                         tag_layouts.push(tag_layout);
                     }
-                    Layout::Union(tag_layouts.into_bump_slice())
+
+                    if is_recursive {
+                        Layout::RecursiveUnion(tag_layouts.into_bump_slice())
+                    } else {
+                        Layout::Union(tag_layouts.into_bump_slice())
+                    }
                 }
             }
         }

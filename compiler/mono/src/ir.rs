@@ -2731,7 +2731,10 @@ pub fn with_hole<'a>(
                     let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
                     assign_to_symbols(env, procs, layout_cache, iter, stmt)
                 }
-                Wrapped(sorted_tag_layouts) => {
+                Wrapped {
+                    sorted_tag_layouts,
+                    is_recursive,
+                } => {
                     let union_size = sorted_tag_layouts.len() as u8;
                     let (tag_id, (_, _)) = sorted_tag_layouts
                         .iter()
@@ -2786,7 +2789,12 @@ pub fn with_hole<'a>(
                     }
 
                     let field_symbols = field_symbols.into_bump_slice();
-                    let layout = Layout::Union(layouts.into_bump_slice());
+                    let layout = if is_recursive {
+                        Layout::RecursiveUnion(layouts.into_bump_slice())
+                    } else {
+                        Layout::Union(layouts.into_bump_slice())
+                    };
+
                     let tag = Expr::Tag {
                         tag_layout: layout.clone(),
                         tag_name,
@@ -4794,6 +4802,12 @@ fn store_pattern<'a>(
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
                 let index = if write_tag { index + 1 } else { index };
 
+                let mut arg_layout = arg_layout;
+
+                if let Layout::RecursivePointer = arg_layout {
+                    arg_layout = layout;
+                }
+
                 let load = Expr::AccessAtIndex {
                     wrapped,
                     index: index as u64,
@@ -5857,7 +5871,10 @@ fn from_can_pattern_help<'a>(
                         layout,
                     }
                 }
-                Wrapped(tags) => {
+                Wrapped {
+                    sorted_tag_layouts: tags,
+                    is_recursive,
+                } => {
                     let mut ctors = std::vec::Vec::with_capacity(tags.len());
                     for (i, (tag_name, args)) in tags.iter().enumerate() {
                         ctors.push(Ctor {
@@ -5912,7 +5929,11 @@ fn from_can_pattern_help<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    let layout = Layout::Union(layouts.into_bump_slice());
+                    let layout = if is_recursive {
+                        Layout::RecursiveUnion(layouts.into_bump_slice())
+                    } else {
+                        Layout::Union(layouts.into_bump_slice())
+                    };
 
                     Pattern::AppliedTag {
                         tag_name: tag_name.clone(),

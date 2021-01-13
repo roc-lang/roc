@@ -816,6 +816,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
     use roc_mono::ir::Expr::*;
 
     match expr {
@@ -968,15 +969,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     field_types.push(field_type);
 
                     if let Layout::RecursivePointer = tag_field_layout {
-                        let ptr = allocate_with_refcount(env, &tag_layout, val);
-
-                        let ptr = cast_basic_basic(
-                            builder,
-                            ptr.into(),
-                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        panic!(
+                            r"non-recursive tag unions cannot directly contain a recursive pointer"
                         );
-
-                        field_vals.push(ptr);
                     } else {
                         // this check fails for recursive tag unions, but can be helpful while debugging
                         debug_assert_eq!(tag_field_layout, val_layout);
@@ -1035,7 +1030,88 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 internal_type,
             )
         }
-        Tag { .. } => unreachable!("tags should have a union layout"),
+        Tag {
+            arguments,
+            tag_layout: Layout::RecursiveUnion(fields),
+            union_size,
+            tag_id,
+            tag_name,
+            ..
+        } => {
+            let tag_layout = Layout::Union(fields);
+
+            debug_assert!(*union_size > 1);
+            let ptr_size = env.ptr_bytes;
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
+                // closures ignore (and do not store) the discriminant
+                &fields[*tag_id as usize][1..]
+            } else {
+                &fields[*tag_id as usize]
+            };
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, val_layout) = load_symbol_and_layout(env, scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = cast_basic_basic(
+                            builder,
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr = reserve_with_refcount(env, &tag_layout);
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = cast_basic_basic(
+                builder,
+                data_ptr.into(),
+                struct_type.ptr_type(AddressSpace::Generic).into(),
+            )
+            .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+
+        Tag { .. } => unreachable!("tags should have a Union or RecursiveUnion layout"),
 
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
@@ -1100,6 +1176,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             field_layouts,
             ..
         } => {
+            use BasicValueEnum::*;
+
             let builder = env.builder;
 
             // Determine types, assumes the descriminant is in the field layouts
@@ -1119,28 +1197,61 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 .struct_type(field_types.into_bump_slice(), false);
 
             // cast the argument bytes into the desired shape for this tag
-            let argument = load_symbol(env, scope, structure).into_struct_value();
+            let argument = load_symbol(env, scope, structure);
 
-            let struct_value = cast_struct_struct(builder, argument, struct_type);
+            let struct_layout = Layout::Struct(field_layouts);
+            match argument {
+                StructValue(value) => {
+                    let struct_value = cast_struct_struct(builder, value, struct_type);
 
-            let result = builder
-                .build_extract_value(struct_value, *index as u32, "")
-                .expect("desired field did not decode");
+                    let result = builder
+                        .build_extract_value(struct_value, *index as u32, "")
+                        .expect("desired field did not decode");
 
-            if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
-                let struct_layout = Layout::Struct(field_layouts);
-                let desired_type = block_of_memory(env.context, &struct_layout, env.ptr_bytes);
+                    if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
+                        let desired_type =
+                            block_of_memory(env.context, &struct_layout, env.ptr_bytes);
 
-                // the value is a pointer to the actual value; load that value!
-                use inkwell::types::BasicType;
-                let ptr = cast_basic_basic(
-                    builder,
-                    result,
-                    desired_type.ptr_type(AddressSpace::Generic).into(),
-                );
-                builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
-            } else {
-                result
+                        // the value is a pointer to the actual value; load that value!
+                        let ptr = cast_basic_basic(
+                            builder,
+                            result,
+                            desired_type.ptr_type(AddressSpace::Generic).into(),
+                        );
+                        builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
+                    } else {
+                        result
+                    }
+                }
+                PointerValue(value) => {
+                    let ptr = cast_basic_basic(
+                        builder,
+                        value.into(),
+                        struct_type.ptr_type(AddressSpace::Generic).into(),
+                    )
+                    .into_pointer_value();
+
+                    let elem_ptr = builder
+                        .build_struct_gep(ptr, *index as u32, "at_index_struct_gep")
+                        .unwrap();
+
+                    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+
+                    if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
+                        // a recursive field is stored as a `i64*`, to use it we must cast it to
+                        // a pointer to the block of memory representation
+                        cast_basic_basic(
+                            builder,
+                            result,
+                            block_of_memory(env.context, &struct_layout, env.ptr_bytes)
+                                .ptr_type(AddressSpace::Generic)
+                                .into(),
+                        )
+                    } else {
+                        result
+                    }
+                }
+                _ => panic!("cannot look up index in {:?}", argument),
             }
         }
         EmptyArray => empty_polymorphic_list(env),
@@ -1186,12 +1297,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     }
 }
 
-pub fn allocate_with_refcount<'a, 'ctx, 'env>(
+pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
-    value: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
-    let builder = env.builder;
     let ctx = env.context;
 
     let len_type = env.ptr_int();
@@ -1201,10 +1310,18 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
     let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
 
-    let data_ptr = allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1);
+    allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1)
+}
+
+pub fn allocate_with_refcount<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    value: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let data_ptr = reserve_with_refcount(env, layout);
 
     // store the value in the pointer
-    builder.build_store(data_ptr, value);
+    env.builder.build_store(data_ptr, value);
 
     data_ptr
 }
@@ -1462,6 +1579,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let mut stack = Vec::with_capacity_in(queue.len(), env.arena);
 
             for (symbol, expr, layout) in queue {
+                debug_assert!(layout != &Layout::RecursivePointer);
                 let context = &env.context;
 
                 let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);

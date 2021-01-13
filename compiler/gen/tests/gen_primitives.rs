@@ -564,7 +564,7 @@ mod gen_primitives {
                         Cons _ rest -> 1 + len rest
 
                 main =
-                    nil : LinkedList (Int *)
+                    nil : LinkedList {}
                     nil = Nil
 
                     len nil
@@ -1123,6 +1123,40 @@ mod gen_primitives {
     }
 
     #[test]
+    fn linked_list_is_singleton() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                empty : ConsList a
+                empty = Nil
+
+                isSingleton : ConsList a -> Bool
+                isSingleton = \list ->
+                    when list is
+                        Cons _ Nil ->
+                            True
+
+                        _ ->
+                            False
+
+                main : Bool
+                main =
+                    myList : ConsList I64 
+                    myList = empty
+
+                    isSingleton myList
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
     fn linked_list_is_empty_1() {
         assert_non_opt_evals_to!(
             indoc!(
@@ -1176,7 +1210,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList (Int *)
+                    myList : ConsList I64 
                     myList = Cons 0x1 Nil
 
                     isEmpty myList
@@ -1184,6 +1218,26 @@ mod gen_primitives {
             ),
             false,
             bool
+        );
+    }
+
+    #[test]
+    fn linked_list_singleton() {
+        // verifies only that valid llvm is produced
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                main : ConsList I64 
+                main = Cons 0x1 Nil
+                "#
+            ),
+            0,
+            i64,
+            |_| 0
         );
     }
 
@@ -1354,7 +1408,8 @@ mod gen_primitives {
                 "#
             ),
             1,
-            i64
+            &i64,
+            |x: &i64| *x
         );
     }
 
@@ -1451,7 +1506,8 @@ mod gen_primitives {
                 "#
             ),
             1,
-            i64
+            &i64,
+            |x: &i64| *x
         );
     }
 

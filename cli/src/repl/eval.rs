@@ -164,7 +164,10 @@ fn jit_to_ast_help<'a>(
 
                 let size = layout.stack_size(env.ptr_bytes);
                 match union_variant {
-                    UnionVariant::Wrapped(tags_and_layouts) => {
+                    UnionVariant::Wrapped {
+                        sorted_tag_layouts: tags_and_layouts,
+                        ..
+                    } => {
                         Ok(run_jit_function_dynamic_type!(
                             lib,
                             main_fn_name,
