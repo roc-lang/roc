@@ -578,9 +578,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         Eq | NotEq | And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap
         | NumSubChecked | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte
-        | NumCompare | NumDivUnchecked | NumRemUnchecked | NumPow | NumPowInt | NumBitwiseAnd => {
-            arena.alloc_slice_copy(&[irrelevant, irrelevant])
-        }
+        | NumCompare | NumDivUnchecked | NumRemUnchecked | NumPow | NumPowInt | NumBitwiseAnd
+        | NumBitwiseXor => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
 
         NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumCeiling | NumFloor
         | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin => {

@@ -117,7 +117,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ASIN => num_asin,
         NUM_MAX_INT => num_max_int,
         NUM_MIN_INT => num_min_int,
-        NUM_BITWISE_AND => num_bitwise_and
+        NUM_BITWISE_AND => num_bitwise_and,
+        NUM_BITWISE_XOR => num_bitwise_xor
     }
 }
 
@@ -1151,6 +1152,11 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.bitwiseAnd : Int, Int -> Int
 fn num_bitwise_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseAnd)
+}
+
+/// Num.bitwiseXor : Int, Int -> Int
+fn num_bitwise_xor(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumBitwiseXor)
 }
 
 /// List.isEmpty : List * -> Bool
