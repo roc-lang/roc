@@ -308,6 +308,16 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn sub_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GPReg,
+        _src1: AArch64GPReg,
+        _src2: AArch64GPReg,
+    ) {
+        unimplemented!("registers subtractions not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret_reg64(buf, AArch64GPReg::LR)
     }

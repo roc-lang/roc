@@ -24,7 +24,7 @@ pub struct Env<'a> {
 }
 
 // INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
-const INLINED_SYMBOLS: [Symbol; 2] = [Symbol::NUM_ABS, Symbol::NUM_ADD];
+const INLINED_SYMBOLS: [Symbol; 3] = [Symbol::NUM_ABS, Symbol::NUM_ADD, Symbol::NUM_SUB];
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
@@ -130,6 +130,10 @@ where
                                 // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumAdd, arguments, layout)
                             }
+                            Symbol::NUM_SUB => {
+                                // Instead of calling the function, just inline it.
+                                self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
+                            }
                             x => Err(format!("the function, {:?}, is not yet implemented", x)),
                         }
                     }
@@ -172,6 +176,15 @@ where
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
+            LowLevel::NumSub => {
+                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
+                match layout {
+                    Layout::Builtin(Builtin::Int64) => {
+                        self.build_num_sub_i64(sym, &args[0], &args[1])
+                    }
+                    x => Err(format!("layout, {:?}, not implemented yet", x)),
+                }
+            }
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
@@ -180,9 +193,18 @@ where
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
 
-    /// build_num_add_i64 stores the absolute value of src into dst.
+    /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_add_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String>;
+
+    /// build_num_sub_i64 stores the `src1 - src2` difference into dst.
+    /// It only deals with inputs and outputs of i64 type.
+    fn build_num_sub_i64(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
