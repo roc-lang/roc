@@ -82,7 +82,7 @@ mod test_load {
                 roc_load::file::load_and_typecheck(
                     arena,
                     full_file_path,
-                    stdlib,
+                    &stdlib,
                     dir.path(),
                     exposed_types,
                     8,
@@ -124,7 +124,7 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            roc_builtins::std::standard_stdlib(),
+            &roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
             8,
@@ -287,7 +287,7 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            roc_builtins::std::standard_stdlib(),
+            &roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
             8,

@@ -19,7 +19,7 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: roc_builtins::std::StdLib,
+    stdlib: &'a roc_builtins::std::StdLib,
     leak: bool,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
@@ -295,40 +295,6 @@ pub fn helper<'a>(
     (main_fn_name, delayed_errors.join("\n"), lib)
 }
 
-// TODO this is almost all code duplication with assert_llvm_evals_to
-// the only difference is that this calls uniq_expr instead of can_expr.
-// Should extract the common logic into test helpers.
-#[macro_export]
-macro_rules! assert_opt_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
-        use bumpalo::Bump;
-        use inkwell::context::Context;
-        use roc_gen::run_jit_function;
-
-        let arena = Bump::new();
-
-        let context = Context::create();
-
-        // don't use uniqueness types any more
-        // let stdlib = roc_builtins::unique::uniq_stdlib();
-        let stdlib = roc_builtins::std::standard_stdlib();
-
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
-
-        let transform = |success| {
-            let expected = $expected;
-            let given = $transform(success);
-            assert_eq!(&given, &expected);
-        };
-        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        assert_opt_evals_to!($src, $expected, $ty, $transform, true)
-    };
-}
-
 #[macro_export]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
@@ -337,9 +303,10 @@ macro_rules! assert_llvm_evals_to {
         use roc_gen::run_jit_function;
 
         let arena = Bump::new();
-
         let context = Context::create();
-        let stdlib = roc_builtins::std::standard_stdlib();
+
+        // NOTE the stdlib must be in the arena; just taking a reference will segfault
+        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
         let (main_fn_name, errors, lib) =
             $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
@@ -377,7 +344,8 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
-            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
+            // NOTE at the moment, the optimized tests do the same thing
+            // assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
         }
     };
 }
