@@ -202,7 +202,7 @@ where
         src2: &Symbol,
     ) -> Result<(), String>;
 
-    /// build_num_sub_i64 stores the `src1 - src2` difference  into dst.
+    /// build_num_sub_i64 stores the `src1 - src2` difference into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_sub_i64(
         &mut self,
