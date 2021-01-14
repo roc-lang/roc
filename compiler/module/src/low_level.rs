@@ -64,4 +64,5 @@ pub enum LowLevel {
     And,
     Or,
     Not,
+    Hash,
 }
