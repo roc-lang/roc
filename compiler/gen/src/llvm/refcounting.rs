@@ -342,6 +342,31 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
             build_dec_union(env, layout_ids, tags, value);
         }
 
+        NullableUnion { foo: tags, .. } => {
+            debug_assert!(value.is_pointer_value());
+
+            let ptr = value.into_pointer_value();
+            let is_null = env.builder.build_is_null(ptr, "is_null");
+
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            env.builder.build_switch(
+                is_null,
+                cont_block,
+                &[(ctx.bool_type().const_int(1, false), then_block)],
+            );
+
+            {
+                env.builder.position_at_end(then_block);
+                build_dec_rec_union(env, layout_ids, tags, ptr);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            env.builder.position_at_end(cont_block);
+        }
+
         RecursiveUnion(tags) => {
             debug_assert!(value.is_pointer_value());
             build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value());
@@ -425,6 +450,31 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     match layout {
         Builtin(builtin) => {
             increment_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
+        }
+
+        NullableUnion { foo: tags, .. } => {
+            debug_assert!(value.is_pointer_value());
+
+            let ptr = value.into_pointer_value();
+            let is_null = env.builder.build_is_null(ptr, "is_null");
+
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            env.builder.build_switch(
+                is_null,
+                cont_block,
+                &[(ctx.bool_type().const_int(1, false), then_block)],
+            );
+
+            {
+                env.builder.position_at_end(then_block);
+                build_inc_rec_union(env, layout_ids, tags, ptr);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            env.builder.position_at_end(cont_block);
         }
 
         RecursiveUnion(tags) => {

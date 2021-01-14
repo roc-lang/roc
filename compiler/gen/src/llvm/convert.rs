@@ -140,6 +140,9 @@ pub fn basic_type_from_layout<'ctx>(
         RecursiveUnion(_) => block_of_memory(context, layout, ptr_bytes)
             .ptr_type(AddressSpace::Generic)
             .into(),
+        NullableUnion { .. } => block_of_memory(context, layout, ptr_bytes)
+            .ptr_type(AddressSpace::Generic)
+            .into(),
         Union(_) => block_of_memory(context, layout, ptr_bytes),
         RecursivePointer => {
             // TODO make this dynamic

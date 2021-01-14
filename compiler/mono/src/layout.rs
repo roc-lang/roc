@@ -30,6 +30,11 @@ pub enum Layout<'a> {
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     RecursiveUnion(&'a [&'a [Layout<'a>]]),
+    NullableUnion {
+        nullable_id: i64,
+        nullable_layout: Builtin<'a>,
+        foo: &'a [&'a [Layout<'a>]],
+    },
     RecursivePointer,
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
@@ -454,7 +459,11 @@ impl<'a> Layout<'a> {
                 .iter()
                 .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
             RecursiveUnion(_) => {
-                // a recursive union will always contain a pointer, and are thus not safe to memcpy
+                // a recursive union will always contain a pointer, and is thus not safe to memcpy
+                false
+            }
+            NullableUnion { .. } => {
+                // a nullable union will always contain a pointer, and is thus not safe to memcpy
                 false
             }
             FunctionPointer(_, _) => {
@@ -520,6 +529,16 @@ impl<'a> Layout<'a> {
                 })
                 .max()
                 .unwrap_or_default(),
+            NullableUnion { foo: fields, .. } => fields
+                .iter()
+                .map(|tag_layout| {
+                    tag_layout
+                        .iter()
+                        .map(|field| field.stack_size(pointer_size))
+                        .sum()
+                })
+                .max()
+                .unwrap_or_default(),
             Closure(_, closure_layout, _) => pointer_size + closure_layout.stack_size(pointer_size),
             FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
@@ -534,13 +553,20 @@ impl<'a> Layout<'a> {
                 .map(|x| x.alignment_bytes(pointer_size))
                 .max()
                 .unwrap_or(0),
-            Layout::Union(tags) | Layout::RecursiveUnion(tags) => tags
+            Layout::Union(tags) => tags
                 .iter()
                 .map(|x| x.iter())
                 .flatten()
                 .map(|x| x.alignment_bytes(pointer_size))
                 .max()
                 .unwrap_or(0),
+            Layout::RecursiveUnion(tags) | Layout::NullableUnion { foo: tags, .. } => tags
+                .iter()
+                .map(|x| x.iter())
+                .flatten()
+                .map(|x| x.alignment_bytes(pointer_size))
+                .max()
+                .unwrap_or(pointer_size),
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::PhantomEmptyStruct => 0,
             Layout::RecursivePointer => pointer_size,
@@ -572,6 +598,7 @@ impl<'a> Layout<'a> {
                 .flatten()
                 .any(|f| f.contains_refcounted()),
             RecursiveUnion(_) => true,
+            NullableUnion { .. } => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
             FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
         }

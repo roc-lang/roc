@@ -211,7 +211,7 @@ fn jit_to_ast_help<'a>(
             }
             other => unreachable!("Weird content for Union layout: {:?}", other),
         },
-        Layout::RecursiveUnion(_) | Layout::RecursivePointer => {
+        Layout::RecursiveUnion(_) | Layout::NullableUnion { .. } | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
 
