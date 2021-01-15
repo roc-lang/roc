@@ -2652,7 +2652,7 @@ pub fn with_hole<'a>(
         Tag {
             variant_var,
             name: tag_name,
-            arguments: mut args,
+            arguments: args,
             ..
         } => {
             use crate::layout::UnionVariant::*;
@@ -2689,27 +2689,7 @@ pub fn with_hole<'a>(
                 }
 
                 Unwrapped(field_layouts) => {
-                    let mut field_symbols_temp =
-                        Vec::with_capacity_in(field_layouts.len(), env.arena);
-
-                    for (var, arg) in args.drain(..) {
-                        // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
-                        let layout = layout_cache
-                            .from_var(env.arena, var, env.subs)
-                            .unwrap_or_else(|err| {
-                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                            });
-
-                        let alignment = layout.alignment_bytes(8);
-
-                        let symbol = possible_reuse_symbol(env, procs, &arg.value);
-                        field_symbols_temp.push((
-                            alignment,
-                            symbol,
-                            ((var, arg), &*env.arena.alloc(symbol)),
-                        ));
-                    }
-                    field_symbols_temp.sort_by(|a, b| b.0.cmp(&a.0));
+                    let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
                     let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
 
@@ -2743,38 +2723,9 @@ pub fn with_hole<'a>(
                         .find(|(_, (key, _))| key == &tag_name)
                         .expect("tag must be in its own type");
 
-                    let mut field_symbols_temp = Vec::with_capacity_in(args.len(), env.arena);
-
-                    for (var, mut arg) in args.drain(..) {
-                        // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
-                        let layout = match layout_cache.from_var(env.arena, var, env.subs) {
-                            Ok(cached) => cached,
-                            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                                // this argument has type `forall a. a`, which is isomorphic to
-                                // the empty type (Void, Never, the empty tag union `[]`)
-                                use roc_can::expr::Expr;
-                                use roc_problem::can::RuntimeError;
-                                arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
-                                Layout::Struct(&[])
-                            }
-                            Err(LayoutProblem::Erroneous) => {
-                                // something went very wrong
-                                panic!("TODO turn fn_var into a RuntimeError")
-                            }
-                        };
-
-                        let alignment = layout.alignment_bytes(8);
-
-                        let symbol = possible_reuse_symbol(env, procs, &arg.value);
-                        field_symbols_temp.push((
-                            alignment,
-                            symbol,
-                            ((var, arg), &*env.arena.alloc(symbol)),
-                        ));
-                    }
-                    field_symbols_temp.sort_by(|a, b| b.0.cmp(&a.0));
-
                     let mut field_symbols: Vec<Symbol> = Vec::with_capacity_in(args.len(), arena);
+                    let mut field_symbols_temp =
+                        sorted_field_symbols(env, procs, layout_cache, args);
                     let tag_id_symbol = env.unique_symbol();
                     field_symbols.push(tag_id_symbol);
 
@@ -3799,6 +3750,48 @@ pub fn with_hole<'a>(
             Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
         }
     }
+}
+
+fn sorted_field_symbols<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    mut args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+) -> Vec<
+    'a,
+    (
+        u32,
+        Symbol,
+        ((Variable, Located<roc_can::expr::Expr>), &'a Symbol),
+    ),
+> {
+    let mut field_symbols_temp = Vec::with_capacity_in(args.len(), env.arena);
+
+    for (var, mut arg) in args.drain(..) {
+        // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
+        let layout = match layout_cache.from_var(env.arena, var, env.subs) {
+            Ok(cached) => cached,
+            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                // this argument has type `forall a. a`, which is isomorphic to
+                // the empty type (Void, Never, the empty tag union `[]`)
+                use roc_can::expr::Expr;
+                arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
+                Layout::Struct(&[])
+            }
+            Err(LayoutProblem::Erroneous) => {
+                // something went very wrong
+                panic!("TODO turn fn_var into a RuntimeError")
+            }
+        };
+
+        let alignment = layout.alignment_bytes(8);
+
+        let symbol = possible_reuse_symbol(env, procs, &arg.value);
+        field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));
+    }
+    field_symbols_temp.sort_by(|a, b| b.0.cmp(&a.0));
+
+    field_symbols_temp
 }
 
 pub fn from_can<'a>(
