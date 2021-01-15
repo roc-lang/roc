@@ -1080,7 +1080,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             };
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, val_layout) = load_symbol_and_layout(env, scope, field_symbol);
+                let val = load_symbol(env, scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!

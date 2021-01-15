@@ -1303,8 +1303,9 @@ pub fn union_sorted_tags_help<'a>(
                 }
             }
 
-            for (index, (tag_name, arguments)) in tags_vec.into_iter().enumerate() {
+            for (tag_name, arguments) in tags_vec.into_iter() {
                 // reserve space for the tag discriminant
+
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
                 // add the tag discriminant (size currently always hardcoded to i64)
