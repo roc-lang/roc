@@ -59,7 +59,7 @@ mod solve_expr {
             let result = roc_load::file::load_and_typecheck(
                 arena,
                 full_file_path,
-                stdlib,
+                &stdlib,
                 dir.path(),
                 exposed_types,
                 8,

@@ -52,7 +52,7 @@ pub fn roc_fx_getLine() -> RocStr {
     let stdin = io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
-    RocStr::from_slice_with_capacity(line1.as_bytes(), line1.len())
+    RocStr::from_slice(line1.as_bytes())
 }
 
 unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const u8) -> i64 {

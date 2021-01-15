@@ -291,6 +291,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // bitwiseXor : Int a, Int a -> Int a
+    add_type(
+        Symbol::NUM_BITWISE_XOR,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
+    );
+
     // rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_type(
         Symbol::NUM_REM,

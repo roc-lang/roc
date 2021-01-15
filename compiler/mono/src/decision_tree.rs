@@ -902,7 +902,10 @@ pub fn optimize_when<'a>(
 
     let decision_tree = compile(patterns);
     let decider = tree_to_decider(decision_tree);
-    let target_counts = count_targets(&decider);
+
+    // for each target (branch body), count in how many ways it can be reached
+    let mut target_counts = bumpalo::vec![in env.arena; 0; indexed_branches.len()];
+    count_targets(&mut target_counts, &decider);
 
     let mut choices = MutMap::default();
     let mut jumps = Vec::new();
@@ -910,8 +913,9 @@ pub fn optimize_when<'a>(
     for (index, branch) in indexed_branches.into_iter() {
         let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
 
-        if let Some(jump) = opt_jump {
-            jumps.push(jump);
+        if let Some((index, body)) = opt_jump {
+            let id = JoinPointId(env.unique_symbol());
+            jumps.push((index, id, body));
         }
 
         choices.insert(branch_index, choice);
@@ -919,7 +923,7 @@ pub fn optimize_when<'a>(
 
     let choice_decider = insert_choices(&choices, decider);
 
-    decide_to_branching(
+    let mut stmt = decide_to_branching(
         env,
         procs,
         layout_cache,
@@ -928,7 +932,18 @@ pub fn optimize_when<'a>(
         ret_layout,
         choice_decider,
         &jumps,
-    )
+    );
+
+    for (_, id, body) in jumps.into_iter() {
+        stmt = Stmt::Join {
+            id,
+            parameters: &[],
+            continuation: env.arena.alloc(body),
+            remainder: env.arena.alloc(stmt),
+        };
+    }
+
+    stmt
 }
 
 #[derive(Debug)]
@@ -1333,7 +1348,7 @@ fn decide_to_branching<'a>(
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
     decider: Decider<'a, Choice<'a>>,
-    jumps: &Vec<(u64, Stmt<'a>)>,
+    jumps: &Vec<(u64, JoinPointId, Stmt<'a>)>,
 ) -> Stmt<'a> {
     use Choice::*;
     use Decider::*;
@@ -1342,12 +1357,11 @@ fn decide_to_branching<'a>(
 
     match decider {
         Leaf(Jump(label)) => {
-            // we currently inline the jumps: does fewer jumps but produces a larger artifact
-            let (_, expr) = jumps
-                .iter()
-                .find(|(l, _)| l == &label)
+            let index = jumps
+                .binary_search_by_key(&label, |ref r| r.0)
                 .expect("jump not in list of jumps");
-            expr.clone()
+
+            Stmt::Jump(jumps[index].1, &[])
         }
         Leaf(Inline(expr)) => expr,
         Chain {
@@ -1624,39 +1638,32 @@ fn to_chain<'a>(
 /// If a target appears exactly once in a Decider, the corresponding expression
 /// can be inlined. Whether things are inlined or jumps is called a "choice".
 
-fn count_targets(decision_tree: &Decider<u64>) -> MutMap<u64, u64> {
-    let mut result = MutMap::default();
-    count_targets_help(decision_tree, &mut result);
-
-    result
-}
-
-fn count_targets_help(decision_tree: &Decider<u64>, targets: &mut MutMap<u64, u64>) {
+fn count_targets(targets: &mut bumpalo::collections::Vec<u64>, initial: &Decider<u64>) {
     use Decider::*;
-    match decision_tree {
-        Leaf(target) => match targets.get_mut(target) {
-            None => {
-                targets.insert(*target, 1);
+
+    let mut stack = vec![initial];
+
+    while let Some(decision_tree) = stack.pop() {
+        match decision_tree {
+            Leaf(target) => {
+                targets[*target as usize] += 1;
             }
-            Some(current) => {
-                *current += 1;
+
+            Chain {
+                success, failure, ..
+            } => {
+                stack.push(success);
+                stack.push(failure);
             }
-        },
 
-        Chain {
-            success, failure, ..
-        } => {
-            count_targets_help(success, targets);
-            count_targets_help(failure, targets);
-        }
+            FanOut {
+                tests, fallback, ..
+            } => {
+                stack.push(fallback);
 
-        FanOut {
-            tests, fallback, ..
-        } => {
-            count_targets_help(fallback, targets);
-
-            for (_, decider) in tests {
-                count_targets_help(decider, targets);
+                for (_, decider) in tests {
+                    stack.push(decider);
+                }
             }
         }
     }
@@ -1664,11 +1671,11 @@ fn count_targets_help(decision_tree: &Decider<u64>, targets: &mut MutMap<u64, u6
 
 #[allow(clippy::type_complexity)]
 fn create_choices<'a>(
-    target_counts: &MutMap<u64, u64>,
+    target_counts: &bumpalo::collections::Vec<'a, u64>,
     target: u64,
     branch: Stmt<'a>,
 ) -> ((u64, Choice<'a>), Option<(u64, Stmt<'a>)>) {
-    match target_counts.get(&target) {
+    match target_counts.get(target as usize) {
         None => unreachable!(
             "this should never happen: {:?} not in {:?}",
             target, target_counts
