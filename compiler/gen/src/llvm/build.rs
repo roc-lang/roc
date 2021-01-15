@@ -730,73 +730,9 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         }
 
         CallType::Foreign {
-            foreign_symbol,
+            foreign_symbol: foreign,
             ret_layout,
-        } => {
-            let mut arg_vals: Vec<BasicValueEnum> =
-                Vec::with_capacity_in(arguments.len(), env.arena);
-
-            let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
-
-            // crude approximation of the C calling convention
-            let pass_result_by_pointer = ret_layout.stack_size(env.ptr_bytes) > 2 * env.ptr_bytes;
-
-            if pass_result_by_pointer {
-                // the return value is too big to pass through a register, so the caller must
-                // allocate space for it on its stack, and provide a pointer to write the result into
-                let ret_type =
-                    basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
-
-                let ret_ptr_type = get_ptr_type(&ret_type, AddressSpace::Generic);
-
-                let ret_ptr = env.builder.build_alloca(ret_type, "return_value");
-
-                arg_vals.push(ret_ptr.into());
-                arg_types.push(ret_ptr_type.into());
-
-                for arg in arguments.iter() {
-                    let (value, layout) = load_symbol_and_layout(env, scope, arg);
-                    arg_vals.push(value);
-                    let arg_type =
-                        basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
-                    arg_types.push(arg_type);
-                }
-
-                let function_type = env.context.void_type().fn_type(&arg_types, false);
-                let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
-
-                let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
-
-                // this is a foreign function, use c calling convention
-                call.set_call_convention(C_CALL_CONV);
-
-                call.try_as_basic_value();
-
-                env.builder.build_load(ret_ptr, "read_result")
-            } else {
-                for arg in arguments.iter() {
-                    let (value, layout) = load_symbol_and_layout(env, scope, arg);
-                    arg_vals.push(value);
-                    let arg_type =
-                        basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
-                    arg_types.push(arg_type);
-                }
-
-                let ret_type =
-                    basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
-                let function_type = get_fn_type(&ret_type, &arg_types);
-                let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
-
-                let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
-
-                // this is a foreign function, use c calling convention
-                call.set_call_convention(C_CALL_CONV);
-
-                call.try_as_basic_value()
-                    .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-            }
-        }
+        } => build_foreign_symbol(env, scope, foreign, arguments, ret_layout),
     }
 }
 
@@ -1696,8 +1632,13 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     fail,
                 )
             }
-            _ => {
-                todo!()
+            CallType::Foreign {
+                ref foreign_symbol,
+                ref ret_layout,
+            } => build_foreign_symbol(env, scope, foreign_symbol, call.arguments, ret_layout),
+
+            CallType::LowLevel { .. } => {
+                unreachable!("lowlevel itself never throws exceptions")
             }
         },
 
@@ -3474,6 +3415,73 @@ fn run_low_level<'a, 'ctx, 'env>(
                 empty,
             )
         }
+    }
+}
+
+fn build_foreign_symbol<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    foreign: &roc_module::ident::ForeignSymbol,
+    arguments: &[Symbol],
+    ret_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
+
+    let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
+
+    // crude approximation of the C calling convention
+    let pass_result_by_pointer = ret_layout.stack_size(env.ptr_bytes) > 2 * env.ptr_bytes;
+
+    if pass_result_by_pointer {
+        // the return value is too big to pass through a register, so the caller must
+        // allocate space for it on its stack, and provide a pointer to write the result into
+        let ret_type = basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+
+        let ret_ptr_type = get_ptr_type(&ret_type, AddressSpace::Generic);
+
+        let ret_ptr = env.builder.build_alloca(ret_type, "return_value");
+
+        arg_vals.push(ret_ptr.into());
+        arg_types.push(ret_ptr_type.into());
+
+        for arg in arguments.iter() {
+            let (value, layout) = load_symbol_and_layout(env, scope, arg);
+            arg_vals.push(value);
+            let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+            arg_types.push(arg_type);
+        }
+
+        let function_type = env.context.void_type().fn_type(&arg_types, false);
+        let function = get_foreign_symbol(env, foreign.clone(), function_type);
+
+        let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+        // this is a foreign function, use c calling convention
+        call.set_call_convention(C_CALL_CONV);
+
+        call.try_as_basic_value();
+
+        env.builder.build_load(ret_ptr, "read_result")
+    } else {
+        for arg in arguments.iter() {
+            let (value, layout) = load_symbol_and_layout(env, scope, arg);
+            arg_vals.push(value);
+            let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+            arg_types.push(arg_type);
+        }
+
+        let ret_type = basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+        let function_type = get_fn_type(&ret_type, &arg_types);
+        let function = get_foreign_symbol(env, foreign.clone(), function_type);
+
+        let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+        // this is a foreign function, use c calling convention
+        call.set_call_convention(C_CALL_CONV);
+
+        call.try_as_basic_value()
+            .left()
+            .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
     }
 }
 
