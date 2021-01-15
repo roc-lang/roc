@@ -42,7 +42,7 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         &arena,
         filename,
         &module_src,
-        stdlib,
+        &stdlib,
         src_dir,
         exposed_types,
         ptr_bytes,

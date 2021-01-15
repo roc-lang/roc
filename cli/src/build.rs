@@ -42,7 +42,7 @@ pub fn build_file(
     let loaded = roc_load::file::load_and_monomorphize(
         &arena,
         roc_file_path.clone(),
-        stdlib,
+        &stdlib,
         src_dir.as_path(),
         subs_by_module,
         ptr_bytes,
