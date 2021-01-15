@@ -891,7 +891,6 @@ pub fn optimize_when<'a>(
     ret_layout: Layout<'a>,
     opt_branches: bumpalo::collections::Vec<'a, (Pattern<'a>, Guard<'a>, Stmt<'a>)>,
 ) -> Stmt<'a> {
-    dbg!(&opt_branches);
     let (patterns, _indexed_branches) = opt_branches
         .into_iter()
         .enumerate()

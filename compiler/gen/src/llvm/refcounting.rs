@@ -345,31 +345,12 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
         NullableUnion { foo: tags, .. } => {
             debug_assert!(value.is_pointer_value());
 
-            let ptr = value.into_pointer_value();
-            let is_null = env.builder.build_is_null(ptr, "is_null");
-
-            let ctx = env.context;
-            let then_block = ctx.append_basic_block(parent, "then");
-            let cont_block = ctx.append_basic_block(parent, "cont");
-
-            env.builder.build_switch(
-                is_null,
-                cont_block,
-                &[(ctx.bool_type().const_int(1, false), then_block)],
-            );
-
-            {
-                env.builder.position_at_end(then_block);
-                build_dec_rec_union(env, layout_ids, tags, ptr);
-                env.builder.build_unconditional_branch(cont_block);
-            }
-
-            env.builder.position_at_end(cont_block);
+            build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
         }
 
         RecursiveUnion(tags) => {
             debug_assert!(value.is_pointer_value());
-            build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value());
+            build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
         }
 
         FunctionPointer(_, _) | Pointer(_) => {}
@@ -455,31 +436,12 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
         NullableUnion { foo: tags, .. } => {
             debug_assert!(value.is_pointer_value());
 
-            let ptr = value.into_pointer_value();
-            let is_null = env.builder.build_is_null(ptr, "is_null");
-
-            let ctx = env.context;
-            let then_block = ctx.append_basic_block(parent, "then");
-            let cont_block = ctx.append_basic_block(parent, "cont");
-
-            env.builder.build_switch(
-                is_null,
-                cont_block,
-                &[(ctx.bool_type().const_int(1, false), then_block)],
-            );
-
-            {
-                env.builder.position_at_end(then_block);
-                build_inc_rec_union(env, layout_ids, tags, ptr);
-                env.builder.build_unconditional_branch(cont_block);
-            }
-
-            env.builder.position_at_end(cont_block);
+            build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
         }
 
         RecursiveUnion(tags) => {
             debug_assert!(value.is_pointer_value());
-            build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value());
+            build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
         }
         Closure(_, closure_layout, _) => {
             if closure_layout.contains_refcounted() {
@@ -1089,6 +1051,7 @@ pub fn build_dec_rec_union<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     fields: &'a [&'a [Layout<'a>]],
     value: PointerValue<'ctx>,
+    is_nullable: bool,
 ) {
     let layout = Layout::RecursiveUnion(fields);
 
@@ -1105,7 +1068,7 @@ pub fn build_dec_rec_union<'a, 'ctx, 'env>(
         None => {
             let function_value = build_header(env, &layout, &fn_name);
 
-            build_dec_rec_union_help(env, layout_ids, fields, function_value);
+            build_dec_rec_union_help(env, layout_ids, fields, function_value, is_nullable);
 
             function_value
         }
@@ -1127,6 +1090,7 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     tags: &[&[Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
+    is_nullable: bool,
 ) {
     debug_assert!(!tags.is_empty());
 
@@ -1167,10 +1131,30 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
     let parent = fn_val;
 
     let layout = Layout::RecursiveUnion(tags);
-    let before_block = env.builder.get_insert_block().expect("to be in a function");
 
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
+
+    let ctx = env.context;
+    let cont_block = ctx.append_basic_block(parent, "cont");
+    if is_nullable {
+        let is_null = env.builder.build_is_null(value_ptr, "is_null");
+
+        let then_block = ctx.append_basic_block(parent, "then");
+
+        env.builder.build_switch(
+            is_null,
+            cont_block,
+            &[(ctx.bool_type().const_int(1, false), then_block)],
+        );
+
+        {
+            env.builder.position_at_end(then_block);
+            env.builder.build_return(None);
+        }
+    } else {
+        env.builder.build_unconditional_branch(cont_block);
+    }
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
@@ -1261,7 +1245,7 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
 
     cases.reverse();
 
-    env.builder.position_at_end(before_block);
+    env.builder.position_at_end(cont_block);
 
     // read the tag_id
     let current_tag_id = rec_union_read_tag(env, value_ptr);
@@ -1449,6 +1433,7 @@ pub fn build_inc_rec_union<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     fields: &'a [&'a [Layout<'a>]],
     value: PointerValue<'ctx>,
+    is_nullable: bool,
 ) {
     let layout = Layout::RecursiveUnion(fields);
 
@@ -1465,7 +1450,7 @@ pub fn build_inc_rec_union<'a, 'ctx, 'env>(
         None => {
             let function_value = build_header(env, &layout, &fn_name);
 
-            build_inc_rec_union_help(env, layout_ids, fields, function_value);
+            build_inc_rec_union_help(env, layout_ids, fields, function_value, is_nullable);
 
             function_value
         }
@@ -1507,6 +1492,7 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     tags: &[&[Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
+    is_nullable: bool,
 ) {
     debug_assert!(!tags.is_empty());
 
@@ -1546,15 +1532,30 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
     let parent = fn_val;
 
     let layout = Layout::RecursiveUnion(tags);
-    let before_block = env.builder.get_insert_block().expect("to be in a function");
 
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
 
-    // read the tag_id
-    let tag_id = rec_union_read_tag(env, value_ptr);
+    let ctx = env.context;
+    let cont_block = ctx.append_basic_block(parent, "cont");
+    if is_nullable {
+        let is_null = env.builder.build_is_null(value_ptr, "is_null");
 
-    let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
+        let then_block = ctx.append_basic_block(parent, "then");
+
+        env.builder.build_switch(
+            is_null,
+            cont_block,
+            &[(ctx.bool_type().const_int(1, false), then_block)],
+        );
+
+        {
+            env.builder.position_at_end(then_block);
+            env.builder.build_return(None);
+        }
+    } else {
+        env.builder.build_unconditional_branch(cont_block);
+    }
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
@@ -1636,7 +1637,12 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
         cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
     }
 
-    env.builder.position_at_end(before_block);
+    env.builder.position_at_end(cont_block);
+
+    // read the tag_id
+    let tag_id = rec_union_read_tag(env, value_ptr);
+
+    let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
 
     env.builder
         .build_switch(tag_id_u8.into_int_value(), merge_block, &cases);

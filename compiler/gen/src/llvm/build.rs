@@ -1103,7 +1103,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         field_vals.push(ptr);
                     } else {
                         // this check fails for recursive tag unions, but can be helpful while debugging
-                        debug_assert_eq!(tag_field_layout, val_layout);
+                        // debug_assert_eq!(tag_field_layout, val_layout);
 
                         field_vals.push(val);
                     }
