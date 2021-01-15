@@ -1246,7 +1246,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
                 PointerValue(value) => {
                     match structure_layout {
-                        Layout::NullableUnion { nullable_id, .. } if *index == 0 => {
+                        Layout::NullableUnion {
+                            nullable_id,
+                            foo: fields,
+                            ..
+                        } if *index == 0 => {
                             let ptr = value;
                             let is_null = env.builder.build_is_null(ptr, "is_null");
 
@@ -1272,7 +1276,16 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                             {
                                 env.builder.position_at_end(else_block);
-                                let tag_id = extract_tag_discriminant_ptr(env, ptr);
+                                // if there is only one other tag besides then nullable_id, we know that id statically
+                                let tag_id = if fields.len() == 1 {
+                                    if *nullable_id == 1 {
+                                        ctx.i64_type().const_int(0, false)
+                                    } else {
+                                        ctx.i64_type().const_int(1, false)
+                                    }
+                                } else {
+                                    extract_tag_discriminant_ptr(env, ptr)
+                                };
                                 env.builder.build_store(result, tag_id);
                                 env.builder.build_unconditional_branch(cont_block);
                             }
