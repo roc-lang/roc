@@ -8,6 +8,7 @@ use roc_types::types::RecordField;
 use std::collections::HashMap;
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
+const GENERATE_NULLABLE: bool = true;
 
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
@@ -165,10 +166,10 @@ impl<'a> ClosureLayout<'a> {
                     }
                     Wrapped {
                         sorted_tag_layouts: tags,
-                        is_recursive,
+                        info,
                     } => {
                         // TODO handle recursive closures
-                        debug_assert!(!is_recursive);
+                        debug_assert!(info == WrappedInfo::NonRecursive);
 
                         let closure_layout =
                             ClosureLayout::from_tag_union(arena, tags.into_bump_slice());
@@ -579,7 +580,7 @@ impl<'a> Layout<'a> {
     }
 
     pub fn is_refcounted(&self) -> bool {
-        matches!(self, Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) | Layout::Builtin(Builtin::Str) | Layout::RecursiveUnion(_) | Layout::RecursivePointer)
+        matches!(self, Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) | Layout::Builtin(Builtin::Str) | Layout::RecursiveUnion(_) | Layout::RecursivePointer | Layout::NullableUnion { .. })
     }
 
     /// Even if a value (say, a record) is not itself reference counted,
@@ -1021,10 +1022,12 @@ fn layout_from_flat_type<'a>(
 
             let mut nullable = None;
 
-            for (index, (_name, variables)) in tags_vec.iter().enumerate() {
-                if variables.is_empty() {
-                    nullable = Some((index as i64, TAG_SIZE));
-                    break;
+            if GENERATE_NULLABLE {
+                for (index, (_name, variables)) in tags_vec.iter().enumerate() {
+                    if variables.is_empty() {
+                        nullable = Some((index as i64, TAG_SIZE));
+                        break;
+                    }
                 }
             }
 
@@ -1158,8 +1161,18 @@ pub enum UnionVariant<'a> {
     Unwrapped(Vec<'a, Layout<'a>>),
     Wrapped {
         sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
-        is_recursive: bool,
+        info: WrappedInfo<'a>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum WrappedInfo<'a> {
+    Recursive,
+    Nullable {
+        nullable_id: i64,
+        nullable_layout: Builtin<'a>,
+    },
+    NonRecursive,
 }
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
@@ -1277,7 +1290,20 @@ pub fn union_sorted_tags_help<'a>(
             let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
             let mut has_any_arguments = false;
 
-            for (tag_name, arguments) in tags_vec {
+            let mut nullable = None;
+
+            // only recursive tag unions can be nullable
+            let is_recursive = opt_rec_var.is_some();
+            if is_recursive && GENERATE_NULLABLE {
+                for (index, (_name, variables)) in tags_vec.iter().enumerate() {
+                    if variables.is_empty() {
+                        nullable = Some((index as i64, TAG_SIZE));
+                        break;
+                    }
+                }
+            }
+
+            for (index, (tag_name, arguments)) in tags_vec.into_iter().enumerate() {
                 // reserve space for the tag discriminant
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
@@ -1338,10 +1364,23 @@ pub fn union_sorted_tags_help<'a>(
 
                     UnionVariant::ByteUnion(tag_names)
                 }
-                _ => UnionVariant::Wrapped {
-                    sorted_tag_layouts: answer,
-                    is_recursive: opt_rec_var.is_some(),
-                },
+                _ => {
+                    let info = if let Some((nullable_id, nullable_layout)) = nullable {
+                        WrappedInfo::Nullable {
+                            nullable_id,
+                            nullable_layout,
+                        }
+                    } else if is_recursive {
+                        WrappedInfo::Recursive
+                    } else {
+                        WrappedInfo::NonRecursive
+                    };
+
+                    UnionVariant::Wrapped {
+                        sorted_tag_layouts: answer,
+                        info,
+                    }
+                }
             }
         }
     }
@@ -1382,7 +1421,7 @@ pub fn layout_from_tag_union<'a>(
                 }
                 Wrapped {
                     sorted_tag_layouts: tags,
-                    is_recursive,
+                    info,
                 } => {
                     let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
@@ -1390,10 +1429,18 @@ pub fn layout_from_tag_union<'a>(
                         tag_layouts.push(tag_layout);
                     }
 
-                    if is_recursive {
-                        Layout::RecursiveUnion(tag_layouts.into_bump_slice())
-                    } else {
-                        Layout::Union(tag_layouts.into_bump_slice())
+                    use WrappedInfo::*;
+                    match info {
+                        Nullable {
+                            nullable_id,
+                            nullable_layout,
+                        } => Layout::NullableUnion {
+                            foo: tag_layouts.into_bump_slice(),
+                            nullable_id,
+                            nullable_layout: nullable_layout.clone(),
+                        },
+                        Recursive => Layout::RecursiveUnion(tag_layouts.into_bump_slice()),
+                        NonRecursive => Layout::Union(tag_layouts.into_bump_slice()),
                     }
                 }
             }

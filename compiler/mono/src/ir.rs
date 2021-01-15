@@ -2734,7 +2734,7 @@ pub fn with_hole<'a>(
                 }
                 Wrapped {
                     sorted_tag_layouts,
-                    is_recursive,
+                    info,
                 } => {
                     let union_size = sorted_tag_layouts.len() as u8;
                     let (tag_id, (_, _)) = sorted_tag_layouts
@@ -2790,10 +2790,18 @@ pub fn with_hole<'a>(
                     }
 
                     let field_symbols = field_symbols.into_bump_slice();
-                    let layout = if is_recursive {
-                        Layout::RecursiveUnion(layouts.into_bump_slice())
-                    } else {
-                        Layout::Union(layouts.into_bump_slice())
+                    use crate::layout::WrappedInfo;
+                    let layout = match info {
+                        WrappedInfo::Nullable {
+                            nullable_id,
+                            nullable_layout,
+                        } => Layout::NullableUnion {
+                            foo: layouts.into_bump_slice(),
+                            nullable_id,
+                            nullable_layout: nullable_layout.clone(),
+                        },
+                        WrappedInfo::Recursive => Layout::RecursiveUnion(layouts.into_bump_slice()),
+                        WrappedInfo::NonRecursive => Layout::Union(layouts.into_bump_slice()),
                     };
 
                     let tag = Expr::Tag {
@@ -5874,7 +5882,7 @@ fn from_can_pattern_help<'a>(
                 }
                 Wrapped {
                     sorted_tag_layouts: tags,
-                    is_recursive,
+                    info,
                 } => {
                     let mut ctors = std::vec::Vec::with_capacity(tags.len());
                     for (i, (tag_name, args)) in tags.iter().enumerate() {
@@ -5895,7 +5903,14 @@ fn from_can_pattern_help<'a>(
                         .iter()
                         .enumerate()
                         .find(|(_, (key, _))| key == tag_name)
-                        .expect("tag must be in its own type");
+                        .expect("tag name is not in its own type");
+
+                    let nullable_id = match info {
+                        crate::layout::WrappedInfo::Nullable { nullable_id, .. } => {
+                            Some(nullable_id as usize)
+                        }
+                        _ => None,
+                    };
 
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     // disregard the tag discriminant layout
@@ -5915,7 +5930,12 @@ fn from_can_pattern_help<'a>(
                     // TODO make this assert pass, it currently does not because
                     // 0-sized values are dropped out
                     // debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
-                    let it = argument_layouts[1..].iter();
+                    let it = if argument_layouts.is_empty() {
+                        [].iter()
+                    } else {
+                        argument_layouts[1..].iter()
+                    };
+
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((
                             from_can_pattern_help(env, layout_cache, &loc_pat.value, assignments)?,
@@ -5926,14 +5946,27 @@ fn from_can_pattern_help<'a>(
                     let mut layouts: Vec<&'a [Layout<'a>]> =
                         Vec::with_capacity_in(tags.len(), env.arena);
 
-                    for (_, arg_layouts) in tags.into_iter() {
+                    for (index, (_, arg_layouts)) in tags.into_iter().enumerate() {
+                        // filter out the tag represented by the NULL pointer, if any
+                        if matches!(nullable_id, Some(i) if i == index) {
+                            continue;
+                        }
+
                         layouts.push(arg_layouts);
                     }
 
-                    let layout = if is_recursive {
-                        Layout::RecursiveUnion(layouts.into_bump_slice())
-                    } else {
-                        Layout::Union(layouts.into_bump_slice())
+                    use crate::layout::WrappedInfo::*;
+                    let layout = match info {
+                        Nullable {
+                            nullable_id,
+                            nullable_layout,
+                        } => Layout::NullableUnion {
+                            foo: layouts.into_bump_slice(),
+                            nullable_id,
+                            nullable_layout: nullable_layout.clone(),
+                        },
+                        Recursive => Layout::RecursiveUnion(layouts.into_bump_slice()),
+                        NonRecursive => Layout::Union(layouts.into_bump_slice()),
                     };
 
                     Pattern::AppliedTag {

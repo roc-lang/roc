@@ -966,6 +966,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_name,
             ..
         } => {
+            dbg!(&arguments, &fields);
+            panic!();
             let tag_layout = Layout::Union(fields);
 
             debug_assert!(*union_size > 1);

@@ -210,6 +210,7 @@ fn flatten_patterns(branch: Branch) -> Branch {
     for path_pattern in branch.patterns {
         flatten(path_pattern, &mut result);
     }
+
     Branch {
         goal: branch.goal,
         patterns: result,
@@ -227,7 +228,7 @@ fn flatten<'a>(
             tag_id,
             tag_name,
             layout,
-        } if union.alternatives.len() == 1 => {
+        } if union.alternatives.len() == 1 && !matches!(layout, Layout::NullableUnion { .. } ) => {
             // TODO ^ do we need to check that guard.is_none() here?
 
             let path = path_pattern.0;
@@ -890,6 +891,7 @@ pub fn optimize_when<'a>(
     ret_layout: Layout<'a>,
     opt_branches: bumpalo::collections::Vec<'a, (Pattern<'a>, Guard<'a>, Stmt<'a>)>,
 ) -> Stmt<'a> {
+    dbg!(&opt_branches);
     let (patterns, _indexed_branches) = opt_branches
         .into_iter()
         .enumerate()
