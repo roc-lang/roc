@@ -1,4 +1,3 @@
-
 pub type ColorTup = (f32, f32, f32, f32);
 pub const WHITE: ColorTup = (1.0, 1.0, 1.0, 1.0);
 pub const BLACK: ColorTup = (0.0, 0.0, 0.0, 1.0);

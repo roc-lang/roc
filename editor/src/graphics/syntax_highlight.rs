@@ -1,12 +1,13 @@
-
-use crate::graphics::primitives;
 use crate::graphics::colors;
+use crate::graphics::primitives;
 use colors::ColorTup;
-
 
 //TODO optimize memory allocation
 //TODO this is a demo function, the AST should be used for highlighting, see #904.
-pub fn highlight_code(code_text: &primitives::text::Text, all_text_tups: &mut Vec<(String, ColorTup)>) {
+pub fn highlight_code(
+    code_text: &primitives::text::Text,
+    all_text_tups: &mut Vec<(String, ColorTup)>,
+) {
     let split_code = split_inclusive(&code_text.text);
 
     let mut active_color = colors::WHITE;
@@ -22,12 +23,7 @@ pub fn highlight_code(code_text: &primitives::text::Text, all_text_tups: &mut Ve
         };
 
         if new_word_color != active_color {
-            all_text_tups.push(
-                (
-                    same_type_str,
-                    active_color
-                )
-            );
+            all_text_tups.push((same_type_str, active_color));
 
             active_color = new_word_color;
             same_type_str = String::new();
@@ -37,12 +33,7 @@ pub fn highlight_code(code_text: &primitives::text::Text, all_text_tups: &mut Ve
     }
 
     if !same_type_str.is_empty() {
-        all_text_tups.push(
-            (
-                same_type_str,
-                active_color
-            )
-        );
+        all_text_tups.push((same_type_str, active_color));
     }
 }
 
