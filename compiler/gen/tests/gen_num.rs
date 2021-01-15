@@ -758,6 +758,14 @@ mod gen_num {
     }
 
     #[test]
+    fn bitwise_xor() {
+        assert_evals_to!("Num.bitwiseXor 20 20", 0, i64);
+        assert_evals_to!("Num.bitwiseXor 15 14", 1, i64);
+        assert_evals_to!("Num.bitwiseXor 7 15", 8, i64);
+        assert_evals_to!("Num.bitwiseXor 200 0", 200, i64);
+    }
+
+    #[test]
     fn lt_i64() {
         assert_evals_to!("1 < 2", true, bool);
         assert_evals_to!("1 < 1", false, bool);
