@@ -1007,6 +1007,22 @@ fn path_to_expr_help<'a>(
                     Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
                         layouts[*tag_id as usize]
                     }
+                    Layout::NullableUnion {
+                        nullable_id,
+                        nullable_layout,
+                        foo: layouts,
+                        ..
+                    } => {
+                        use std::cmp::Ordering;
+                        match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
+                            Ordering::Equal => {
+                                &*env.arena.alloc([Layout::Builtin(nullable_layout.clone())])
+                            }
+                            Ordering::Less => layouts[*tag_id as usize],
+                            Ordering::Greater => layouts[*tag_id as usize - 1],
+                        }
+                    }
+
                     Layout::Struct(layouts) => layouts,
                     other => env.arena.alloc([other.clone()]),
                 };

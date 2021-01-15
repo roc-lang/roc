@@ -827,6 +827,7 @@ impl Wrapped {
                 },
                 _ => Some(Wrapped::MultiTagUnion),
             },
+            Layout::NullableUnion { .. } => Some(Wrapped::MultiTagUnion),
             _ => None,
         }
     }

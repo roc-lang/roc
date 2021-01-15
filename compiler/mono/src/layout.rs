@@ -1019,7 +1019,21 @@ fn layout_from_flat_type<'a>(
             let mut tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
             tags_vec.sort();
 
-            for (_name, variables) in tags_vec {
+            let mut nullable = None;
+
+            for (index, (_name, variables)) in tags_vec.iter().enumerate() {
+                if variables.is_empty() {
+                    nullable = Some((index as i64, TAG_SIZE));
+                    break;
+                }
+            }
+
+            for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
+                if matches!(nullable, Some((i, _)) if i == index as i64) {
+                    // don't add the
+                    continue;
+                }
+
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
                 // store the discriminant
@@ -1047,7 +1061,15 @@ fn layout_from_flat_type<'a>(
                 tag_layouts.push(tag_layout.into_bump_slice());
             }
 
-            Ok(Layout::RecursiveUnion(tag_layouts.into_bump_slice()))
+            if let Some((tag_id, tag_id_layout)) = nullable {
+                Ok(Layout::NullableUnion {
+                    nullable_id: tag_id,
+                    nullable_layout: tag_id_layout,
+                    foo: tag_layouts.into_bump_slice(),
+                })
+            } else {
+                Ok(Layout::RecursiveUnion(tag_layouts.into_bump_slice()))
+            }
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
