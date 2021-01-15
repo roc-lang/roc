@@ -19,7 +19,7 @@ use crate::graphics::lowlevel::buffer::create_rect_buffers;
 use crate::graphics::lowlevel::ortho::update_ortho_buffer;
 use crate::graphics::lowlevel::pipelines;
 use crate::graphics::primitives::text::{
-    build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text,
+    build_glyph_brush, example_code_glyph_rect, queue_text_draw, queue_code_text_draw, Text,
 };
 use crate::graphics::style::CODE_FONT_SIZE;
 use crate::graphics::style::CODE_TXT_XY;
@@ -392,7 +392,7 @@ fn queue_editor_text(
 
     queue_text_draw(&caret_pos_label, glyph_brush);
 
-    queue_text_draw(&code_text, glyph_brush);
+    queue_code_text_draw(&code_text, glyph_brush);
 }
 
 fn queue_no_file_text(
