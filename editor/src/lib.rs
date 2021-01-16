@@ -46,10 +46,12 @@ pub mod error;
 pub mod graphics;
 mod keyboard_input;
 pub mod lang;
-mod mvc;
+//mod mvc;
+pub mod mvc; // for benchmarking
 mod resources;
 mod selection;
-mod text_buffer;
+//mod text_buffer;
+pub mod text_buffer; // for benchmarking
 mod util;
 mod vec_result;
 

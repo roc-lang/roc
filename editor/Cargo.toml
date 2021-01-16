@@ -81,6 +81,11 @@ maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
+criterion = "0.3"
+
+[[bench]]
+name = "my_benchmark"
+harness = false
 
 # uncomment everything below if you have made changes to any shaders and
 # want to compile them to .spv
