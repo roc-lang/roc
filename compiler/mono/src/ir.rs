@@ -2838,7 +2838,42 @@ pub fn with_hole<'a>(
 
                             (tag, layout)
                         }
-                        NullableUnwrapped { .. } => todo!(),
+                        NullableUnwrapped {
+                            nullable_id,
+                            nullable_name: _,
+                            other_name: _,
+                            other_fields,
+                        } => {
+                            // FIXME drop tag
+                            let tag_id_symbol = env.unique_symbol();
+                            opt_tag_id_symbol = Some(tag_id_symbol);
+
+                            field_symbols = {
+                                let mut temp =
+                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                                // FIXME drop tag
+                                temp.push(tag_id_symbol);
+
+                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                                temp.into_bump_slice()
+                            };
+
+                            let layout = Layout::Union(UnionLayout::NullableUnwrapped {
+                                nullable_id,
+                                other_fields,
+                            });
+
+                            let tag = Expr::Tag {
+                                tag_layout: layout.clone(),
+                                tag_name,
+                                tag_id: tag_id as u8,
+                                union_size,
+                                arguments: field_symbols,
+                            };
+
+                            (tag, layout)
+                        }
                     };
 
                     let mut stmt = Stmt::Let(assigned, tag, layout, hole);
@@ -6182,7 +6217,68 @@ fn from_can_pattern_help<'a>(
                             }
                         }
 
-                        NullableUnwrapped { .. } => todo!(),
+                        NullableUnwrapped {
+                            other_fields,
+                            nullable_id,
+                            nullable_name,
+                            other_name: _,
+                        } => {
+                            debug_assert!(!other_fields.is_empty());
+
+                            dbg!(nullable_id, &nullable_name);
+
+                            ctors.push(Ctor {
+                                tag_id: TagId(nullable_id as u8),
+                                name: nullable_name.clone(),
+                                arity: 0,
+                            });
+
+                            ctors.push(Ctor {
+                                tag_id: TagId(!nullable_id as u8),
+                                name: nullable_name.clone(),
+                                // FIXME drop tag
+                                arity: other_fields.len() - 1,
+                            });
+
+                            let union = crate::exhaustive::Union {
+                                render_as: RenderAs::Tag,
+                                alternatives: ctors,
+                            };
+
+                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+
+                            let it = if tag_name == &nullable_name {
+                                [].iter()
+                            } else {
+                                // FIXME drop tag
+                                argument_layouts[1..].iter()
+                            };
+
+                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
+                                mono_args.push((
+                                    from_can_pattern_help(
+                                        env,
+                                        layout_cache,
+                                        &loc_pat.value,
+                                        assignments,
+                                    )?,
+                                    layout.clone(),
+                                ));
+                            }
+
+                            let layout = Layout::Union(UnionLayout::NullableUnwrapped {
+                                nullable_id,
+                                other_fields,
+                            });
+
+                            Pattern::AppliedTag {
+                                tag_name: tag_name.clone(),
+                                tag_id: tag_id as u8,
+                                arguments: mono_args,
+                                union,
+                                layout,
+                            }
+                        }
                     }
                 }
             };

@@ -9,8 +9,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, collection, get_fn_type,
-    get_ptr_type, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
+    collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
@@ -1136,6 +1136,109 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             data_ptr.into()
         }
 
+        Tag {
+            arguments,
+            tag_layout:
+                Layout::Union(UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                    ..
+                }),
+            union_size,
+            tag_id,
+            tag_name,
+            ..
+        } => {
+            let tag_struct_type =
+                block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+
+            if *tag_id == *nullable_id as u8 {
+                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
+
+                return output_type.const_null().into();
+            }
+
+            debug_assert!(*union_size > 1);
+            let ptr_size = env.ptr_bytes;
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
+                // closures ignore (and do not store) the discriminant
+                panic!()
+            } else {
+                if (*tag_id != 0) == *nullable_id {
+                    &[] as &[_]
+                } else {
+                    other_fields
+                }
+            };
+
+            debug_assert_eq!(arguments.len(), tag_field_layouts.len());
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(env, scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = cast_basic_basic(
+                            builder,
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr = reserve_with_refcount(
+                env,
+                &Layout::Union(UnionLayout::NonRecursive(&[other_fields])),
+            );
+
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = cast_basic_basic(
+                builder,
+                data_ptr.into(),
+                struct_type.ptr_type(AddressSpace::Generic).into(),
+            )
+            .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+
         Tag { .. } => unreachable!("tags should have a Union or RecursiveUnion layout"),
 
         Reset(_) => todo!(),
@@ -1250,11 +1353,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
                 PointerValue(value) => {
                     match structure_layout {
-                        Layout::Union(UnionLayout::NullableWrapped {
-                            nullable_id,
-                            other_tags: fields,
-                            ..
-                        }) if *index == 0 => {
+                        Layout::Union(UnionLayout::NullableWrapped { nullable_id, .. })
+                            if *index == 0 =>
+                        {
                             let ptr = value;
                             let is_null = env.builder.build_is_null(ptr, "is_null");
 
@@ -1280,16 +1381,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                             {
                                 env.builder.position_at_end(else_block);
-                                // if there is only one other tag besides then nullable_id, we know that id statically
-                                let tag_id = if fields.len() == 1 {
-                                    if *nullable_id == 1 {
-                                        ctx.i64_type().const_int(0, false)
-                                    } else {
-                                        ctx.i64_type().const_int(1, false)
-                                    }
-                                } else {
-                                    extract_tag_discriminant_ptr(env, ptr)
-                                };
+                                let tag_id = extract_tag_discriminant_ptr(env, ptr);
                                 env.builder.build_store(result, tag_id);
                                 env.builder.build_unconditional_branch(cont_block);
                             }
@@ -1297,6 +1389,23 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                             env.builder.position_at_end(cont_block);
 
                             env.builder.build_load(result, "load_result")
+                        }
+                        Layout::Union(UnionLayout::NullableUnwrapped { nullable_id, .. })
+                            if *index == 0 =>
+                        {
+                            let is_null = env.builder.build_is_null(value, "is_null");
+
+                            let ctx = env.context;
+
+                            let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
+                            let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
+
+                            env.builder.build_select(
+                                is_null,
+                                then_value,
+                                else_value,
+                                "select_tag_id",
+                            )
                         }
                         _ => {
                             let ptr = cast_basic_basic(

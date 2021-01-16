@@ -229,7 +229,7 @@ fn flatten<'a>(
             tag_name,
             layout,
         } if union.alternatives.len() == 1
-            && !matches!(layout, Layout::Union(UnionLayout::NullableWrapped { .. })) =>
+            && !matches!(layout, Layout::Union(UnionLayout::NullableWrapped { .. })| Layout::Union(UnionLayout::NullableUnwrapped { .. })) =>
         {
             // TODO ^ do we need to check that guard.is_none() here?
 
@@ -1020,9 +1020,8 @@ fn path_to_expr_help<'a>(
                                 use std::cmp::Ordering;
                                 dbg!(nullable_id, tag_id);
                                 match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
-                                    Ordering::Equal =>
-                                    // the nullable tag is going to predent it stores a tag id
-                                    {
+                                    Ordering::Equal => {
+                                        // the nullable tag is going to pretend it stores a tag id
                                         &*env
                                             .arena
                                             .alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
@@ -1033,16 +1032,15 @@ fn path_to_expr_help<'a>(
                             }
                             NullableUnwrapped {
                                 nullable_id,
-                                other_id: _,
                                 other_fields,
                             } => {
-                                let tag_id = *tag_id == 0;
+                                let tag_id = *tag_id != 0;
 
                                 if tag_id == *nullable_id {
-                                    // the nullable tag is going to predent it stores a tag id
-                                    &[] as &[_]
+                                    // the nullable tag is going to pretend it stores a tag id
+                                    &*env.arena.alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
                                 } else {
-                                    other_fields
+                                    *other_fields
                                 }
                             }
                         }
@@ -1052,7 +1050,14 @@ fn path_to_expr_help<'a>(
                     other => env.arena.alloc([other.clone()]),
                 };
 
-                debug_assert!(*index < field_layouts.len() as u64);
+                debug_assert!(
+                    *index < field_layouts.len() as u64,
+                    "{} {:?} {:?} {:?}",
+                    index,
+                    field_layouts,
+                    &layout,
+                    tag_id,
+                );
 
                 let inner_layout = match &field_layouts[*index as usize] {
                     Layout::RecursivePointer => layout.clone(),

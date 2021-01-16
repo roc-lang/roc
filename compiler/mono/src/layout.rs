@@ -56,7 +56,6 @@ pub enum UnionLayout<'a> {
     /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
     NullableUnwrapped {
         nullable_id: bool,
-        other_id: bool,
         other_fields: &'a [Layout<'a>],
     },
 }
@@ -1104,13 +1103,11 @@ fn layout_from_flat_type<'a>(
 
             let union_layout = if let Some(tag_id) = nullable {
                 match tag_layouts.into_bump_slice() {
-                    [one] if false => {
-                        let nullable_id = tag_id == 0;
-                        let other_id = !nullable_id;
+                    [one] => {
+                        let nullable_id = tag_id != 0;
 
                         UnionLayout::NullableUnwrapped {
                             nullable_id,
-                            other_id,
                             other_fields: one,
                         }
                     }
@@ -1224,11 +1221,10 @@ pub enum WrappedVariant<'a> {
         sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
     },
     NullableUnwrapped {
-        nullable_id: i64,
+        nullable_id: bool,
         nullable_name: TagName,
-        other_id: i64,
         other_name: TagName,
-        other_arguments: &'a [Layout<'a>],
+        other_fields: &'a [Layout<'a>],
     },
 }
 
@@ -1274,16 +1270,15 @@ impl<'a> WrappedVariant<'a> {
             NullableUnwrapped {
                 nullable_id,
                 nullable_name,
-                other_id,
                 other_name,
-                other_arguments,
+                other_fields,
             } => {
                 if tag_name == nullable_name {
                     (*nullable_id as u8, &[] as &[_])
                 } else {
                     debug_assert_eq!(other_name, tag_name);
 
-                    (*other_id as u8, other_arguments.clone())
+                    (!*nullable_id as u8, other_fields.clone())
                 }
             }
         }
@@ -1504,10 +1499,22 @@ pub fn union_sorted_tags_help<'a>(
                 }
                 _ => {
                     let variant = if let Some((nullable_id, nullable_name)) = nullable {
-                        WrappedVariant::NullableWrapped {
-                            nullable_id,
-                            nullable_name,
-                            sorted_tag_layouts: answer,
+                        if answer.len() == 1 {
+                            let (other_name, other_arguments) = answer.drain(..).next().unwrap();
+                            let nullable_id = nullable_id != 0;
+
+                            WrappedVariant::NullableUnwrapped {
+                                nullable_id,
+                                nullable_name,
+                                other_name,
+                                other_fields: other_arguments,
+                            }
+                        } else {
+                            WrappedVariant::NullableWrapped {
+                                nullable_id,
+                                nullable_name,
+                                sorted_tag_layouts: answer,
+                            }
                         }
                     } else if is_recursive {
                         WrappedVariant::Recursive {
