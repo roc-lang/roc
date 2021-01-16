@@ -133,14 +133,20 @@ pub fn basic_type_from_layout<'ctx>(
         PhantomEmptyStruct => context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(arena, context, sorted_fields, ptr_bytes),
         Union(variant) => {
-            let block = block_of_memory(context, layout, ptr_bytes);
-
             use UnionLayout::*;
             match variant {
-                Recursive(_) | NullableWrapped { .. } => {
+                Recursive(tags)
+                | NullableWrapped {
+                    other_tags: tags, ..
+                } => {
+                    let block = block_of_memory_slices(context, tags, ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
-                NonRecursive(_) => block,
+                NullableUnwrapped { other_fields, .. } => {
+                    let block = block_of_memory_slices(context, &[other_fields], ptr_bytes);
+                    block.ptr_type(AddressSpace::Generic).into()
+                }
+                NonRecursive(_) => block_of_memory(context, layout, ptr_bytes),
             }
         }
         RecursivePointer => {
@@ -180,6 +186,24 @@ pub fn basic_type_from_builtin<'ctx>(
         List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
         EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
     }
+}
+
+pub fn block_of_memory_slices<'ctx>(
+    context: &'ctx Context,
+    layouts: &[&[Layout<'_>]],
+    ptr_bytes: u32,
+) -> BasicTypeEnum<'ctx> {
+    let mut union_size = 0;
+    for tag in layouts {
+        let mut total = 0;
+        for layout in tag.iter() {
+            total += layout.stack_size(ptr_bytes as u32);
+        }
+
+        union_size = union_size.max(total);
+    }
+
+    block_of_memory_help(context, union_size)
 }
 
 pub fn block_of_memory<'ctx>(

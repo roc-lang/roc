@@ -3,12 +3,14 @@ use crate::llvm::build::{
     FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
+use crate::llvm::convert::{
+    basic_type_from_layout, block_of_memory, block_of_memory_slices, ptr_int,
+};
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::debug_info::AsDIScope;
 use inkwell::module::Linkage;
-use inkwell::types::{AnyTypeEnum, BasicTypeEnum};
+use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
@@ -354,6 +356,18 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                     build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
                 }
 
+                NullableUnwrapped { other_fields, .. } => {
+                    debug_assert!(value.is_pointer_value());
+
+                    build_dec_rec_union(
+                        env,
+                        layout_ids,
+                        &*env.arena.alloc([*other_fields]),
+                        value.into_pointer_value(),
+                        true,
+                    );
+                }
+
                 Recursive(tags) => {
                     debug_assert!(value.is_pointer_value());
                     build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
@@ -380,8 +394,6 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
         List(memory_mode, element_layout) => {
             let wrapper_struct = value.into_struct_value();
             if element_layout.contains_refcounted() {
-                use inkwell::types::BasicType;
-
                 let ptr_type =
                     basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
                         .ptr_type(AddressSpace::Generic);
@@ -453,6 +465,18 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
                     build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
                 }
 
+                NullableUnwrapped { other_fields, .. } => {
+                    debug_assert!(value.is_pointer_value());
+
+                    build_inc_rec_union(
+                        env,
+                        layout_ids,
+                        &*env.arena.alloc([*other_fields]),
+                        value.into_pointer_value(),
+                        true,
+                    );
+                }
+
                 Recursive(tags) => {
                     debug_assert!(value.is_pointer_value());
                     build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
@@ -500,8 +524,6 @@ fn increment_refcount_builtin<'a, 'ctx, 'env>(
         List(memory_mode, element_layout) => {
             let wrapper_struct = value.into_struct_value();
             if element_layout.contains_refcounted() {
-                use inkwell::types::BasicType;
-
                 let ptr_type =
                     basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
                         .ptr_type(AddressSpace::Generic);
@@ -565,7 +587,8 @@ pub fn build_inc_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_inc_list_help(env, layout_ids, layout, function_value);
 
@@ -681,7 +704,8 @@ pub fn build_dec_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_dec_list_help(env, layout_ids, layout, function_value);
 
@@ -800,7 +824,8 @@ pub fn build_inc_str<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_inc_str_help(env, layout_ids, layout, function_value);
 
@@ -919,7 +944,8 @@ pub fn build_dec_str<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_dec_str_help(env, layout_ids, layout, function_value);
 
@@ -1024,11 +1050,9 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
 /// Build an increment or decrement function for a specific layout
 pub fn build_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
+    arg_type: BasicTypeEnum<'ctx>,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
-    let arena = env.arena;
-    let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
     build_header_help(env, fn_name, env.context.void_type().into(), &[arg_type])
 }
 
@@ -1086,7 +1110,10 @@ pub fn build_dec_rec_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic)
+                .into();
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_dec_rec_union_help(env, layout_ids, fields, function_value, is_nullable);
 
@@ -1113,8 +1140,6 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
     is_nullable: bool,
 ) {
     debug_assert!(!tags.is_empty());
-
-    use inkwell::types::BasicType;
 
     let context = &env.context;
     let builder = env.builder;
@@ -1225,9 +1250,12 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-                let union_type =
-                    basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
-                let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
+                let union_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                let recursive_field_ptr = cast_basic_basic(
+                    env.builder,
+                    ptr_as_i64_ptr,
+                    union_type.ptr_type(AddressSpace::Generic).into(),
+                );
 
                 // recursively decrement the field
                 let call = env.builder.build_call(
@@ -1303,7 +1331,8 @@ pub fn build_dec_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_dec_union_help(env, layout_ids, fields, function_value);
 
@@ -1468,7 +1497,10 @@ pub fn build_inc_rec_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic)
+                .into();
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_inc_rec_union_help(env, layout_ids, fields, function_value, is_nullable);
 
@@ -1516,8 +1548,6 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
 ) {
     debug_assert!(!tags.is_empty());
 
-    use inkwell::types::BasicType;
-
     let context = &env.context;
     let builder = env.builder;
 
@@ -1550,8 +1580,6 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
     set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
-
-    let layout = Layout::Union(UnionLayout::Recursive(tags));
 
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
@@ -1624,7 +1652,7 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-                let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+                let union_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
                 let recursive_field_ptr = cast_basic_basic(
                     env.builder,
                     ptr_as_i64_ptr,
@@ -1696,7 +1724,8 @@ pub fn build_inc_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let function_value = build_header(env, &layout, &fn_name);
+            let basic_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, &fn_name);
 
             build_inc_union_help(env, layout_ids, fields, function_value);
 
@@ -1721,8 +1750,6 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
     fn_val: FunctionValue<'ctx>,
 ) {
     debug_assert!(!tags.is_empty());
-
-    use inkwell::types::BasicType;
 
     let context = &env.context;
     let builder = env.builder;

@@ -223,6 +223,7 @@ fn jit_to_ast_help<'a>(
         },
         Layout::Union(UnionLayout::Recursive(_))
         | Layout::Union(UnionLayout::NullableWrapped { .. })
+        | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }

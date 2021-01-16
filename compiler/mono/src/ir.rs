@@ -834,7 +834,9 @@ impl Wrapped {
                         },
                         _ => Some(Wrapped::MultiTagUnion),
                     },
-                    NullableWrapped { .. } => Some(Wrapped::MultiTagUnion),
+                    NullableWrapped { .. } | NullableUnwrapped { .. } => {
+                        Some(Wrapped::MultiTagUnion)
+                    }
                 }
             }
             _ => None,

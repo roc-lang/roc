@@ -1020,13 +1020,29 @@ fn path_to_expr_help<'a>(
                                 use std::cmp::Ordering;
                                 dbg!(nullable_id, tag_id);
                                 match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
-                                    Ordering::Equal => 
-                                        // the nullable tag is going to predent it stores a tag id
+                                    Ordering::Equal =>
+                                    // the nullable tag is going to predent it stores a tag id
+                                    {
                                         &*env
-                                        .arena
-                                        .alloc([Layout::Builtin(crate::layout::TAG_SIZE)]),
+                                            .arena
+                                            .alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
+                                    }
                                     Ordering::Less => layouts[*tag_id as usize],
                                     Ordering::Greater => layouts[*tag_id as usize - 1],
+                                }
+                            }
+                            NullableUnwrapped {
+                                nullable_id,
+                                other_id: _,
+                                other_fields,
+                            } => {
+                                let tag_id = *tag_id == 0;
+
+                                if tag_id == *nullable_id {
+                                    // the nullable tag is going to predent it stores a tag id
+                                    &[] as &[_]
+                                } else {
+                                    other_fields
                                 }
                             }
                         }
