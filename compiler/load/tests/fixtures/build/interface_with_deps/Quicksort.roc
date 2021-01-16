@@ -2,7 +2,7 @@ interface Quicksort
     exposes [ swap, partition, quicksort ]
     imports []
 
-quicksort : List (Num a), I64, I64 -> List (Num a)
+quicksort : List (Num a), Nat, Nat -> List (Num a)
 quicksort = \list, low, high ->
     when partition low high list is
         Pair partitionIndex partitioned ->
@@ -11,7 +11,7 @@ quicksort = \list, low, high ->
                 |> quicksort (partitionIndex + 1) high
 
 
-swap : I64, I64, List a -> List a
+swap : Nat, Nat, List a -> List a
 swap = \i, j, list ->
     when Pair (List.get list i) (List.get list j) is
         Pair (Ok atI) (Ok atJ) ->
@@ -23,7 +23,7 @@ swap = \i, j, list ->
             []
 
 
-partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+partition : Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
@@ -35,7 +35,7 @@ partition = \low, high, initialList ->
             Pair (low - 1) initialList
 
 
-partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
 partitionHelp = \i, j, list, high, pivot ->
     if j < high then
         when List.get list j is

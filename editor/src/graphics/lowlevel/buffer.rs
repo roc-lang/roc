@@ -1,6 +1,6 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
-use crate::graphics::lowlevel::vertex::Vertex;
+use super::vertex::Vertex;
 use crate::graphics::primitives::rect::Rect;
 use bumpalo::collections::Vec as BumpVec;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};

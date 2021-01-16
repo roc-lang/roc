@@ -1003,6 +1003,7 @@ pub fn list_walk_backwards<'a, 'ctx, 'env>(
 /// List.contains : List elem, elem -> Bool
 pub fn list_contains<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     elem: BasicValueEnum<'ctx>,
     elem_layout: &Layout<'a>,
@@ -1034,6 +1035,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
 
     list_contains_help(
         env,
+        layout_ids,
         parent,
         length,
         list_ptr,
@@ -1043,8 +1045,10 @@ pub fn list_contains<'a, 'ctx, 'env>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn list_contains_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     length: IntValue<'ctx>,
     source_ptr: PointerValue<'ctx>,
@@ -1082,7 +1086,14 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 
     let current_elem = builder.build_load(current_elem_ptr, "load_elem");
 
-    let has_found = build_eq(env, current_elem, elem, list_elem_layout, elem_layout);
+    let has_found = build_eq(
+        env,
+        layout_ids,
+        current_elem,
+        elem,
+        list_elem_layout,
+        elem_layout,
+    );
 
     builder.build_store(bool_alloca, has_found.into_int_value());
 
@@ -1111,8 +1122,10 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
+#[allow(clippy::too_many_arguments)]
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     output_inplace: InPlace,
     parent: FunctionValue<'ctx>,
     func: BasicValueEnum<'ctx>,
@@ -1211,6 +1224,9 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             }
 
             builder.position_at_end(cont_block);
+
+            // consume the input list
+            decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
 
             builder.build_load(result, "load_result")
         }

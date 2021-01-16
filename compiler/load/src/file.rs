@@ -699,7 +699,7 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub platform_id: Option<ModuleId>,
     pub goal_phase: Phase,
-    pub stdlib: StdLib,
+    pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: Option<To<'a>>,
@@ -944,9 +944,10 @@ fn enqueue_task<'a>(
 pub fn load_and_typecheck(
     arena: &Bump,
     filename: PathBuf,
-    stdlib: StdLib,
+    stdlib: &StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
+    ptr_bytes: u32,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
@@ -959,6 +960,7 @@ pub fn load_and_typecheck(
         src_dir,
         exposed_types,
         Phase::SolveTypes,
+        ptr_bytes,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -968,9 +970,10 @@ pub fn load_and_typecheck(
 pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    stdlib: StdLib,
+    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
+    ptr_bytes: u32,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
@@ -983,6 +986,7 @@ pub fn load_and_monomorphize<'a>(
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
+        ptr_bytes,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -993,9 +997,10 @@ pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     src: &'a str,
-    stdlib: StdLib,
+    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
+    ptr_bytes: u32,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
@@ -1008,6 +1013,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
+        ptr_bytes,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -1140,10 +1146,11 @@ fn load<'a>(
     arena: &'a Bump,
     //filename: PathBuf,
     load_start: LoadStart<'a>,
-    stdlib: StdLib,
+    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     goal_phase: Phase,
+    ptr_bytes: u32,
 ) -> Result<LoadResult<'a>, LoadingProblem>
 where
 {
@@ -1259,8 +1266,14 @@ where
                                     // added. In that case, do nothing, and keep waiting
                                     // until we receive a Shutdown message.
                                     if let Some(task) = find_task(&worker, injector, stealers) {
-                                        run_task(task, worker_arena, src_dir, msg_tx.clone())
-                                            .expect("Msg channel closed unexpectedly.");
+                                        run_task(
+                                            task,
+                                            worker_arena,
+                                            src_dir,
+                                            msg_tx.clone(),
+                                            ptr_bytes,
+                                        )
+                                        .expect("Msg channel closed unexpectedly.");
                                     }
                                 }
                             }
@@ -1790,8 +1803,6 @@ fn update<'a>(
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -1804,6 +1815,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
@@ -3341,6 +3354,7 @@ fn make_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations,
     mut module_timing: ModuleTiming,
+    ptr_bytes: u32,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut mono_problems = Vec::new();
@@ -3351,6 +3365,7 @@ fn make_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
+        ptr_bytes,
     };
 
     procs
@@ -3396,6 +3411,7 @@ fn build_pending_specializations<'a>(
     decls: Vec<Declaration>,
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
+    ptr_bytes: u32,
     // TODO remove
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
@@ -3410,6 +3426,7 @@ fn build_pending_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
+        ptr_bytes,
     };
 
     // Add modules' decls to Procs
@@ -3613,6 +3630,7 @@ fn run_task<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
+    ptr_bytes: u32,
 ) -> Result<(), LoadingProblem> {
     use BuildTask::*;
 
@@ -3685,6 +3703,7 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
+            ptr_bytes,
             exposed_to_host,
         )),
         MakeSpecializations {
@@ -3704,6 +3723,7 @@ fn run_task<'a>(
             layout_cache,
             specializations_we_must_make,
             module_timing,
+            ptr_bytes,
         )),
     }?;
 

@@ -166,8 +166,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // addWrap : Int, Int -> Int
     add_type(Symbol::NUM_ADD_WRAP, {
-        let_tvars! { u, v, w };
-        unique_function(vec![int_type(u), int_type(v)], int_type(w))
+        let_tvars! { u, v, w, int };
+        unique_function(vec![int_type(u, int), int_type(v, int)], int_type(w, int))
     });
 
     // sub or (-) : Num a, Num a -> Num a
@@ -199,8 +199,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // mulWrap : Int, Int -> Int
     add_type(Symbol::NUM_MUL_WRAP, {
-        let_tvars! { u, v, w };
-        unique_function(vec![int_type(u), int_type(v)], int_type(w))
+        let_tvars! { u, v, w , int };
+        unique_function(vec![int_type(u, int), int_type(v, int)], int_type(w, int))
     });
 
     // mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
@@ -257,38 +257,50 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // rem : Attr * Int, Attr * Int -> Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))
     add_type(Symbol::NUM_REM, {
-        let_tvars! { star1, star2, star3, star4, star5 };
+        let_tvars! { star1, star2, star3, star4, star5, int };
         unique_function(
-            vec![int_type(star1), int_type(star2)],
-            result_type(star3, int_type(star4), lift(star5, div_by_zero())),
+            vec![int_type(star1, int), int_type(star2, int)],
+            result_type(star3, int_type(star4, int), lift(star5, div_by_zero())),
         )
     });
 
     // maxInt : Int
     add_type(Symbol::NUM_MAX_INT, {
-        let_tvars! { star };
-        int_type(star)
+        let_tvars! { star, int };
+        int_type(star, int)
     });
 
     // minInt : Int
     add_type(Symbol::NUM_MIN_INT, {
-        let_tvars! { star };
-        int_type(star)
+        let_tvars! { star, int };
+        int_type(star, int)
     });
 
     // divFloor or (//) : Int, Int -> Result Int [ DivByZero ]*
     add_type(Symbol::NUM_DIV_INT, {
-        let_tvars! { star1, star2, star3, star4, star5 };
+        let_tvars! { star1, star2, star3, star4, star5, int };
         unique_function(
-            vec![int_type(star1), int_type(star2)],
-            result_type(star3, int_type(star4), lift(star5, div_by_zero())),
+            vec![int_type(star1, int), int_type(star2, int)],
+            result_type(star3, int_type(star4, int), lift(star5, div_by_zero())),
         )
     });
 
     // bitwiseAnd : Attr * Int, Attr * Int -> Attr * Int
     add_type(Symbol::NUM_BITWISE_AND, {
-        let_tvars! { star1, star2, star3 };
-        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
+        let_tvars! { star1, star2, star3, int };
+        unique_function(
+            vec![int_type(star1, int), int_type(star2, int)],
+            int_type(star3, int),
+        )
+    });
+
+    // bitwiseAnd : Attr * Int, Attr * Int -> Attr * Int
+    add_type(Symbol::NUM_BITWISE_XOR, {
+        let_tvars! { star1, star2, star3, int };
+        unique_function(
+            vec![int_type(star1, int), int_type(star2, int)],
+            int_type(star3, int),
+        )
     });
 
     // divFloat : Float, Float -> Float
@@ -302,8 +314,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // round : Float -> Int
     add_type(Symbol::NUM_ROUND, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![float_type(star1)], int_type(star2))
+        let_tvars! { star1, star2, int };
+        unique_function(vec![float_type(star1)], int_type(star2, int))
     });
 
     // sqrt : Float -> Float
@@ -391,20 +403,23 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // ceiling : Float -> Int
     add_type(Symbol::NUM_CEILING, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![float_type(star1)], int_type(star2))
+        let_tvars! { star1, star2, int  };
+        unique_function(vec![float_type(star1)], int_type(star2, int))
     });
 
     // powInt : Int, Int -> Int
     add_type(Symbol::NUM_POW_INT, {
-        let_tvars! { star1, star2, star3 };
-        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
+        let_tvars! { star1, star2, star3 , int };
+        unique_function(
+            vec![int_type(star1, int), int_type(star2, int)],
+            int_type(star3, int),
+        )
     });
 
     // floor : Float -> Int
     add_type(Symbol::NUM_FLOOR, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![float_type(star1)], int_type(star2))
+        let_tvars! { star1, star2 , int};
+        unique_function(vec![float_type(star1)], int_type(star2, int))
     });
 
     // atan : Float -> Float
@@ -479,8 +494,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // len : Attr * (List *) -> Attr * Int
     add_type(Symbol::LIST_LEN, {
-        let_tvars! { star1, a, star2 };
-        unique_function(vec![list_type(star1, a)], int_type(star2))
+        let_tvars! { star1, a, star2 , int };
+        unique_function(vec![list_type(star1, a)], int_type(star2, int))
     });
 
     fn list_was_empty() -> SolvedType {
@@ -536,7 +551,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     add_type(Symbol::LIST_GET, {
-        let_tvars! { a, u, star1, star2, star3, star4 };
+        let_tvars! { a, u, star1, star2, star3, star4, int};
 
         unique_function(
             vec![
@@ -547,7 +562,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                         SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                     ],
                 ),
-                int_type(star2),
+                int_type(star2, int),
             ],
             result_type(star3, attr_type(u, a), lift(star4, index_out_of_bounds)),
         )
@@ -559,7 +574,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     Attr (u | v) a
     //     -> Attr * (List (Attr u  a))
     add_type(Symbol::LIST_SET, {
-        let_tvars! { u, v, w, star1, star2, a };
+        let_tvars! { u, v, w, star1, star2, a, int};
 
         unique_function(
             vec![
@@ -570,7 +585,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                         SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                     ],
                 ),
-                int_type(star1),
+                int_type(star1, int),
                 SolvedType::Apply(Symbol::ATTR_ATTR, vec![container(u, vec![v]), flex(a)]),
             ],
             SolvedType::Apply(
@@ -627,10 +642,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //        , Attr Shared a
     //       -> Attr * (List (Attr Shared a))
     add_type(Symbol::LIST_REPEAT, {
-        let_tvars! { a, star1, star2 };
+        let_tvars! { a, star1, star2, int };
 
         unique_function(
-            vec![int_type(star1), shared(flex(a))],
+            vec![int_type(star1, int), shared(flex(a))],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
@@ -1162,14 +1177,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Str.countGraphemes : Attr * Str, -> Attr * Int
     add_type(Symbol::STR_COUNT_GRAPHEMES, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![str_type(star1)], int_type(star2))
+        let_tvars! { star1, star2, int };
+        unique_function(vec![str_type(star1)], int_type(star2, int))
     });
 
     // fromInt : Attr * Int -> Attr * Str
     add_type(Symbol::STR_FROM_INT, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![int_type(star1)], str_type(star2))
+        let_tvars! { star1, star2, int };
+        unique_function(vec![int_type(star1, int)], str_type(star2))
     });
 
     // Result module
@@ -1242,9 +1257,8 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 
 #[inline(always)]
 fn float_type(u: VarId) -> SolvedType {
-    let b_64 = builtin_aliases::binary64_type();
-    let attr_b_64 = lift(u, b_64);
-    let fp = builtin_aliases::floatingpoint_type(attr_b_64);
+    let inner_type = lift(u, flex(u));
+    let fp = builtin_aliases::floatingpoint_type(inner_type.clone());
     let attr_fb = lift(u, fp);
     let num = builtin_aliases::num_type(attr_fb);
 
@@ -1252,16 +1266,19 @@ fn float_type(u: VarId) -> SolvedType {
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(Symbol::NUM_F64, Vec::new(), Box::new(num)),
+            SolvedType::Alias(
+                Symbol::NUM_FLOAT,
+                vec![("range".into(), inner_type)],
+                Box::new(num),
+            ),
         ],
     )
 }
 
 #[inline(always)]
-fn int_type(u: VarId) -> SolvedType {
-    let signed_64 = builtin_aliases::signed64_type();
-    let attr_signed_64 = lift(u, signed_64);
-    let integer = builtin_aliases::integer_type(attr_signed_64);
+fn int_type(u: VarId, range: VarId) -> SolvedType {
+    let inner_type = lift(u, flex(range));
+    let integer = builtin_aliases::integer_type(inner_type.clone());
     let attr_fb = lift(u, integer);
     let num = builtin_aliases::num_type(attr_fb);
 
@@ -1269,7 +1286,11 @@ fn int_type(u: VarId) -> SolvedType {
         Symbol::ATTR_ATTR,
         vec![
             flex(u),
-            SolvedType::Alias(Symbol::NUM_I64, Vec::new(), Box::new(num)),
+            SolvedType::Alias(
+                Symbol::NUM_INT,
+                vec![("range".into(), inner_type)],
+                Box::new(num),
+            ),
         ],
     )
 }

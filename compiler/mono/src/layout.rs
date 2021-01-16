@@ -11,6 +11,7 @@ pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
+pub const TAG_SIZE: Builtin<'_> = Builtin::Int64;
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
@@ -157,7 +158,13 @@ impl<'a> ClosureLayout<'a> {
 
                         Ok(Some(closure_layout))
                     }
-                    Wrapped(tags) => {
+                    Wrapped {
+                        sorted_tag_layouts: tags,
+                        is_recursive,
+                    } => {
+                        // TODO handle recursive closures
+                        debug_assert!(!is_recursive);
+
                         let closure_layout =
                             ClosureLayout::from_tag_union(arena, tags.into_bump_slice());
 
@@ -312,6 +319,7 @@ pub enum Builtin<'a> {
     Int16,
     Int8,
     Int1,
+    Usize,
     Float128,
     Float64,
     Float32,
@@ -362,14 +370,60 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
+            // Ints
+            Alias(Symbol::NUM_I128, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int128))
+            }
             Alias(Symbol::NUM_I64, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Int64))
             }
+            Alias(Symbol::NUM_I32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int32))
+            }
+            Alias(Symbol::NUM_I16, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int16))
+            }
+            Alias(Symbol::NUM_I8, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int8))
+            }
+
+            // I think unsigned and signed use the same layout
+            Alias(Symbol::NUM_U128, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int128))
+            }
+            Alias(Symbol::NUM_U64, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int64))
+            }
+            Alias(Symbol::NUM_U32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int32))
+            }
+            Alias(Symbol::NUM_U16, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int16))
+            }
+            Alias(Symbol::NUM_U8, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int8))
+            }
+
+            // Floats
             Alias(Symbol::NUM_F64, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
+            Alias(Symbol::NUM_F32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Float32))
+            }
+
             Alias(_, _, var) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
@@ -654,6 +708,7 @@ impl<'a> Builtin<'a> {
     const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
     const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
+    const USIZE_SIZE: u32 = std::mem::size_of::<usize>() as u32;
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
@@ -682,6 +737,7 @@ impl<'a> Builtin<'a> {
             Int16 => Builtin::I16_SIZE,
             Int8 => Builtin::I8_SIZE,
             Int1 => Builtin::I1_SIZE,
+            Usize => Builtin::USIZE_SIZE,
             Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
             Float32 => Builtin::F32_SIZE,
@@ -707,6 +763,7 @@ impl<'a> Builtin<'a> {
             Int16 => align_of::<i16>() as u32,
             Int8 => align_of::<i8>() as u32,
             Int1 => align_of::<bool>() as u32,
+            Usize => align_of::<usize>() as u32,
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
@@ -722,7 +779,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
             Str | Dict(_, _) | Set(_) | List(_, _) => false,
         }
@@ -733,7 +790,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
             List(mode, element_layout) => match mode {
                 MemoryMode::Refcounted => true,
@@ -757,14 +814,64 @@ fn layout_from_flat_type<'a>(
     match flat_type {
         Apply(symbol, args) => {
             match symbol {
+                // Ints
+                Symbol::NUM_NAT => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Usize))
+                }
+
+                Symbol::NUM_I128 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int128))
+                }
                 Symbol::NUM_I64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
+                Symbol::NUM_I32 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int32))
+                }
+                Symbol::NUM_I16 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int16))
+                }
+                Symbol::NUM_I8 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int8))
+                }
+
+                Symbol::NUM_U128 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int128))
+                }
+                Symbol::NUM_U64 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::NUM_U32 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int32))
+                }
+                Symbol::NUM_U16 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int16))
+                }
+                Symbol::NUM_U8 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Int8))
+                }
+
+                // Floats
                 Symbol::NUM_F64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
                 }
+                Symbol::NUM_F32 => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Float32))
+                }
+
                 Symbol::NUM_NUM | Symbol::NUM_AT_NUM => {
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
@@ -774,6 +881,7 @@ fn layout_from_flat_type<'a>(
 
                     layout_from_num_content(content)
                 }
+
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
                 Symbol::ATTR_ATTR => {
@@ -888,7 +996,7 @@ fn layout_from_flat_type<'a>(
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
                 // store the discriminant
-                tag_layout.push(Layout::Builtin(Builtin::Int64));
+                tag_layout.push(Layout::Builtin(TAG_SIZE));
 
                 for var in variables {
                     // TODO does this cause problems with mutually recursive unions?
@@ -993,10 +1101,16 @@ pub enum UnionVariant<'a> {
     Never,
     Unit,
     UnitWithArguments,
-    BoolUnion { ttrue: TagName, ffalse: TagName },
+    BoolUnion {
+        ttrue: TagName,
+        ffalse: TagName,
+    },
     ByteUnion(Vec<'a, TagName>),
     Unwrapped(Vec<'a, Layout<'a>>),
-    Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
+    Wrapped {
+        sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
+        is_recursive: bool,
+    },
 }
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
@@ -1119,7 +1233,7 @@ pub fn union_sorted_tags_help<'a>(
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
                 // add the tag discriminant (size currently always hardcoded to i64)
-                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+                arg_layouts.push(Layout::Builtin(TAG_SIZE));
 
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {
@@ -1175,7 +1289,10 @@ pub fn union_sorted_tags_help<'a>(
 
                     UnionVariant::ByteUnion(tag_names)
                 }
-                _ => UnionVariant::Wrapped(answer),
+                _ => UnionVariant::Wrapped {
+                    sorted_tag_layouts: answer,
+                    is_recursive: opt_rec_var.is_some(),
+                },
             }
         }
     }
@@ -1214,13 +1331,21 @@ pub fn layout_from_tag_union<'a>(
                         Layout::Struct(field_layouts.into_bump_slice())
                     }
                 }
-                Wrapped(tags) => {
+                Wrapped {
+                    sorted_tag_layouts: tags,
+                    is_recursive,
+                } => {
                     let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
                     for (_, tag_layout) in tags {
                         tag_layouts.push(tag_layout);
                     }
-                    Layout::Union(tag_layouts.into_bump_slice())
+
+                    if is_recursive {
+                        Layout::RecursiveUnion(tag_layouts.into_bump_slice())
+                    } else {
+                        Layout::Union(tag_layouts.into_bump_slice())
+                    }
                 }
             }
         }
@@ -1257,8 +1382,27 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
             Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
         Structure(Apply(symbol, args)) => match symbol {
+            // Ints
+            Symbol::NUM_NAT => Ok(Layout::Builtin(Builtin::Usize)),
+
             Symbol::NUM_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_I128 => Ok(Layout::Builtin(Builtin::Int128)),
+            Symbol::NUM_I64 => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_I32 => Ok(Layout::Builtin(Builtin::Int32)),
+            Symbol::NUM_I16 => Ok(Layout::Builtin(Builtin::Int16)),
+            Symbol::NUM_I8 => Ok(Layout::Builtin(Builtin::Int8)),
+
+            Symbol::NUM_U128 => Ok(Layout::Builtin(Builtin::Int128)),
+            Symbol::NUM_U64 => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_U32 => Ok(Layout::Builtin(Builtin::Int32)),
+            Symbol::NUM_U16 => Ok(Layout::Builtin(Builtin::Int16)),
+            Symbol::NUM_U8 => Ok(Layout::Builtin(Builtin::Int8)),
+
+            // Floats
             Symbol::NUM_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_F64 => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_F32 => Ok(Layout::Builtin(Builtin::Float32)),
+
             _ => {
                 panic!(
                     "Invalid Num.Num type application: {:?}",
@@ -1293,16 +1437,62 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
 
-            // TODO: we probably need to match on the type of the arg
-            // and return the correct builtin ex: Builtin::{Int32, Int16}
-            Ok(Layout::Builtin(Builtin::Int64))
+            let (_, precision_var) = args[0];
+
+            let precision = subs.get_without_compacting(precision_var).content;
+
+            match precision {
+                Content::Alias(symbol, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    let builtin = match symbol {
+                        Symbol::NUM_SIGNED128 => Builtin::Int128,
+                        Symbol::NUM_SIGNED64 => Builtin::Int64,
+                        Symbol::NUM_SIGNED32 => Builtin::Int32,
+                        Symbol::NUM_SIGNED16 => Builtin::Int16,
+                        Symbol::NUM_SIGNED8 => Builtin::Int8,
+                        Symbol::NUM_UNSIGNED128 => Builtin::Int128,
+                        Symbol::NUM_UNSIGNED64 => Builtin::Int64,
+                        Symbol::NUM_UNSIGNED32 => Builtin::Int32,
+                        Symbol::NUM_UNSIGNED16 => Builtin::Int16,
+                        Symbol::NUM_UNSIGNED8 => Builtin::Int8,
+                        Symbol::NUM_NATURAL => Builtin::Usize,
+                        _ => unreachable!("not a valid int variant: {:?} {:?}", symbol, args),
+                    };
+
+                    Ok(Layout::Builtin(builtin))
+                }
+                Content::FlexVar(_) | Content::RigidVar(_) => {
+                    // default to i64
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                _ => unreachable!("not a valid int variant: {:?}", precision),
+            }
         }
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
             debug_assert!(args.len() == 1);
 
-            // TODO: we probably need to match on the type of the arg
-            // and return the correct builtin ex: Builtin::Float32
-            Ok(Layout::Builtin(Builtin::Float64))
+            let (_, precision_var) = args[0];
+
+            let precision = subs.get_without_compacting(precision_var).content;
+
+            match precision {
+                Content::Alias(Symbol::NUM_BINARY32, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    Ok(Layout::Builtin(Builtin::Float32))
+                }
+                Content::Alias(Symbol::NUM_BINARY64, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    Ok(Layout::Builtin(Builtin::Float64))
+                }
+                Content::FlexVar(_) | Content::RigidVar(_) => {
+                    // default to f64
+                    Ok(Layout::Builtin(Builtin::Float64))
+                }
+                _ => unreachable!("not a valid float variant: {:?}", precision),
+            }
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Num *) then default to compiling it to i64

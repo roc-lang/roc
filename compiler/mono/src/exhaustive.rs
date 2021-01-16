@@ -37,7 +37,7 @@ pub enum Pattern {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
-    Int(i64),
+    Int(i128),
     Bit(bool),
     Byte(u8),
     Float(u64),

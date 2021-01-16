@@ -28,6 +28,26 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         aliases.insert(symbol, alias);
     };
 
+    // Int range : [ @Int range ]
+    add_alias(
+        Symbol::NUM_INT,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![Located::at(Region::zero(), "range".into())],
+            typ: int_alias_content(flex(TVAR1)),
+        },
+    );
+
+    // Float range : [ @Float range ]
+    add_alias(
+        Symbol::NUM_FLOAT,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![Located::at(Region::zero(), "range".into())],
+            typ: float_alias_content(flex(TVAR1)),
+        },
+    );
+
     // Num range : [ @Num range ]
     add_alias(
         Symbol::NUM_NUM,
@@ -48,6 +68,26 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Natural : [ @Natural ]
+    add_alias(
+        Symbol::NUM_NATURAL,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![],
+            typ: natural_alias_content(),
+        },
+    );
+
+    // Nat : Int Natural
+    add_alias(
+        Symbol::NUM_NAT,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: int_alias_content(natural_type()),
+        },
+    );
+
     // Signed128 : [ @Signed128 ]
     add_alias(
         Symbol::NUM_SIGNED128,
@@ -58,7 +98,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // I128 : Num (Integer Signed128)
+    // I128 : Int Signed128
     add_alias(
         Symbol::NUM_I128,
         BuiltinAlias {
@@ -68,7 +108,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // U128 : Num (Integer Unsigned128)
+    // U128 : Int Unsigned128
     add_alias(
         Symbol::NUM_U128,
         BuiltinAlias {
@@ -88,7 +128,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // I64 : Num (Integer Signed64)
+    // I64 : Int Signed64
     add_alias(
         Symbol::NUM_I64,
         BuiltinAlias {
@@ -98,7 +138,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // U64 : Num (Integer Unsigned64)
+    // U64 : Int Unsigned64
     add_alias(
         Symbol::NUM_U64,
         BuiltinAlias {
@@ -118,7 +158,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // I32 : Num (Integer Signed32)
+    // I32 : Int Signed32
     add_alias(
         Symbol::NUM_I32,
         BuiltinAlias {
@@ -128,7 +168,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // U32 : Num (Integer Unsigned32)
+    // U32 : Int Unsigned32
     add_alias(
         Symbol::NUM_U32,
         BuiltinAlias {
@@ -148,7 +188,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // I16 : Num (Integer Signed16)
+    // I16 : Int Signed16
     add_alias(
         Symbol::NUM_I16,
         BuiltinAlias {
@@ -158,7 +198,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // U16 : Num (Integer Unsigned16)
+    // U16 : Int Unsigned16
     add_alias(
         Symbol::NUM_U16,
         BuiltinAlias {
@@ -178,7 +218,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // I8 : Num (Integer Signed8)
+    // I8 : Int Signed8
     add_alias(
         Symbol::NUM_I8,
         BuiltinAlias {
@@ -188,7 +228,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // U8 : Num (Integer Unsigned8)
+    // U8 : Int Unsigned8
     add_alias(
         Symbol::NUM_U8,
         BuiltinAlias {
@@ -228,7 +268,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // F64 : Num (FloatingPoint Binary64)
+    // F64 : Float Binary64
     add_alias(
         Symbol::NUM_F64,
         BuiltinAlias {
@@ -238,7 +278,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // F32 : Num (FloatingPoint Binary32)
+    // F32 : Float Binary32
     add_alias(
         Symbol::NUM_F32,
         BuiltinAlias {
@@ -312,27 +352,39 @@ fn floatingpoint_alias_content(range: SolvedType) -> SolvedType {
 // FLOAT
 
 #[inline(always)]
-pub fn float_type() -> SolvedType {
+pub fn float_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
-        Symbol::NUM_F64,
-        Vec::new(),
-        Box::new(float_alias_content(binary64_type())),
+        Symbol::NUM_FLOAT,
+        vec![("range".into(), range.clone())],
+        Box::new(float_alias_content(range)),
     )
 }
 
 #[inline(always)]
-fn float_alias_content(typ: SolvedType) -> SolvedType {
-    num_type(floatingpoint_type(typ))
+fn float_alias_content(range: SolvedType) -> SolvedType {
+    num_type(floatingpoint_type(range))
+}
+
+// Nat
+
+#[inline(always)]
+pub fn nat_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_NAT, vec![], Box::new(nat_alias_content()))
+}
+
+#[inline(always)]
+fn nat_alias_content() -> SolvedType {
+    int_alias_content(natural_type())
 }
 
 // INT
 
 #[inline(always)]
-pub fn int_type() -> SolvedType {
+pub fn int_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
-        Symbol::NUM_I64,
-        Vec::new(),
-        Box::new(int_alias_content(signed64_type())),
+        Symbol::NUM_INT,
+        vec![("range".into(), range.clone())],
+        Box::new(int_alias_content(range)),
     )
 }
 
@@ -383,6 +435,20 @@ pub fn binary32_type() -> SolvedType {
 #[inline(always)]
 fn binary32_alias_content() -> SolvedType {
     single_private_tag(Symbol::NUM_AT_BINARY32, vec![])
+}
+
+#[inline(always)]
+pub fn natural_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_NATURAL,
+        vec![],
+        Box::new(natural_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn natural_alias_content() -> SolvedType {
+    single_private_tag(Symbol::NUM_AT_NATURAL, vec![])
 }
 
 #[inline(always)]

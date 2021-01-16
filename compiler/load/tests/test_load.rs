@@ -82,9 +82,10 @@ mod test_load {
                 roc_load::file::load_and_typecheck(
                     arena,
                     full_file_path,
-                    stdlib,
+                    &stdlib,
                     dir.path(),
                     exposed_types,
+                    8,
                 )
             };
 
@@ -123,9 +124,10 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            roc_builtins::std::standard_stdlib(),
+            &roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
+            8,
         );
         let mut loaded_module = loaded.expect("Test module failed to load");
 
@@ -285,9 +287,10 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            roc_builtins::std::standard_stdlib(),
+            &roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
+            8,
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");
@@ -357,14 +360,14 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "F64",
-                "divisionFn" => "F64, F64 -> Result F64 [ DivByZero ]*",
-                "divisionTest" => "Result F64 [ DivByZero ]*",
-                "intTest" => "I64",
-                "x" => "F64",
+                "floatTest" => "Float *",
+                "divisionFn" => "Float a, Float a -> Result (Float a) [ DivByZero ]*",
+                "divisionTest" => "Result (Float *) [ DivByZero ]*",
+                "intTest" => "Int *",
+                "x" => "Float *",
                 "constantNum" => "Num *",
-                "divDep1ByDep2" => "Result F64 [ DivByZero ]*",
-                "fromDep2" => "F64",
+                "divDep1ByDep2" => "Result (Float *) [ DivByZero ]*",
+                "fromDep2" => "Float *",
             },
         );
     }
@@ -377,10 +380,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "I64, I64, List a -> List a",
-                "partition" => "I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]",
-                "partitionHelp" => "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
-                "quicksort" => "List (Num a), I64, I64 -> List (Num a)",
+                "swap" => "Nat, Nat, List a -> List a",
+                "partition" => "Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]",
+                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+                "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
             },
         );
     }
@@ -406,10 +409,10 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "swap" => "I64, I64, List a -> List a",
-                "partition" => "I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]",
-                "partitionHelp" => "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
-                "quicksort" => "List (Num a), I64, I64 -> List (Num a)",
+                "swap" => "Nat, Nat, List a -> List a",
+                "partition" => "Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]",
+                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+                "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
             },
         );
     }
@@ -454,7 +457,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "F64",
+                "blah2" => "Float *",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",
@@ -476,7 +479,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "blah2" => "F64",
+                "blah2" => "Float *",
                 "blah3" => "Str",
                 "str" => "Str",
                 "alwaysThree" => "* -> Str",

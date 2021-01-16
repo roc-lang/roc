@@ -58,9 +58,10 @@ mod test_mono {
             arena,
             filename,
             &module_src,
-            stdlib,
+            &stdlib,
             src_dir,
             exposed_types,
+            8,
         );
 
         let mut loaded = loaded.expect("failed to load module");
@@ -156,6 +157,45 @@ mod test_mono {
                 procedure Test.0 ():
                     let Test.1 = 5i64;
                     ret Test.1;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ir_int_add() {
+        compiles_to_ir(
+            r#"
+            x = [ 1,2 ]
+            5 + 4 + 3 + List.len x
+            "#,
+            indoc!(
+                r#"
+                procedure List.7 (#Attr.2):
+                    let Test.6 = lowlevel ListLen #Attr.2;
+                    ret Test.6;
+
+                procedure Num.24 (#Attr.2, #Attr.3):
+                    let Test.5 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.5;
+
+                procedure Test.0 ():
+                    let Test.11 = 1i64;
+                    let Test.12 = 2i64;
+                    let Test.1 = Array [Test.11, Test.12];
+                    let Test.9 = 5i64;
+                    let Test.10 = 4i64;
+                    invoke Test.7 = CallByName Num.24 Test.9 Test.10 catch
+                        dec Test.1;
+                        unreachable;
+                    let Test.8 = 3i64;
+                    invoke Test.3 = CallByName Num.24 Test.7 Test.8 catch
+                        dec Test.1;
+                        unreachable;
+                    let Test.4 = CallByName List.7 Test.1;
+                    dec Test.1;
+                    let Test.2 = CallByName Num.24 Test.3 Test.4;
+                    ret Test.2;
                 "#
             ),
         )
@@ -1853,6 +1893,7 @@ mod test_mono {
                     let Test.2 = S Test.9 Test.8;
                     let Test.5 = 1i64;
                     let Test.6 = Index 0 Test.2;
+                    dec Test.2;
                     let Test.7 = lowlevel Eq Test.5 Test.6;
                     if Test.7 then
                         let Test.3 = 0i64;
@@ -1904,12 +1945,16 @@ mod test_mono {
                         let Test.10 = lowlevel Eq Test.8 Test.9;
                         if Test.10 then
                             let Test.4 = Index 1 Test.2;
+                            inc Test.4;
+                            dec Test.2;
                             let Test.3 = 1i64;
                             ret Test.3;
                         else
+                            dec Test.2;
                             let Test.5 = 0i64;
                             ret Test.5;
                     else
+                        dec Test.2;
                         let Test.6 = 0i64;
                         ret Test.6;
                 "#
@@ -2104,7 +2149,7 @@ mod test_mono {
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                swap : I64, I64, List a -> List a
+                swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->

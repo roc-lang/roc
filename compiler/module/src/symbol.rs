@@ -738,6 +738,7 @@ define_builtins! {
         10 INC: "#inc" // internal function that increments the refcount
         11 DEC: "#dec" // internal function that increments the refcount
         12 ARG_CLOSURE: "#arg_closure" // symbol used to store the closure record
+        13 LIST_EQ: "#list_eq" // internal function that checks list equality
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -822,10 +823,16 @@ define_builtins! {
         79 NUM_AT_BINARY32: "@Binary32"
         80 NUM_BINARY32: "Binary32" imported
         81 NUM_BITWISE_AND: "bitwiseAnd"
-        82 NUM_SUB_WRAP: "subWrap"
-        83 NUM_SUB_CHECKED: "subChecked"
-        84 NUM_MUL_WRAP: "mulWrap"
-        85 NUM_MUL_CHECKED: "mulChecked"
+        82 NUM_BITWISE_XOR: "bitwiseXor"
+        83 NUM_SUB_WRAP: "subWrap"
+        84 NUM_SUB_CHECKED: "subChecked"
+        85 NUM_MUL_WRAP: "mulWrap"
+        86 NUM_MUL_CHECKED: "mulChecked"
+        87 NUM_INT: "Int" imported
+        88 NUM_FLOAT: "Float" imported
+        89 NUM_AT_NATURAL: "@Natural"
+        90 NUM_NATURAL: "Natural" imported
+        91 NUM_NAT: "Nat" imported
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

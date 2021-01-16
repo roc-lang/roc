@@ -35,14 +35,17 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
 
     let module_src = promote_expr_to_module(src_str);
 
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         &arena,
         filename,
         &module_src,
-        stdlib,
+        &stdlib,
         src_dir,
         exposed_types,
+        ptr_bytes,
     );
 
     let mut loaded = loaded.expect("failed to load module");

@@ -1,12 +1,12 @@
 app "quicksort" packages { base: "./platform" } provides [ quicksort ] to base
 
-quicksort : List I64 -> List I64
+quicksort : List Int * -> List Int *
 quicksort = \originalList -> helper originalList
 
-helper : List I64 -> List I64
+helper : List Int * -> List Int *
 helper = \originalList ->
 
-    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
+    quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
             when partition low high list is
@@ -18,7 +18,7 @@ helper = \originalList ->
             list
 
 
-    swap : I64, I64, List a -> List a
+    swap : Nat, Nat, List a -> List a
     swap = \i, j, list ->
         when Pair (List.get list i) (List.get list j) is
             Pair (Ok atI) (Ok atJ) ->
@@ -29,7 +29,7 @@ helper = \originalList ->
             _ ->
                 []
 
-    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+    partition : Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]
     partition = \low, high, initialList ->
         when List.get initialList high is
             Ok pivot ->
@@ -41,7 +41,7 @@ helper = \originalList ->
                 Pair (low - 1) initialList
 
 
-    partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+    partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
     partitionHelp = \i, j, list, high, pivot ->
         if j < high then
             when List.get list j is
