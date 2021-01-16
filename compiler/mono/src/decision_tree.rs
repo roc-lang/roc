@@ -1014,16 +1014,17 @@ fn path_to_expr_help<'a>(
                             NonRecursive(layouts) | Recursive(layouts) => layouts[*tag_id as usize],
                             NullableWrapped {
                                 nullable_id,
-                                nullable_layout,
                                 other_tags: layouts,
                                 ..
                             } => {
                                 use std::cmp::Ordering;
                                 dbg!(nullable_id, tag_id);
                                 match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
-                                    Ordering::Equal => &*env
+                                    Ordering::Equal => 
+                                        // the nullable tag is going to predent it stores a tag id
+                                        &*env
                                         .arena
-                                        .alloc([Layout::Builtin(nullable_layout.clone())]),
+                                        .alloc([Layout::Builtin(crate::layout::TAG_SIZE)]),
                                     Ordering::Less => layouts[*tag_id as usize],
                                     Ordering::Greater => layouts[*tag_id as usize - 1],
                                 }

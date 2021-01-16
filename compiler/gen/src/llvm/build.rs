@@ -1044,7 +1044,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_layout:
                 Layout::Union(UnionLayout::NullableWrapped {
                     nullable_id,
-                    nullable_layout: _,
                     other_tags: fields,
                 }),
             union_size,

@@ -50,12 +50,11 @@ pub enum UnionLayout<'a> {
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         nullable_id: i64,
-        nullable_layout: Builtin<'a>,
         other_tags: &'a [&'a [Layout<'a>]],
     },
     // A recursive tag union where the non-nullable variant does NOT store the tag id
     // e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
-    // NullableUnwrapped,
+    // NullableUnwrapped { nullable_id: bool, other_id: bool, other_fields: &'a [Layout<'a>], }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1090,14 +1089,14 @@ fn layout_from_flat_type<'a>(
             if GENERATE_NULLABLE {
                 for (index, (_name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some((index as i64, TAG_SIZE));
+                        nullable = Some(index as i64);
                         break;
                     }
                 }
             }
 
             for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
-                if matches!(nullable, Some((i, _)) if i == index as i64) {
+                if matches!(nullable, Some(i) if i == index as i64) {
                     // don't add the
                     continue;
                 }
@@ -1129,10 +1128,9 @@ fn layout_from_flat_type<'a>(
                 tag_layouts.push(tag_layout.into_bump_slice());
             }
 
-            let union_layout = if let Some((tag_id, tag_id_layout)) = nullable {
+            let union_layout = if let Some(tag_id) = nullable {
                 UnionLayout::NullableWrapped {
                     nullable_id: tag_id,
-                    nullable_layout: tag_id_layout,
                     other_tags: tag_layouts.into_bump_slice(),
                 }
             } else {
@@ -1607,7 +1605,6 @@ pub fn layout_from_tag_union<'a>(
 
                             Layout::Union(UnionLayout::NullableWrapped {
                                 nullable_id,
-                                nullable_layout: TAG_SIZE,
                                 other_tags: tag_layouts.into_bump_slice(),
                             })
                         }

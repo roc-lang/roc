@@ -2823,7 +2823,6 @@ pub fn with_hole<'a>(
 
                             let layout = Layout::Union(UnionLayout::NullableWrapped {
                                 nullable_id,
-                                nullable_layout: TAG_SIZE,
                                 other_tags: layouts.into_bump_slice(),
                             });
 
@@ -6169,7 +6168,6 @@ fn from_can_pattern_help<'a>(
 
                             let layout = Layout::Union(UnionLayout::NullableWrapped {
                                 nullable_id,
-                                nullable_layout: TAG_SIZE,
                                 other_tags: layouts.into_bump_slice(),
                             });
 
