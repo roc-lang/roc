@@ -4,7 +4,7 @@ use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
 use inkwell::AddressSpace;
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_ptr_type<'ctx>(
@@ -132,18 +132,17 @@ pub fn basic_type_from_layout<'ctx>(
             .into(),
         PhantomEmptyStruct => context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(arena, context, sorted_fields, ptr_bytes),
-        //        Union(tags) if tags.len() == 1 => {
-        //            let sorted_fields = tags.iter().next().unwrap();
-        //
-        //            basic_type_from_record(arena, context, sorted_fields, ptr_bytes)
-        //        }
-        RecursiveUnion(_) => block_of_memory(context, layout, ptr_bytes)
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-        NullableUnion { .. } => block_of_memory(context, layout, ptr_bytes)
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-        Union(_) => block_of_memory(context, layout, ptr_bytes),
+        Union(variant) => {
+            let block = block_of_memory(context, layout, ptr_bytes);
+
+            use UnionLayout::*;
+            match variant {
+                Recursive(_) | NullableWrapped { .. } => {
+                    block.ptr_type(AddressSpace::Generic).into()
+                }
+                NonRecursive(_) => block,
+            }
+        }
         RecursivePointer => {
             // TODO make this dynamic
             context
@@ -181,20 +180,6 @@ pub fn basic_type_from_builtin<'ctx>(
         List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
         EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
     }
-}
-
-pub fn block_of_memory_slice<'ctx>(
-    context: &'ctx Context,
-    layouts: &[Layout<'_>],
-    ptr_bytes: u32,
-) -> BasicTypeEnum<'ctx> {
-    let mut union_size = 0;
-
-    for layout in layouts {
-        union_size += layout.stack_size(ptr_bytes as u32);
-    }
-
-    block_of_memory_help(context, union_size)
 }
 
 pub fn block_of_memory<'ctx>(

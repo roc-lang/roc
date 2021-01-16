@@ -2,7 +2,7 @@ use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
     DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
 };
-use crate::layout::{Builtin, Layout, LayoutCache};
+use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -228,7 +228,9 @@ fn flatten<'a>(
             tag_id,
             tag_name,
             layout,
-        } if union.alternatives.len() == 1 && !matches!(layout, Layout::NullableUnion { .. } ) => {
+        } if union.alternatives.len() == 1
+            && !matches!(layout, Layout::Union(UnionLayout::NullableWrapped { .. })) =>
+        {
             // TODO ^ do we need to check that guard.is_none() here?
 
             let path = path_pattern.0;
@@ -1005,23 +1007,27 @@ fn path_to_expr_help<'a>(
             }
             Some(wrapped) => {
                 let field_layouts = match &layout {
-                    Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
-                        layouts[*tag_id as usize]
-                    }
-                    Layout::NullableUnion {
-                        nullable_id,
-                        nullable_layout,
-                        foo: layouts,
-                        ..
-                    } => {
-                        use std::cmp::Ordering;
-                        dbg!(nullable_id, tag_id);
-                        match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
-                            Ordering::Equal => {
-                                &*env.arena.alloc([Layout::Builtin(nullable_layout.clone())])
+                    Layout::Union(variant) => {
+                        use UnionLayout::*;
+
+                        match variant {
+                            NonRecursive(layouts) | Recursive(layouts) => layouts[*tag_id as usize],
+                            NullableWrapped {
+                                nullable_id,
+                                nullable_layout,
+                                other_tags: layouts,
+                                ..
+                            } => {
+                                use std::cmp::Ordering;
+                                dbg!(nullable_id, tag_id);
+                                match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
+                                    Ordering::Equal => &*env
+                                        .arena
+                                        .alloc([Layout::Builtin(nullable_layout.clone())]),
+                                    Ordering::Less => layouts[*tag_id as usize],
+                                    Ordering::Greater => layouts[*tag_id as usize - 1],
+                                }
                             }
-                            Ordering::Less => layouts[*tag_id as usize],
-                            Ordering::Greater => layouts[*tag_id as usize - 1],
                         }
                     }
 

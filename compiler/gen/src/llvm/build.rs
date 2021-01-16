@@ -9,8 +9,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slice,
-    collection, get_fn_type, get_ptr_type, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, collection, get_fn_type,
+    get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
@@ -42,7 +42,7 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{CallType, JoinPointId, Wrapped};
-use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode};
+use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode, UnionLayout};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -859,13 +859,13 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Tag {
             arguments,
-            tag_layout: Layout::Union(fields),
+            tag_layout: Layout::Union(UnionLayout::NonRecursive(fields)),
             union_size,
             tag_id,
             tag_name,
             ..
         } => {
-            let tag_layout = Layout::Union(fields);
+            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
@@ -960,13 +960,13 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         }
         Tag {
             arguments,
-            tag_layout: Layout::RecursiveUnion(fields),
+            tag_layout: Layout::Union(UnionLayout::Recursive(fields)),
             union_size,
             tag_id,
             tag_name,
             ..
         } => {
-            let tag_layout = Layout::Union(fields);
+            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
@@ -1042,17 +1042,17 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Tag {
             arguments,
             tag_layout:
-                Layout::NullableUnion {
+                Layout::Union(UnionLayout::NullableWrapped {
                     nullable_id,
                     nullable_layout: _,
-                    foo: fields,
-                },
+                    other_tags: fields,
+                }),
             union_size,
             tag_id,
             tag_name,
             ..
         } => {
-            let tag_layout = Layout::Union(fields);
+            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
             let tag_struct_type =
                 basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
             if *tag_id == *nullable_id as u8 {
@@ -1251,11 +1251,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
                 PointerValue(value) => {
                     match structure_layout {
-                        Layout::NullableUnion {
+                        Layout::Union(UnionLayout::NullableWrapped {
                             nullable_id,
-                            foo: fields,
+                            other_tags: fields,
                             ..
-                        } if *index == 0 => {
+                        }) if *index == 0 => {
                             let ptr = value;
                             let is_null = env.builder.build_is_null(ptr, "is_null");
 

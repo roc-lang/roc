@@ -12,7 +12,7 @@ use inkwell::types::{AnyTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode, UnionLayout};
 
 pub const REFCOUNT_MAX: usize = 0_usize;
 
@@ -338,19 +338,27 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
         }
         RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
 
-        Union(tags) => {
-            build_dec_union(env, layout_ids, tags, value);
-        }
+        Union(variant) => {
+            use UnionLayout::*;
 
-        NullableUnion { foo: tags, .. } => {
-            debug_assert!(value.is_pointer_value());
+            match variant {
+                NonRecursive(tags) => {
+                    build_dec_union(env, layout_ids, tags, value);
+                }
 
-            build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
-        }
+                NullableWrapped {
+                    other_tags: tags, ..
+                } => {
+                    debug_assert!(value.is_pointer_value());
 
-        RecursiveUnion(tags) => {
-            debug_assert!(value.is_pointer_value());
-            build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
+                    build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
+                }
+
+                Recursive(tags) => {
+                    debug_assert!(value.is_pointer_value());
+                    build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
+                }
+            }
         }
 
         FunctionPointer(_, _) | Pointer(_) => {}
@@ -433,15 +441,27 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
             increment_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
         }
 
-        NullableUnion { foo: tags, .. } => {
-            debug_assert!(value.is_pointer_value());
+        Union(variant) => {
+            use UnionLayout::*;
 
-            build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
-        }
+            match variant {
+                NullableWrapped {
+                    other_tags: tags, ..
+                } => {
+                    debug_assert!(value.is_pointer_value());
 
-        RecursiveUnion(tags) => {
-            debug_assert!(value.is_pointer_value());
-            build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
+                    build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
+                }
+
+                Recursive(tags) => {
+                    debug_assert!(value.is_pointer_value());
+                    build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
+                }
+
+                NonRecursive(tags) => {
+                    build_inc_union(env, layout_ids, tags, value);
+                }
+            }
         }
         Closure(_, closure_layout, _) => {
             if closure_layout.contains_refcounted() {
@@ -1053,7 +1073,7 @@ pub fn build_dec_rec_union<'a, 'ctx, 'env>(
     value: PointerValue<'ctx>,
     is_nullable: bool,
 ) {
-    let layout = Layout::RecursiveUnion(fields);
+    let layout = Layout::Union(UnionLayout::Recursive(fields));
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -1130,7 +1150,7 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
-    let layout = Layout::RecursiveUnion(tags);
+    let layout = Layout::Union(UnionLayout::Recursive(tags));
 
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
@@ -1270,7 +1290,7 @@ pub fn build_dec_union<'a, 'ctx, 'env>(
     fields: &'a [&'a [Layout<'a>]],
     value: BasicValueEnum<'ctx>,
 ) {
-    let layout = Layout::Union(fields);
+    let layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -1435,7 +1455,7 @@ pub fn build_inc_rec_union<'a, 'ctx, 'env>(
     value: PointerValue<'ctx>,
     is_nullable: bool,
 ) {
-    let layout = Layout::RecursiveUnion(fields);
+    let layout = Layout::Union(UnionLayout::Recursive(fields));
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -1531,7 +1551,7 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
-    let layout = Layout::RecursiveUnion(tags);
+    let layout = Layout::Union(UnionLayout::Recursive(tags));
 
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
@@ -1663,7 +1683,7 @@ pub fn build_inc_union<'a, 'ctx, 'env>(
     fields: &'a [&'a [Layout<'a>]],
     value: BasicValueEnum<'ctx>,
 ) {
-    let layout = Layout::Union(fields);
+    let layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -1737,7 +1757,7 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
-    let layout = Layout::RecursiveUnion(tags);
+    let layout = Layout::Union(UnionLayout::Recursive(tags));
     let before_block = env.builder.get_insert_block().expect("to be in a function");
 
     let wrapper_struct = arg_val.into_struct_value();
@@ -1880,9 +1900,7 @@ pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layou
     match layout {
         Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
         Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
-        Layout::RecursivePointer | Layout::Union(_) | Layout::RecursiveUnion(_) => {
-            env.ptr_bytes as u64
-        }
+        Layout::RecursivePointer | Layout::Union(_) => env.ptr_bytes as u64,
         _ => (env.ptr_bytes as u64).max(value_bytes),
     }
 }

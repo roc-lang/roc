@@ -1,7 +1,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, WrappedVariant, TAG_SIZE,
+    Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout, WrappedVariant,
+    TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -820,16 +821,22 @@ impl Wrapped {
                 _ => Some(Wrapped::RecordOrSingleTagUnion),
             },
 
-            Layout::Union(tags) | Layout::RecursiveUnion(tags) => match tags {
-                [] => todo!("how to handle empty tag unions?"),
-                [single] => match single.len() {
-                    0 => Some(Wrapped::EmptyRecord),
-                    1 => Some(Wrapped::SingleElementRecord),
-                    _ => Some(Wrapped::RecordOrSingleTagUnion),
-                },
-                _ => Some(Wrapped::MultiTagUnion),
-            },
-            Layout::NullableUnion { .. } => Some(Wrapped::MultiTagUnion),
+            Layout::Union(variant) => {
+                use UnionLayout::*;
+
+                match variant {
+                    Recursive(tags) | NonRecursive(tags) => match tags {
+                        [] => todo!("how to handle empty tag unions?"),
+                        [single] => match single.len() {
+                            0 => Some(Wrapped::EmptyRecord),
+                            1 => Some(Wrapped::SingleElementRecord),
+                            _ => Some(Wrapped::RecordOrSingleTagUnion),
+                        },
+                        _ => Some(Wrapped::MultiTagUnion),
+                    },
+                    NullableWrapped { .. } => Some(Wrapped::MultiTagUnion),
+                }
+            }
             _ => None,
         }
     }
@@ -2742,7 +2749,8 @@ pub fn with_hole<'a>(
                                 layouts.push(arg_layouts);
                             }
 
-                            let layout = Layout::RecursiveUnion(layouts.into_bump_slice());
+                            let layout =
+                                Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
 
                             let tag = Expr::Tag {
                                 tag_layout: layout.clone(),
@@ -2775,7 +2783,8 @@ pub fn with_hole<'a>(
                                 layouts.push(arg_layouts);
                             }
 
-                            let layout = Layout::Union(layouts.into_bump_slice());
+                            let layout =
+                                Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
 
                             let tag = Expr::Tag {
                                 tag_layout: layout.clone(),
@@ -2812,11 +2821,11 @@ pub fn with_hole<'a>(
                                 layouts.push(arg_layouts);
                             }
 
-                            let layout = Layout::NullableUnion {
+                            let layout = Layout::Union(UnionLayout::NullableWrapped {
                                 nullable_id,
                                 nullable_layout: TAG_SIZE,
-                                foo: layouts.into_bump_slice(),
-                            };
+                                other_tags: layouts.into_bump_slice(),
+                            });
 
                             let tag = Expr::Tag {
                                 tag_layout: layout.clone(),
@@ -5945,6 +5954,8 @@ fn from_can_pattern_help<'a>(
                 }
                 Wrapped(variant) => {
                     let (tag_id, argument_layouts) = variant.tag_name_to_id(tag_name);
+                    let number_of_tags = variant.number_of_tags();
+                    let mut ctors = std::vec::Vec::with_capacity(number_of_tags);
 
                     let arguments = {
                         let mut temp = arguments.clone();
@@ -5971,7 +5982,6 @@ fn from_can_pattern_help<'a>(
                         } => {
                             debug_assert!(tags.len() > 1);
 
-                            let mut ctors = std::vec::Vec::with_capacity(tags.len());
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as u8),
@@ -6013,7 +6023,8 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout = Layout::Union(layouts.into_bump_slice());
+                            let layout =
+                                Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -6029,7 +6040,6 @@ fn from_can_pattern_help<'a>(
                         } => {
                             debug_assert!(tags.len() > 1);
 
-                            let mut ctors = std::vec::Vec::with_capacity(tags.len());
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as u8),
@@ -6071,7 +6081,8 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout = Layout::RecursiveUnion(layouts.into_bump_slice());
+                            let layout =
+                                Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -6088,8 +6099,6 @@ fn from_can_pattern_help<'a>(
                             nullable_name,
                         } => {
                             debug_assert!(!tags.is_empty());
-
-                            let mut ctors = std::vec::Vec::with_capacity(tags.len());
 
                             let mut i = 0;
                             for (tag_name, args) in tags.iter() {
@@ -6158,11 +6167,11 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout = Layout::NullableUnion {
+                            let layout = Layout::Union(UnionLayout::NullableWrapped {
                                 nullable_id,
                                 nullable_layout: TAG_SIZE,
-                                foo: layouts.into_bump_slice(),
-                            };
+                                other_tags: layouts.into_bump_slice(),
+                            });
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),

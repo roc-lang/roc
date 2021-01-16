@@ -29,18 +29,24 @@ pub enum Layout<'a> {
     /// this is important for closures that capture zero-sized values
     PhantomEmptyStruct,
     Struct(&'a [Layout<'a>]),
-    Union(&'a [&'a [Layout<'a>]]),
-    RecursiveUnion(&'a [&'a [Layout<'a>]]),
-    NullableUnion {
-        nullable_id: i64,
-        nullable_layout: Builtin<'a>,
-        foo: &'a [&'a [Layout<'a>]],
-    },
+    Union(UnionLayout<'a>),
     RecursivePointer,
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Closure(&'a [Layout<'a>], ClosureLayout<'a>, &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum UnionLayout<'a> {
+    NonRecursive(&'a [&'a [Layout<'a>]]),
+    Recursive(&'a [&'a [Layout<'a>]]),
+    NullableWrapped {
+        nullable_id: i64,
+        nullable_layout: Builtin<'a>,
+        other_tags: &'a [&'a [Layout<'a>]],
+    },
+    // NullableUnwrapped,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -104,7 +110,9 @@ impl<'a> ClosureLayout<'a> {
 
         ClosureLayout {
             captured: tags,
-            layout: arena.alloc(Layout::Union(tag_arguments.into_bump_slice())),
+            layout: arena.alloc(Layout::Union(UnionLayout::NonRecursive(
+                tag_arguments.into_bump_slice(),
+            ))),
         }
     }
 
@@ -273,7 +281,7 @@ impl<'a> ClosureLayout<'a> {
 
                 Ok(Expr::Struct(symbols))
             }
-            Layout::Union(tags) => {
+            Layout::Union(UnionLayout::NonRecursive(tags)) => {
                 // NOTE it's very important that this Union consists of Closure tags
                 // and is not an unpacked 1-element record
 
@@ -284,7 +292,7 @@ impl<'a> ClosureLayout<'a> {
                     .unwrap() as _;
 
                 let expr = Expr::Tag {
-                    tag_layout: Layout::Union(tags),
+                    tag_layout: Layout::Union(UnionLayout::NonRecursive(tags)),
                     tag_name: TagName::Closure(original),
                     tag_id,
                     union_size: tags.len() as u8,
@@ -459,16 +467,22 @@ impl<'a> Layout<'a> {
             Struct(fields) => fields
                 .iter()
                 .all(|field_layout| field_layout.safe_to_memcpy()),
-            Union(tags) => tags
-                .iter()
-                .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
-            RecursiveUnion(_) => {
-                // a recursive union will always contain a pointer, and is thus not safe to memcpy
-                false
-            }
-            NullableUnion { .. } => {
-                // a nullable union will always contain a pointer, and is thus not safe to memcpy
-                false
+            Union(variant) => {
+                use UnionLayout::*;
+
+                match variant {
+                    NonRecursive(tags) => tags
+                        .iter()
+                        .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
+                    Recursive(_) => {
+                        // a recursive union will always contain a pointer, and is thus not safe to memcpy
+                        false
+                    }
+                    NullableWrapped { .. } => {
+                        // a nullable union will always contain a pointer, and is thus not safe to memcpy
+                        false
+                    }
+                }
             }
             FunctionPointer(_, _) => {
                 // Function pointers are immutable and can always be safely copied
@@ -513,36 +527,44 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Union(fields) => fields
-                .iter()
-                .map(|tag_layout| {
-                    tag_layout
+            Union(variant) => {
+                use UnionLayout::*;
+
+                match variant {
+                    NonRecursive(fields) => fields
                         .iter()
-                        .map(|field| field.stack_size(pointer_size))
-                        .sum()
-                })
-                .max()
-                .unwrap_or_default(),
-            RecursiveUnion(fields) => fields
-                .iter()
-                .map(|tag_layout| {
-                    tag_layout
+                        .map(|tag_layout| {
+                            tag_layout
+                                .iter()
+                                .map(|field| field.stack_size(pointer_size))
+                                .sum()
+                        })
+                        .max()
+                        .unwrap_or_default(),
+                    Recursive(fields) => fields
                         .iter()
-                        .map(|field| field.stack_size(pointer_size))
-                        .sum()
-                })
-                .max()
-                .unwrap_or_default(),
-            NullableUnion { foo: fields, .. } => fields
-                .iter()
-                .map(|tag_layout| {
-                    tag_layout
+                        .map(|tag_layout| {
+                            tag_layout
+                                .iter()
+                                .map(|field| field.stack_size(pointer_size))
+                                .sum()
+                        })
+                        .max()
+                        .unwrap_or_default(),
+                    NullableWrapped {
+                        other_tags: fields, ..
+                    } => fields
                         .iter()
-                        .map(|field| field.stack_size(pointer_size))
-                        .sum()
-                })
-                .max()
-                .unwrap_or_default(),
+                        .map(|tag_layout| {
+                            tag_layout
+                                .iter()
+                                .map(|field| field.stack_size(pointer_size))
+                                .sum()
+                        })
+                        .max()
+                        .unwrap_or_default(),
+                }
+            }
             Closure(_, closure_layout, _) => pointer_size + closure_layout.stack_size(pointer_size),
             FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
@@ -557,20 +579,30 @@ impl<'a> Layout<'a> {
                 .map(|x| x.alignment_bytes(pointer_size))
                 .max()
                 .unwrap_or(0),
-            Layout::Union(tags) => tags
-                .iter()
-                .map(|x| x.iter())
-                .flatten()
-                .map(|x| x.alignment_bytes(pointer_size))
-                .max()
-                .unwrap_or(0),
-            Layout::RecursiveUnion(tags) | Layout::NullableUnion { foo: tags, .. } => tags
-                .iter()
-                .map(|x| x.iter())
-                .flatten()
-                .map(|x| x.alignment_bytes(pointer_size))
-                .max()
-                .unwrap_or(pointer_size),
+
+            Layout::Union(variant) => {
+                use UnionLayout::*;
+
+                match variant {
+                    NonRecursive(tags) => tags
+                        .iter()
+                        .map(|x| x.iter())
+                        .flatten()
+                        .map(|x| x.alignment_bytes(pointer_size))
+                        .max()
+                        .unwrap_or(0),
+                    Recursive(tags)
+                    | NullableWrapped {
+                        other_tags: tags, ..
+                    } => tags
+                        .iter()
+                        .map(|x| x.iter())
+                        .flatten()
+                        .map(|x| x.alignment_bytes(pointer_size))
+                        .max()
+                        .unwrap_or(pointer_size),
+                }
+            }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::PhantomEmptyStruct => 0,
             Layout::RecursivePointer => pointer_size,
@@ -583,7 +615,22 @@ impl<'a> Layout<'a> {
     }
 
     pub fn is_refcounted(&self) -> bool {
-        matches!(self, Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) | Layout::Builtin(Builtin::Str) | Layout::RecursiveUnion(_) | Layout::RecursivePointer | Layout::NullableUnion { .. })
+        use self::Builtin::*;
+        use Layout::*;
+
+        match self {
+            Union(variant) => {
+                use UnionLayout::*;
+
+                matches!(variant, Recursive(_)| NullableWrapped { .. } )
+            }
+
+            RecursivePointer => true,
+
+            Builtin(List(MemoryMode::Refcounted, _)) | Builtin(Str) => true,
+
+            _ => false,
+        }
     }
 
     /// Even if a value (say, a record) is not itself reference counted,
@@ -596,13 +643,19 @@ impl<'a> Layout<'a> {
             Builtin(builtin) => builtin.is_refcounted(),
             PhantomEmptyStruct => false,
             Struct(fields) => fields.iter().any(|f| f.contains_refcounted()),
-            Union(fields) => fields
-                .iter()
-                .map(|ls| ls.iter())
-                .flatten()
-                .any(|f| f.contains_refcounted()),
-            RecursiveUnion(_) => true,
-            NullableUnion { .. } => true,
+            Union(variant) => {
+                use UnionLayout::*;
+
+                match variant {
+                    NonRecursive(fields) => fields
+                        .iter()
+                        .map(|ls| ls.iter())
+                        .flatten()
+                        .any(|f| f.contains_refcounted()),
+                    Recursive(_) => true,
+                    NullableWrapped { .. } => true,
+                }
+            }
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
             FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
         }
@@ -1067,15 +1120,17 @@ fn layout_from_flat_type<'a>(
                 tag_layouts.push(tag_layout.into_bump_slice());
             }
 
-            if let Some((tag_id, tag_id_layout)) = nullable {
-                Ok(Layout::NullableUnion {
+            let union_layout = if let Some((tag_id, tag_id_layout)) = nullable {
+                UnionLayout::NullableWrapped {
                     nullable_id: tag_id,
                     nullable_layout: tag_id_layout,
-                    foo: tag_layouts.into_bump_slice(),
-                })
+                    other_tags: tag_layouts.into_bump_slice(),
+                }
             } else {
-                Ok(Layout::RecursiveUnion(tag_layouts.into_bump_slice()))
-            }
+                UnionLayout::Recursive(tag_layouts.into_bump_slice())
+            };
+
+            Ok(Layout::Union(union_layout))
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
@@ -1500,7 +1555,7 @@ pub fn layout_from_tag_union<'a>(
             let variant = union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs);
 
             match variant {
-                Never => Layout::Union(&[]),
+                Never => Layout::Union(UnionLayout::NonRecursive(&[])),
                 Unit | UnitWithArguments => Layout::Struct(&[]),
                 BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
                 ByteUnion(_) => Layout::Builtin(Builtin::Int8),
@@ -1521,7 +1576,7 @@ pub fn layout_from_tag_union<'a>(
                             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
                             tag_layouts.extend(tags.iter().map(|r| r.1));
 
-                            Layout::Union(tag_layouts.into_bump_slice())
+                            Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()))
                         }
 
                         Recursive {
@@ -1530,7 +1585,7 @@ pub fn layout_from_tag_union<'a>(
                             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
                             tag_layouts.extend(tags.iter().map(|r| r.1));
 
-                            Layout::RecursiveUnion(tag_layouts.into_bump_slice())
+                            Layout::Union(UnionLayout::Recursive(tag_layouts.into_bump_slice()))
                         }
 
                         NullableWrapped {
@@ -1541,11 +1596,11 @@ pub fn layout_from_tag_union<'a>(
                             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
                             tag_layouts.extend(tags.iter().map(|r| r.1));
 
-                            Layout::NullableUnion {
+                            Layout::Union(UnionLayout::NullableWrapped {
                                 nullable_id,
                                 nullable_layout: TAG_SIZE,
-                                foo: tag_layouts.into_bump_slice(),
-                            }
+                                other_tags: tag_layouts.into_bump_slice(),
+                            })
                         }
 
                         NullableUnwrapped { .. } => todo!(),
