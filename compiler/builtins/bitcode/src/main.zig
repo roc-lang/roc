@@ -2,6 +2,12 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// Dict Module
+const dict = @import("dict.zig");
+comptime {
+    exportDictFn(dict.size, "size");
+}
+
 // Num Module
 const num = @import("num.zig");
 comptime {

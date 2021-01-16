@@ -2,9 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
-
 const RocDict = struct {
-    len: u32,
+    size: usize,
 
     pub fn init() RocDict {
         return RocDict{
@@ -17,6 +16,9 @@ const RocDict = struct {
     }
 };
 
+pub fn dictSize(dict: RocDict) usize {
+    return dict.size;
+}
 
 test "RocDict.init() contains nothing" {
     const dict = RocDict.init();

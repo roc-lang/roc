@@ -882,6 +882,7 @@ define_builtins! {
         3 DICT_SINGLETON: "singleton"
         4 DICT_GET: "get"
         5 DICT_INSERT: "insert"
+        6 DICT_SIZE: "size"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
