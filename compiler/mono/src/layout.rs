@@ -39,13 +39,22 @@ pub enum Layout<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum UnionLayout<'a> {
+    /// A non-recursive tag union
+    /// e.g. `Result a e : [ Ok a, Err e ]`
     NonRecursive(&'a [&'a [Layout<'a>]]),
+    /// A recursive tag union
+    /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
     Recursive(&'a [&'a [Layout<'a>]]),
+    /// A recursive tag union where the non-nullable variant(s) store the tag id
+    /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+    /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         nullable_id: i64,
         nullable_layout: Builtin<'a>,
         other_tags: &'a [&'a [Layout<'a>]],
     },
+    // A recursive tag union where the non-nullable variant does NOT store the tag id
+    // e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
     // NullableUnwrapped,
 }
 
