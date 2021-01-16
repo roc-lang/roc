@@ -6,7 +6,7 @@ use roc_gen::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionVariant};
+use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
@@ -153,7 +153,7 @@ fn jit_to_ast_help<'a>(
                 |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
             ))
         }
-        Layout::Union(union_layouts) => match content {
+        Layout::Union(UnionLayout::NonRecursive(union_layouts)) => match content {
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(union_layouts.len(), tags.len());
 
@@ -221,7 +221,9 @@ fn jit_to_ast_help<'a>(
             }
             other => unreachable!("Weird content for Union layout: {:?}", other),
         },
-        Layout::RecursiveUnion(_) | Layout::NullableUnion { .. } | Layout::RecursivePointer => {
+        Layout::Union(UnionLayout::Recursive(_))
+        | Layout::Union(UnionLayout::NullableWrapped { .. })
+        | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
 
