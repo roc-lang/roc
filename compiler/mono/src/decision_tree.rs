@@ -1015,6 +1015,7 @@ fn path_to_expr_help<'a>(
                         ..
                     } => {
                         use std::cmp::Ordering;
+                        dbg!(nullable_id, tag_id);
                         match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
                             Ordering::Equal => {
                                 &*env.arena.alloc([Layout::Builtin(nullable_layout.clone())])

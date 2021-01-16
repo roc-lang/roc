@@ -1,6 +1,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
-use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, TAG_SIZE};
+use crate::layout::{
+    Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, WrappedVariant, TAG_SIZE,
+};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -2692,11 +2694,7 @@ pub fn with_hole<'a>(
                     let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
                     let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
-
-                    for (_, symbol, _) in field_symbols_temp.iter() {
-                        field_symbols.push(*symbol);
-                    }
-
+                    field_symbols.extend(field_symbols_temp.iter().map(|r| r.1));
                     let field_symbols = field_symbols.into_bump_slice();
 
                     // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
@@ -2712,73 +2710,145 @@ pub fn with_hole<'a>(
                     let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
                     assign_to_symbols(env, procs, layout_cache, iter, stmt)
                 }
-                Wrapped {
-                    sorted_tag_layouts,
-                    info,
-                } => {
-                    let union_size = sorted_tag_layouts.len() as u8;
-                    let (tag_id, (_, _)) = sorted_tag_layouts
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (key, _))| key == &tag_name)
-                        .expect("tag must be in its own type");
+                Wrapped(variant) => {
+                    let union_size = variant.number_of_tags() as u8;
+                    let (tag_id, _) = variant.tag_name_to_id(&tag_name);
 
-                    let mut field_symbols: Vec<Symbol> = Vec::with_capacity_in(args.len(), arena);
-                    let mut field_symbols_temp =
-                        sorted_field_symbols(env, procs, layout_cache, args);
-                    let tag_id_symbol = env.unique_symbol();
-                    field_symbols.push(tag_id_symbol);
+                    let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
-                    for (_, symbol, _) in field_symbols_temp.iter() {
-                        field_symbols.push(*symbol);
-                    }
+                    let field_symbols;
+                    let opt_tag_id_symbol;
 
-                    let mut layouts: Vec<&'a [Layout<'a>]> =
-                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+                    use WrappedVariant::*;
+                    let (tag, layout) = match variant {
+                        Recursive { sorted_tag_layouts } => {
+                            let tag_id_symbol = env.unique_symbol();
+                            opt_tag_id_symbol = Some(tag_id_symbol);
 
-                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
-                        layouts.push(arg_layouts);
-                    }
+                            field_symbols = {
+                                let mut temp =
+                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                                temp.push(tag_id_symbol);
 
-                    let field_symbols = field_symbols.into_bump_slice();
-                    use crate::layout::WrappedInfo;
-                    let layout = match info {
-                        WrappedInfo::Nullable {
+                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                                temp.into_bump_slice()
+                            };
+
+                            let mut layouts: Vec<&'a [Layout<'a>]> =
+                                Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                            for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                                layouts.push(arg_layouts);
+                            }
+
+                            let layout = Layout::RecursiveUnion(layouts.into_bump_slice());
+
+                            let tag = Expr::Tag {
+                                tag_layout: layout.clone(),
+                                tag_name,
+                                tag_id: tag_id as u8,
+                                union_size,
+                                arguments: field_symbols,
+                            };
+
+                            (tag, layout)
+                        }
+                        NonRecursive { sorted_tag_layouts } => {
+                            let tag_id_symbol = env.unique_symbol();
+                            opt_tag_id_symbol = Some(tag_id_symbol);
+
+                            field_symbols = {
+                                let mut temp =
+                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                                temp.push(tag_id_symbol);
+
+                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                                temp.into_bump_slice()
+                            };
+
+                            let mut layouts: Vec<&'a [Layout<'a>]> =
+                                Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                            for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                                layouts.push(arg_layouts);
+                            }
+
+                            let layout = Layout::Union(layouts.into_bump_slice());
+
+                            let tag = Expr::Tag {
+                                tag_layout: layout.clone(),
+                                tag_name,
+                                tag_id: tag_id as u8,
+                                union_size,
+                                arguments: field_symbols,
+                            };
+
+                            (tag, layout)
+                        }
+                        NullableWrapped {
                             nullable_id,
-                            nullable_layout,
-                        } => Layout::NullableUnion {
-                            foo: layouts.into_bump_slice(),
-                            nullable_id,
-                            nullable_layout: nullable_layout.clone(),
-                        },
-                        WrappedInfo::Recursive => Layout::RecursiveUnion(layouts.into_bump_slice()),
-                        WrappedInfo::NonRecursive => Layout::Union(layouts.into_bump_slice()),
-                    };
+                            nullable_name: _,
+                            sorted_tag_layouts,
+                        } => {
+                            let tag_id_symbol = env.unique_symbol();
+                            opt_tag_id_symbol = Some(tag_id_symbol);
 
-                    let tag = Expr::Tag {
-                        tag_layout: layout.clone(),
-                        tag_name,
-                        tag_id: tag_id as u8,
-                        union_size,
-                        arguments: field_symbols,
+                            field_symbols = {
+                                let mut temp =
+                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                                temp.push(tag_id_symbol);
+
+                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                                temp.into_bump_slice()
+                            };
+
+                            let mut layouts: Vec<&'a [Layout<'a>]> =
+                                Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                            for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                                layouts.push(arg_layouts);
+                            }
+
+                            let layout = Layout::NullableUnion {
+                                nullable_id,
+                                nullable_layout: TAG_SIZE,
+                                foo: layouts.into_bump_slice(),
+                            };
+
+                            let tag = Expr::Tag {
+                                tag_layout: layout.clone(),
+                                tag_name,
+                                tag_id: tag_id as u8,
+                                union_size,
+                                arguments: field_symbols,
+                            };
+
+                            (tag, layout)
+                        }
+                        NullableUnwrapped { .. } => todo!(),
                     };
 
                     let mut stmt = Stmt::Let(assigned, tag, layout, hole);
                     let iter = field_symbols_temp
-                        .drain(..)
+                        .into_iter()
                         .map(|x| x.2 .0)
                         .rev()
                         .zip(field_symbols.iter().rev());
 
                     stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
 
-                    // define the tag id
-                    stmt = Stmt::Let(
-                        tag_id_symbol,
-                        Expr::Literal(Literal::Int(tag_id as i64)),
-                        Layout::Builtin(TAG_SIZE),
-                        arena.alloc(stmt),
-                    );
+                    if let Some(tag_id_symbol) = opt_tag_id_symbol {
+                        // define the tag id
+                        stmt = Stmt::Let(
+                            tag_id_symbol,
+                            Expr::Literal(Literal::Int(tag_id as i64)),
+                            Layout::Builtin(TAG_SIZE),
+                            arena.alloc(stmt),
+                        );
+                    }
 
                     stmt
                 }
@@ -5814,10 +5884,10 @@ fn from_can_pattern_help<'a>(
                         .expect("tag must be in its own type");
 
                     let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
-                    for (i, tag_name) in tag_names.iter().enumerate() {
+                    for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
                             tag_id: TagId(i as u8),
-                            name: tag_name.clone(),
+                            name: tag_name,
                             arity: 0,
                         })
                     }
@@ -5873,101 +5943,237 @@ fn from_can_pattern_help<'a>(
                         layout,
                     }
                 }
-                Wrapped {
-                    sorted_tag_layouts: tags,
-                    info,
-                } => {
-                    let mut ctors = std::vec::Vec::with_capacity(tags.len());
-                    for (i, (tag_name, args)) in tags.iter().enumerate() {
-                        ctors.push(Ctor {
-                            tag_id: TagId(i as u8),
-                            name: tag_name.clone(),
-                            // don't include tag discriminant in arity
-                            arity: args.len() - 1,
-                        })
-                    }
+                Wrapped(variant) => {
+                    let (tag_id, argument_layouts) = variant.tag_name_to_id(tag_name);
 
-                    let union = crate::exhaustive::Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: ctors,
+                    let arguments = {
+                        let mut temp = arguments.clone();
+
+                        temp.sort_by(|arg1, arg2| {
+                            let layout1 =
+                                layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
+                            let layout2 =
+                                layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
+
+                            let size1 = layout1.alignment_bytes(env.ptr_bytes);
+                            let size2 = layout2.alignment_bytes(env.ptr_bytes);
+
+                            size2.cmp(&size1)
+                        });
+
+                        temp
                     };
 
-                    let (tag_id, (_, argument_layouts)) = tags
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (key, _))| key == tag_name)
-                        .expect("tag name is not in its own type");
+                    use WrappedVariant::*;
+                    match variant {
+                        NonRecursive {
+                            sorted_tag_layouts: ref tags,
+                        } => {
+                            debug_assert!(tags.len() > 1);
 
-                    let nullable_id = match info {
-                        crate::layout::WrappedInfo::Nullable { nullable_id, .. } => {
-                            Some(nullable_id as usize)
+                            let mut ctors = std::vec::Vec::with_capacity(tags.len());
+                            for (i, (tag_name, args)) in tags.iter().enumerate() {
+                                ctors.push(Ctor {
+                                    tag_id: TagId(i as u8),
+                                    name: tag_name.clone(),
+                                    // don't include tag discriminant in arity
+                                    arity: args.len() - 1,
+                                })
+                            }
+
+                            let union = crate::exhaustive::Union {
+                                render_as: RenderAs::Tag,
+                                alternatives: ctors,
+                            };
+
+                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+
+                            debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
+                            let it = argument_layouts[1..].iter();
+
+                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
+                                mono_args.push((
+                                    from_can_pattern_help(
+                                        env,
+                                        layout_cache,
+                                        &loc_pat.value,
+                                        assignments,
+                                    )?,
+                                    layout.clone(),
+                                ));
+                            }
+
+                            let layouts: Vec<&'a [Layout<'a>]> = {
+                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
+
+                                for (_, arg_layouts) in tags.into_iter() {
+                                    temp.push(*arg_layouts);
+                                }
+
+                                temp
+                            };
+
+                            let layout = Layout::Union(layouts.into_bump_slice());
+
+                            Pattern::AppliedTag {
+                                tag_name: tag_name.clone(),
+                                tag_id: tag_id as u8,
+                                arguments: mono_args,
+                                union,
+                                layout,
+                            }
                         }
-                        _ => None,
-                    };
 
-                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                    // disregard the tag discriminant layout
+                        Recursive {
+                            sorted_tag_layouts: ref tags,
+                        } => {
+                            debug_assert!(tags.len() > 1);
 
-                    let mut arguments = arguments.clone();
+                            let mut ctors = std::vec::Vec::with_capacity(tags.len());
+                            for (i, (tag_name, args)) in tags.iter().enumerate() {
+                                ctors.push(Ctor {
+                                    tag_id: TagId(i as u8),
+                                    name: tag_name.clone(),
+                                    // don't include tag discriminant in arity
+                                    arity: args.len() - 1,
+                                })
+                            }
 
-                    arguments.sort_by(|arg1, arg2| {
-                        let layout1 = layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
-                        let layout2 = layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
+                            let union = crate::exhaustive::Union {
+                                render_as: RenderAs::Tag,
+                                alternatives: ctors,
+                            };
 
-                        let size1 = layout1.alignment_bytes(env.ptr_bytes);
-                        let size2 = layout2.alignment_bytes(env.ptr_bytes);
+                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                        size2.cmp(&size1)
-                    });
+                            debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
+                            let it = argument_layouts[1..].iter();
 
-                    // TODO make this assert pass, it currently does not because
-                    // 0-sized values are dropped out
-                    // debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
-                    let it = if argument_layouts.is_empty() {
-                        [].iter()
-                    } else {
-                        argument_layouts[1..].iter()
-                    };
+                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
+                                mono_args.push((
+                                    from_can_pattern_help(
+                                        env,
+                                        layout_cache,
+                                        &loc_pat.value,
+                                        assignments,
+                                    )?,
+                                    layout.clone(),
+                                ));
+                            }
 
-                    for ((_, loc_pat), layout) in arguments.iter().zip(it) {
-                        mono_args.push((
-                            from_can_pattern_help(env, layout_cache, &loc_pat.value, assignments)?,
-                            layout.clone(),
-                        ));
-                    }
+                            let layouts: Vec<&'a [Layout<'a>]> = {
+                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
 
-                    let mut layouts: Vec<&'a [Layout<'a>]> =
-                        Vec::with_capacity_in(tags.len(), env.arena);
+                                for (_, arg_layouts) in tags.into_iter() {
+                                    temp.push(*arg_layouts);
+                                }
 
-                    for (index, (_, arg_layouts)) in tags.into_iter().enumerate() {
-                        // filter out the tag represented by the NULL pointer, if any
-                        if matches!(nullable_id, Some(i) if i == index) {
-                            continue;
+                                temp
+                            };
+
+                            let layout = Layout::RecursiveUnion(layouts.into_bump_slice());
+
+                            Pattern::AppliedTag {
+                                tag_name: tag_name.clone(),
+                                tag_id: tag_id as u8,
+                                arguments: mono_args,
+                                union,
+                                layout,
+                            }
                         }
 
-                        layouts.push(arg_layouts);
-                    }
-
-                    use crate::layout::WrappedInfo::*;
-                    let layout = match info {
-                        Nullable {
+                        NullableWrapped {
+                            sorted_tag_layouts: ref tags,
                             nullable_id,
-                            nullable_layout,
-                        } => Layout::NullableUnion {
-                            foo: layouts.into_bump_slice(),
-                            nullable_id,
-                            nullable_layout: nullable_layout.clone(),
-                        },
-                        Recursive => Layout::RecursiveUnion(layouts.into_bump_slice()),
-                        NonRecursive => Layout::Union(layouts.into_bump_slice()),
-                    };
+                            nullable_name,
+                        } => {
+                            debug_assert!(!tags.is_empty());
 
-                    Pattern::AppliedTag {
-                        tag_name: tag_name.clone(),
-                        tag_id: tag_id as u8,
-                        arguments: mono_args,
-                        union,
-                        layout,
+                            let mut ctors = std::vec::Vec::with_capacity(tags.len());
+
+                            let mut i = 0;
+                            for (tag_name, args) in tags.iter() {
+                                if i == nullable_id as usize {
+                                    ctors.push(Ctor {
+                                        tag_id: TagId(i as u8),
+                                        name: nullable_name.clone(),
+                                        // don't include tag discriminant in arity
+                                        arity: 0,
+                                    });
+
+                                    i += 1;
+                                }
+
+                                ctors.push(Ctor {
+                                    tag_id: TagId(i as u8),
+                                    name: tag_name.clone(),
+                                    // don't include tag discriminant in arity
+                                    arity: args.len() - 1,
+                                });
+
+                                i += 1;
+                            }
+
+                            if i == nullable_id as usize {
+                                ctors.push(Ctor {
+                                    tag_id: TagId(i as u8),
+                                    name: nullable_name.clone(),
+                                    // don't include tag discriminant in arity
+                                    arity: 0,
+                                });
+                            }
+
+                            let union = crate::exhaustive::Union {
+                                render_as: RenderAs::Tag,
+                                alternatives: ctors,
+                            };
+
+                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+
+                            let it = if tag_name == &nullable_name {
+                                [].iter()
+                            } else {
+                                argument_layouts[1..].iter()
+                            };
+
+                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
+                                mono_args.push((
+                                    from_can_pattern_help(
+                                        env,
+                                        layout_cache,
+                                        &loc_pat.value,
+                                        assignments,
+                                    )?,
+                                    layout.clone(),
+                                ));
+                            }
+
+                            let layouts: Vec<&'a [Layout<'a>]> = {
+                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
+
+                                for (_, arg_layouts) in tags.into_iter() {
+                                    temp.push(*arg_layouts);
+                                }
+
+                                temp
+                            };
+
+                            let layout = Layout::NullableUnion {
+                                nullable_id,
+                                nullable_layout: TAG_SIZE,
+                                foo: layouts.into_bump_slice(),
+                            };
+
+                            Pattern::AppliedTag {
+                                tag_name: tag_name.clone(),
+                                tag_id: tag_id as u8,
+                                arguments: mono_args,
+                                union,
+                                layout,
+                            }
+                        }
+
+                        NullableUnwrapped { .. } => todo!(),
                     }
                 }
             };

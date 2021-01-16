@@ -9,8 +9,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, collection, get_fn_type,
-    get_ptr_type, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slice,
+    collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
@@ -1053,10 +1053,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => {
             let tag_layout = Layout::Union(fields);
+            let tag_struct_type =
+                basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
             if *tag_id == *nullable_id as u8 {
-                let output_type =
-                    basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes)
-                        .ptr_type(AddressSpace::Generic);
+                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
 
                 return output_type.const_null().into();
             }
@@ -1076,7 +1076,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // closures ignore (and do not store) the discriminant
                 &fields[*tag_id as usize][1..]
             } else {
-                &fields[*tag_id as usize]
+                use std::cmp::Ordering::*;
+                match tag_id.cmp(&(*nullable_id as u8)) {
+                    Equal => &[] as &[_],
+                    Less => &fields[*tag_id as usize],
+                    Greater => &fields[*tag_id as usize - 1],
+                }
             };
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {

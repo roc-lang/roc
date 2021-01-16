@@ -132,11 +132,11 @@ pub fn basic_type_from_layout<'ctx>(
             .into(),
         PhantomEmptyStruct => context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(arena, context, sorted_fields, ptr_bytes),
-        Union(tags) if tags.len() == 1 => {
-            let sorted_fields = tags.iter().next().unwrap();
-
-            basic_type_from_record(arena, context, sorted_fields, ptr_bytes)
-        }
+        //        Union(tags) if tags.len() == 1 => {
+        //            let sorted_fields = tags.iter().next().unwrap();
+        //
+        //            basic_type_from_record(arena, context, sorted_fields, ptr_bytes)
+        //        }
         RecursiveUnion(_) => block_of_memory(context, layout, ptr_bytes)
             .ptr_type(AddressSpace::Generic)
             .into(),
@@ -183,6 +183,20 @@ pub fn basic_type_from_builtin<'ctx>(
     }
 }
 
+pub fn block_of_memory_slice<'ctx>(
+    context: &'ctx Context,
+    layouts: &[Layout<'_>],
+    ptr_bytes: u32,
+) -> BasicTypeEnum<'ctx> {
+    let mut union_size = 0;
+
+    for layout in layouts {
+        union_size += layout.stack_size(ptr_bytes as u32);
+    }
+
+    block_of_memory_help(context, union_size)
+}
+
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
@@ -191,6 +205,10 @@ pub fn block_of_memory<'ctx>(
     // TODO make this dynamic
     let union_size = layout.stack_size(ptr_bytes as u32);
 
+    block_of_memory_help(context, union_size)
+}
+
+fn block_of_memory_help<'ctx>(context: &'ctx Context, union_size: u32) -> BasicTypeEnum<'ctx> {
     // The memory layout of Union is a bit tricky.
     // We have tags with different memory layouts, that are part of the same type.
     // For llvm, all tags must have the same memory layout.

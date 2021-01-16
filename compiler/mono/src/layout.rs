@@ -164,17 +164,20 @@ impl<'a> ClosureLayout<'a> {
 
                         Ok(Some(closure_layout))
                     }
-                    Wrapped {
-                        sorted_tag_layouts: tags,
-                        info,
-                    } => {
-                        // TODO handle recursive closures
-                        debug_assert!(info == WrappedInfo::NonRecursive);
+                    Wrapped(variant) => {
+                        use WrappedVariant::*;
 
-                        let closure_layout =
-                            ClosureLayout::from_tag_union(arena, tags.into_bump_slice());
+                        match variant {
+                            NonRecursive {
+                                sorted_tag_layouts: tags,
+                            } => {
+                                let closure_layout =
+                                    ClosureLayout::from_tag_union(arena, tags.into_bump_slice());
+                                Ok(Some(closure_layout))
+                            }
 
-                        Ok(Some(closure_layout))
+                            _ => panic!("handle recursive layouts"),
+                        }
                     }
                 }
             }
@@ -1153,26 +1156,108 @@ pub enum UnionVariant<'a> {
     Never,
     Unit,
     UnitWithArguments,
-    BoolUnion {
-        ttrue: TagName,
-        ffalse: TagName,
-    },
+    BoolUnion { ttrue: TagName, ffalse: TagName },
     ByteUnion(Vec<'a, TagName>),
     Unwrapped(Vec<'a, Layout<'a>>),
-    Wrapped {
-        sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
-        info: WrappedInfo<'a>,
-    },
+    Wrapped(WrappedVariant<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum WrappedInfo<'a> {
-    Recursive,
-    Nullable {
-        nullable_id: i64,
-        nullable_layout: Builtin<'a>,
+pub enum WrappedVariant<'a> {
+    Recursive {
+        sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
     },
-    NonRecursive,
+    NonRecursive {
+        sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
+    },
+    NullableWrapped {
+        nullable_id: i64,
+        nullable_name: TagName,
+        sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
+    },
+    NullableUnwrapped {
+        nullable_id: i64,
+        nullable_name: TagName,
+        other_id: i64,
+        other_name: TagName,
+        other_arguments: &'a [Layout<'a>],
+    },
+}
+
+impl<'a> WrappedVariant<'a> {
+    pub fn tag_name_to_id(&self, tag_name: &TagName) -> (u8, &'a [Layout<'a>]) {
+        use WrappedVariant::*;
+
+        match self {
+            Recursive { sorted_tag_layouts } | NonRecursive { sorted_tag_layouts } => {
+                let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (key, _))| key == tag_name)
+                    .expect("tag name is not in its own type");
+
+                debug_assert!(tag_id < 256);
+                (tag_id as u8, argument_layouts.clone())
+            }
+            NullableWrapped {
+                nullable_id,
+                nullable_name,
+                sorted_tag_layouts,
+            } => {
+                // assumption: the nullable_name is not included in sorted_tag_layouts
+
+                if tag_name == nullable_name {
+                    (*nullable_id as u8, &[] as &[_])
+                } else {
+                    let (mut tag_id, (_, argument_layouts)) = sorted_tag_layouts
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (key, _))| key == tag_name)
+                        .expect("tag name is not in its own type");
+
+                    if tag_id >= *nullable_id as usize {
+                        tag_id += 1;
+                    }
+
+                    debug_assert!(tag_id < 256);
+                    (tag_id as u8, argument_layouts.clone())
+                }
+            }
+            NullableUnwrapped {
+                nullable_id,
+                nullable_name,
+                other_id,
+                other_name,
+                other_arguments,
+            } => {
+                if tag_name == nullable_name {
+                    (*nullable_id as u8, &[] as &[_])
+                } else {
+                    debug_assert_eq!(other_name, tag_name);
+
+                    (*other_id as u8, other_arguments.clone())
+                }
+            }
+        }
+    }
+
+    pub fn number_of_tags(&'a self) -> usize {
+        use WrappedVariant::*;
+
+        match self {
+            Recursive { sorted_tag_layouts } | NonRecursive { sorted_tag_layouts } => {
+                sorted_tag_layouts.len()
+            }
+            NullableWrapped {
+                sorted_tag_layouts, ..
+            } => {
+                // assumption: the nullable_name is not included in sorted_tag_layouts
+
+                sorted_tag_layouts.len() + 1
+            }
+            NullableUnwrapped { .. } => 2,
+        }
+    }
 }
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
@@ -1295,16 +1380,20 @@ pub fn union_sorted_tags_help<'a>(
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
             if is_recursive && GENERATE_NULLABLE {
-                for (index, (_name, variables)) in tags_vec.iter().enumerate() {
+                for (index, (name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some((index as i64, TAG_SIZE));
+                        nullable = Some((index as i64, name.clone()));
                         break;
                     }
                 }
             }
 
-            for (tag_name, arguments) in tags_vec.into_iter() {
+            for (index, (tag_name, arguments)) in tags_vec.into_iter().enumerate() {
                 // reserve space for the tag discriminant
+                if matches!(nullable, Some((i, _)) if i  as usize == index) {
+                    debug_assert!(arguments.is_empty());
+                    continue;
+                }
 
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
@@ -1366,21 +1455,23 @@ pub fn union_sorted_tags_help<'a>(
                     UnionVariant::ByteUnion(tag_names)
                 }
                 _ => {
-                    let info = if let Some((nullable_id, nullable_layout)) = nullable {
-                        WrappedInfo::Nullable {
+                    let variant = if let Some((nullable_id, nullable_name)) = nullable {
+                        WrappedVariant::NullableWrapped {
                             nullable_id,
-                            nullable_layout,
+                            nullable_name,
+                            sorted_tag_layouts: answer,
                         }
                     } else if is_recursive {
-                        WrappedInfo::Recursive
+                        WrappedVariant::Recursive {
+                            sorted_tag_layouts: answer,
+                        }
                     } else {
-                        WrappedInfo::NonRecursive
+                        WrappedVariant::NonRecursive {
+                            sorted_tag_layouts: answer,
+                        }
                     };
 
-                    UnionVariant::Wrapped {
-                        sorted_tag_layouts: answer,
-                        info,
-                    }
+                    UnionVariant::Wrapped(variant)
                 }
             }
         }
@@ -1420,28 +1511,44 @@ pub fn layout_from_tag_union<'a>(
                         Layout::Struct(field_layouts.into_bump_slice())
                     }
                 }
-                Wrapped {
-                    sorted_tag_layouts: tags,
-                    info,
-                } => {
-                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+                Wrapped(variant) => {
+                    use WrappedVariant::*;
 
-                    for (_, tag_layout) in tags {
-                        tag_layouts.push(tag_layout);
-                    }
+                    match variant {
+                        NonRecursive {
+                            sorted_tag_layouts: tags,
+                        } => {
+                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+                            tag_layouts.extend(tags.iter().map(|r| r.1));
 
-                    use WrappedInfo::*;
-                    match info {
-                        Nullable {
+                            Layout::Union(tag_layouts.into_bump_slice())
+                        }
+
+                        Recursive {
+                            sorted_tag_layouts: tags,
+                        } => {
+                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+                            tag_layouts.extend(tags.iter().map(|r| r.1));
+
+                            Layout::RecursiveUnion(tag_layouts.into_bump_slice())
+                        }
+
+                        NullableWrapped {
                             nullable_id,
-                            nullable_layout,
-                        } => Layout::NullableUnion {
-                            foo: tag_layouts.into_bump_slice(),
-                            nullable_id,
-                            nullable_layout: nullable_layout.clone(),
-                        },
-                        Recursive => Layout::RecursiveUnion(tag_layouts.into_bump_slice()),
-                        NonRecursive => Layout::Union(tag_layouts.into_bump_slice()),
+                            nullable_name: _,
+                            sorted_tag_layouts: tags,
+                        } => {
+                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+                            tag_layouts.extend(tags.iter().map(|r| r.1));
+
+                            Layout::NullableUnion {
+                                nullable_id,
+                                nullable_layout: TAG_SIZE,
+                                foo: tag_layouts.into_bump_slice(),
+                            }
+                        }
+
+                        NullableUnwrapped { .. } => todo!(),
                     }
                 }
             }
