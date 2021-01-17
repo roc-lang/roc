@@ -68,6 +68,7 @@ snafu = { version = "0.6", features = ["backtraces"] }
 colored = "2"
 pest = "2.1"
 pest_derive = "2.1"
+ropey = "1.2.0"
 
 
 [dependencies.bytemuck]
@@ -83,9 +84,9 @@ quickcheck_macros = "0.8"
 
 # uncomment everything below if you have made changes to any shaders and
 # want to compile them to .spv
-#[build-dependencies]
-#rayon = "1.5.0"
-#anyhow = "1.0"
-#fs_extra = "1.1"
-#glob = "0.3"
-#shaderc = "0.6"
+# [build-dependencies]
+# rayon = "1.5.0"
+# anyhow = "1.0"
+# fs_extra = "1.1"
+# glob = "0.3"
+# shaderc = "0.6"
