@@ -28,7 +28,7 @@ use inkwell::debug_info::{
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
+use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
     BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
@@ -1158,7 +1158,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 return output_type.const_null().into();
             }
 
-            debug_assert!(*union_size > 1);
+            // this tag id is not the nullable one. For the type to be recursive, the other
+            // constructor must have at least one argument!
+            debug_assert!(!arguments.is_empty());
+
+            debug_assert!(*union_size == 2);
             let ptr_size = env.ptr_bytes;
 
             let ctx = env.context;
@@ -1169,16 +1173,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
-                // closures ignore (and do not store) the discriminant
-                panic!()
-            } else {
-                if (*tag_id != 0) == *nullable_id {
-                    &[] as &[_]
-                } else {
-                    other_fields
-                }
-            };
+            debug_assert!(!matches!(tag_name, TagName::Closure(_)));
+
+            let tag_field_layouts = &other_fields[0..];
+            let arguments = &arguments[0..];
 
             debug_assert_eq!(arguments.len(), tag_field_layouts.len());
 
@@ -1351,48 +1349,46 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         result
                     }
                 }
-                PointerValue(value) => {
-                    match structure_layout {
-                        Layout::Union(UnionLayout::NullableWrapped { nullable_id, .. })
-                            if *index == 0 =>
+                PointerValue(value) => match structure_layout {
+                    Layout::Union(UnionLayout::NullableWrapped { nullable_id, .. })
+                        if *index == 0 =>
+                    {
+                        let ptr = value;
+                        let is_null = env.builder.build_is_null(ptr, "is_null");
+
+                        let ctx = env.context;
+                        let then_block = ctx.append_basic_block(parent, "then");
+                        let else_block = ctx.append_basic_block(parent, "else");
+                        let cont_block = ctx.append_basic_block(parent, "cont");
+
+                        let result = builder.build_alloca(ctx.i64_type(), "result");
+
+                        env.builder.build_switch(
+                            is_null,
+                            else_block,
+                            &[(ctx.bool_type().const_int(1, false), then_block)],
+                        );
+
                         {
-                            let ptr = value;
-                            let is_null = env.builder.build_is_null(ptr, "is_null");
-
-                            let ctx = env.context;
-                            let then_block = ctx.append_basic_block(parent, "then");
-                            let else_block = ctx.append_basic_block(parent, "else");
-                            let cont_block = ctx.append_basic_block(parent, "cont");
-
-                            let result = builder.build_alloca(ctx.i64_type(), "result");
-
-                            env.builder.build_switch(
-                                is_null,
-                                else_block,
-                                &[(ctx.bool_type().const_int(1, false), then_block)],
-                            );
-
-                            {
-                                env.builder.position_at_end(then_block);
-                                let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
-                                env.builder.build_store(result, tag_id);
-                                env.builder.build_unconditional_branch(cont_block);
-                            }
-
-                            {
-                                env.builder.position_at_end(else_block);
-                                let tag_id = extract_tag_discriminant_ptr(env, ptr);
-                                env.builder.build_store(result, tag_id);
-                                env.builder.build_unconditional_branch(cont_block);
-                            }
-
-                            env.builder.position_at_end(cont_block);
-
-                            env.builder.build_load(result, "load_result")
+                            env.builder.position_at_end(then_block);
+                            let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
+                            env.builder.build_store(result, tag_id);
+                            env.builder.build_unconditional_branch(cont_block);
                         }
-                        Layout::Union(UnionLayout::NullableUnwrapped { nullable_id, .. })
-                            if *index == 0 =>
+
                         {
+                            env.builder.position_at_end(else_block);
+                            let tag_id = extract_tag_discriminant_ptr(env, ptr);
+                            env.builder.build_store(result, tag_id);
+                            env.builder.build_unconditional_branch(cont_block);
+                        }
+
+                        env.builder.position_at_end(cont_block);
+
+                        env.builder.build_load(result, "load_result")
+                    }
+                    Layout::Union(UnionLayout::NullableUnwrapped { nullable_id, .. }) => {
+                        if *index == 0 {
                             let is_null = env.builder.build_is_null(value, "is_null");
 
                             let ctx = env.context;
@@ -1406,39 +1402,26 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                                 else_value,
                                 "select_tag_id",
                             )
-                        }
-                        _ => {
-                            let ptr = cast_basic_basic(
-                                builder,
-                                value.into(),
-                                struct_type.ptr_type(AddressSpace::Generic).into(),
+                        } else {
+                            lookup_at_index_ptr(
+                                env,
+                                field_layouts,
+                                *index as usize,
+                                value,
+                                &struct_layout,
+                                struct_type,
                             )
-                            .into_pointer_value();
-
-                            let elem_ptr = builder
-                                .build_struct_gep(ptr, *index as u32, "at_index_struct_gep")
-                                .unwrap();
-
-                            let result = builder.build_load(elem_ptr, "load_at_index_ptr");
-
-                            if let Some(Layout::RecursivePointer) =
-                                field_layouts.get(*index as usize)
-                            {
-                                // a recursive field is stored as a `i64*`, to use it we must cast it to
-                                // a pointer to the block of memory representation
-                                cast_basic_basic(
-                                    builder,
-                                    result,
-                                    block_of_memory(env.context, &struct_layout, env.ptr_bytes)
-                                        .ptr_type(AddressSpace::Generic)
-                                        .into(),
-                                )
-                            } else {
-                                result
-                            }
                         }
                     }
-                }
+                    _ => lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        *index as usize,
+                        value,
+                        &struct_layout,
+                        struct_type,
+                    ),
+                },
                 _ => panic!("cannot look up index in {:?}", argument),
             }
         }
@@ -1482,6 +1465,45 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
         }
         RuntimeErrorFunction(_) => todo!(),
+    }
+}
+
+fn lookup_at_index_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    field_layouts: &[Layout<'_>],
+    index: usize,
+    value: PointerValue<'ctx>,
+    struct_layout: &Layout<'_>,
+    struct_type: StructType<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
+    let builder = env.builder;
+
+    let ptr = cast_basic_basic(
+        builder,
+        value.into(),
+        struct_type.ptr_type(AddressSpace::Generic).into(),
+    )
+    .into_pointer_value();
+
+    let elem_ptr = builder
+        .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
+        .unwrap();
+
+    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+
+    if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
+        // a recursive field is stored as a `i64*`, to use it we must cast it to
+        // a pointer to the block of memory representation
+        cast_basic_basic(
+            builder,
+            result,
+            block_of_memory(env.context, &struct_layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic)
+                .into(),
+        )
+    } else {
+        result
     }
 }
 

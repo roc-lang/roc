@@ -1006,6 +1006,8 @@ fn path_to_expr_help<'a>(
                 break;
             }
             Some(wrapped) => {
+                let index = *index;
+
                 let field_layouts = match &layout {
                     Layout::Union(variant) => {
                         use UnionLayout::*;
@@ -1037,6 +1039,9 @@ fn path_to_expr_help<'a>(
                                 let tag_id = *tag_id != 0;
 
                                 if tag_id == *nullable_id {
+                                    // the nullable tag has no fields; we can only lookup its tag id
+                                    debug_assert_eq!(index, 0);
+
                                     // the nullable tag is going to pretend it stores a tag id
                                     &*env.arena.alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
                                 } else {
@@ -1051,7 +1056,7 @@ fn path_to_expr_help<'a>(
                 };
 
                 debug_assert!(
-                    *index < field_layouts.len() as u64,
+                    index < field_layouts.len() as u64,
                     "{} {:?} {:?} {:?}",
                     index,
                     field_layouts,
@@ -1059,13 +1064,13 @@ fn path_to_expr_help<'a>(
                     tag_id,
                 );
 
-                let inner_layout = match &field_layouts[*index as usize] {
+                let inner_layout = match &field_layouts[index as usize] {
                     Layout::RecursivePointer => layout.clone(),
                     other => other.clone(),
                 };
 
                 let inner_expr = Expr::AccessAtIndex {
-                    index: *index,
+                    index,
                     field_layouts,
                     structure: symbol,
                     wrapped,
