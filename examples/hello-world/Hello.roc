@@ -3,9 +3,6 @@ app "hello-world"
     imports []
     provides [ main ] to base
 
-
-ConsList a : [ Cons a (ConsList a), Nil ]
-
 greeting =
     hi = "Hello"
     name = "World"
