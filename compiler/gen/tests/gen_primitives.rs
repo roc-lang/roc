@@ -1500,7 +1500,7 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree F64 F64 
+                main : RedBlackTree F64 F64
                 main =
                     balance Red 0 0 Empty Empty
                 "#
@@ -1974,6 +1974,42 @@ mod gen_primitives {
                 "#
             ),
             1,
+            i64
+        );
+    }
+
+    #[test]
+    fn nullable_eval() {
+        // the decision tree will generate a jump to the `1` branch here
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Var, Val I64, Add Expr Expr, Mul Expr Expr ]
+
+                mkExpr : I64, I64 -> Expr
+                mkExpr = \n , v ->
+                    when n is
+                        0 -> if v == 0 then Var else Val v
+                        _ -> Add (mkExpr (n-1) (v+1)) (mkExpr (n-1) (max (v-1) 0))
+
+                max : I64, I64 -> I64
+                max = \a, b -> if a > b then a else b
+
+                eval : Expr -> I64
+                eval = \e ->
+                    when e is
+                        Var   -> 0
+                        Val v -> v
+                        Add l r -> eval l + eval r
+                        Mul l r -> eval l * eval r
+
+                main : I64
+                main = eval (mkExpr 3 1)
+                "#
+            ),
+            11,
             i64
         );
     }

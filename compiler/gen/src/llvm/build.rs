@@ -2238,12 +2238,57 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .build_bitcast(full_cond, env.context.i32_type(), "")
                 .into_int_value()
         }
-        Layout::Union(_) => {
-            // we match on the discriminant, not the whole Tag
-            cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond = load_symbol(env, scope, cond_symbol).into_struct_value();
+        Layout::Union(variant) => {
+            use UnionLayout::*;
 
-            extract_tag_discriminant_struct(env, full_cond)
+            match variant {
+                NonRecursive(_) => {
+                    // we match on the discriminant, not the whole Tag
+                    cond_layout = Layout::Builtin(Builtin::Int64);
+                    let full_cond = load_symbol(env, scope, cond_symbol).into_struct_value();
+
+                    extract_tag_discriminant_struct(env, full_cond)
+                }
+                Recursive(_) => {
+                    // we match on the discriminant, not the whole Tag
+                    cond_layout = Layout::Builtin(Builtin::Int64);
+                    let full_cond_ptr = load_symbol(env, scope, cond_symbol).into_pointer_value();
+
+                    extract_tag_discriminant_ptr(env, full_cond_ptr)
+                }
+                NullableWrapped { nullable_id, .. } => {
+                    // we match on the discriminant, not the whole Tag
+                    cond_layout = Layout::Builtin(Builtin::Int64);
+                    let full_cond_ptr = load_symbol(env, scope, cond_symbol).into_pointer_value();
+
+                    let comparison: IntValue =
+                        env.builder.build_is_null(full_cond_ptr, "is_null_cond");
+
+                    let when_null = || {
+                        env.context
+                            .i64_type()
+                            .const_int(nullable_id as u64, false)
+                            .into()
+                    };
+                    let when_not_null = || extract_tag_discriminant_ptr(env, full_cond_ptr).into();
+
+                    crate::llvm::build_list::build_basic_phi2(
+                        env,
+                        parent,
+                        comparison,
+                        when_null,
+                        when_not_null,
+                        BasicTypeEnum::IntType(env.context.i64_type()),
+                    )
+                    .into_int_value()
+                }
+                NullableUnwrapped { .. } => {
+                    // there are only two options, so we do a `tag_id == 0` check and branch on that
+                    unreachable!(
+                        "we never switch on the tag id directly for NullableUnwrapped unions"
+                    )
+                }
+            }
         }
         Layout::Builtin(_) => load_symbol(env, scope, cond_symbol).into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
