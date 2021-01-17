@@ -359,10 +359,12 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                 NullableUnwrapped { other_fields, .. } => {
                     debug_assert!(value.is_pointer_value());
 
+                    let other_fields = &other_fields[1..];
+
                     build_dec_rec_union(
                         env,
                         layout_ids,
-                        &*env.arena.alloc([*other_fields]),
+                        &*env.arena.alloc([other_fields]),
                         value.into_pointer_value(),
                         true,
                     );
@@ -468,10 +470,12 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
                 NullableUnwrapped { other_fields, .. } => {
                     debug_assert!(value.is_pointer_value());
 
+                    let other_fields = &other_fields[1..];
+
                     build_inc_rec_union(
                         env,
                         layout_ids,
-                        &*env.arena.alloc([*other_fields]),
+                        &*env.arena.alloc([other_fields]),
                         value.into_pointer_value(),
                         true,
                     );

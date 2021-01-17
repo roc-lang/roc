@@ -564,7 +564,7 @@ mod gen_primitives {
                         Cons _ rest -> 1 + len rest
 
                 main =
-                    nil : LinkedList {}
+                    nil : LinkedList F64
                     nil = Nil
 
                     len nil
@@ -584,7 +584,7 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList (Int *)
+                nil : LinkedList I64
                 nil = Nil
 
                 length : LinkedList a -> Int *
@@ -1407,9 +1407,9 @@ mod gen_primitives {
                     balance 0 Empty
                 "#
             ),
-            1,
-            &i64,
-            |x: &i64| *x
+            false,
+            *const i64,
+            |x: *const i64| x.is_null()
         );
     }
 
@@ -1500,14 +1500,14 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree (Int *) (Int *)
+                main : RedBlackTree F64 F64 
                 main =
                     balance Red 0 0 Empty Empty
                 "#
             ),
-            1,
-            &i64,
-            |x: &i64| *x
+            false,
+            *const i64,
+            |x: *const i64| x.is_null()
         );
     }
 

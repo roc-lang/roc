@@ -1020,7 +1020,6 @@ fn path_to_expr_help<'a>(
                                 ..
                             } => {
                                 use std::cmp::Ordering;
-                                dbg!(nullable_id, tag_id);
                                 match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
                                     Ordering::Equal => {
                                         // the nullable tag is going to pretend it stores a tag id

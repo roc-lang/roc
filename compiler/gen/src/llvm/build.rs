@@ -28,7 +28,7 @@ use inkwell::debug_info::{
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
+use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
     BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
@@ -1149,6 +1149,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_name,
             ..
         } => {
+            let other_fields = &other_fields[1..];
+
             let tag_struct_type =
                 block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
 
@@ -1175,8 +1177,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             debug_assert!(!matches!(tag_name, TagName::Closure(_)));
 
-            let tag_field_layouts = &other_fields[0..];
-            let arguments = &arguments[0..];
+            let tag_field_layouts = other_fields;
+            let arguments = &arguments[1..];
 
             debug_assert_eq!(arguments.len(), tag_field_layouts.len());
 
@@ -1317,17 +1319,16 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 field_types.push(field_type);
             }
 
-            // Create the struct_type
-            let struct_type = env
-                .context
-                .struct_type(field_types.into_bump_slice(), false);
-
             // cast the argument bytes into the desired shape for this tag
             let (argument, structure_layout) = load_symbol_and_layout(env, scope, structure);
 
-            let struct_layout = Layout::Struct(field_layouts);
             match argument {
                 StructValue(value) => {
+                    let struct_layout = Layout::Struct(field_layouts);
+                    let struct_type = env
+                        .context
+                        .struct_type(field_types.into_bump_slice(), false);
+
                     let struct_value = cast_struct_struct(builder, value, struct_type);
 
                     let result = builder
@@ -1403,24 +1404,36 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                                 "select_tag_id",
                             )
                         } else {
+                            let struct_layout = Layout::Struct(&field_layouts[1..]);
+                            let struct_type = env
+                                .context
+                                .struct_type(&field_types.into_bump_slice()[1..], false);
+
                             lookup_at_index_ptr(
                                 env,
-                                field_layouts,
-                                *index as usize,
+                                &field_layouts[1..],
+                                *index as usize - 1,
                                 value,
                                 &struct_layout,
                                 struct_type,
                             )
                         }
                     }
-                    _ => lookup_at_index_ptr(
-                        env,
-                        field_layouts,
-                        *index as usize,
-                        value,
-                        &struct_layout,
-                        struct_type,
-                    ),
+                    _ => {
+                        let struct_layout = Layout::Struct(field_layouts);
+                        let struct_type = env
+                            .context
+                            .struct_type(field_types.into_bump_slice(), false);
+
+                        lookup_at_index_ptr(
+                            env,
+                            field_layouts,
+                            *index as usize,
+                            value,
+                            &struct_layout,
+                            struct_type,
+                        )
+                    }
                 },
                 _ => panic!("cannot look up index in {:?}", argument),
             }

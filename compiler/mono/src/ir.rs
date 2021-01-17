@@ -6225,8 +6225,6 @@ fn from_can_pattern_help<'a>(
                         } => {
                             debug_assert!(!other_fields.is_empty());
 
-                            dbg!(nullable_id, &nullable_name);
-
                             ctors.push(Ctor {
                                 tag_id: TagId(nullable_id as u8),
                                 name: nullable_name.clone(),
