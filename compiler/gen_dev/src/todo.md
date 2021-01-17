@@ -12,5 +12,6 @@
   It should be a nice optimization for little cost. Just be sure to make it optional, otherwise our tests will do nothing.
 - Automatically build the zig builtins .o file and make it available here.
   We will need to link against it and use it whenever we call specific builtins.
+- Add unwind tables and landing pads.
 - Add ability to wrap functions with exceptions or return a results.
   Will need to start dealing with overflows and such to return errors.
