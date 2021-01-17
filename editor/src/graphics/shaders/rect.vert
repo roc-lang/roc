@@ -11,9 +11,9 @@ layout(set = 0, binding = 0) uniform Globals {
 } global;
 
 layout(location=0) in vec2 aPosition;
-layout(location=1) in vec3 aColor;
+layout(location=1) in vec4 aColor;
 
-layout(location=0) out vec3 vColor;
+layout(location=0) out vec4 vColor;
 
 void main() {
     gl_Position = global.ortho * vec4(aPosition, 0, 1);

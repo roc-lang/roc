@@ -261,6 +261,17 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_bitwise_xor() {
+        expect_success("Num.bitwiseXor 20 20", "0 : Int *");
+
+        expect_success("Num.bitwiseXor 15 14", "1 : Int *");
+
+        expect_success("Num.bitwiseXor 7 15", "8 : Int *");
+
+        expect_success("Num.bitwiseXor 200 0", "200 : Int *")
+    }
+
+    #[test]
     fn num_add_wrap() {
         expect_success("Num.addWrap Num.maxInt 1", "-9223372036854775808 : Int *");
     }

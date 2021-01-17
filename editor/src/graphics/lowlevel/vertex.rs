@@ -6,7 +6,7 @@ use cgmath::Vector2;
 pub struct Vertex {
     #[allow(dead_code)]
     pub position: Vector2<f32>,
-    pub color: [f32; 3],
+    pub color: [f32; 4],
 }
 
 unsafe impl bytemuck::Pod for Vertex {}
@@ -28,7 +28,7 @@ impl Vertex {
             wgpu::VertexAttributeDescriptor {
                 offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                 shader_location: 1,
-                format: wgpu::VertexFormat::Float3,
+                format: wgpu::VertexFormat::Float4,
             },
         ],
     };

@@ -47,7 +47,7 @@ pub fn helper<'a>(
         arena,
         filename,
         &module_src,
-        stdlib,
+        &stdlib,
         src_dir,
         exposed_types,
         8,

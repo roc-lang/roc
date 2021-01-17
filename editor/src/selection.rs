@@ -1,18 +1,18 @@
 use crate::error::{EdResult, InvalidSelection};
 use crate::graphics::colors;
 use crate::graphics::primitives::rect::Rect;
-use crate::tea::ed_model::RawSelection;
-use crate::vec_result::get_res;
+use crate::mvc::ed_model::RawSelection;
+use crate::text_buffer::TextBuffer;
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use snafu::ensure;
 
 //using the "parse don't validate" pattern
-struct ValidSelection {
-    selection: RawSelection,
+pub struct ValidSelection {
+    pub selection: RawSelection,
 }
 
-fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
+pub fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
     let RawSelection { start_pos, end_pos } = selection;
 
     ensure!(
@@ -43,7 +43,7 @@ fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
 
 pub fn create_selection_rects<'a>(
     raw_sel: RawSelection,
-    lines: &[String],
+    text_buf: &TextBuffer,
     glyph_dim_rect: &Rect,
     arena: &'a Bump,
 ) -> EdResult<BumpVec<'a, Rect>> {
@@ -71,7 +71,7 @@ pub fn create_selection_rects<'a>(
         Ok(all_rects)
     } else {
         // first line
-        let end_col = get_res(start_pos.line, lines)?.len();
+        let end_col = text_buf.line_len_res(start_pos.line)?;
         let width = ((end_col as f32) * glyph_dim_rect.width)
             - ((start_pos.column as f32) * glyph_dim_rect.width);
 
@@ -89,7 +89,7 @@ pub fn create_selection_rects<'a>(
         let first_mid_line = start_pos.line + 1;
 
         for i in first_mid_line..(first_mid_line + nr_mid_lines) {
-            let mid_line_len = get_res(i, lines)?.len();
+            let mid_line_len = text_buf.line_len_res(i)?;
 
             let width = (mid_line_len as f32) * glyph_dim_rect.width;
 
@@ -123,13 +123,17 @@ pub fn create_selection_rects<'a>(
 }
 
 #[cfg(test)]
-mod test_parse {
+pub mod test_selection {
     use crate::error::{EdResult, OutOfBounds};
-    use crate::tea::ed_model::{Position, RawSelection};
-    use crate::tea::update::{move_caret_down, move_caret_left, move_caret_right, move_caret_up};
+    use crate::mvc::ed_model::{Position, RawSelection};
+    use crate::mvc::update::{
+        move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
+    };
+    use crate::text_buffer::TextBuffer;
     use crate::vec_result::get_res;
     use core::cmp::Ordering;
     use pest::Parser;
+    use ropey::Rope;
     use snafu::OptionExt;
     use std::collections::HashMap;
     use std::slice::SliceIndex;
@@ -139,7 +143,7 @@ mod test_parse {
     pub struct LineParser;
 
     // show selection and caret position as symbols in lines for easy testing
-    fn convert_selection_to_dsl(
+    pub fn convert_selection_to_dsl(
         raw_sel_opt: Option<RawSelection>,
         caret_pos: Position,
         lines: &mut [String],
@@ -199,13 +203,51 @@ mod test_parse {
     ) -> EdResult<&mut <usize as SliceIndex<[T]>>::Output> {
         let vec_len = vec.len();
 
-        let elt_ref = vec.get_mut(index).context(OutOfBounds { index, vec_len })?;
+        let elt_ref = vec.get_mut(index).context(OutOfBounds {
+            index,
+            collection_name: "Slice",
+            len: vec_len,
+        })?;
 
         Ok(elt_ref)
     }
 
+    fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
+        TextBuffer {
+            text_rope: Rope::from_str(lines_str),
+            path_str: "".to_owned(),
+        }
+    }
+
+    pub fn text_buffer_from_dsl_str(lines: &[String]) -> TextBuffer {
+        text_buffer_from_str(
+            &lines
+                .iter()
+                .map(|line| line.replace(&['[', ']', '|'][..], ""))
+                .collect::<Vec<String>>()
+                .join(""),
+        )
+    }
+
+    pub fn all_lines_vec(text_buf: &TextBuffer) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+
+        for line in text_buf.text_rope.lines() {
+            lines.push(
+                line
+                .as_str()
+                .expect(
+                    "Failed to get str from RopeSlice. See https://docs.rs/ropey/1.2.0/ropey/struct.RopeSlice.html#method.as_str"
+                )
+                .to_owned()
+            );
+        }
+
+        lines
+    }
+
     // Retrieve selection and position from formatted string
-    fn convert_dsl_to_selection(
+    pub fn convert_dsl_to_selection(
         lines: &[String],
     ) -> Result<(Option<RawSelection>, Position), String> {
         let lines_str: String = lines.join("");
@@ -303,9 +345,6 @@ mod test_parse {
         }
     }
 
-    pub type MoveCaretFun =
-        fn(Position, Option<RawSelection>, bool, &[String]) -> (Position, Option<RawSelection>);
-
     // Convert nice string representations and compare results
     fn assert_move(
         pre_lines_str: &[&str],
@@ -321,15 +360,13 @@ mod test_parse {
 
         let (sel_opt, caret_pos) = convert_dsl_to_selection(&pre_lines)?;
 
-        let mut clean_lines = pre_lines
-            .into_iter()
-            .map(|line| line.replace(&['[', ']', '|'][..], ""))
-            .collect::<Vec<String>>();
+        let clean_text_buf = text_buffer_from_dsl_str(&pre_lines);
 
         let (new_caret_pos, new_sel_opt) =
-            move_fun(caret_pos, sel_opt, shift_pressed, &clean_lines);
+            move_fun(caret_pos, sel_opt, shift_pressed, &clean_text_buf);
 
-        let post_lines_res = convert_selection_to_dsl(new_sel_opt, new_caret_pos, &mut clean_lines);
+        let mut lines_vec = all_lines_vec(&clean_text_buf);
+        let post_lines_res = convert_selection_to_dsl(new_sel_opt, new_caret_pos, &mut lines_vec);
 
         match post_lines_res {
             Ok(post_lines) => {

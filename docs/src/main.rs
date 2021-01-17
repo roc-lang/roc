@@ -129,7 +129,7 @@ fn files_to_documentations(
         let mut loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            std_lib.clone(),
+            &std_lib,
             src_dir,
             MutMap::default(),
             8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
