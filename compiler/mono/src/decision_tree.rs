@@ -66,7 +66,7 @@ pub enum Test<'a> {
         union: crate::exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i64),
+    IsInt(i128),
     // float patterns are stored as u64 so they are comparable/hashable
     IsFloat(u64),
     IsStr(Box<str>),
@@ -276,7 +276,7 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match<'a>(branches: &Vec<Branch<'a>>) -> Option<Label> {
+fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
     match branches.get(0) {
         Some(Branch { goal, patterns })
             if patterns
@@ -379,7 +379,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
 
             match pattern {
                 // TODO use guard!
-                Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
+                Identifier(_) | Underscore => {
                     if let Guard::Guard { symbol, id, stmt } = guard {
                         all_tests.push(Guarded {
                             opt_test: None,
@@ -408,11 +408,8 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                             DestructType::Guard(guard) => {
                                 arguments.push((guard.clone(), destruct.layout.clone()));
                             }
-                            DestructType::Required => {
+                            DestructType::Required(_) => {
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
-                            }
-                            DestructType::Optional(_expr) => {
-                                // do nothing
                             }
                         }
                     }
@@ -531,7 +528,7 @@ fn to_relevant_branch_help<'a>(
     use Test::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch.clone()),
+        Identifier(_) | Underscore => Some(branch.clone()),
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
@@ -540,27 +537,22 @@ fn to_relevant_branch_help<'a>(
                 ..
             } => {
                 debug_assert!(test_name == &TagName::Global(RECORD_TAG_NAME.into()));
-                let sub_positions = destructs
-                    .into_iter()
-                    .filter(|destruct| !matches!(destruct.typ, DestructType::Optional(_)))
-                    .enumerate()
-                    .map(|(index, destruct)| {
-                        let pattern = match destruct.typ {
-                            DestructType::Guard(guard) => guard.clone(),
-                            DestructType::Required => Pattern::Underscore,
-                            DestructType::Optional(_expr) => unreachable!("because of the filter"),
-                        };
+                let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
+                    let pattern = match destruct.typ {
+                        DestructType::Guard(guard) => guard.clone(),
+                        DestructType::Required(_) => Pattern::Underscore,
+                    };
 
-                        (
-                            Path::Index {
-                                index: index as u64,
-                                tag_id: *tag_id,
-                                path: Box::new(path.clone()),
-                            },
-                            Guard::NoGuard,
-                            pattern,
-                        )
-                    });
+                    (
+                        Path::Index {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                            path: Box::new(path.clone()),
+                        },
+                        Guard::NoGuard,
+                        pattern,
+                    )
+                });
                 start.extend(sub_positions);
                 start.extend(end);
 
@@ -738,11 +730,11 @@ fn is_irrelevant_to<'a>(selected_path: &Path, branch: &Branch<'a>) -> bool {
     }
 }
 
-fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
+fn needs_tests(pattern: &Pattern) -> bool {
     use Pattern::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => false,
+        Identifier(_) | Underscore => false,
 
         RecordDestructure(_, _)
         | AppliedTag { .. }
@@ -910,7 +902,10 @@ pub fn optimize_when<'a>(
 
     let decision_tree = compile(patterns);
     let decider = tree_to_decider(decision_tree);
-    let target_counts = count_targets(&decider);
+
+    // for each target (branch body), count in how many ways it can be reached
+    let mut target_counts = bumpalo::vec![in env.arena; 0; indexed_branches.len()];
+    count_targets(&mut target_counts, &decider);
 
     let mut choices = MutMap::default();
     let mut jumps = Vec::new();
@@ -918,8 +913,9 @@ pub fn optimize_when<'a>(
     for (index, branch) in indexed_branches.into_iter() {
         let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
 
-        if let Some(jump) = opt_jump {
-            jumps.push(jump);
+        if let Some((index, body)) = opt_jump {
+            let id = JoinPointId(env.unique_symbol());
+            jumps.push((index, id, body));
         }
 
         choices.insert(branch_index, choice);
@@ -927,7 +923,7 @@ pub fn optimize_when<'a>(
 
     let choice_decider = insert_choices(&choices, decider);
 
-    decide_to_branching(
+    let mut stmt = decide_to_branching(
         env,
         procs,
         layout_cache,
@@ -936,7 +932,18 @@ pub fn optimize_when<'a>(
         ret_layout,
         choice_decider,
         &jumps,
-    )
+    );
+
+    for (_, id, body) in jumps.into_iter() {
+        stmt = Stmt::Join {
+            id,
+            parameters: &[],
+            continuation: env.arena.alloc(body),
+            remainder: env.arena.alloc(stmt),
+        };
+    }
+
+    stmt
 }
 
 #[derive(Debug)]
@@ -1100,7 +1107,9 @@ fn test_to_equality<'a>(
             )
         }
         Test::IsInt(test_int) => {
-            let lhs = Expr::Literal(Literal::Int(test_int));
+            // TODO don't downcast i128 here
+            debug_assert!(test_int <= i64::MAX as i128);
+            let lhs = Expr::Literal(Literal::Int(test_int as i64));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
 
@@ -1239,15 +1248,14 @@ fn compile_guard<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
     // calculate the guard value
     let param = Param {
@@ -1277,17 +1285,19 @@ fn compile_test<'a>(
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = Stmt::Cond {
-        cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
-        branching_symbol: test_symbol,
-        branching_layout: Layout::Builtin(Builtin::Int1),
-        pass: arena.alloc(cond),
-        fail,
+    cond = crate::ir::cond(
+        env,
+        test_symbol,
+        Layout::Builtin(Builtin::Int1),
+        cond,
+        fail.clone(),
         ret_layout,
-    };
+    );
 
-    let test = Expr::RunLowLevel(LowLevel::Eq, arena.alloc([lhs, rhs]));
+    let test = Expr::Call(crate::ir::Call {
+        call_type: crate::ir::CallType::LowLevel { op: LowLevel::Eq },
+        arguments: arena.alloc([lhs, rhs]),
+    });
 
     // write to the test symbol
     cond = Stmt::Let(
@@ -1338,7 +1348,7 @@ fn decide_to_branching<'a>(
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
     decider: Decider<'a, Choice<'a>>,
-    jumps: &Vec<(u64, Stmt<'a>)>,
+    jumps: &Vec<(u64, JoinPointId, Stmt<'a>)>,
 ) -> Stmt<'a> {
     use Choice::*;
     use Decider::*;
@@ -1347,12 +1357,11 @@ fn decide_to_branching<'a>(
 
     match decider {
         Leaf(Jump(label)) => {
-            // we currently inline the jumps: does fewer jumps but produces a larger artifact
-            let (_, expr) = jumps
-                .iter()
-                .find(|(l, _)| l == &label)
+            let index = jumps
+                .binary_search_by_key(&label, |ref r| r.0)
                 .expect("jump not in list of jumps");
-            expr.clone()
+
+            Stmt::Jump(jumps[index].1, &[])
         }
         Leaf(Inline(expr)) => expr,
         Chain {
@@ -1629,39 +1638,32 @@ fn to_chain<'a>(
 /// If a target appears exactly once in a Decider, the corresponding expression
 /// can be inlined. Whether things are inlined or jumps is called a "choice".
 
-fn count_targets(decision_tree: &Decider<u64>) -> MutMap<u64, u64> {
-    let mut result = MutMap::default();
-    count_targets_help(decision_tree, &mut result);
-
-    result
-}
-
-fn count_targets_help(decision_tree: &Decider<u64>, targets: &mut MutMap<u64, u64>) {
+fn count_targets(targets: &mut bumpalo::collections::Vec<u64>, initial: &Decider<u64>) {
     use Decider::*;
-    match decision_tree {
-        Leaf(target) => match targets.get_mut(target) {
-            None => {
-                targets.insert(*target, 1);
+
+    let mut stack = vec![initial];
+
+    while let Some(decision_tree) = stack.pop() {
+        match decision_tree {
+            Leaf(target) => {
+                targets[*target as usize] += 1;
             }
-            Some(current) => {
-                *current += 1;
+
+            Chain {
+                success, failure, ..
+            } => {
+                stack.push(success);
+                stack.push(failure);
             }
-        },
 
-        Chain {
-            success, failure, ..
-        } => {
-            count_targets_help(success, targets);
-            count_targets_help(failure, targets);
-        }
+            FanOut {
+                tests, fallback, ..
+            } => {
+                stack.push(fallback);
 
-        FanOut {
-            tests, fallback, ..
-        } => {
-            count_targets_help(fallback, targets);
-
-            for (_, decider) in tests {
-                count_targets_help(decider, targets);
+                for (_, decider) in tests {
+                    stack.push(decider);
+                }
             }
         }
     }
@@ -1669,11 +1671,11 @@ fn count_targets_help(decision_tree: &Decider<u64>, targets: &mut MutMap<u64, u6
 
 #[allow(clippy::type_complexity)]
 fn create_choices<'a>(
-    target_counts: &MutMap<u64, u64>,
+    target_counts: &bumpalo::collections::Vec<'a, u64>,
     target: u64,
     branch: Stmt<'a>,
 ) -> ((u64, Choice<'a>), Option<(u64, Stmt<'a>)>) {
-    match target_counts.get(&target) {
+    match target_counts.get(target as usize) {
         None => unreachable!(
             "this should never happen: {:?} not in {:?}",
             target, target_counts
@@ -1719,5 +1721,3 @@ fn insert_choices<'a>(
         },
     }
 }
-
-// Opt.FanOut path (map (second go) tests) (go fallback)

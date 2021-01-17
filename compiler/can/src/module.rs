@@ -21,7 +21,7 @@ use roc_types::types::Alias;
 pub struct Module {
     pub module_id: ModuleId,
     pub exposed_imports: MutMap<Symbol, Variable>,
-    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub exposed_symbols: MutSet<Symbol>,
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
@@ -36,7 +36,6 @@ pub struct ModuleOutput {
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
-    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
 }
 
@@ -51,7 +50,7 @@ pub fn canonicalize_module_defs<'a>(
     dep_idents: MutMap<ModuleId, IdentIds>,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    mut exposed_symbols: MutSet<Symbol>,
+    exposed_symbols: &MutSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
@@ -166,45 +165,39 @@ pub fn canonicalize_module_defs<'a>(
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
 
+    // assume all exposed symbols are not actually defined in the module
+    // then as we walk the module and encounter the definitions, remove
+    // symbols from this set
+    let mut exposed_but_not_defined = exposed_symbols.clone();
+
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
-            // Record the variables for all exposed symbols.
-            let mut exposed_vars_by_symbol = Vec::with_capacity(exposed_symbols.len());
-
             for decl in declarations.iter() {
                 match decl {
                     Declare(def) => {
-                        for (symbol, variable) in def.pattern_vars.iter() {
-                            if exposed_symbols.contains(symbol) {
-                                // This is one of our exposed symbols;
-                                // record the corresponding variable!
-                                exposed_vars_by_symbol.push((*symbol, *variable));
-
+                        for (symbol, _) in def.pattern_vars.iter() {
+                            if exposed_but_not_defined.contains(symbol) {
                                 // Remove this from exposed_symbols,
                                 // so that at the end of the process,
                                 // we can see if there were any
                                 // exposed symbols which did not have
                                 // corresponding defs.
-                                exposed_symbols.remove(symbol);
+                                exposed_but_not_defined.remove(symbol);
                             }
                         }
                     }
                     DeclareRec(defs) => {
                         for def in defs {
-                            for (symbol, variable) in def.pattern_vars.iter() {
-                                if exposed_symbols.contains(symbol) {
-                                    // This is one of our exposed symbols;
-                                    // record the corresponding variable!
-                                    exposed_vars_by_symbol.push((*symbol, *variable));
-
+                            for (symbol, _) in def.pattern_vars.iter() {
+                                if exposed_but_not_defined.contains(symbol) {
                                     // Remove this from exposed_symbols,
                                     // so that at the end of the process,
                                     // we can see if there were any
                                     // exposed symbols which did not have
                                     // corresponding defs.
-                                    exposed_symbols.remove(symbol);
+                                    exposed_but_not_defined.remove(symbol);
                                 }
                             }
                         }
@@ -219,7 +212,7 @@ pub fn canonicalize_module_defs<'a>(
                         debug_assert!(def
                             .pattern_vars
                             .iter()
-                            .all(|(symbol, _)| !exposed_symbols.contains(symbol)));
+                            .all(|(symbol, _)| !exposed_but_not_defined.contains(symbol)));
                     }
                 }
             }
@@ -232,7 +225,7 @@ pub fn canonicalize_module_defs<'a>(
                 // we can see if there were any
                 // exposed symbols which did not have
                 // corresponding defs.
-                exposed_symbols.remove(&symbol);
+                exposed_but_not_defined.remove(&symbol);
 
                 aliases.insert(symbol, alias);
             }
@@ -241,7 +234,7 @@ pub fn canonicalize_module_defs<'a>(
             // exposed_symbols and added to exposed_vars_by_symbol. If any were
             // not, that means they were declared as exposed but there was
             // no actual declaration with that name!
-            for symbol in exposed_symbols {
+            for symbol in exposed_but_not_defined {
                 env.problem(Problem::ExposedButNotDefined(symbol));
 
                 // In case this exposed value is referenced by other modules,
@@ -305,7 +298,6 @@ pub fn canonicalize_module_defs<'a>(
                 exposed_imports: can_exposed_imports,
                 problems: env.problems,
                 lookups,
-                exposed_vars_by_symbol,
                 ident_ids: env.ident_ids,
             })
         }
@@ -371,8 +363,8 @@ fn fix_values_captured_in_closure_pattern(
         }
         Identifier(_)
         | NumLiteral(_, _)
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | StrLiteral(_)
         | Underscore
         | Shadowed(_, _)
@@ -422,8 +414,8 @@ fn fix_values_captured_in_closure_expr(
         }
 
         Num(_, _)
-        | Int(_, _)
-        | Float(_, _)
+        | Int(_, _, _)
+        | Float(_, _, _)
         | Str(_)
         | Var(_)
         | EmptyRecord

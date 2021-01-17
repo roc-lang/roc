@@ -8,50 +8,80 @@
 
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-use crate::buffer::create_rect_buffers;
-use crate::text::{build_glyph_brush, Text};
-use crate::vertex::Vertex;
-use ortho::{init_ortho, update_ortho_buffer, OrthoResources};
+extern crate pest;
+#[cfg(test)]
+#[macro_use]
+extern crate pest_derive;
+
+use crate::error::{print_err, EdResult};
+use crate::graphics::colors::{CODE_COLOR, TXT_COLOR};
+use crate::graphics::lowlevel::buffer::create_rect_buffers;
+use crate::graphics::lowlevel::ortho::update_ortho_buffer;
+use crate::graphics::lowlevel::pipelines;
+use crate::graphics::primitives::text::{
+    build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text,
+};
+use crate::graphics::style::CODE_FONT_SIZE;
+use crate::graphics::style::CODE_TXT_XY;
+use crate::mvc::app_model::AppModel;
+use crate::mvc::ed_model::EdModel;
+use crate::mvc::{ed_model, ed_view, update};
+use crate::resources::strings::NOTHING_OPENED;
+use crate::vec_result::get_res;
+use bumpalo::Bump;
+use cgmath::Vector2;
+use ed_model::Position;
+use pipelines::RectResources;
 use std::error::Error;
 use std::io;
 use std::path::Path;
+use wgpu::{CommandEncoder, RenderPass, TextureView};
+use wgpu_glyph::GlyphBrush;
+use winit::dpi::PhysicalSize;
 use winit::event;
 use winit::event::{Event, ModifiersState};
 use winit::event_loop::ControlFlow;
 
-pub mod ast;
-mod buffer;
-mod def;
-pub mod expr;
-pub mod file;
+pub mod error;
+pub mod graphics;
 mod keyboard_input;
-mod ortho;
-mod pattern;
-pub mod pool;
-mod rect;
-mod scope;
-pub mod text;
-mod types;
+pub mod lang;
+mod mvc;
+mod resources;
+mod selection;
+mod text_buffer;
 mod util;
-mod vertex;
+mod vec_result;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
-pub fn launch(_filepaths: &[&Path]) -> io::Result<()> {
-    // TODO do any initialization here
+pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
+    //TODO support using multiple filepaths
+    let first_path_opt = if !filepaths.is_empty() {
+        match get_res(0, filepaths) {
+            Ok(path_ref_ref) => Some(*path_ref_ref),
+            Err(e) => {
+                eprintln!("{}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    run_event_loop().expect("Error running event loop");
+    run_event_loop(first_path_opt).expect("Error running event loop");
 
     Ok(())
 }
 
-fn run_event_loop() -> Result<(), Box<dyn Error>> {
+fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
     let event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
+        .with_inner_size(PhysicalSize::new(1200.0, 1000.0))
         .build(&event_loop)
         .unwrap();
 
@@ -88,7 +118,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let local_spawner = local_pool.spawner();
 
     // Prepare swap chain
-    let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let render_format = wgpu::TextureFormat::Bgra8Unorm;
     let mut size = window.inner_size();
 
     let swap_chain_descr = wgpu::SwapChainDescriptor {
@@ -102,13 +132,34 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
 
-    let (rect_pipeline, ortho) = make_rect_pipeline(&gpu_device, &swap_chain_descr);
+    let rect_resources = pipelines::make_rect_pipeline(&gpu_device, &swap_chain_descr);
 
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let mut text_state = String::new();
+    let ed_model_opt = if let Some(file_path) = file_path_opt {
+        let ed_model_res = ed_model::init_model(file_path);
+
+        match ed_model_res {
+            Ok(mut ed_model) => {
+                ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(&mut glyph_brush));
+
+                Some(ed_model)
+            }
+            Err(e) => {
+                print_err(&e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut app_model = AppModel { ed_model_opt };
+
     let mut keyboard_modifiers = ModifiersState::empty();
+
+    let arena = Bump::new();
 
     // Render loop
     window.request_redraw();
@@ -127,7 +178,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
             Event::WindowEvent {
                 event: event::WindowEvent::CloseRequested,
                 ..
-            } => *control_flow = winit::event_loop::ControlFlow::Exit,
+            } => *control_flow = ControlFlow::Exit,
             //Resize
             Event::WindowEvent {
                 event: event::WindowEvent::Resized(new_size),
@@ -151,7 +202,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     size.width,
                     size.height,
                     &gpu_device,
-                    &ortho.buffer,
+                    &rect_resources.ortho.buffer,
                     &cmd_queue,
                 );
             }
@@ -160,7 +211,9 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                update_text_state(&mut text_state, &ch);
+                if let Err(e) = update::handle_new_char(&mut app_model, &ch) {
+                    print_err(&e)
+                }
             }
             //Keyboard Input
             Event::WindowEvent {
@@ -168,11 +221,16 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 ..
             } => {
                 if let Some(virtual_keycode) = input.virtual_keycode {
-                    keyboard_input::handle_keydown(
-                        input.state,
-                        virtual_keycode,
-                        keyboard_modifiers,
-                    );
+                    if let Some(ref mut ed_model) = app_model.ed_model_opt {
+                        if ed_model.has_focus {
+                            keyboard_input::handle_keydown(
+                                input.state,
+                                virtual_keycode,
+                                keyboard_modifiers,
+                                ed_model,
+                            );
+                        }
+                    }
                 }
             }
             //Modifiers Changed
@@ -190,41 +248,50 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         label: Some("Redraw"),
                     });
 
-                let rect_buffers = create_rect_buffers(&gpu_device, &mut encoder);
-
                 let frame = swap_chain
                     .get_current_frame()
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
 
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &frame.view,
-                        resolve_target: None,
-                        ops: wgpu::Operations::default(),
-                    }],
-                    depth_stencil_attachment: None,
-                });
-
-                if rect_buffers.num_rects > 0 {
-                    render_pass.set_pipeline(&rect_pipeline);
-                    render_pass.set_bind_group(0, &ortho.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-                    render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
-                    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+                if let Some(ed_model) = &app_model.ed_model_opt {
+                    //TODO don't pass invisible lines
+                    queue_editor_text(
+                        &size,
+                        &ed_model.text_buf.all_lines(&arena),
+                        ed_model.caret_pos,
+                        CODE_TXT_XY.into(),
+                        &mut glyph_brush,
+                    );
+                } else {
+                    queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
                 }
 
-                drop(render_pass);
-
-                draw_all_text(
-                    &gpu_device,
-                    &mut staging_belt,
+                match draw_all_rects(
+                    &app_model.ed_model_opt,
+                    &arena,
                     &mut encoder,
-                    &frame,
-                    &size,
-                    &text_state,
-                    &mut glyph_brush,
-                );
+                    &frame.view,
+                    &gpu_device,
+                    &rect_resources,
+                ) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        print_err(&e);
+                        begin_render_pass(&mut encoder, &frame.view);
+                    }
+                }
+
+                // draw all text
+                glyph_brush
+                    .draw_queued(
+                        &gpu_device,
+                        &mut staging_belt,
+                        &mut encoder,
+                        &frame.view,
+                        size.width,
+                        size.height,
+                    )
+                    .expect("Draw queued");
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
@@ -245,128 +312,105 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     })
 }
 
-fn make_rect_pipeline(
+fn draw_all_rects(
+    ed_model_opt: &Option<EdModel>,
+    arena: &Bump,
+    encoder: &mut CommandEncoder,
+    texture_view: &TextureView,
     gpu_device: &wgpu::Device,
-    swap_chain_descr: &wgpu::SwapChainDescriptor,
-) -> (wgpu::RenderPipeline, OrthoResources) {
-    let ortho = init_ortho(swap_chain_descr.width, swap_chain_descr.height, gpu_device);
+    rect_resources: &RectResources,
+) -> EdResult<()> {
+    if let Some(ed_model) = ed_model_opt {
+        let all_rects = ed_view::create_ed_rects(ed_model, arena)?;
 
-    let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        bind_group_layouts: &[&ortho.bind_group_layout],
-        push_constant_ranges: &[],
-        label: Some("Rectangle pipeline layout"),
-    });
-    let pipeline = create_render_pipeline(
-        &gpu_device,
-        &pipeline_layout,
-        swap_chain_descr.format,
-        &[Vertex::DESC],
-        wgpu::include_spirv!("shaders/rect.vert.spv"),
-        wgpu::include_spirv!("shaders/rect.frag.spv"),
-    );
+        let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
 
-    (pipeline, ortho)
+        let mut render_pass = begin_render_pass(encoder, texture_view);
+
+        render_pass.set_pipeline(&rect_resources.pipeline);
+        render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+        render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+    } else {
+        // need to begin render pass to clear screen
+        begin_render_pass(encoder, texture_view);
+    }
+
+    Ok(())
 }
 
-fn create_render_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    color_format: wgpu::TextureFormat,
-    vertex_descs: &[wgpu::VertexBufferDescriptor],
-    vs_src: wgpu::ShaderModuleSource,
-    fs_src: wgpu::ShaderModuleSource,
-) -> wgpu::RenderPipeline {
-    let vs_module = device.create_shader_module(vs_src);
-    let fs_module = device.create_shader_module(fs_src);
-
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render pipeline"),
-        layout: Some(&layout),
-        vertex_stage: wgpu::ProgrammableStageDescriptor {
-            module: &vs_module,
-            entry_point: "main",
-        },
-        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
-            module: &fs_module,
-            entry_point: "main",
-        }),
-        rasterization_state: None,
-        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: &[wgpu::ColorStateDescriptor {
-            format: color_format,
-            color_blend: wgpu::BlendDescriptor::REPLACE,
-            alpha_blend: wgpu::BlendDescriptor::REPLACE,
-            write_mask: wgpu::ColorWrite::ALL,
+fn begin_render_pass<'a>(
+    encoder: &'a mut CommandEncoder,
+    texture_view: &'a TextureView,
+) -> RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+            attachment: texture_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.1,
+                    g: 0.2,
+                    b: 0.3,
+                    a: 1.0,
+                }),
+                store: true,
+            },
         }],
-        depth_stencil_state: None,
-        sample_count: 1,
-        sample_mask: !0,
-        alpha_to_coverage_enabled: false,
-        vertex_state: wgpu::VertexStateDescriptor {
-            index_format: wgpu::IndexFormat::Uint32,
-            vertex_buffers: vertex_descs,
-        },
+        depth_stencil_attachment: None,
     })
 }
 
-fn draw_all_text(
-    gpu_device: &wgpu::Device,
-    staging_belt: &mut wgpu::util::StagingBelt,
-    encoder: &mut wgpu::CommandEncoder,
-    frame: &wgpu::SwapChainTexture,
-    size: &winit::dpi::PhysicalSize<u32>,
-    text_state: &str,
-    glyph_brush: &mut wgpu_glyph::GlyphBrush<()>,
+// returns bounding boxes for every glyph
+fn queue_editor_text(
+    size: &PhysicalSize<u32>,
+    editor_lines: &str,
+    caret_pos: Position,
+    code_coords: Vector2<f32>,
+    glyph_brush: &mut GlyphBrush<()>,
 ) {
-    let bounds = (size.width as f32, size.height as f32).into();
-
-    let main_label = Text {
-        position: (30.0, 30.0).into(),
-        bounds,
-        color: (0.4666, 0.2, 1.0, 1.0).into(),
-        text: String::from("Enter some text:"),
-        size: 40.0,
-        ..Default::default()
-    };
+    let area_bounds = (size.width as f32, size.height as f32).into();
 
     let code_text = Text {
-        position: (30.0, 90.0).into(),
-        bounds,
-        color: (1.0, 1.0, 1.0, 1.0).into(),
-        text: String::from(format!("{}|", text_state).as_str()),
-        size: 40.0,
+        position: code_coords,
+        area_bounds,
+        color: CODE_COLOR.into(),
+        text: editor_lines.to_owned(),
+        size: CODE_FONT_SIZE,
         ..Default::default()
     };
 
-    text::queue_text_draw(&main_label, glyph_brush);
+    let caret_pos_label = Text {
+        position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
+        area_bounds,
+        color: TXT_COLOR.into(),
+        text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
+        size: 25.0,
+        ..Default::default()
+    };
 
-    text::queue_text_draw(&code_text, glyph_brush);
+    queue_text_draw(&caret_pos_label, glyph_brush);
 
-    glyph_brush
-        .draw_queued(
-            gpu_device,
-            staging_belt,
-            encoder,
-            &frame.view,
-            size.width,
-            size.height,
-        )
-        .expect("Draw queued");
+    queue_text_draw(&code_text, glyph_brush);
 }
 
-fn update_text_state(text_state: &mut String, received_char: &char) {
-    match received_char {
-        '\u{8}' | '\u{7f}' => {
-            // In Linux, we get a '\u{8}' when you press backspace,
-            // but in macOS we get '\u{7f}'.
-            text_state.pop();
-        }
-        '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
-            // These are private use characters; ignore them.
-            // See http://www.unicode.org/faq/private_use.html
-        }
-        _ => {
-            text_state.push(*received_char);
-        }
-    }
+fn queue_no_file_text(
+    size: &PhysicalSize<u32>,
+    text: &str,
+    text_coords: Vector2<f32>,
+    glyph_brush: &mut GlyphBrush<()>,
+) {
+    let area_bounds = (size.width as f32, size.height as f32).into();
+
+    let code_text = Text {
+        position: text_coords,
+        area_bounds,
+        color: CODE_COLOR.into(),
+        text: text.to_owned(),
+        size: CODE_FONT_SIZE,
+        ..Default::default()
+    };
+
+    queue_text_draw(&code_text, glyph_brush);
 }

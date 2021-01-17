@@ -56,8 +56,8 @@ pub enum Expr {
     Num(Variable, i64),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, i64),
-    Float(Variable, f64),
+    Int(Variable, Variable, i64),
+    Float(Variable, Variable, f64),
     Str(InlinableString),
     List {
         list_var: Variable, // required for uniqueness of the list
@@ -285,7 +285,9 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
-        ast::Expr::List(loc_elems) => {
+        ast::Expr::List {
+            items: loc_elems, ..
+        } => {
             if loc_elems.is_empty() {
                 (
                     List {
@@ -308,12 +310,11 @@ pub fn canonicalize_expr<'a>(
                     can_elems.push(can_expr);
                 }
 
-                let mut output = Output::default();
-
-                output.references = references;
-
-                // A list literal is never a tail call!
-                output.tail_call = None;
+                let output = Output {
+                    references,
+                    tail_call: None,
+                    ..Default::default()
+                };
 
                 (
                     List {
@@ -891,10 +892,7 @@ pub fn local_successors<'a>(
     answer
 }
 
-fn call_successors<'a>(
-    call_symbol: Symbol,
-    closures: &'a MutMap<Symbol, References>,
-) -> ImSet<Symbol> {
+fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -> ImSet<Symbol> {
     let mut answer = im_rc::hashset::HashSet::default();
     let mut seen = MutSet::default();
     let mut queue = vec![call_symbol];
@@ -1170,8 +1168,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
         other @ Num(_, _)
-        | other @ Int(_, _)
-        | other @ Float(_, _)
+        | other @ Int(_, _, _)
+        | other @ Float(_, _, _)
         | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord

@@ -762,8 +762,8 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                f: {                    y : I64,
-                                         x : I64 ,
+                f: {                    y : Int *,
+                                         x : Int * ,
                    }
                 
                 f"#
@@ -772,8 +772,8 @@ mod test_fmt {
                 r#"
                 f :
                     {
-                        y : I64,
-                        x : I64,
+                        y : Int *,
+                        x : Int *,
                     }
 
                 f"#
@@ -787,8 +787,8 @@ mod test_fmt {
             r#"
                 f :
                     {
-                        y : I64,
-                        x : I64,
+                        y : Int *,
+                        x : Int *,
                     }
 
                 f"#
@@ -800,7 +800,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
                 f :
-                    I64
+                    Int *
 
                 f"#
         ));
@@ -880,7 +880,7 @@ mod test_fmt {
                 r#"
                 f :
                     { 
-                        x: I64 # comment 1
+                        x: Int * # comment 1
                         ,
                         # comment 2
                     }
@@ -891,7 +891,7 @@ mod test_fmt {
                 r#"
                 f :
                     {
-                        x : I64,
+                        x : Int *,
                         # comment 1
                         # comment 2
                     }
@@ -1022,7 +1022,7 @@ mod test_fmt {
             [
                 7,
                 8,
-                9
+                9,
             ]
             "#
         ));
@@ -1041,7 +1041,7 @@ mod test_fmt {
                 [
                     17,
                     18,
-                    19
+                    19,
                 ]
                 "#
             ),
@@ -1064,7 +1064,7 @@ mod test_fmt {
                 [
                     27,
                     28,
-                    29
+                    29,
                 ]
                 "#
             ),
@@ -1084,7 +1084,7 @@ mod test_fmt {
                 [
                     157,
                     158,
-                    159
+                    159,
                 ]
                 "#
             ),
@@ -1105,7 +1105,7 @@ mod test_fmt {
                     557,
                     648,
                     759,
-                    837
+                    837,
                 ]
                 "#
             ),
@@ -1127,7 +1127,7 @@ mod test_fmt {
                     257,
                     358,
                     # Hey!
-                    459
+                    459,
                 ]
                 "#
             ),
@@ -1155,7 +1155,7 @@ mod test_fmt {
                     37,
                     # Thirty Eight
                     38,
-                    39
+                    39,
                 ]
                 "#
             ),
@@ -1189,7 +1189,7 @@ mod test_fmt {
                     48,
                     # Bottom 48
                     # Top 49
-                    49
+                    49,
                     # Bottom 49
                     # 49!
                 ]
@@ -1197,7 +1197,31 @@ mod test_fmt {
             ),
         );
     }
-
+    #[test]
+    fn ending_comments_in_list() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                [ # Top 49
+                 49
+                # Bottom 49
+                ,
+                # 49!
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    # Top 49
+                    49,
+                    # Bottom 49
+                    # 49!
+                ]
+                "#
+            ),
+        );
+    }
     #[test]
     fn multi_line_list_def() {
         // expr_formats_same(indoc!(
@@ -1228,7 +1252,7 @@ mod test_fmt {
                 results =
                     [
                         Ok 4,
-                        Ok 5
+                        Ok 5,
                     ]
 
                 allOks results
@@ -1271,6 +1295,27 @@ mod test_fmt {
         expr_formats_same("{}");
     }
 
+    #[test]
+    fn empty_record_with_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            {
+                # comment
+            }"#
+        ));
+    }
+
+    #[test]
+    fn empty_record_with_newline() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            {    
+            }"#
+            ),
+            "{}",
+        );
+    }
     #[test]
     fn one_field() {
         expr_formats_same("{ x: 4 }");
@@ -2407,22 +2452,54 @@ mod test_fmt {
         ));
     }
 
-    // TODO This raises a parse error:
-    // NotYetImplemented("TODO the : in this declaration seems outdented")
-    // #[test]
-    // fn multiline_tag_union_annotation() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         b :
-    //             [
-    //                 True,
-    //                 False,
-    //             ]
+    #[test]
+    fn multiline_tag_union_annotation() {
+        expr_formats_same(indoc!(
+            r#"
+            b :
+                [
+                    True,
+                    False,
+                ]
 
-    //         b
-    //         "#
-    //     ));
-    // }
+            b
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_tag_union_annotation_with_final_comment() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            b :
+                [
+                    True,
+                    # comment 1
+                    False # comment 2
+                    ,
+                    # comment 3
+                ]
+
+            b
+            "#
+            ),
+            indoc!(
+                r#"
+                b :
+                    [
+                        True,
+                        # comment 1
+                        False,
+                        # comment 2
+                        # comment 3
+                    ]
+    
+                b
+                "#
+            ),
+        );
+    }
 
     #[test]
     fn tag_union() {
@@ -2435,6 +2512,28 @@ mod test_fmt {
             "#
         ));
     }
+
+    // TODO: the current formatting seems a bit odd for multiline function annotations
+    // (beside weird indentation, note the trailing space after the "->")
+    // #[test]
+    // fn multiline_tag_union_function_annotation() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         f :
+    //             [
+    //                 True,
+    //                 False,
+    //             ] ->
+    //             [
+    //                 True,
+    //                 False,
+    //             ]
+    //         f = \x -> x
+
+    //         a
+    //         "#
+    //     ));
+    // }
 
     #[test]
     fn recursive_tag_union() {
@@ -2458,7 +2557,7 @@ mod test_fmt {
     fn record_type() {
         expr_formats_same(indoc!(
             r#"
-            f : { foo : I64 }
+            f : { foo : Int * }
             f = { foo: 1000 }
 
             a
@@ -2509,11 +2608,11 @@ mod test_fmt {
     //            r#"
     //            f :
     //                Result a
-    //                    { x : I64
+    //                    { x : Int *
     //                    , y : Float
     //                    }
     //                    c
-    //                -> I64
+    //                -> Int *
     //            f =
     //                \_ -> 4
     //            "#

@@ -338,6 +338,12 @@ fn pretty_runtime_error<'b>(
     runtime_error: RuntimeError,
 ) -> RocDocBuilder<'b> {
     match runtime_error {
+        RuntimeError::VoidValue => {
+            // is used to communicate to the compiler that
+            // a branch is unreachable; this should never reach a user
+            unreachable!("")
+        }
+
         RuntimeError::Shadowing {
             original_region,
             shadow,

@@ -497,7 +497,7 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str> {
 
 /// A single UTF-8-encoded char. This will both parse *and* validate that the
 /// char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char<'a>(state: &State<'a>) -> Result<(char, usize), FailReason> {
+pub fn peek_utf8_char(state: &State) -> Result<(char, usize), FailReason> {
     if !state.bytes.is_empty() {
         match char::from_utf8_slice_start(state.bytes) {
             Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
@@ -512,10 +512,7 @@ pub fn peek_utf8_char<'a>(state: &State<'a>) -> Result<(char, usize), FailReason
 
 /// A single UTF-8-encoded char, with an offset. This will both parse *and*
 /// validate that the char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char_at<'a>(
-    state: &State<'a>,
-    offset: usize,
-) -> Result<(char, usize), FailReason> {
+pub fn peek_utf8_char_at(state: &State, offset: usize) -> Result<(char, usize), FailReason> {
     if state.bytes.len() > offset {
         let bytes = &state.bytes[offset..];
 

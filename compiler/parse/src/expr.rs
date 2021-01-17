@@ -306,7 +306,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         // These would not have parsed as patterns
         Expr::AccessorFunction(_)
         | Expr::Access(_, _)
-        | Expr::List(_)
+        | Expr::List { .. }
         | Expr::Closure(_, _)
         | Expr::BinOp(_)
         | Expr::Defs(_, _)
@@ -1848,7 +1848,7 @@ fn binop<'a>() -> impl Parser<'a, BinOp> {
 }
 
 pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    let elems = collection!(
+    let elems = collection_trailing_sep!(
         ascii_char(b'['),
         loc!(expr(min_indent)),
         ascii_char(b','),
@@ -1858,14 +1858,21 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
     parser::attempt(
         Attempting::List,
-        map_with_arena!(elems, |arena, parsed_elems: Vec<'a, Located<Expr<'a>>>| {
+        map_with_arena!(elems, |arena,
+                                (parsed_elems, final_comments): (
+            Vec<'a, Located<Expr<'a>>>,
+            &'a [CommentOrNewline<'a>]
+        )| {
             let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
 
             for parsed_elem in parsed_elems {
                 allocated.push(&*arena.alloc(parsed_elem));
             }
 
-            Expr::List(allocated.into_bump_slice())
+            Expr::List {
+                items: allocated.into_bump_slice(),
+                final_comments,
+            }
         }),
     )
 }

@@ -29,7 +29,7 @@ impl<T: Sized> Into<Result<T, String>> for RocCallResult<T> {
 #[macro_export]
 macro_rules! run_jit_function {
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
-        let v: std::vec::Vec<roc_problem::can::Problem> = std::vec::Vec::new();
+        let v: String = String::new();
         run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
     }};
 
@@ -52,12 +52,7 @@ macro_rules! run_jit_function {
             match result.assume_init().into() {
                 Ok(success) => {
                     // only if there are no exceptions thrown, check for errors
-                    assert_eq!(
-                        $errors,
-                        std::vec::Vec::new(),
-                        "Encountered errors: {:?}",
-                        $errors
-                    );
+                    assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);
 
                     $transform(success)
                 }
@@ -73,7 +68,7 @@ macro_rules! run_jit_function {
 #[macro_export]
 macro_rules! run_jit_function_dynamic_type {
     ($lib: expr, $main_fn_name: expr, $bytes:expr, $transform:expr) => {{
-        let v: std::vec::Vec<roc_problem::can::Problem> = std::vec::Vec::new();
+        let v: String = String::new();
         run_jit_function_dynamic_type!($lib, $main_fn_name, $bytes, $transform, v)
     }};
 

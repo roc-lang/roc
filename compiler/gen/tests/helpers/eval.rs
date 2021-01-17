@@ -19,10 +19,10 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: roc_builtins::std::StdLib,
+    stdlib: &'a roc_builtins::std::StdLib,
     leak: bool,
     context: &'a inkwell::context::Context,
-) -> (&'static str, Vec<roc_problem::can::Problem>, Library) {
+) -> (&'static str, String, Library) {
     use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
@@ -41,6 +41,9 @@ pub fn helper<'a>(
         module_src = &temp;
     }
 
+    let target = target_lexicon::Triple::host();
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
@@ -49,6 +52,7 @@ pub fn helper<'a>(
         stdlib,
         src_dir,
         exposed_types,
+        ptr_bytes,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -62,16 +66,16 @@ pub fn helper<'a>(
     } = loaded;
 
     debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
+    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
-    let (_, main_fn_layout) = procedures
-        .keys()
-        .find(|(s, _)| *s == main_fn_symbol)
-        .unwrap()
-        .clone();
-
-    let target = target_lexicon::Triple::host();
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
+        Some(found) => found.clone(),
+        None => panic!(
+            "The main function symbol {:?} does not have a procedure in {:?}",
+            main_fn_symbol,
+            &procedures.keys()
+        ),
+    };
 
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
@@ -106,14 +110,14 @@ pub fn helper<'a>(
                 | UnusedArgument(_, _, _)
                 | UnusedImport(_, _)
                 | RuntimeError(_)
+                | UnsupportedPattern(_, _)
                 | ExposedButNotDefined(_) => {
-                    delayed_errors.push(problem.clone());
-
                     let report = can_problem(&alloc, module_path.clone(), problem);
                     let mut buf = String::new();
 
                     report.render_color_terminal(&mut buf, &alloc, &palette);
 
+                    delayed_errors.push(buf.clone());
                     lines.push(buf);
                 }
                 _ => {
@@ -142,6 +146,7 @@ pub fn helper<'a>(
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
+            delayed_errors.push(buf.clone());
             lines.push(buf);
         }
     }
@@ -156,6 +161,10 @@ pub fn helper<'a>(
     }
 
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+
+    // strip Zig debug stuff
+    module.strip_debug_info();
+
     let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
         roc_gen::llvm::build::OptLevel::Normal
@@ -283,39 +292,7 @@ pub fn helper<'a>(
     let lib = module_to_dylib(&env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
-    (main_fn_name, delayed_errors, lib)
-}
-
-// TODO this is almost all code duplication with assert_llvm_evals_to
-// the only difference is that this calls uniq_expr instead of can_expr.
-// Should extract the common logic into test helpers.
-#[macro_export]
-macro_rules! assert_opt_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
-        use bumpalo::Bump;
-        use inkwell::context::Context;
-        use roc_gen::run_jit_function;
-
-        let arena = Bump::new();
-
-        let context = Context::create();
-
-        let stdlib = roc_builtins::unique::uniq_stdlib();
-
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
-
-        let transform = |success| {
-            let expected = $expected;
-            let given = $transform(success);
-            assert_eq!(&given, &expected);
-        };
-        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        assert_opt_evals_to!($src, $expected, $ty, $transform, true)
-    };
+    (main_fn_name, delayed_errors.join("\n"), lib)
 }
 
 #[macro_export]
@@ -326,9 +303,10 @@ macro_rules! assert_llvm_evals_to {
         use roc_gen::run_jit_function;
 
         let arena = Bump::new();
-
         let context = Context::create();
-        let stdlib = roc_builtins::std::standard_stdlib();
+
+        // NOTE the stdlib must be in the arena; just taking a reference will segfault
+        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
         let (main_fn_name, errors, lib) =
             $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
@@ -366,7 +344,8 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
-            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
+            // NOTE at the moment, the optimized tests do the same thing
+            // assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
         }
     };
 }

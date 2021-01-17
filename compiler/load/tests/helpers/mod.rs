@@ -8,7 +8,7 @@ use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
 use roc_can::scope::Scope;
-use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
+use roc_collections::all::{ImMap, ImSet, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::ident::Ident;
@@ -37,7 +37,7 @@ pub fn infer_expr(
 ) -> (Content, Subs) {
     let env = solve::Env {
         aliases: MutMap::default(),
-        vars_by_symbol: SendMap::default(),
+        vars_by_symbol: MutMap::default(),
     };
     let (solved, _) = solve::run(&env, problems, subs, constraint);
 
@@ -327,7 +327,7 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
     // and variables actually used in constraints
     let (declared, used) = variable_usage(constraint);
 
-    let used: ImSet<Variable> = used.clone().into();
+    let used: ImSet<Variable> = used.into();
     let mut decl: ImSet<Variable> = declared.rigid_vars.clone().into();
 
     for var in declared.flex_vars.clone() {

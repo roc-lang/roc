@@ -35,14 +35,17 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
 
     let module_src = promote_expr_to_module(src_str);
 
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         &arena,
         filename,
         &module_src,
-        stdlib,
+        &stdlib,
         src_dir,
         exposed_types,
+        ptr_bytes,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -131,11 +134,15 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         let content = subs.get(main_fn_var).content;
         let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
 
-        let (_, main_fn_layout) = procedures
-            .keys()
-            .find(|(s, _)| *s == main_fn_symbol)
-            .unwrap()
-            .clone();
+        let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
+            Some(layout) => layout.clone(),
+            None => {
+                return Ok(ReplOutput::NoProblems {
+                    expr: "<function>".to_string(),
+                    expr_type: expr_type_str,
+                });
+            }
+        };
 
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
@@ -249,7 +256,7 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
 
         let lib = module_to_dylib(&env.module, &target, opt_level)
             .expect("Error loading compiled dylib for test");
-        let answer = unsafe {
+        let res_answer = unsafe {
             eval::jit_to_ast(
                 &arena,
                 lib,
@@ -264,7 +271,15 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         };
         let mut expr = bumpalo::collections::String::new_in(&arena);
 
-        answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
+        use eval::ToAstProblem::*;
+        match res_answer {
+            Ok(answer) => {
+                answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
+            }
+            Err(FunctionLayout) => {
+                expr.push_str("<function>");
+            }
+        }
 
         Ok(ReplOutput::NoProblems {
             expr: expr.into_bump_str().to_string(),

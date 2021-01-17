@@ -75,17 +75,38 @@ fn insert_jumps<'a>(
     match stmt {
         Let(
             symbol,
-            Expr::FunctionCall {
-                call_type: CallType::ByName(fsym),
-                args,
+            Expr::Call(crate::ir::Call {
+                call_type: CallType::ByName { name: fsym, .. },
+                arguments,
                 ..
-            },
+            }),
             _,
             Stmt::Ret(rsym),
         ) if needle == *fsym && symbol == rsym => {
             // replace the call and return with a jump
 
-            let jump = Stmt::Jump(goal_id, args);
+            let jump = Stmt::Jump(goal_id, arguments);
+
+            Some(arena.alloc(jump))
+        }
+
+        Invoke {
+            symbol,
+            call:
+                crate::ir::Call {
+                    call_type: CallType::ByName { name: fsym, .. },
+                    arguments,
+                    ..
+                },
+            fail,
+            pass: Stmt::Ret(rsym),
+            ..
+        } if needle == *fsym && symbol == rsym => {
+            debug_assert_eq!(fail, &&Stmt::Rethrow);
+
+            // replace the call and return with a jump
+
+            let jump = Stmt::Jump(goal_id, arguments);
 
             Some(arena.alloc(jump))
         }
@@ -101,6 +122,35 @@ fn insert_jumps<'a>(
                 None
             }
         }
+
+        Invoke {
+            symbol,
+            call,
+            fail,
+            pass,
+            layout,
+        } => {
+            let opt_pass = insert_jumps(arena, pass, goal_id, needle);
+            let opt_fail = insert_jumps(arena, fail, goal_id, needle);
+
+            if opt_pass.is_some() || opt_fail.is_some() {
+                let pass = opt_pass.unwrap_or(pass);
+                let fail = opt_fail.unwrap_or(fail);
+
+                let stmt = Invoke {
+                    symbol: *symbol,
+                    call: call.clone(),
+                    layout: layout.clone(),
+                    pass,
+                    fail,
+                };
+
+                Some(arena.alloc(stmt))
+            } else {
+                None
+            }
+        }
+
         Join {
             id,
             parameters,
@@ -119,35 +169,6 @@ fn insert_jumps<'a>(
                     parameters,
                     remainder,
                     continuation,
-                }))
-            } else {
-                None
-            }
-        }
-        Cond {
-            cond_symbol,
-            cond_layout,
-            branching_symbol,
-            branching_layout,
-            pass,
-            fail,
-            ret_layout,
-        } => {
-            let opt_pass = insert_jumps(arena, pass, goal_id, needle);
-            let opt_fail = insert_jumps(arena, fail, goal_id, needle);
-
-            if opt_pass.is_some() || opt_fail.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or_else(|| *fail);
-
-                Some(arena.alloc(Cond {
-                    cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_symbol: *branching_symbol,
-                    branching_layout: branching_layout.clone(),
-                    pass,
-                    fail,
-                    ret_layout: ret_layout.clone(),
                 }))
             } else {
                 None
@@ -216,6 +237,7 @@ fn insert_jumps<'a>(
             None => None,
         },
 
+        Rethrow => None,
         Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,

@@ -20,7 +20,7 @@ use roc_module::symbol::{
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Attempting, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
@@ -663,7 +663,7 @@ enum Msg<'a> {
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
-        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        exposed_vars_by_symbol: MutMap<Symbol, Variable>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -699,7 +699,7 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub platform_id: Option<ModuleId>,
     pub goal_phase: Phase,
-    pub stdlib: StdLib,
+    pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: Option<To<'a>>,
@@ -944,9 +944,10 @@ fn enqueue_task<'a>(
 pub fn load_and_typecheck(
     arena: &Bump,
     filename: PathBuf,
-    stdlib: StdLib,
+    stdlib: &StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
+    ptr_bytes: u32,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
@@ -959,6 +960,7 @@ pub fn load_and_typecheck(
         src_dir,
         exposed_types,
         Phase::SolveTypes,
+        ptr_bytes,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -968,9 +970,10 @@ pub fn load_and_typecheck(
 pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    stdlib: StdLib,
+    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
+    ptr_bytes: u32,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
@@ -983,6 +986,7 @@ pub fn load_and_monomorphize<'a>(
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
+        ptr_bytes,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -993,9 +997,10 @@ pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     src: &'a str,
-    stdlib: StdLib,
+    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
+    ptr_bytes: u32,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
@@ -1008,6 +1013,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
+        ptr_bytes,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -1140,10 +1146,11 @@ fn load<'a>(
     arena: &'a Bump,
     //filename: PathBuf,
     load_start: LoadStart<'a>,
-    stdlib: StdLib,
+    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     goal_phase: Phase,
+    ptr_bytes: u32,
 ) -> Result<LoadResult<'a>, LoadingProblem>
 where
 {
@@ -1259,8 +1266,14 @@ where
                                     // added. In that case, do nothing, and keep waiting
                                     // until we receive a Shutdown message.
                                     if let Some(task) = find_task(&worker, injector, stealers) {
-                                        run_task(task, worker_arena, src_dir, msg_tx.clone())
-                                            .expect("Msg channel closed unexpectedly.");
+                                        run_task(
+                                            task,
+                                            worker_arena,
+                                            src_dir,
+                                            msg_tx.clone(),
+                                            ptr_bytes,
+                                        )
+                                        .expect("Msg channel closed unexpectedly.");
                                     }
                                 }
                             }
@@ -1638,9 +1651,12 @@ fn update<'a>(
             };
 
             if is_host_exposed {
-                state
-                    .exposed_to_host
-                    .extend(solved_module.exposed_vars_by_symbol.iter().copied());
+                state.exposed_to_host.extend(
+                    solved_module
+                        .exposed_vars_by_symbol
+                        .iter()
+                        .map(|(k, v)| (*k, *v)),
+                );
             }
 
             if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
@@ -1787,8 +1803,6 @@ fn update<'a>(
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -1801,6 +1815,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
@@ -1828,11 +1844,11 @@ fn update<'a>(
     }
 }
 
-fn finish_specialization<'a>(
-    state: State<'a>,
+fn finish_specialization(
+    state: State,
     subs: Subs,
     exposed_to_host: MutMap<Symbol, Variable>,
-) -> MonomorphizedModule<'a> {
+) -> MonomorphizedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
@@ -1901,10 +1917,10 @@ fn finish_specialization<'a>(
     }
 }
 
-fn finish<'a>(
-    state: State<'a>,
+fn finish(
+    state: State,
     solved: Solved<Subs>,
-    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -2791,7 +2807,7 @@ fn run_solve<'a>(
     let module_id = module.module_id;
 
     let Module {
-        exposed_vars_by_symbol,
+        exposed_symbols,
         aliases,
         rigid_variables,
         ..
@@ -2799,6 +2815,9 @@ fn run_solve<'a>(
 
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
+
+    let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol.clone();
+    exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
 
     let solved_types =
         roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
@@ -3001,8 +3020,8 @@ fn fabricate_effects_module<'a>(
 
     let mut declarations = Vec::new();
 
-    let exposed_vars_by_symbol = {
-        let mut exposed_vars_by_symbol = Vec::new();
+    let exposed_symbols: MutSet<Symbol> = {
+        let mut exposed_symbols = MutSet::default();
 
         {
             for (ident, ann) in effect_entries {
@@ -3035,7 +3054,7 @@ fn fabricate_effects_module<'a>(
                     annotation,
                 );
 
-                exposed_vars_by_symbol.push((symbol, def.expr_var));
+                exposed_symbols.insert(symbol);
 
                 declarations.push(Declaration::Declare(def));
             }
@@ -3047,11 +3066,11 @@ fn fabricate_effects_module<'a>(
             &mut scope,
             effect_symbol,
             &mut var_store,
-            &mut exposed_vars_by_symbol,
+            &mut exposed_symbols,
             &mut declarations,
         );
 
-        exposed_vars_by_symbol
+        exposed_symbols
     };
 
     use roc_can::module::ModuleOutput;
@@ -3063,7 +3082,6 @@ fn fabricate_effects_module<'a>(
         lookups: Vec::new(),
         problems: can_env.problems,
         ident_ids: can_env.ident_ids,
-        exposed_vars_by_symbol,
         references: MutSet::default(),
     };
 
@@ -3072,7 +3090,7 @@ fn fabricate_effects_module<'a>(
     let module = Module {
         module_id,
         exposed_imports: module_output.exposed_imports,
-        exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+        exposed_symbols,
         references: module_output.references,
         aliases: module_output.aliases,
         rigid_variables: module_output.rigid_variables,
@@ -3182,7 +3200,7 @@ fn canonicalize_and_constrain<'a>(
         dep_idents,
         aliases,
         exposed_imports,
-        exposed_symbols,
+        &exposed_symbols,
         &mut var_store,
     );
     let canonicalize_end = SystemTime::now();
@@ -3196,7 +3214,7 @@ fn canonicalize_and_constrain<'a>(
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
-                exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+                exposed_symbols,
                 references: module_output.references,
                 aliases: module_output.aliases,
                 rigid_variables: module_output.rigid_variables,
@@ -3336,6 +3354,7 @@ fn make_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations,
     mut module_timing: ModuleTiming,
+    ptr_bytes: u32,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut mono_problems = Vec::new();
@@ -3346,6 +3365,7 @@ fn make_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
+        ptr_bytes,
     };
 
     procs
@@ -3391,6 +3411,7 @@ fn build_pending_specializations<'a>(
     decls: Vec<Declaration>,
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
+    ptr_bytes: u32,
     // TODO remove
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
@@ -3405,6 +3426,7 @@ fn build_pending_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
+        ptr_bytes,
     };
 
     // Add modules' decls to Procs
@@ -3503,9 +3525,20 @@ fn add_def_to_module<'a>(
                             mono_env.subs,
                         ) {
                             Ok(l) => l,
-                            Err(err) => {
-                                // a host-exposed function is not monomorphized
-                                todo!("The host-exposed function {:?} does not have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", symbol, err)
+                            Err(LayoutProblem::Erroneous) => {
+                                let message = "top level function has erroneous type";
+                                procs.runtime_errors.insert(symbol, message);
+                                return;
+                            }
+                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                return;
                             }
                         };
 
@@ -3537,9 +3570,29 @@ fn add_def_to_module<'a>(
                     // get specialized!
                     if is_exposed {
                         let annotation = def.expr_var;
-                        let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
-                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
-                                    );
+
+                        let layout = match layout_cache.from_var(
+                            mono_env.arena,
+                            annotation,
+                            mono_env.subs,
+                        ) {
+                            Ok(l) => l,
+                            Err(LayoutProblem::Erroneous) => {
+                                let message = "top level function has erroneous type";
+                                procs.runtime_errors.insert(symbol, message);
+                                return;
+                            }
+                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                return;
+                            }
+                        };
 
                         procs.insert_exposed(
                             symbol,
@@ -3577,6 +3630,7 @@ fn run_task<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
+    ptr_bytes: u32,
 ) -> Result<(), LoadingProblem> {
     use BuildTask::*;
 
@@ -3649,6 +3703,7 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
+            ptr_bytes,
             exposed_to_host,
         )),
         MakeSpecializations {
@@ -3668,6 +3723,7 @@ fn run_task<'a>(
             layout_cache,
             specializations_we_must_make,
             module_timing,
+            ptr_bytes,
         )),
     }?;
 

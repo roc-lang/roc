@@ -47,9 +47,10 @@ pub fn helper<'a>(
         arena,
         filename,
         &module_src,
-        stdlib,
+        &stdlib,
         src_dir,
         exposed_types,
+        8,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -76,7 +77,7 @@ pub fn helper<'a>(
     println!("=================================\n");
     */
     debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
+    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
     let (_, main_fn_layout) = procedures
         .keys()

@@ -109,14 +109,24 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             arena.alloc(Located { region, value })
         }
-        List(elems) | Nested(List(elems)) => {
-            let mut new_elems = Vec::with_capacity_in(elems.len(), arena);
+        List {
+            items,
+            final_comments,
+        }
+        | Nested(List {
+            items,
+            final_comments,
+        }) => {
+            let mut new_items = Vec::with_capacity_in(items.len(), arena);
 
-            for elem in elems.iter() {
-                new_elems.push(desugar_expr(arena, elem));
+            for item in items.iter() {
+                new_items.push(desugar_expr(arena, item));
             }
-            let new_elems = new_elems.into_bump_slice();
-            let value: Expr<'a> = List(new_elems);
+            let new_items = new_items.into_bump_slice();
+            let value: Expr<'a> = List {
+                items: new_items,
+                final_comments,
+            };
 
             arena.alloc(Located {
                 region: loc_expr.region,

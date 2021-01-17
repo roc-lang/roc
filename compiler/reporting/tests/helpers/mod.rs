@@ -7,7 +7,7 @@ use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
 use roc_can::scope::Scope;
-use roc_collections::all::{ImMap, MutMap, SendMap, SendSet};
+use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
@@ -35,7 +35,7 @@ pub fn infer_expr(
 ) -> (Content, Subs) {
     let env = solve::Env {
         aliases: MutMap::default(),
-        vars_by_symbol: SendMap::default(),
+        vars_by_symbol: MutMap::default(),
     };
     let (solved, _) = solve::run(&env, problems, subs, constraint);
 
@@ -57,7 +57,7 @@ const EXPANDED_STACK_SIZE: usize = 4 * 1024 * 1024;
 #[cfg(debug_assertions)]
 pub fn with_larger_debug_stack<F>(run_test: F)
 where
-    F: FnOnce() -> (),
+    F: FnOnce(),
     F: Send,
     F: 'static,
 {

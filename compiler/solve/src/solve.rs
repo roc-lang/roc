@@ -1,6 +1,6 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{ImMap, MutMap, SendMap};
+use roc_collections::all::{ImMap, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -73,7 +73,7 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    pub vars_by_symbol: SendMap<Symbol, Variable>,
+    pub vars_by_symbol: MutMap<Symbol, Variable>,
     pub aliases: MutMap<Symbol, Alias>,
 }
 
@@ -109,7 +109,7 @@ impl Pools {
             .unwrap_or_else(|| panic!("Compiler bug: could not find pool at rank {}", rank))
     }
 
-    pub fn iter<'a>(&'a self) -> std::slice::Iter<'a, Vec<Variable>> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Vec<Variable>> {
         self.0.iter()
     }
 
@@ -138,24 +138,9 @@ pub fn run(
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let mut pools = Pools::default();
-    let state = State {
-        env: env.clone(),
-        mark: Mark::NONE.next(),
-    };
-    let rank = Rank::toplevel();
-    let state = solve(
-        env,
-        state,
-        rank,
-        &mut pools,
-        problems,
-        &mut MutMap::default(),
-        &mut subs,
-        constraint,
-    );
+    let env = run_in_place(env, problems, &mut subs, constraint);
 
-    (Solved(subs), state.env)
+    (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead

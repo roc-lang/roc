@@ -8,12 +8,13 @@ use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::debug_info::AsDIScope;
 use inkwell::module::Linkage;
+use inkwell::types::{AnyTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
-pub const REFCOUNT_MAX: usize = 0 as usize;
+pub const REFCOUNT_MAX: usize = 0_usize;
 
 pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
     match ptr_bytes {
@@ -65,7 +66,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             .into_pointer_value();
 
         // get a pointer to index -1
-        let index_intvalue = refcount_type.const_int((-1 as i64) as u64, false);
+        let index_intvalue = refcount_type.const_int(-1_i64 as u64, false);
         let refcount_ptr = unsafe {
             builder.build_in_bounds_gep(ptr_as_usize_ptr, &[index_intvalue], "get_rc_ptr")
         };
@@ -108,7 +109,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         );
         let incremented = builder.build_int_add(
             refcount,
-            refcount_type.const_int(1 as u64, false),
+            refcount_type.const_int(1_u64, false),
             "increment_refcount",
         );
 
@@ -210,7 +211,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 LLVM_SADD_WITH_OVERFLOW_I64,
                 &[
                     refcount.into(),
-                    refcount_type.const_int((-1 as i64) as u64, true).into(),
+                    refcount_type.const_int(-1_i64 as u64, true).into(),
                 ],
             )
             .into_struct_value();
@@ -222,7 +223,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let has_overflowed_comparison = builder.build_int_compare(
             IntPredicate::EQ,
             has_overflowed.into_int_value(),
-            ctx.bool_type().const_int(1 as u64, false),
+            ctx.bool_type().const_int(1_u64, false),
             "has_overflowed",
         );
 
@@ -342,7 +343,8 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
         }
 
         RecursiveUnion(tags) => {
-            build_dec_union(env, layout_ids, tags, value);
+            debug_assert!(value.is_pointer_value());
+            build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value());
         }
 
         FunctionPointer(_, _) | Pointer(_) => {}
@@ -426,7 +428,8 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
         }
 
         RecursiveUnion(tags) => {
-            build_inc_union(env, layout_ids, tags, value);
+            debug_assert!(value.is_pointer_value());
+            build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value());
         }
         Closure(_, closure_layout, _) => {
             if closure_layout.contains_refcounted() {
@@ -993,12 +996,28 @@ pub fn build_header<'a, 'ctx, 'env>(
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
     let arena = env.arena;
-    let context = &env.context;
-
     let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
+    build_header_help(env, fn_name, env.context.void_type().into(), &[arg_type])
+}
 
-    // inc and dec return void
-    let fn_type = context.void_type().fn_type(&[arg_type], false);
+/// Build an increment or decrement function for a specific layout
+pub fn build_header_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    return_type: AnyTypeEnum<'ctx>,
+    arguments: &[BasicTypeEnum<'ctx>],
+) -> FunctionValue<'ctx> {
+    use inkwell::types::AnyTypeEnum::*;
+    let fn_type = match return_type {
+        ArrayType(t) => t.fn_type(arguments, false),
+        FloatType(t) => t.fn_type(arguments, false),
+        FunctionType(_) => unreachable!("functions cannot return functions"),
+        IntType(t) => t.fn_type(arguments, false),
+        PointerType(t) => t.fn_type(arguments, false),
+        StructType(t) => t.fn_type(arguments, false),
+        VectorType(t) => t.fn_type(arguments, false),
+        VoidType(t) => t.fn_type(arguments, false),
+    };
 
     let fn_val = env
         .module
@@ -1013,6 +1032,202 @@ pub fn build_header<'a, 'ctx, 'env>(
     env.dibuilder.finalize();
 
     fn_val
+}
+
+pub fn build_dec_rec_union<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    fields: &'a [&'a [Layout<'a>]],
+    value: PointerValue<'ctx>,
+) {
+    let layout = Layout::RecursiveUnion(fields);
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::DEC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_header(env, &layout, &fn_name);
+
+            build_dec_rec_union_help(env, layout_ids, fields, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    let call = env
+        .builder
+        .build_call(function, &[value.into()], "decrement_union");
+
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    tags: &[&[Layout<'a>]],
+    fn_val: FunctionValue<'ctx>,
+) {
+    debug_assert!(!tags.is_empty());
+
+    use inkwell::types::BasicType;
+
+    let context = &env.context;
+    let builder = env.builder;
+
+    // Add a basic block for the entry point
+    let entry = context.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&context, loc);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let parent = fn_val;
+
+    let layout = Layout::RecursiveUnion(tags);
+    let before_block = env.builder.get_insert_block().expect("to be in a function");
+
+    debug_assert!(arg_val.is_pointer_value());
+    let value_ptr = arg_val.into_pointer_value();
+
+    // next, make a jump table for all possible values of the tag_id
+    let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+    let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+
+    builder.set_current_debug_location(&context, loc);
+
+    for (tag_id, field_layouts) in tags.iter().enumerate() {
+        // if none of the fields are or contain anything refcounted, just move on
+        if !field_layouts
+            .iter()
+            .any(|x| x.is_refcounted() || x.contains_refcounted())
+        {
+            continue;
+        }
+
+        let block = env.context.append_basic_block(parent, "tag_id_decrement");
+        env.builder.position_at_end(block);
+
+        let wrapper_type = basic_type_from_layout(
+            env.arena,
+            env.context,
+            &Layout::Struct(field_layouts),
+            env.ptr_bytes,
+        );
+
+        // cast the opaque pointer to a pointer of the correct shape
+        let struct_ptr = cast_basic_basic(
+            env.builder,
+            value_ptr.into(),
+            wrapper_type.ptr_type(AddressSpace::Generic).into(),
+        )
+        .into_pointer_value();
+
+        for (i, field_layout) in field_layouts.iter().enumerate() {
+            if let Layout::RecursivePointer = field_layout {
+                // this field has type `*i64`, but is really a pointer to the data we want
+                let elem_pointer = env
+                    .builder
+                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .unwrap();
+
+                let ptr_as_i64_ptr = env
+                    .builder
+                    .build_load(elem_pointer, "load_recursive_pointer");
+
+                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
+
+                // therefore we must cast it to our desired type
+                let union_type =
+                    basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+                let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
+
+                // recursively decrement the field
+                let call = env.builder.build_call(
+                    fn_val,
+                    &[recursive_field_ptr],
+                    "recursive_tag_decrement",
+                );
+
+                // Because it's an internal-only function, use the fast calling convention.
+                call.set_call_convention(FAST_CALL_CONV);
+            } else if field_layout.contains_refcounted() {
+                // TODO this loads the whole field onto the stack;
+                // that's wasteful if e.g. the field is a big record, where only
+                // some fields are actually refcounted.
+                let elem_pointer = env
+                    .builder
+                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .unwrap();
+
+                let field = env
+                    .builder
+                    .build_load(elem_pointer, "decrement_struct_field");
+
+                decrement_refcount_layout(env, parent, layout_ids, field, field_layout);
+            }
+        }
+
+        env.builder.build_unconditional_branch(merge_block);
+
+        cases.push((
+            env.context.i64_type().const_int(tag_id as u64, false),
+            block,
+        ));
+    }
+
+    cases.reverse();
+
+    env.builder.position_at_end(before_block);
+
+    // read the tag_id
+    let current_tag_id = rec_union_read_tag(env, value_ptr);
+
+    // switch on it
+    env.builder
+        .build_switch(current_tag_id, merge_block, &cases);
+
+    env.builder.position_at_end(merge_block);
+
+    // decrement this cons-cell itself
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    refcount_ptr.decrement(env, &layout);
+
+    // this function returns void
+    builder.build_return(None);
 }
 
 pub fn build_dec_union<'a, 'ctx, 'env>(
@@ -1061,8 +1276,6 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 ) {
     debug_assert!(!tags.is_empty());
 
-    use inkwell::types::BasicType;
-
     let context = &env.context;
     let builder = env.builder;
 
@@ -1088,32 +1301,18 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
     );
     builder.set_current_debug_location(&context, loc);
 
-    let mut scope = Scope::default();
-
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
-    let layout = Layout::Union(tags);
 
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
     set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
-    let alloca = create_entry_block_alloca(
-        env,
-        fn_val,
-        arg_val.get_type(),
-        arg_symbol.ident_string(&env.interns),
-    );
-
-    builder.build_store(alloca, arg_val);
-
-    scope.insert(arg_symbol, (layout.clone(), alloca));
-
     let parent = fn_val;
 
-    let layout = Layout::RecursiveUnion(tags);
     let before_block = env.builder.get_insert_block().expect("to be in a function");
 
+    debug_assert!(arg_val.is_struct_value());
     let wrapper_struct = arg_val.into_struct_value();
 
     // next, make a jump table for all possible values of the tag_id
@@ -1147,39 +1346,7 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
-                // this field has type `*i64`, but is really a pointer to the data we want
-                let ptr_as_i64_ptr = env
-                    .builder
-                    .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
-                    .unwrap();
-
-                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
-
-                // therefore we must cast it to our desired type
-                let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
-                let recursive_field_ptr = cast_basic_basic(
-                    env.builder,
-                    ptr_as_i64_ptr,
-                    union_type.ptr_type(AddressSpace::Generic).into(),
-                )
-                .into_pointer_value();
-
-                let recursive_field = env
-                    .builder
-                    .build_load(recursive_field_ptr, "load_recursive_field");
-
-                // recursively decrement the field
-                let call =
-                    env.builder
-                        .build_call(fn_val, &[recursive_field], "recursive_tag_decrement");
-
-                // Because it's an internal-only function, use the fast calling convention.
-                call.set_call_convention(FAST_CALL_CONV);
-
-                // TODO do this decrement before the recursive call?
-                // Then the recursive call is potentially TCE'd
-                let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, recursive_field_ptr);
-                refcount_ptr.decrement(env, &layout);
+                panic!("a non-recursive tag union cannot contain RecursivePointer");
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -1222,6 +1389,213 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
         .build_switch(current_tag_id, merge_block, &cases);
 
     env.builder.position_at_end(merge_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+pub fn build_inc_rec_union<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    fields: &'a [&'a [Layout<'a>]],
+    value: PointerValue<'ctx>,
+) {
+    let layout = Layout::RecursiveUnion(fields);
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::INC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_header(env, &layout, &fn_name);
+
+            build_inc_rec_union_help(env, layout_ids, fields, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+    let call = env
+        .builder
+        .build_call(function, &[value.into()], "increment_union");
+
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+fn rec_union_read_tag<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value_ptr: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    // Assumption: the tag is the first thing stored
+    // so cast the pointer to the data to a `i64*`
+    let tag_ptr = cast_basic_basic(
+        env.builder,
+        value_ptr.into(),
+        env.context
+            .i64_type()
+            .ptr_type(AddressSpace::Generic)
+            .into(),
+    )
+    .into_pointer_value();
+
+    env.builder
+        .build_load(tag_ptr, "load_tag_id")
+        .into_int_value()
+}
+
+pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    tags: &[&[Layout<'a>]],
+    fn_val: FunctionValue<'ctx>,
+) {
+    debug_assert!(!tags.is_empty());
+
+    use inkwell::types::BasicType;
+
+    let context = &env.context;
+    let builder = env.builder;
+
+    // Add a basic block for the entry point
+    let entry = context.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let func_scope = fn_val.get_subprogram().unwrap();
+    let lexical_block = env.dibuilder.create_lexical_block(
+        /* scope */ func_scope.as_debug_info_scope(),
+        /* file */ env.compile_unit.get_file(),
+        /* line_no */ 0,
+        /* column_no */ 0,
+    );
+
+    let loc = env.dibuilder.create_debug_location(
+        context,
+        /* line */ 0,
+        /* column */ 0,
+        /* current_scope */ lexical_block.as_debug_info_scope(),
+        /* inlined_at */ None,
+    );
+    builder.set_current_debug_location(&context, loc);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let parent = fn_val;
+
+    let layout = Layout::RecursiveUnion(tags);
+    let before_block = env.builder.get_insert_block().expect("to be in a function");
+
+    debug_assert!(arg_val.is_pointer_value());
+    let value_ptr = arg_val.into_pointer_value();
+
+    // read the tag_id
+    let tag_id = rec_union_read_tag(env, value_ptr);
+
+    let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
+
+    // next, make a jump table for all possible values of the tag_id
+    let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+    let merge_block = env.context.append_basic_block(parent, "increment_merge");
+
+    for (tag_id, field_layouts) in tags.iter().enumerate() {
+        // if none of the fields are or contain anything refcounted, just move on
+        if !field_layouts
+            .iter()
+            .any(|x| x.is_refcounted() || x.contains_refcounted())
+        {
+            continue;
+        }
+
+        let block = env.context.append_basic_block(parent, "tag_id_increment");
+        env.builder.position_at_end(block);
+
+        let wrapper_type = basic_type_from_layout(
+            env.arena,
+            env.context,
+            &Layout::Struct(field_layouts),
+            env.ptr_bytes,
+        );
+
+        // cast the opaque pointer to a pointer of the correct shape
+        let struct_ptr = cast_basic_basic(
+            env.builder,
+            value_ptr.into(),
+            wrapper_type.ptr_type(AddressSpace::Generic).into(),
+        )
+        .into_pointer_value();
+
+        for (i, field_layout) in field_layouts.iter().enumerate() {
+            if let Layout::RecursivePointer = field_layout {
+                // this field has type `*i64`, but is really a pointer to the data we want
+                let elem_pointer = env
+                    .builder
+                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .unwrap();
+
+                let ptr_as_i64_ptr = env
+                    .builder
+                    .build_load(elem_pointer, "load_recursive_pointer");
+
+                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
+
+                // therefore we must cast it to our desired type
+                let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+                let recursive_field_ptr = cast_basic_basic(
+                    env.builder,
+                    ptr_as_i64_ptr,
+                    union_type.ptr_type(AddressSpace::Generic).into(),
+                );
+
+                // recursively increment the field
+                let call = env.builder.build_call(
+                    fn_val,
+                    &[recursive_field_ptr],
+                    "recursive_tag_increment",
+                );
+
+                // Because it's an internal-only function, use the fast calling convention.
+                call.set_call_convention(FAST_CALL_CONV);
+            } else if field_layout.contains_refcounted() {
+                let elem_pointer = env
+                    .builder
+                    .build_struct_gep(struct_ptr, i as u32, "gep_field")
+                    .unwrap();
+
+                let field = env.builder.build_load(elem_pointer, "load_field");
+
+                increment_refcount_layout(env, parent, layout_ids, field, field_layout);
+            }
+        }
+
+        env.builder.build_unconditional_branch(merge_block);
+
+        cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+    }
+
+    env.builder.position_at_end(before_block);
+
+    env.builder
+        .build_switch(tag_id_u8.into_int_value(), merge_block, &cases);
+
+    env.builder.position_at_end(merge_block);
+
+    // increment this cons cell
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    refcount_ptr.increment(env);
 
     // this function returns void
     builder.build_return(None);
@@ -1299,25 +1673,11 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
     );
     builder.set_current_debug_location(&context, loc);
 
-    let mut scope = Scope::default();
-
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
-    let layout = Layout::Union(tags);
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
     set_name(arg_val, arg_symbol.ident_string(&env.interns));
-
-    let alloca = create_entry_block_alloca(
-        env,
-        fn_val,
-        arg_val.get_type(),
-        arg_symbol.ident_string(&env.interns),
-    );
-
-    builder.build_store(alloca, arg_val);
-
-    scope.insert(arg_symbol, (layout.clone(), alloca));
 
     let parent = fn_val;
 

@@ -85,6 +85,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SUB_WRAP => num_sub_wrap,
         NUM_SUB_CHECKED => num_sub_checked,
         NUM_MUL => num_mul,
+        NUM_MUL_WRAP => num_mul_wrap,
+        NUM_MUL_CHECKED => num_mul_checked,
         NUM_GT => num_gt,
         NUM_GTE => num_gte,
         NUM_LT => num_lt,
@@ -115,7 +117,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ASIN => num_asin,
         NUM_MAX_INT => num_max_int,
         NUM_MIN_INT => num_min_int,
-        NUM_BITWISE_AND => num_bitwise_and
+        NUM_BITWISE_AND => num_bitwise_and,
+        NUM_BITWISE_XOR => num_bitwise_xor
     }
 }
 
@@ -210,7 +213,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
 /// Num.maxInt : Int
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
-    let body = Int(int_var, i64::MAX);
+    let int_percision_var = var_store.fresh();
+    let body = Int(int_var, int_percision_var, i64::MAX);
 
     Def {
         annotation: None,
@@ -224,7 +228,8 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.minInt : Int
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
-    let body = Int(int_var, i64::MIN);
+    let int_percision_var = var_store.fresh();
+    let body = Int(int_var, int_percision_var, i64::MIN);
 
     Def {
         annotation: None,
@@ -573,6 +578,100 @@ fn num_mul(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumMul)
 }
 
+/// Num.mulWrap : Int, Int -> Int
+fn num_mul_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumMulWrap)
+}
+
+/// Num.mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+fn num_mul_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let num_var_1 = var_store.fresh();
+    let num_var_2 = var_store.fresh();
+    let num_var_3 = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let record_var = var_store.fresh();
+
+    // let arg_3 = RunLowLevel NumMulChecked arg_1 arg_2
+    //
+    // if arg_3.b then
+    //  # overflow
+    //  Err Overflow
+    // else
+    //  # all is well
+    //  Ok arg_3.a
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_3.b
+                Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "b".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                },
+            ),
+            // overflow!
+            no_region(tag(
+                "Err",
+                vec![tag("Overflow", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // all is well
+            no_region(
+                // Ok arg_3.a
+                tag(
+                    "Ok",
+                    vec![
+                        // arg_3.a
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a".into(),
+                            field_var: num_var_3,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    // arg_3 = RunLowLevel NumMulChecked arg_1 arg_2
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::NumMulChecked,
+            args: vec![
+                (num_var_1, Var(Symbol::ARG_1)),
+                (num_var_2, Var(Symbol::ARG_2)),
+            ],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(num_var_1, Symbol::ARG_1), (num_var_2, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
 /// Num.isGt : Num a, Num a -> Bool
 fn num_gt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_num_other_binop(symbol, var_store, LowLevel::NumGt)
@@ -750,7 +849,7 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (arg_var, Int(var_store.fresh(), 1)),
+            (arg_var, Int(var_store.fresh(), var_store.fresh(), 1)),
             (
                 arg_var,
                 RunLowLevel {
@@ -834,6 +933,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
+    let percision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -847,7 +947,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (float_var, Var(Symbol::ARG_1)),
-                        (float_var, Float(unbound_zero_var, 0.0)),
+                        (float_var, Float(unbound_zero_var, percision_var, 0.0)),
                     ],
                     ret_var: bool_var,
                 },
@@ -1052,6 +1152,11 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.bitwiseAnd : Int, Int -> Int
 fn num_bitwise_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseAnd)
+}
+
+/// Num.bitwiseXor : Int, Int -> Int
+fn num_bitwise_xor(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumBitwiseXor)
 }
 
 /// List.isEmpty : List * -> Bool
@@ -1800,6 +1905,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
+    let percision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -1813,7 +1919,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (num_var, Float(unbound_zero_var, 0.0)),
+                        (num_var, Float(unbound_zero_var, percision_var, 0.0)),
                     ],
                     ret_var: bool_var,
                 },
@@ -1862,6 +1968,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
+    let unbound_zero_percision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -1875,7 +1982,10 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (num_var, Int(unbound_zero_var, 0)),
+                        (
+                            num_var,
+                            Int(unbound_zero_var, unbound_zero_percision_var, 0),
+                        ),
                     ],
                     ret_var: bool_var,
                 },
@@ -1929,6 +2039,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
     let zero_var = var_store.fresh();
+    let zero_percision_var = var_store.fresh();
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
@@ -1943,7 +2054,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, Int(zero_var, 0)),
+                        (len_var, Int(zero_var, zero_percision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -1965,7 +2076,10 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         // List.#getUnsafe list 0
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
-                            args: vec![(list_var, Var(Symbol::ARG_1)), (len_var, Int(zero_var, 0))],
+                            args: vec![
+                                (list_var, Var(Symbol::ARG_1)),
+                                (len_var, Int(zero_var, zero_percision_var, 0)),
+                            ],
                             ret_var: list_elem_var,
                         },
                     ],
@@ -2006,6 +2120,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
     let num_var = var_store.fresh();
+    let num_percision_var = var_store.fresh();
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
@@ -2020,7 +2135,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, Int(num_var, 0)),
+                        (len_var, Int(num_var, num_percision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2059,7 +2174,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     ret_var: len_var,
                                                 },
                                             ),
-                                            (arg_var, Int(num_var, 1)),
+                                            (arg_var, Int(num_var, num_percision_var, 1)),
                                         ],
                                         ret_var: len_var,
                                     },

@@ -51,17 +51,18 @@ mod solve_expr {
         let loaded = {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
-            let file_path = dir.path().join(filename.clone());
-            let full_file_path = PathBuf::from(file_path.clone());
+            let file_path = dir.path().join(filename);
+            let full_file_path = file_path.clone();
             let mut file = File::create(file_path)?;
             writeln!(file, "{}", module_src)?;
             drop(file);
             let result = roc_load::file::load_and_typecheck(
                 arena,
                 full_file_path,
-                stdlib,
+                &stdlib,
                 dir.path(),
                 exposed_types,
+                8,
             );
 
             dir.close()?;
@@ -169,7 +170,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "F64");
+        infer_eq("0.5", "Float *");
     }
 
     #[test]
@@ -762,7 +763,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "F64",
+            "Float *",
         );
     }
 
@@ -1026,7 +1027,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : F64 }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float * }");
     }
 
     #[test]
@@ -1326,7 +1327,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Num.Integer
+                   int : Num.Num (Num.Integer Num.Signed64)
 
                    int
                 "#
@@ -1339,7 +1340,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Num.Integer
+                   int : Num.Num (Num.Integer Num.Signed64)
                    int = 5
 
                    int
@@ -1353,7 +1354,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num Integer
+                   int : Num (Integer Signed64)
 
                    int
                 "#
@@ -1366,7 +1367,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num Integer
+                   int : Num (Integer Signed64)
                    int = 5
 
                    int
@@ -1931,7 +1932,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Num Num.FloatingPoint
+                   float : Num.Num (Num.FloatingPoint Num.Binary64)
 
                    float
                 "#
@@ -1944,7 +1945,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Num Num.FloatingPoint
+                   float : Num.Num (Num.FloatingPoint Num.Binary64)
                    float = 5.5
 
                    float
@@ -1958,7 +1959,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num FloatingPoint
+                   float : Num (FloatingPoint Binary64)
 
                    float
                 "#
@@ -1971,7 +1972,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num FloatingPoint
+                   float : Num (FloatingPoint Binary64)
                    float = 5.5
 
                    float
@@ -2216,7 +2217,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    x : Num.Num Num.Integer
+                    x : Num.Num (Num.Integer Num.Signed64)
                     x =
                         when 2 is
                             3 -> 4
@@ -2385,7 +2386,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "F64",
+            "Float *",
         );
     }
 
@@ -2428,7 +2429,7 @@ mod solve_expr {
                 r#"
                 Foo a : { foo : a }
 
-                v : Foo (Num.Num Num.Integer)
+                v : Foo (Num.Num (Num.Integer Num.Signed64))
                 v = { foo: 42 }
 
                 v
@@ -2492,7 +2493,7 @@ mod solve_expr {
                 r#"
                     Peano : [ S Peano, Z ]
 
-                    length : Peano -> Num.Num Num.Integer
+                    length : Peano -> Num.Num (Num.Integer Num.Signed64)
                     length = \peano ->
                         when peano is
                             Z -> 0
@@ -2592,10 +2593,10 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                r : { x : (Num.Num Num.Integer) }
+                r : { x : (Num.Num (Num.Integer Signed64)) }
                 r = { x : 1 }
 
-                s : { left : { x : Num.Num Num.FloatingPoint } }
+                s : { left : { x : Num.Num (Num.FloatingPoint Num.Binary64) } }
                 s = { left: { x : 3.14 } }
 
                 when 0 is
@@ -2757,7 +2758,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    { x, y } : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    { x, y } : { x : Str.Str, y : Num.Num (Num.FloatingPoint Num.Binary64) }
                     { x, y } = { x : "foo", y : 3.14 }
 
                     x
@@ -2772,7 +2773,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Foo : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num (Num.FloatingPoint Num.Binary64) }
 
                     { x, y } : Foo
                     { x, y } = { x : "foo", y : 3.14 }
@@ -2830,7 +2831,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Foo : { x : Str.Str, y : Num.Num Num.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num (Num.FloatingPoint Num.Binary64) }
 
                     { x, y } : Foo
                     { x, y } = { x : "foo", y : 3.14 }
@@ -2982,7 +2983,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
+                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -2994,7 +2995,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
+            "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
         );
     }
 
@@ -3004,7 +3005,7 @@ mod solve_expr {
             infer_eq_without_problem(
                 indoc!(
                     r#"
-                swap : I64, I64, List a -> List a
+                swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -3015,7 +3016,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : I64, I64, List I64 -> [ Pair I64 (List I64) ]
+                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -3043,7 +3044,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "I64, I64, List I64 -> [ Pair I64 (List I64) ]",
+                "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
             );
         });
     }
@@ -3076,6 +3077,15 @@ mod solve_expr {
                 "#
             ),
             "Result (Num *) [ OutOfBounds ]*",
+        );
+
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List.get
+                "#
+            ),
+            "List a, Nat -> Result a [ OutOfBounds ]*",
         );
     }
 
@@ -3117,7 +3127,7 @@ mod solve_expr {
                 Num.toFloat
                 "#
             ),
-            "Num * -> F64",
+            "Num * -> Float *",
         );
     }
 
@@ -3129,7 +3139,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "F64, F64 -> F64",
+            "Float a, Float a -> Float a",
         );
     }
 
@@ -3141,7 +3151,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "F64 -> I64",
+            "Float * -> Int *",
         );
     }
 
@@ -3153,7 +3163,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "F64 -> I64",
+            "Float * -> Int *",
         );
     }
 
@@ -3165,7 +3175,7 @@ mod solve_expr {
                 Num.powInt
                 "#
             ),
-            "I64, I64 -> I64",
+            "Int a, Int a -> Int a",
         );
     }
 
@@ -3177,7 +3187,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "F64 -> F64",
+            "Float a -> Float a",
         );
     }
 
@@ -3444,7 +3454,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : I64 }",
+            "{ x : Num a, y : F64, z : Int * }",
         );
     }
 
@@ -4096,7 +4106,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ partitionHelp ] to "./platform"
 
-                swap : I64, I64, List a -> List a
+                swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -4107,7 +4117,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -4123,7 +4133,7 @@ mod solve_expr {
                         Pair i list
                 "#
             ),
-            "I64, I64, List (Num a), I64, Num a -> [ Pair I64 (List (Num a)) ]",
+            "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
         );
     }
 

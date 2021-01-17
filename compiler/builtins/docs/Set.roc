@@ -10,7 +10,7 @@ empty : Set *
 
 isEmpty : Set * -> Bool
 
-len : Set * -> Len
+len : Set * -> Nat
 
 # TODO: removed `'` from signature because parser does not support it yet
 # Original signature: `add : Set 'elem, 'elem -> Set 'elem`

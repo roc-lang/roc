@@ -122,7 +122,7 @@ pub fn fmt_body<'a>(
             Expr::SpaceBefore(_, _) => {
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
-            Expr::Record { .. } | Expr::List(_) => {
+            Expr::Record { .. } | Expr::List { .. } => {
                 newline(buf, indent + INDENT);
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }

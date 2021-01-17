@@ -147,6 +147,9 @@ pub enum RuntimeError {
     /// When the author specifies a type annotation but no implementation
     NoImplementation,
 
+    /// cases where the `[]` value (or equivalently, `forall a. a`) pops up
+    VoidValue,
+
     ExposedButNotDefined(Symbol),
 }
 

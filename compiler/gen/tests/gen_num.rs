@@ -16,6 +16,357 @@ mod gen_num {
     use roc_std::RocOrder;
 
     #[test]
+    fn nat_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : Nat
+                    i = 1
+
+                    i
+                "#
+            ),
+            1,
+            usize
+        );
+    }
+
+    #[test]
+    fn i128_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I128
+                    i = 128
+
+                    i
+                "#
+            ),
+            128,
+            i128
+        );
+    }
+    #[test]
+    fn i64_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I64
+                    i = 64
+
+                    i
+                "#
+            ),
+            64,
+            i64
+        );
+    }
+    #[test]
+    fn i32_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I32
+                    i = 32
+
+                    i
+                "#
+            ),
+            32,
+            i32
+        );
+    }
+    #[test]
+    fn i16_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I16
+                    i = 16
+
+                    i
+                "#
+            ),
+            16,
+            i16
+        );
+    }
+    #[test]
+    fn i8_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : I8
+                    i = 8
+
+                    i
+                "#
+            ),
+            8,
+            i8
+        );
+    }
+
+    #[test]
+    fn i128_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I128
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i128
+        );
+    }
+    #[test]
+    fn i64_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I64
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i64
+        );
+    }
+    #[test]
+    fn i32_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I32
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i32
+        );
+    }
+    #[test]
+    fn i16_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I16
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i16
+        );
+    }
+    #[test]
+    fn i8_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : I8
+                    f = 0xA
+
+                    f
+                "#
+            ),
+            0xA,
+            i8
+        );
+    }
+
+    #[test]
+    fn u128_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U128
+                    i = 128
+
+                    i
+                "#
+            ),
+            128,
+            u128
+        );
+    }
+    #[test]
+    fn u64_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U64
+                    i = 64
+
+                    i
+                "#
+            ),
+            64,
+            u64
+        );
+    }
+    #[test]
+    fn u32_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U32
+                    i = 32
+
+                    i
+                "#
+            ),
+            32,
+            u32
+        );
+    }
+    #[test]
+    fn u16_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U16
+                    i = 16
+
+                    i
+                "#
+            ),
+            16,
+            u16
+        );
+    }
+    #[test]
+    fn u8_signed_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i : U8
+                    i = 8
+
+                    i
+                "#
+            ),
+            8,
+            u8
+        );
+    }
+
+    #[test]
+    fn u128_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U128
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            i128
+        );
+    }
+    #[test]
+    fn u64_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U64
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            u64
+        );
+    }
+    #[test]
+    fn u32_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U32
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            u32
+        );
+    }
+    #[test]
+    fn u16_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U16
+                    f = 0x123
+
+                    f
+                "#
+            ),
+            0x123,
+            u16
+        );
+    }
+    #[test]
+    fn u8_hex_int_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : U8
+                    f = 0xA
+
+                    f
+                "#
+            ),
+            0xA,
+            u8
+        );
+    }
+
+    #[test]
+    fn f64_float_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : F64
+                    f = 3.6
+
+                    f
+                "#
+            ),
+            3.6,
+            f64
+        );
+    }
+    #[test]
+    fn f32_float_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    f : F32
+                    f = 3.6
+
+                    f
+                "#
+            ),
+            3.6,
+            f32
+        );
+    }
+
+    #[test]
     fn f64_sqrt() {
         // FIXME this works with normal types, but fails when checking uniqueness types
         assert_evals_to!(
@@ -40,6 +391,8 @@ mod gen_num {
     fn f64_abs() {
         assert_evals_to!("Num.abs -4.7", 4.7, f64);
         assert_evals_to!("Num.abs 5.8", 5.8, f64);
+        //assert_evals_to!("Num.abs Num.maxFloat", f64::MAX, f64);
+        //assert_evals_to!("Num.abs Num.minFloat", -f64::MIN, f64);
     }
 
     #[test]
@@ -52,6 +405,24 @@ mod gen_num {
         assert_evals_to!("Num.abs 1", 1, i64);
         assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
         assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to!("Num.abs Num.maxInt", i64::MAX, i64);
+        assert_evals_to!("Num.abs (Num.minInt + 1)", -(i64::MIN + 1), i64);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
+    )]
+    fn abs_min_int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.abs Num.minInt
+                "#
+            ),
+            0,
+            i64
+        );
     }
 
     #[test]
@@ -387,6 +758,14 @@ mod gen_num {
     }
 
     #[test]
+    fn bitwise_xor() {
+        assert_evals_to!("Num.bitwiseXor 20 20", 0, i64);
+        assert_evals_to!("Num.bitwiseXor 15 14", 1, i64);
+        assert_evals_to!("Num.bitwiseXor 7 15", 8, i64);
+        assert_evals_to!("Num.bitwiseXor 200 0", 200, i64);
+    }
+
+    #[test]
     fn lt_i64() {
         assert_evals_to!("1 < 2", true, bool);
         assert_evals_to!("1 < 1", false, bool);
@@ -533,6 +912,24 @@ mod gen_num {
     #[test]
     fn int_negate() {
         assert_evals_to!("Num.neg 123", -123, i64);
+        assert_evals_to!("Num.neg Num.maxInt", -i64::MAX, i64);
+        assert_evals_to!("Num.neg (Num.minInt + 1)", i64::MAX, i64);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = r#"Roc failed with message: "integer negation overflowed because its argument is the minimum value"#
+    )]
+    fn neg_min_int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.neg Num.minInt
+                "#
+            ),
+            0,
+            i64
+        );
     }
 
     #[test]
@@ -555,7 +952,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                    always42 : Num.Num Num.Integer -> Num.Num Num.Integer
+                    always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
                     always42 = \_ -> 42
 
                     always42 5
@@ -778,7 +1175,7 @@ mod gen_num {
             indoc!(
                 r#"
                     -1.7976931348623157e308 - 1.7976931348623157e308
-                    "#
+                "#
             ),
             0.0,
             f64
@@ -790,12 +1187,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when Num.subChecked 1 2 is
+                when Num.subChecked 5 2 is
                     Ok v -> v
                     _ -> -1
                 "#
             ),
-            -1,
+            3,
             i64
         );
 
@@ -830,6 +1227,129 @@ mod gen_num {
             indoc!(
                 r#"
                 when Num.subChecked -1.7976931348623157e308 1.7976931348623157e308 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+    fn int_positive_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                9_223_372_036_854_775_807 * 2
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+    fn int_negative_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                (-9_223_372_036_854_775_808) * 2
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+    fn float_positive_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.7976931348623157e308 * 2
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+    fn float_negative_mul_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    -1.7976931348623157e308 * 2
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn int_mul_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.mulWrap Num.maxInt 2
+                "#
+            ),
+            -2,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_mul_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 20 2 is
+                    Ok v -> v
+                    _ -> -1
+                "#
+            ),
+            40,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked Num.maxInt 2 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_mul_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 20.0 2.0 is
+                    Ok v -> v
+                    Err Overflow -> -1.0
+                "#
+            ),
+            40.0,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.mulChecked 1.7976931348623157e308 2 is
                     Err Overflow -> -1
                     Ok v -> v
                 "#

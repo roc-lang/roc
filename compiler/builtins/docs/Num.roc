@@ -24,9 +24,9 @@ interface Num2
 ## a more specific type based on how they're used.
 ##
 ## For example, in `(1 + List.len myList)`, the `1` has the type `Num *` at first,
-## but because `List.len` returns a `Len`, the `1` ends up changing from
-## `Num *` to the more specific `Len`, and the expression as a whole
-## ends up having the type `Len`.
+## but because `List.len` returns a `Nat`, the `1` ends up changing from
+## `Num *` to the more specific `Nat`, and the expression as a whole
+## ends up having the type `Nat`.
 ##
 ## Sometimes number literals don't become more specific. For example,
 ## the #Num.toStr function has the type `Num * -> Str`. This means that
@@ -47,7 +47,7 @@ interface Num2
 ##
 ## * `215u8` is a `215` value of type #U8
 ## * `76.4f32` is a `76.4` value of type #F32
-## * `12345ulen` is a `12345` value of type `#Len`
+## * `12345ulen` is a `12345` value of type #Nat
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
@@ -116,7 +116,7 @@ U64 : Int @U64
 I128 : Int @I128
 U128 : Int @U128
 Ilen : Int @Ilen
-Len : Int @Len
+Nat : Int @Nat
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -176,15 +176,15 @@ Len : Int @Len
 ## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: #Len. The size of #Len is equal
+## Roc also has one variable-size integer type: #Nat. The size of #Nat is equal
 ## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, #Len is the same as #U64. When compiling for a
+## compiling for a 64-bit system, #Nat is the same as #U64. When compiling for a
 ## 32-bit system, it's the same as #U32.
 ##
-## A common use for #Len is to store the length ("len" for short) of a
+## A common use for #Nat is to store the length ("len" for short) of a
 ## collection like #List, #Set, or #Map. 64-bit systems can represent longer
 ## lists in memory than 32-bit sytems can, which is why the length of a list
-## is represented as a #Len in Roc.
+## is represented as a #Nat in Roc.
 ##
 ## If any operation would result in an #Int that is either too big
 ## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
@@ -475,22 +475,22 @@ ceil : Float * -> Int *
 floor : Float * -> Int *
 trunc : Float * -> Int *
 
-## Convert an #Int to a #Len. If the given number doesn't fit in #Len, it will be truncated.
-## Since #Len has a different maximum number depending on the system you're building
+## Convert an #Int to a #Nat. If the given number doesn't fit in #Nat, it will be truncated.
+## Since #Nat has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
-## For example, on a 32-bit sytem, #Num.maxLen will return the same answer as
-## #Num.maxU32. This means that calling `Num.toLen 9_000_000_000` on a 32-bit
+## For example, on a 32-bit sytem, #Num.maxNat will return the same answer as
+## #Num.maxU32. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
 ## system will return #Num.maxU32 instead of 9 billion, because 9 billion is
-## higher than #Num.maxU32 and will not fit in a #Len on a 32-bit system.
+## higher than #Num.maxU32 and will not fit in a #Nat on a 32-bit system.
 ##
-## However, calling `Num.toLen 9_000_000_000` on a 64-bit system will return
-## the #Len value of 9_000_000_000. This is because on a 64-bit system, #Len can
+## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
+## the #Nat value of 9_000_000_000. This is because on a 64-bit system, #Nat can
 ## hold up to #Num.maxU64, and 9_000_000_000 is lower than #Num.maxU64.
 ##
-## To convert a #Float to a #Len, first call either #Num.round, #Num.ceil, or #Num.floor
+## To convert a #Float to a #Nat, first call either #Num.round, #Num.ceil, or #Num.floor
 ## on it, then call this on the resulting #Int.
-toLen : Int * -> Len
+toNat : Int * -> Nat
 
 ## Convert an #Int to an #I8. If the given number doesn't fit in #I8, it will be truncated.
 ##
@@ -606,20 +606,20 @@ hash64 : a -> U64
 
 ## Limits
 
-## The highest number that can be stored in a #Len without overflowing its
+## The highest number that can be stored in a #Nat without overflowing its
 ## available memory and crashing.
 ##
 ## Note that this number varies by systems. For example, when building for a
 ## 64-bit system, this will be equal to #Num.maxU64, but when building for a
 ## 32-bit system, this will be equal to #Num.maxU32.
-maxLen : Len
+maxNat : Nat
 
 ## The number zero.
 ##
-## #Num.minLen is the lowest number that can be stored in a #Len, which is zero
-## because #Len is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## #Num.minNat is the lowest number that can be stored in a #Nat, which is zero
+## because #Nat is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minLen : Len
+minNat : Nat
 
 ## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.

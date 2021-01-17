@@ -244,14 +244,14 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
     #[inline(always)]
-    fn abs_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+    fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
         mov_reg64_reg64(buf, dst, src);
         neg_reg64(buf, dst);
         cmovl_reg64_reg64(buf, dst, src);
     }
     #[inline(always)]
-    fn add_reg64_reg64_imm32<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn add_reg64_reg64_imm32(
+        buf: &mut Vec<'_, u8>,
         dst: X86_64GPReg,
         src1: X86_64GPReg,
         imm32: i32,
@@ -264,8 +264,8 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
-    fn add_reg64_reg64_reg64<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn add_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
         dst: X86_64GPReg,
         src1: X86_64GPReg,
         src2: X86_64GPReg,
@@ -280,24 +280,24 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
-    fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i64) {
+    fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i64) {
         mov_reg64_imm64(buf, dst, imm);
     }
     #[inline(always)]
-    fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
         mov_reg64_reg64(buf, dst, src);
     }
     #[inline(always)]
-    fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, offset: i32) {
+    fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, offset: i32) {
         mov_reg64_stack32(buf, dst, offset);
     }
     #[inline(always)]
-    fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: X86_64GPReg) {
+    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GPReg) {
         mov_stack32_reg64(buf, offset, src);
     }
     #[inline(always)]
-    fn sub_reg64_reg64_imm32<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn sub_reg64_reg64_imm32(
+        buf: &mut Vec<'_, u8>,
         dst: X86_64GPReg,
         src1: X86_64GPReg,
         imm32: i32,
@@ -310,19 +310,33 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
-    fn ret<'a>(buf: &mut Vec<'a, u8>) {
+    fn sub_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GPReg,
+        src1: X86_64GPReg,
+        src2: X86_64GPReg,
+    ) {
+        if dst == src1 {
+            sub_reg64_reg64(buf, dst, src2);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            sub_reg64_reg64(buf, dst, src2);
+        }
+    }
+    #[inline(always)]
+    fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
 }
 
 impl X86_64Assembler {
     #[inline(always)]
-    fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+    fn pop_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GPReg) {
         pop_reg64(buf, reg);
     }
 
     #[inline(always)]
-    fn push_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+    fn push_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GPReg) {
         push_reg64(buf, reg);
     }
 }
@@ -360,7 +374,7 @@ const fn add_reg_extension(reg: X86_64GPReg, byte: u8) -> u8 {
 
 /// `ADD r/m64, imm32` -> Add imm32 sign-extended to 64-bits from r/m64.
 #[inline(always)]
-fn add_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
+fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i32) {
     // This can be optimized if the immediate is 1 byte.
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
@@ -371,7 +385,7 @@ fn add_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
 
 /// `ADD r/m64,r64` -> Add r64 to r/m64.
 #[inline(always)]
-fn add_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
     let rex = add_rm_extension(dst, REX_W);
     let rex = add_reg_extension(src, rex);
     let dst_mod = dst as u8 % 8;
@@ -379,9 +393,19 @@ fn add_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg
     buf.extend(&[rex, 0x01, 0xC0 + dst_mod + src_mod]);
 }
 
+/// `SUB r/m64,r64` -> Sub r64 to r/m64.
+#[inline(always)]
+fn sub_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
+    let dst_mod = dst as u8 % 8;
+    let src_mod = (src as u8 % 8) << 3;
+    buf.extend(&[rex, 0x29, 0xC0 + dst_mod + src_mod]);
+}
+
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
 #[inline(always)]
-fn cmovl_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+fn cmovl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
     let rex = add_reg_extension(dst, REX_W);
     let rex = add_rm_extension(src, rex);
     let dst_mod = (dst as u8 % 8) << 3;
@@ -391,7 +415,7 @@ fn cmovl_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPR
 
 /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
 #[inline(always)]
-fn mov_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
+fn mov_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i32) {
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
@@ -401,7 +425,7 @@ fn mov_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
 
 /// `MOV r64, imm64` -> Move imm64 to r64.
 #[inline(always)]
-fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i64) {
+fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i64) {
     if imm <= i32::MAX as i64 && imm >= i32::MIN as i64 {
         mov_reg64_imm32(buf, dst, imm as i32)
     } else {
@@ -415,7 +439,7 @@ fn mov_reg64_imm64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i64) {
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
 #[inline(always)]
-fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
     let rex = add_rm_extension(dst, REX_W);
     let rex = add_reg_extension(src, rex);
     let dst_mod = dst as u8 % 8;
@@ -425,7 +449,7 @@ fn mov_reg64_reg64<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, src: X86_64GPReg
 
 /// `MOV r64,r/m64` -> Move r/m64 to r64.
 #[inline(always)]
-fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, offset: i32) {
+fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, offset: i32) {
     // This can be optimized based on how many bytes the offset actually is.
     // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
     // Also, this may technically be faster genration since stack operations should be so common.
@@ -438,7 +462,7 @@ fn mov_reg64_stack32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, offset: i32) {
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
 #[inline(always)]
-fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: X86_64GPReg) {
+fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GPReg) {
     // This can be optimized based on how many bytes the offset actually is.
     // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
     // Also, this may technically be faster genration since stack operations should be so common.
@@ -451,7 +475,7 @@ fn mov_stack32_reg64<'a>(buf: &mut Vec<'a, u8>, offset: i32, src: X86_64GPReg) {
 
 /// `NEG r/m64` -> Two's complement negate r/m64.
 #[inline(always)]
-fn neg_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GPReg) {
     let rex = add_rm_extension(reg, REX_W);
     let reg_mod = reg as u8 % 8;
     buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
@@ -459,13 +483,13 @@ fn neg_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
 
 /// `RET` -> Near return to calling procedure.
 #[inline(always)]
-fn ret<'a>(buf: &mut Vec<'a, u8>) {
+fn ret(buf: &mut Vec<'_, u8>) {
     buf.push(0xC3);
 }
 
 /// `SUB r/m64, imm32` -> Subtract imm32 sign-extended to 64-bits from r/m64.
 #[inline(always)]
-fn sub_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
+fn sub_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i32) {
     // This can be optimized if the immediate is 1 byte.
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
@@ -476,7 +500,7 @@ fn sub_reg64_imm32<'a>(buf: &mut Vec<'a, u8>, dst: X86_64GPReg, imm: i32) {
 
 /// `POP r64` -> Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit operand size.
 #[inline(always)]
-fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+fn pop_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GPReg) {
     let reg_mod = reg as u8 % 8;
     if reg as u8 > 7 {
         let rex = add_opcode_extension(reg, REX);
@@ -488,7 +512,7 @@ fn pop_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
 
 /// `PUSH r64` -> Push r64,
 #[inline(always)]
-fn push_reg64<'a>(buf: &mut Vec<'a, u8>, reg: X86_64GPReg) {
+fn push_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GPReg) {
     let reg_mod = reg as u8 % 8;
     if reg as u8 > 7 {
         let rex = add_opcode_extension(reg, REX);
@@ -505,7 +529,7 @@ mod tests {
     use super::*;
 
     const TEST_I32: i32 = 0x12345678;
-    const TEST_I64: i64 = 0x12345678_9ABCDEF0;
+    const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
 
     #[test]
     fn test_add_reg64_imm32() {

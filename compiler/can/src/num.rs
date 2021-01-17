@@ -45,7 +45,7 @@ pub fn int_expr_from_result(
 ) -> Expr {
     // Int stores a variable to generate better error messages
     match result {
-        Ok(int) => Expr::Int(var_store.fresh(), int),
+        Ok(int) => Expr::Int(var_store.fresh(), var_store.fresh(), int),
         Err((raw, error)) => {
             let runtime_error = InvalidInt(error, base, region, raw.into());
 
@@ -65,7 +65,7 @@ pub fn float_expr_from_result(
 ) -> Expr {
     // Float stores a variable to generate better error messages
     match result {
-        Ok(float) => Expr::Float(var_store.fresh(), float),
+        Ok(float) => Expr::Float(var_store.fresh(), var_store.fresh(), float),
         Err((raw, error)) => {
             let runtime_error = InvalidFloat(error, region, raw.into());
 
@@ -169,7 +169,7 @@ fn from_str_radix<T: FromStrRadixHelper>(src: &str, radix: u32) -> Result<T, Par
     use self::ParseIntError as PIE;
 
     assert!(
-        radix >= 2 && radix <= 36,
+        (2..=36).contains(&radix),
         "from_str_radix_int: must lie in the range `[2, 36]` - found {}",
         radix
     );

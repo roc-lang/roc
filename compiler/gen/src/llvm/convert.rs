@@ -4,7 +4,7 @@ use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
 use inkwell::AddressSpace;
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Builtin, Layout};
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_ptr_type<'ctx>(
@@ -103,8 +103,7 @@ pub fn basic_type_from_layout<'ctx>(
     layout: &Layout<'_>,
     ptr_bytes: u32,
 ) -> BasicTypeEnum<'ctx> {
-    use roc_mono::layout::Builtin::*;
-    use roc_mono::layout::Layout::*;
+    use Layout::*;
 
     match layout {
         FunctionPointer(args, ret_layout) => {
@@ -138,7 +137,10 @@ pub fn basic_type_from_layout<'ctx>(
 
             basic_type_from_record(arena, context, sorted_fields, ptr_bytes)
         }
-        RecursiveUnion(_) | Union(_) => block_of_memory(context, layout, ptr_bytes),
+        RecursiveUnion(_) => block_of_memory(context, layout, ptr_bytes)
+            .ptr_type(AddressSpace::Generic)
+            .into(),
+        Union(_) => block_of_memory(context, layout, ptr_bytes),
         RecursivePointer => {
             // TODO make this dynamic
             context
@@ -147,22 +149,34 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum()
         }
 
-        Builtin(builtin) => match builtin {
-            Int128 => context.i128_type().as_basic_type_enum(),
-            Int64 => context.i64_type().as_basic_type_enum(),
-            Int32 => context.i32_type().as_basic_type_enum(),
-            Int16 => context.i16_type().as_basic_type_enum(),
-            Int8 => context.i8_type().as_basic_type_enum(),
-            Int1 => context.bool_type().as_basic_type_enum(),
-            Float128 => context.f128_type().as_basic_type_enum(),
-            Float64 => context.f64_type().as_basic_type_enum(),
-            Float32 => context.f32_type().as_basic_type_enum(),
-            Float16 => context.f16_type().as_basic_type_enum(),
-            Dict(_, _) | EmptyDict => panic!("TODO layout_to_basic_type for Builtin::Dict"),
-            Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
-            EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
-        },
+        Builtin(builtin) => basic_type_from_builtin(arena, context, builtin, ptr_bytes),
+    }
+}
+
+pub fn basic_type_from_builtin<'ctx>(
+    _arena: &Bump,
+    context: &'ctx Context,
+    builtin: &Builtin<'_>,
+    ptr_bytes: u32,
+) -> BasicTypeEnum<'ctx> {
+    use Builtin::*;
+
+    match builtin {
+        Int128 => context.i128_type().as_basic_type_enum(),
+        Int64 => context.i64_type().as_basic_type_enum(),
+        Int32 => context.i32_type().as_basic_type_enum(),
+        Int16 => context.i16_type().as_basic_type_enum(),
+        Int8 => context.i8_type().as_basic_type_enum(),
+        Int1 => context.bool_type().as_basic_type_enum(),
+        Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
+        Float128 => context.f128_type().as_basic_type_enum(),
+        Float64 => context.f64_type().as_basic_type_enum(),
+        Float32 => context.f32_type().as_basic_type_enum(),
+        Float16 => context.f16_type().as_basic_type_enum(),
+        Dict(_, _) | EmptyDict => panic!("TODO layout_to_basic_type for Builtin::Dict"),
+        Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
+        List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
+        EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
     }
 }
 

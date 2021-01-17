@@ -6,17 +6,17 @@ extern crate indoc;
 #[cfg(test)]
 mod test_file {
     use bumpalo::Bump;
-    use roc_editor::file::File;
+    use roc_editor::lang::roc_file::File;
     use std::path::Path;
 
     #[test]
     fn read_and_fmt_simple_roc_module() {
-        let simple_module_path = Path::new("./tests/modules/Simple.roc");
+        let simple_module_path = Path::new("./tests/modules/SimpleUnformatted.roc");
 
         let arena = Bump::new();
 
         let file = File::read(simple_module_path, &arena)
-            .expect("Could not read Simple.roc in test_file test");
+            .expect("Could not read SimpleUnformatted.roc in test_file test");
 
         assert_eq!(
             file.fmt(),

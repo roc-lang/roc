@@ -920,4 +920,25 @@ mod gen_tags {
             (i64, i64)
         );
     }
+
+    #[test]
+    fn result_never() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                res : Result I64 []
+                res = Ok 4
+
+                # we should provide this in the stdlib
+                never : [] -> a
+
+                when res is
+                    Ok v -> v
+                    Err empty -> never empty
+                #"
+            ),
+            4,
+            i64
+        );
+    }
 }

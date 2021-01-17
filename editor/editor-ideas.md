@@ -52,6 +52,16 @@ These are potentially inspirational resources for the editor's design.
 
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
 
+### Productivity features
+
+* When refactoring; 
+    - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
+    - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed. 
+* Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
+    - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
+* When a function is called like `foo(false)`, the name of the boolean argument should be shown automatically; `foo(`*is_active:*`false)`. This should be done for booleans and numbers.
+
+
 ### Non-Code Related Inspiration
 
 * [Scrivner](https://www.literatureandlatte.com/scrivener/overview) writing app for novelists, screenwriters, and more
@@ -70,6 +80,28 @@ These are potentially inspirational resources for the editor's design.
     * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
     * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
     * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
+* Voice input:
+    * Good for accessibility.
+    * https://www.youtube.com/watch?v=Ffa3cXM7bjc is interesting for inspiration.
+    * Could be efficient way to communicate with smart assistant.
+    * Describe actions to execute them, examples:
+        * Add latest datetime package to dependencies.
+        * Generate unit test for this function.
+        * Show edit history for this function.
+
+
+## Testing
+    
+* From Google Docs' comments, adding tests in a similar manner, where they exists in the same "document" but parallel to the code being written
+    * Makes sense for unit tests, keeps the test close to the source
+    * Doesn't necessarily make sense for integration or e2e testing
+    * Maybe easier to manually trigger a test related to exactly what code you're writing
+* Ability to generate unit tests for a selected function in context menu
+    * A table should appear to enter input and expected output pairs quickly
+* Ability to "record" unit tests
+    * Select a function to record.
+    * Do a normal run, and save the input and output of the selected function.
+    * Generate a unit test with that input-output pair
 
 
 ## General Thoughts/Ideas
@@ -77,12 +109,7 @@ These are potentially inspirational resources for the editor's design.
 Thoughts and ideas possibly taken from above inspirations or separate.
 
 * ACCESSIBILITY!!!
-* From Google Docs' comments, adding tests in a similar manner, where they exists in the same "document" but parallel to the code being written
-    * Makes sense for unit tests, keeps the test close to the source
-    * Doesn't necessarily make sense for integration or e2e testing
-    * Maybe easier to manually trigger a test related to exactly what code you're writing
-* Ability to generate unit tests for a selected function in context menu
-    * A table should appear to enter input and expected output pairs quickly 
+* Nice backtraces that highlight important information
 * Ability to show import connection within project visually
     * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
 * Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.

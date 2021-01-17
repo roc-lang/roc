@@ -432,6 +432,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colored"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3616f750b84d8f0de8a58bda93e08e2a81ad3f523089b05f1dffecab48c6cbd"
+dependencies = [
+ "atty",
+ "lazy_static",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "const_fn"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -800,6 +811,12 @@ checksum = "b11f15d1e3268f140f68d390637d5e76d849782d971ae7063e0da69fe9709a76"
 dependencies = [
  "libloading",
 ]
+
+[[package]]
+name = "doc-comment"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
 
 [[package]]
 name = "docs"
@@ -2641,6 +2658,7 @@ dependencies = [
  "bumpalo",
  "bytemuck",
  "cgmath",
+ "colored",
  "env_logger 0.7.1",
  "futures",
  "glyph_brush",
@@ -2649,10 +2667,13 @@ dependencies = [
  "indoc",
  "inkwell",
  "inlinable_string",
+ "itertools",
  "libc",
  "log",
  "maplit",
  "page_size",
+ "pest",
+ "pest_derive",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
@@ -2673,6 +2694,8 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_uniq",
+ "ropey",
+ "snafu",
  "target-lexicon",
  "ven_graph",
  "wgpu",
@@ -3002,6 +3025,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ropey"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0f3ef16589fdbb3e8fbce3dca944c08e61f39c7f16064b21a257d68ea911a83"
+dependencies = [
+ "smallvec",
+]
+
+[[package]]
 name = "rust-argon2"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3253,6 +3285,28 @@ dependencies = [
  "nix 0.14.1",
  "wayland-client",
  "wayland-protocols",
+]
+
+[[package]]
+name = "snafu"
+version = "0.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eab12d3c261b2308b0d80c26fffb58d17eba81a4be97890101f416b478c79ca7"
+dependencies = [
+ "backtrace",
+ "doc-comment",
+ "snafu-derive",
+]
+
+[[package]]
+name = "snafu-derive"
+version = "0.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1508efa03c362e23817f96cde18abed596a25219a8b2c66e8db33c03543d315b"
+dependencies = [
+ "proc-macro2 1.0.24",
+ "quote 1.0.7",
+ "syn 1.0.53",
 ]
 
 [[package]]

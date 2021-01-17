@@ -24,7 +24,7 @@ pub struct Env<'a> {
 }
 
 // INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
-const INLINED_SYMBOLS: [Symbol; 2] = [Symbol::NUM_ABS, Symbol::NUM_ADD];
+const INLINED_SYMBOLS: [Symbol; 3] = [Symbol::NUM_ABS, Symbol::NUM_ADD, Symbol::NUM_SUB];
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
@@ -82,6 +82,18 @@ where
                 self.free_symbols(stmt);
                 Ok(())
             }
+            Stmt::Invoke {
+                symbol,
+                layout,
+                call,
+                pass,
+                fail: _,
+            } => {
+                // for now, treat invoke as a normal call
+
+                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+                self.build_stmt(&stmt)
+            }
             x => Err(format!("the statement, {:?}, is not yet implemented", x)),
         }
     }
@@ -103,25 +115,34 @@ where
                 }
                 Ok(())
             }
-            Expr::FunctionCall {
-                call_type: CallType::ByName(func_sym),
-                args,
-                ..
-            } => {
-                match *func_sym {
-                    Symbol::NUM_ABS => {
-                        // Instead of calling the function, just inline it.
-                        self.build_expr(sym, &Expr::RunLowLevel(LowLevel::NumAbs, args), layout)
+            Expr::Call(roc_mono::ir::Call {
+                call_type,
+                arguments,
+            }) => {
+                match call_type {
+                    CallType::ByName { name: func_sym, .. } => {
+                        match *func_sym {
+                            Symbol::NUM_ABS => {
+                                // Instead of calling the function, just inline it.
+                                self.build_run_low_level(sym, &LowLevel::NumAbs, arguments, layout)
+                            }
+                            Symbol::NUM_ADD => {
+                                // Instead of calling the function, just inline it.
+                                self.build_run_low_level(sym, &LowLevel::NumAdd, arguments, layout)
+                            }
+                            Symbol::NUM_SUB => {
+                                // Instead of calling the function, just inline it.
+                                self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
+                            }
+                            x => Err(format!("the function, {:?}, is not yet implemented", x)),
+                        }
                     }
-                    Symbol::NUM_ADD => {
-                        // Instead of calling the function, just inline it.
-                        self.build_expr(sym, &Expr::RunLowLevel(LowLevel::NumAdd, args), layout)
+
+                    CallType::LowLevel { op: lowlevel } => {
+                        self.build_run_low_level(sym, lowlevel, arguments, layout)
                     }
-                    x => Err(format!("the function, {:?}, is not yet implemented", x)),
+                    x => Err(format!("the call type, {:?}, is not yet implemented", x)),
                 }
-            }
-            Expr::RunLowLevel(lowlevel, args) => {
-                self.build_run_low_level(sym, lowlevel, args, layout)
             }
             x => Err(format!("the expression, {:?}, is not yet implemented", x)),
         }
@@ -155,6 +176,15 @@ where
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
+            LowLevel::NumSub => {
+                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
+                match layout {
+                    Layout::Builtin(Builtin::Int64) => {
+                        self.build_num_sub_i64(sym, &args[0], &args[1])
+                    }
+                    x => Err(format!("layout, {:?}, not implemented yet", x)),
+                }
+            }
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
@@ -163,9 +193,18 @@ where
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
 
-    /// build_num_add_i64 stores the absolute value of src into dst.
+    /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_add_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String>;
+
+    /// build_num_sub_i64 stores the `src1 - src2` difference into dst.
+    /// It only deals with inputs and outputs of i64 type.
+    fn build_num_sub_i64(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
@@ -244,36 +283,9 @@ where
                 match expr {
                     Expr::Literal(_) => {}
                     Expr::FunctionPointer(sym, _) => self.set_last_seen(*sym, stmt),
-                    Expr::FunctionCall {
-                        call_type, args, ..
-                    } => {
-                        for sym in *args {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                        match call_type {
-                            CallType::ByName(sym) => {
-                                // For functions that we won't inline, we should not be a leaf function.
-                                if !INLINED_SYMBOLS.contains(sym) {
-                                    self.set_not_leaf_function();
-                                }
-                            }
-                            CallType::ByPointer(sym) => {
-                                self.set_not_leaf_function();
-                                self.set_last_seen(*sym, stmt);
-                            }
-                        }
-                    }
-                    Expr::RunLowLevel(_, args) => {
-                        for sym in *args {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                    }
-                    Expr::ForeignCall { arguments, .. } => {
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                        self.set_not_leaf_function();
-                    }
+
+                    Expr::Call(call) => self.scan_ast_call(call, stmt),
+
                     Expr::Tag { arguments, .. } => {
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
@@ -320,6 +332,20 @@ where
                 }
                 self.scan_ast(following);
             }
+
+            Stmt::Invoke {
+                symbol,
+                layout,
+                call,
+                pass,
+                fail: _,
+            } => {
+                // for now, treat invoke as a normal call
+
+                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+                self.scan_ast(&stmt);
+            }
+
             Stmt::Switch {
                 cond_symbol,
                 branches,
@@ -332,21 +358,10 @@ where
                 }
                 self.scan_ast(default_branch);
             }
-            Stmt::Cond {
-                cond_symbol,
-                branching_symbol,
-                pass,
-                fail,
-                ..
-            } => {
-                self.set_last_seen(*cond_symbol, stmt);
-                self.set_last_seen(*branching_symbol, stmt);
-                self.scan_ast(pass);
-                self.scan_ast(fail);
-            }
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
+            Stmt::Rethrow => {}
             Stmt::Inc(sym, following) => {
                 self.set_last_seen(*sym, stmt);
                 self.scan_ast(following);
@@ -374,6 +389,32 @@ where
                 }
             }
             Stmt::RuntimeError(_) => {}
+        }
+    }
+
+    fn scan_ast_call(&mut self, call: &roc_mono::ir::Call, stmt: &roc_mono::ir::Stmt<'a>) {
+        let roc_mono::ir::Call {
+            call_type,
+            arguments,
+        } = call;
+
+        for sym in *arguments {
+            self.set_last_seen(*sym, stmt);
+        }
+
+        match call_type {
+            CallType::ByName { name: sym, .. } => {
+                // For functions that we won't inline, we should not be a leaf function.
+                if !INLINED_SYMBOLS.contains(sym) {
+                    self.set_not_leaf_function();
+                }
+            }
+            CallType::ByPointer { name: sym, .. } => {
+                self.set_not_leaf_function();
+                self.set_last_seen(*sym, stmt);
+            }
+            CallType::LowLevel { .. } => {}
+            CallType::Foreign { .. } => self.set_not_leaf_function(),
         }
     }
 }

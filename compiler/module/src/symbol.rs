@@ -738,6 +738,7 @@ define_builtins! {
         10 INC: "#inc" // internal function that increments the refcount
         11 DEC: "#dec" // internal function that increments the refcount
         12 ARG_CLOSURE: "#arg_closure" // symbol used to store the closure record
+        13 LIST_EQ: "#list_eq" // internal function that checks list equality
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -797,9 +798,41 @@ define_builtins! {
         54 NUM_ATAN: "atan"
         55 NUM_ACOS: "acos"
         56 NUM_ASIN: "asin"
-        57 NUM_BITWISE_AND: "bitwiseAnd"
-        58 NUM_SUB_WRAP: "subWrap"
-        59 NUM_SUB_CHECKED: "subChecked"
+        57 NUM_AT_SIGNED128: "@Signed128"
+        58 NUM_SIGNED128: "Signed128" imported
+        59 NUM_AT_SIGNED64: "@Signed64"
+        60 NUM_SIGNED64: "Signed64" imported
+        61 NUM_AT_SIGNED32: "@Signed32"
+        62 NUM_SIGNED32: "Signed32" imported
+        63 NUM_AT_SIGNED16: "@Signed16"
+        64 NUM_SIGNED16: "Signed16" imported
+        65 NUM_AT_SIGNED8: "@Signed8"
+        66 NUM_SIGNED8: "Signed8" imported
+        67 NUM_AT_UNSIGNED128: "@Unsigned128"
+        68 NUM_UNSIGNED128: "Unsigned128" imported
+        69 NUM_AT_UNSIGNED64: "@Unsigned64"
+        70 NUM_UNSIGNED64: "Unsigned64" imported
+        71 NUM_AT_UNSIGNED32: "@Unsigned32"
+        72 NUM_UNSIGNED32: "Unsigned32" imported
+        73 NUM_AT_UNSIGNED16: "@Unsigned16"
+        74 NUM_UNSIGNED16: "Unsigned16" imported
+        75 NUM_AT_UNSIGNED8: "@Unsigned8"
+        76 NUM_UNSIGNED8: "Unsigned8" imported
+        77 NUM_AT_BINARY64: "@Binary64"
+        78 NUM_BINARY64: "Binary64" imported
+        79 NUM_AT_BINARY32: "@Binary32"
+        80 NUM_BINARY32: "Binary32" imported
+        81 NUM_BITWISE_AND: "bitwiseAnd"
+        82 NUM_BITWISE_XOR: "bitwiseXor"
+        83 NUM_SUB_WRAP: "subWrap"
+        84 NUM_SUB_CHECKED: "subChecked"
+        85 NUM_MUL_WRAP: "mulWrap"
+        86 NUM_MUL_CHECKED: "mulChecked"
+        87 NUM_INT: "Int" imported
+        88 NUM_FLOAT: "Float" imported
+        89 NUM_AT_NATURAL: "@Natural"
+        90 NUM_NATURAL: "Natural" imported
+        91 NUM_NAT: "Nat" imported
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

@@ -1,9 +1,14 @@
+use crate::mvc::ed_model::EdModel;
+use crate::mvc::update::{
+    move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
+};
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
 pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
-    _modifiers: ModifiersState,
+    modifiers: ModifiersState,
+    ed_model: &mut EdModel,
 ) {
     use winit::event::VirtualKeyCode::*;
 
@@ -12,6 +17,10 @@ pub fn handle_keydown(
     }
 
     match virtual_keycode {
+        Left => handle_arrow(move_caret_left, &modifiers, ed_model),
+        Up => handle_arrow(move_caret_up, &modifiers, ed_model),
+        Right => handle_arrow(move_caret_right, &modifiers, ed_model),
+        Down => handle_arrow(move_caret_down, &modifiers, ed_model),
         Copy => {
             todo!("copy");
         }
@@ -23,6 +32,17 @@ pub fn handle_keydown(
         }
         _ => {}
     }
+}
+
+fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) {
+    let (new_caret_pos, new_selection_opt) = move_caret_fun(
+        ed_model.caret_pos,
+        ed_model.selection_opt,
+        modifiers.shift(),
+        &ed_model.text_buf,
+    );
+    ed_model.caret_pos = new_caret_pos;
+    ed_model.selection_opt = new_selection_opt;
 }
 
 // pub fn handle_text_input(
@@ -77,7 +97,7 @@ pub fn handle_keydown(
 //         Escape | F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12 | F13 | F14 | F15
 //         | F16 | F17 | F18 | F19 | F20 | F21 | F22 | F23 | F24 | Snapshot | Scroll | Pause
 //         | Insert | Home | Delete | End | PageDown | PageUp | Left | Up | Right | Down | Compose
-//         | Caret | Numlock | AbntC1 | AbntC2 | Ax | Calculator | Capital | Convert | Kana
+//         | caret | Numlock | AbntC1 | AbntC2 | Ax | Calculator | Capital | Convert | Kana
 //         | Kanji | LAlt | LBracket | LControl | LShift | LWin | Mail | MediaSelect | PlayPause
 //         | Power | PrevTrack | MediaStop | Mute | MyComputer | NavigateForward
 //         | NavigateBackward | NextTrack | NoConvert | OEM102 | RAlt | Sysrq | RBracket

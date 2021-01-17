@@ -1284,7 +1284,7 @@ pub mod suggest {
         }
     }
 
-    pub fn sort<'a, T>(typo: &'a str, mut options: Vec<T>) -> Vec<T>
+    pub fn sort<T>(typo: &str, mut options: Vec<T>) -> Vec<T>
     where
         T: ToStr,
     {
@@ -1624,25 +1624,28 @@ fn to_diff<'b>(
             let right = to_doc(alloc, Parens::Unnecessary, type2);
 
             let is_int = |t: &ErrorType| match t {
-                ErrorType::Type(Symbol::NUM_I64, _) => true,
-                ErrorType::Alias(Symbol::NUM_I64, _, _) => true,
+                ErrorType::Type(Symbol::NUM_INT, _) => true,
+                ErrorType::Alias(Symbol::NUM_INT, _, _) => true,
 
-                ErrorType::Type(Symbol::NUM_NUM, args) => match &args.get(0) {
-                    Some(ErrorType::Type(Symbol::NUM_INTEGER, _)) => true,
-                    Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _)) => true,
-                    _ => false,
-                },
-                ErrorType::Alias(Symbol::NUM_NUM, args, _) => match &args.get(0) {
-                    Some((_, ErrorType::Type(Symbol::NUM_INTEGER, _))) => true,
-                    Some((_, ErrorType::Alias(Symbol::NUM_INTEGER, _, _))) => true,
-                    _ => false,
-                },
+                ErrorType::Type(Symbol::NUM_NUM, args) => {
+                    matches!( &args.get(0) ,Some(ErrorType::Type(Symbol::NUM_INTEGER, _)) | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _)))
+                }
+                ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
+                    matches!(&args.get(0), Some((_, ErrorType::Type(Symbol::NUM_INTEGER, _))) | Some((_, ErrorType::Alias(Symbol::NUM_INTEGER, _, _))))
+                }
                 _ => false,
             };
             let is_float = |t: &ErrorType| match t {
-                ErrorType::Type(Symbol::NUM_F64, _) => true,
-                ErrorType::Alias(Symbol::NUM_F64, _, _) => true,
+                ErrorType::Type(Symbol::NUM_FLOAT, _) => true,
+                ErrorType::Alias(Symbol::NUM_FLOAT, _, _) => true,
 
+                ErrorType::Type(Symbol::NUM_NUM, args) => {
+                    matches!(&args.get(0), Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _)) | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _)))
+                }
+
+                ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
+                    matches!(&args.get(0), Some((_, ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))) | Some((_, ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _))))
+                }
                 _ => false,
             };
 
@@ -1888,7 +1891,7 @@ fn diff_tag_union<'b>(
             alloc.tag_name(field.clone()),
             // TODO add spaces between args
             args.iter()
-                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg.clone()))
+                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()))
                 .collect(),
         )
     };

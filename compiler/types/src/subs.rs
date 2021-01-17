@@ -561,9 +561,10 @@ impl Content {
     #[allow(dead_code)]
     pub fn dbg(self, subs: &Subs) -> Self {
         let home = roc_module::symbol::ModuleIds::default().get_or_insert(&"#Dbg".into());
-        let mut interns = roc_module::symbol::Interns::default();
-
-        interns.all_ident_ids = roc_module::symbol::IdentIds::exposed_builtins(0);
+        let interns = roc_module::symbol::Interns {
+            all_ident_ids: roc_module::symbol::IdentIds::exposed_builtins(0),
+            ..Default::default()
+        };
 
         eprintln!(
             "{}",
