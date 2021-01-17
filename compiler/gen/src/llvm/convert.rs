@@ -217,7 +217,7 @@ pub fn block_of_memory<'ctx>(
     block_of_memory_help(context, union_size)
 }
 
-fn block_of_memory_help<'ctx>(context: &'ctx Context, union_size: u32) -> BasicTypeEnum<'ctx> {
+fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_> {
     // The memory layout of Union is a bit tricky.
     // We have tags with different memory layouts, that are part of the same type.
     // For llvm, all tags must have the same memory layout.

@@ -3867,6 +3867,7 @@ pub fn with_hole<'a>(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sorted_field_symbols<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,

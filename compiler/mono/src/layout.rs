@@ -1241,7 +1241,7 @@ impl<'a> WrappedVariant<'a> {
                     .expect("tag name is not in its own type");
 
                 debug_assert!(tag_id < 256);
-                (tag_id as u8, argument_layouts.clone())
+                (tag_id as u8, *argument_layouts)
             }
             NullableWrapped {
                 nullable_id,
@@ -1264,7 +1264,7 @@ impl<'a> WrappedVariant<'a> {
                     }
 
                     debug_assert!(tag_id < 256);
-                    (tag_id as u8, argument_layouts.clone())
+                    (tag_id as u8, *argument_layouts)
                 }
             }
             NullableUnwrapped {
@@ -1278,7 +1278,7 @@ impl<'a> WrappedVariant<'a> {
                 } else {
                     debug_assert_eq!(other_name, tag_name);
 
-                    (!*nullable_id as u8, other_fields.clone())
+                    (!*nullable_id as u8, *other_fields)
                 }
             }
         }
