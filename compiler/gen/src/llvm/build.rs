@@ -1259,7 +1259,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .build_extract_value(
                             argument,
                             *index as u32,
-                            env.arena.alloc(format!("struct_field_access_{}_", index)),
+                            env.arena
+                                .alloc(format!("struct_field_access_single_element{}", index)),
                         )
                         .unwrap()
                 }
@@ -1280,7 +1281,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     .build_extract_value(
                         argument,
                         *index as u32,
-                        env.arena.alloc(format!("struct_field_access_{}_", index)),
+                        env.arena
+                            .alloc(format!("struct_field_access_record_{}", index)),
                     )
                     .unwrap(),
                 (StructValue(argument), Layout::Closure(_, _, _)) => env
@@ -2119,8 +2121,13 @@ pub fn cast_basic_basic<'ctx>(
     to_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::types::BasicType;
+
+    // we can't use the more simple
+    // builder.build_bitcast(from_value, to_type, "cast_basic_basic")
+    // because this does not allow some (valid) bitcasts
+
     // store the value in memory
-    let argument_pointer = builder.build_alloca(from_value.get_type(), "");
+    let argument_pointer = builder.build_alloca(from_value.get_type(), "cast_alloca");
     builder.build_store(argument_pointer, from_value);
 
     // then read it back as a different type
@@ -2132,7 +2139,7 @@ pub fn cast_basic_basic<'ctx>(
         )
         .into_pointer_value();
 
-    builder.build_load(to_type_pointer, "")
+    builder.build_load(to_type_pointer, "cast_value")
 }
 
 fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(
@@ -2155,15 +2162,12 @@ fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let ptr = cast_basic_basic(
-        env.builder,
-        from_value.into(),
-        env.context
-            .i64_type()
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-    )
-    .into_pointer_value();
+    let tag_id_ptr_type = env.context.i64_type().ptr_type(AddressSpace::Generic);
+
+    let ptr = env
+        .builder
+        .build_bitcast(from_value, tag_id_ptr_type, "extract_tag_discriminant_ptr")
+        .into_pointer_value();
 
     env.builder.build_load(ptr, "load_tag_id").into_int_value()
 }
@@ -2252,9 +2256,17 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 Recursive(_) => {
                     // we match on the discriminant, not the whole Tag
                     cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond_ptr = load_symbol(env, scope, cond_symbol).into_pointer_value();
 
-                    extract_tag_discriminant_ptr(env, full_cond_ptr)
+                    use BasicValueEnum::*;
+                    match load_symbol(env, scope, cond_symbol) {
+                        PointerValue(full_cond_ptr) => {
+                            extract_tag_discriminant_ptr(env, full_cond_ptr)
+                        }
+                        StructValue(full_cond_struct) => {
+                            extract_tag_discriminant_struct(env, full_cond_struct)
+                        }
+                        _ => unreachable!(),
+                    }
                 }
                 NullableWrapped { nullable_id, .. } => {
                     // we match on the discriminant, not the whole Tag

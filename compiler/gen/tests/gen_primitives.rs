@@ -1979,7 +1979,7 @@ mod gen_primitives {
     }
 
     #[test]
-    fn nullable_eval() {
+    fn nullable_eval_cfold() {
         // the decision tree will generate a jump to the `1` branch here
         assert_evals_to!(
             indoc!(
@@ -2007,6 +2007,67 @@ mod gen_primitives {
 
                 main : I64
                 main = eval (mkExpr 3 1)
+                "#
+            ),
+            11,
+            i64
+        );
+    }
+
+    #[test]
+    fn non_nullable_eval_cfold() {
+        // the decision tree will generate a jump to the `1` branch here
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Var I64 ]
+
+                mkExpr : I64, I64 -> Expr
+                mkExpr = \n , v ->
+                    when n is
+                        0 -> if v == 0 then Var 1 else Val v
+                        _ -> Add (mkExpr (n-1) (v+1)) (mkExpr (n-1) (max (v-1) 0))
+
+                max : I64, I64 -> I64
+                max = \a, b -> if a > b then a else b
+
+                eval : Expr -> I64
+                eval = \e ->
+                    when e is
+                        Var _ -> 0
+                        Val v -> v
+                        Add l r -> eval l + eval r
+                        Mul l r -> eval l * eval r
+
+                constFolding : Expr -> Expr
+                constFolding = \e ->
+                    when e is
+                        Add e1 e2 ->
+                            x1 = constFolding e1
+                            x2 = constFolding e2
+
+                            when Pair x1 x2 is
+                                Pair (Val a) (Val b) -> Val (a+b)
+                                Pair (Val a) (Add (Val b) x) -> Add (Val (a+b)) x
+                                Pair (Val a) (Add x (Val b)) -> Add (Val (a+b)) x
+                                Pair _ _                     -> Add x1 x2
+
+                        Mul e1 e2 ->
+                            x1 = constFolding e1
+                            x2 = constFolding e2
+
+                            when Pair x1 x2 is
+                                Pair (Val a) (Val b) -> Val (a*b)
+                                Pair (Val a) (Mul (Val b) x) -> Mul (Val (a*b)) x
+                                Pair (Val a) (Mul x (Val b)) -> Mul (Val (a*b)) x
+                                Pair _ _                     -> Mul x1 x2
+
+                        _ -> e
+
+                main : I64
+                main = eval (constFolding (mkExpr 3 1))
                 "#
             ),
             11,

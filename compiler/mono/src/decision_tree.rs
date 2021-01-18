@@ -1477,15 +1477,15 @@ fn decide_to_branching<'a>(
             // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
-            let (cond, cond_stores_vec, cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout);
+            let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
+                path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
 
             let default_branch = decide_to_branching(
                 env,
                 procs,
                 layout_cache,
-                cond_symbol,
-                cond_layout.clone(),
+                inner_cond_symbol,
+                inner_cond_layout.clone(),
                 ret_layout.clone(),
                 *fallback,
                 jumps,
@@ -1498,8 +1498,8 @@ fn decide_to_branching<'a>(
                     env,
                     procs,
                     layout_cache,
-                    cond_symbol,
-                    cond_layout.clone(),
+                    inner_cond_symbol,
+                    inner_cond_layout.clone(),
                     ret_layout.clone(),
                     decider,
                     jumps,
@@ -1517,9 +1517,11 @@ fn decide_to_branching<'a>(
                 branches.push((tag, branch));
             }
 
+            // We have learned more about the exact layout of the cond (based on the path)
+            // but tests are still relative to the original cond symbol
             let mut switch = Stmt::Switch {
-                cond_layout,
-                cond_symbol: cond,
+                cond_layout: inner_cond_layout,
+                cond_symbol,
                 branches: branches.into_bump_slice(),
                 default_branch: env.arena.alloc(default_branch),
                 ret_layout,
