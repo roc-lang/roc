@@ -195,6 +195,18 @@ mod cli_run {
         );
     }
 
+    #[test]
+    #[serial(deriv)]
+    fn run_deriv_not_optimized() {
+        check_output(
+            &example_file("benchmarks", "Deriv.roc"),
+            "deriv",
+            &[],
+            "1 count: 6\n2 count: 22\n",
+            false,
+        );
+    }
+
     //    #[test]
     //    #[serial(effect)]
     //    fn run_effect_unoptimized() {
