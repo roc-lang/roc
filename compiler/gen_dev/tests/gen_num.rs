@@ -28,6 +28,21 @@ mod gen_num {
     }
 
     #[test]
+    fn f64_values() {
+        assert_evals_to!("0.0", 0.0, f64);
+        assert_evals_to!("-0.0", 0.0, f64);
+        assert_evals_to!("1.0", 1.0, f64);
+        assert_evals_to!("-1.0", -1.0, f64);
+        assert_evals_to!(
+            "3.14159265358979323846264338327950288419716939937510582097494459230781640628620899",
+            3.14159265358979323846264338327950288419716939937510582097494459230781640628620899,
+            f64
+        );
+        assert_evals_to!(&format!("{}1.0", f64::MIN), f64::MIN, f64);
+        assert_evals_to!(&format!("{}1.0", f64::MAX), f64::MAX, f64);
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(
