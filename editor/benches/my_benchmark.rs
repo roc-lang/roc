@@ -1,8 +1,7 @@
-
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use roc_editor::mvc::update::handle_new_char;
-use roc_editor::mvc::ed_model::{EdModel, Position, RawSelection};
 use roc_editor::mvc::app_model::AppModel;
+use roc_editor::mvc::ed_model::{EdModel, Position, RawSelection};
+use roc_editor::mvc::update::handle_new_char;
 use roc_editor::text_buffer::TextBuffer;
 use ropey::Rope;
 
@@ -32,15 +31,14 @@ fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
 
 pub fn char_insert_benchmark(c: &mut Criterion) {
     let text_buf = text_buffer_from_str("");
-    
-    let caret_pos = Position {
-        line: 0,
-        column: 0
-    };
-    
+
+    let caret_pos = Position { line: 0, column: 0 };
+
     let selection_opt: Option<RawSelection> = None;
     let mut app_model = mock_app_model(text_buf, caret_pos, selection_opt);
-    c.bench_function("single char insert, small buffer", |b| b.iter(|| handle_new_char(&mut app_model, &'a')));
+    c.bench_function("single char insert, small buffer", |b| {
+        b.iter(|| handle_new_char(&mut app_model, &'a'))
+    });
 }
 
 pub fn file_open_benchmark(c: &mut Criterion) {
