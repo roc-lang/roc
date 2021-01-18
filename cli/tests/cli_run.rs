@@ -175,7 +175,7 @@ mod cli_run {
     #[serial(nqueens)]
     fn run_nqueens_not_optimized() {
         check_output(
-            &example_file("effect", "NQueens.roc"),
+            &example_file("benchmarks", "NQueens.roc"),
             "nqueens",
             &[],
             "724\n",
@@ -187,7 +187,7 @@ mod cli_run {
     #[serial(cfold)]
     fn run_cfold_not_optimized() {
         check_output(
-            &example_file("effect", "CFold.roc"),
+            &example_file("benchmarks", "CFold.roc"),
             "cfold",
             &[],
             "11 & 11\n",
