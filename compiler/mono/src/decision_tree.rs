@@ -569,6 +569,7 @@ fn to_relevant_branch_help<'a>(
 
         AppliedTag {
             tag_name,
+            tag_id,
             arguments,
             layout,
             ..
@@ -576,15 +577,20 @@ fn to_relevant_branch_help<'a>(
             match test {
                 IsCtor {
                     tag_name: test_name,
-                    tag_id,
+                    tag_id: test_id,
                     ..
                 } if &tag_name == test_name => {
+                    debug_assert_eq!(tag_id, *test_id);
+
+                    // the test matches the constructor of this pattern
+
                     match Wrapped::opt_from_layout(&layout) {
                         None => todo!(),
                         Some(wrapped) => {
                             match wrapped {
                                 Wrapped::SingleElementRecord => {
                                     // Theory: Unbox doesn't have any value for us
+                                    debug_assert_eq!(arguments.len(), 1);
                                     let arg = arguments[0].clone();
                                     {
                                         start.push((
@@ -604,7 +610,7 @@ fn to_relevant_branch_help<'a>(
                                             (
                                                 Path::Index {
                                                     index: 1 + index as u64,
-                                                    tag_id: *tag_id,
+                                                    tag_id,
                                                     path: Box::new(path.clone()),
                                                 },
                                                 Guard::NoGuard,
@@ -999,7 +1005,7 @@ fn path_to_expr_help<'a>(
             None => {
                 // this MUST be an index into a single-element (hence unwrapped) record
 
-                debug_assert_eq!(*index, 0);
+                debug_assert_eq!(*index, 0, "{:?}", &layout);
                 debug_assert_eq!(*tag_id, 0);
                 debug_assert!(it.peek().is_none());
 
@@ -1421,7 +1427,8 @@ fn decide_to_branching<'a>(
         } => {
             // generate a (nested) if-then-else
 
-            // TODO specialize layout in the true and false case?
+            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+
             let pass_expr = decide_to_branching(
                 env,
                 procs,
@@ -1443,8 +1450,6 @@ fn decide_to_branching<'a>(
                 *failure,
                 jumps,
             );
-
-            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
 
             let number_of_tests = tests.len() as i64 + guard.is_some() as i64;
 
@@ -1485,8 +1490,8 @@ fn decide_to_branching<'a>(
                 env,
                 procs,
                 layout_cache,
-                inner_cond_symbol,
-                inner_cond_layout.clone(),
+                cond_symbol,
+                cond_layout.clone(),
                 ret_layout.clone(),
                 *fallback,
                 jumps,
@@ -1499,8 +1504,8 @@ fn decide_to_branching<'a>(
                     env,
                     procs,
                     layout_cache,
-                    inner_cond_symbol,
-                    inner_cond_layout.clone(),
+                    cond_symbol,
+                    cond_layout.clone(),
                     ret_layout.clone(),
                     decider,
                     jumps,
@@ -1522,7 +1527,7 @@ fn decide_to_branching<'a>(
             // but tests are still relative to the original cond symbol
             let mut switch = Stmt::Switch {
                 cond_layout: inner_cond_layout,
-                cond_symbol,
+                cond_symbol: inner_cond_symbol,
                 branches: branches.into_bump_slice(),
                 default_branch: env.arena.alloc(default_branch),
                 ret_layout,
