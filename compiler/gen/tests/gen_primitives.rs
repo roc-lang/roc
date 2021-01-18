@@ -2081,4 +2081,40 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn deriv_pow() {
+        // exposed bug with ordering of variable declarations before switch
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Ln Expr, Pow Expr Expr, Var Str, Val I64 ]
+
+                count : Expr -> I64
+                count = \expr ->
+                    when expr is
+                        (Var _) -> 1
+                        (Val n) -> n
+                        (Pow f g) -> count f + count g
+                        (Ln f)    -> count f
+
+                pow : Expr, Expr -> Expr
+                pow = \a,b ->
+                    when Pair a b is
+                        Pair (Val _) (Val _) -> Val -1
+                        Pair _       (Val 0) -> Val 1
+                        Pair f       (Val 1) -> f
+                        Pair (Val 0) _       -> Val 0
+                        Pair f       g       -> Pow f g
+
+                main : I64
+                main = count (pow (Var "x") (Var "x"))
+                "#
+            ),
+            2,
+            i64
+        );
+    }
 }

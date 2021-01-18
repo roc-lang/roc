@@ -1533,7 +1533,7 @@ fn decide_to_branching<'a>(
                 ret_layout,
             };
 
-            for (symbol, layout, expr) in cond_stores_vec.into_iter() {
+            for (symbol, layout, expr) in cond_stores_vec.into_iter().rev() {
                 switch = Stmt::Let(symbol, expr, layout, env.arena.alloc(switch));
             }
 
