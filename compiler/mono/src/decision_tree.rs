@@ -1421,6 +1421,7 @@ fn decide_to_branching<'a>(
         } => {
             // generate a (nested) if-then-else
 
+            // TODO specialize layout in the true and false case?
             let pass_expr = decide_to_branching(
                 env,
                 procs,
