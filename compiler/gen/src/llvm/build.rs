@@ -1409,7 +1409,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                                 "select_tag_id",
                             )
                         } else {
-                            let struct_layout = Layout::Struct(&field_layouts[1..]);
                             let struct_type = env
                                 .context
                                 .struct_type(&field_types.into_bump_slice()[1..], false);
@@ -1419,13 +1418,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                                 &field_layouts[1..],
                                 *index as usize - 1,
                                 value,
-                                &struct_layout,
                                 struct_type,
+                                structure_layout,
                             )
                         }
                     }
                     _ => {
-                        let struct_layout = Layout::Struct(field_layouts);
                         let struct_type = env
                             .context
                             .struct_type(field_types.into_bump_slice(), false);
@@ -1435,8 +1433,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                             field_layouts,
                             *index as usize,
                             value,
-                            &struct_layout,
                             struct_type,
+                            structure_layout,
                         )
                     }
                 },
@@ -1491,10 +1489,9 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     field_layouts: &[Layout<'_>],
     index: usize,
     value: PointerValue<'ctx>,
-    struct_layout: &Layout<'_>,
     struct_type: StructType<'ctx>,
+    structure_layout: &Layout<'_>,
 ) -> BasicValueEnum<'ctx> {
-    use inkwell::types::BasicType;
     let builder = env.builder;
 
     let ptr = env
@@ -1517,8 +1514,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         // a pointer to the block of memory representation
         builder.build_bitcast(
             result,
-            block_of_memory(env.context, &struct_layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic),
+            basic_type_from_layout(env.arena, env.context, structure_layout, env.ptr_bytes),
             "cast_rec_pointer_lookup_at_index_ptr",
         )
     } else {

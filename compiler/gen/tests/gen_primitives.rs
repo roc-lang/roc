@@ -2055,4 +2055,30 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn count_deriv_x() {
+        // exposed bug with basing the block_of_memory on a specific (smaller) tag layout
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Ln Expr, Pow Expr Expr, Var Str ]
+
+                count : Expr -> I64
+                count = \expr ->
+                    when expr is
+                        (Var _) -> 1
+                        (Pow f g) -> count f + count g
+                        (Ln f)    -> count f
+
+                main : I64
+                main = count (Var "x")
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 }
