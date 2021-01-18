@@ -1,4 +1,5 @@
-use crate::generic64::{Assembler, CallConv, GPRegTrait};
+use crate::generic64::{Assembler, CallConv, RegTrait};
+use crate::Relocation;
 use bumpalo::collections::Vec;
 
 // Not sure exactly how I want to represent registers.
@@ -22,8 +23,28 @@ pub enum X86_64GPReg {
     R14 = 14,
     R15 = 15,
 }
+impl RegTrait for X86_64GPReg {}
 
-impl GPRegTrait for X86_64GPReg {}
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub enum X86_64FPReg {
+    XMM0 = 0,
+    XMM1 = 1,
+    XMM2 = 2,
+    XMM3 = 3,
+    XMM4 = 4,
+    XMM5 = 5,
+    XMM6 = 6,
+    XMM7 = 7,
+    XMM8 = 8,
+    XMM9 = 9,
+    XMM10 = 10,
+    XMM11 = 11,
+    XMM12 = 12,
+    XMM13 = 13,
+    XMM14 = 14,
+    XMM15 = 15,
+}
+impl RegTrait for X86_64FPReg {}
 
 pub struct X86_64Assembler {}
 pub struct X86_64WindowsFastcall {}
@@ -31,7 +52,7 @@ pub struct X86_64SystemV {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<X86_64GPReg> for X86_64SystemV {
+impl CallConv<X86_64GPReg, X86_64FPReg> for X86_64SystemV {
     const GP_PARAM_REGS: &'static [X86_64GPReg] = &[
         X86_64GPReg::RDI,
         X86_64GPReg::RSI,
@@ -41,7 +62,6 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
         X86_64GPReg::R9,
     ];
     const GP_RETURN_REGS: &'static [X86_64GPReg] = &[X86_64GPReg::RAX, X86_64GPReg::RDX];
-
     const GP_DEFAULT_FREE_REGS: &'static [X86_64GPReg] = &[
         // The regs we want to use first should be at the end of this vec.
         // We will use pop to get which reg to use next
@@ -64,10 +84,44 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
         X86_64GPReg::R10,
         X86_64GPReg::R11,
     ];
+
+    const FP_PARAM_REGS: &'static [X86_64FPReg] = &[
+        X86_64FPReg::XMM0,
+        X86_64FPReg::XMM1,
+        X86_64FPReg::XMM2,
+        X86_64FPReg::XMM3,
+        X86_64FPReg::XMM4,
+        X86_64FPReg::XMM5,
+        X86_64FPReg::XMM6,
+        X86_64FPReg::XMM7,
+    ];
+    const FP_RETURN_REGS: &'static [X86_64FPReg] = &[X86_64FPReg::XMM0, X86_64FPReg::XMM1];
+    const FP_DEFAULT_FREE_REGS: &'static [X86_64FPReg] = &[
+        // The regs we want to use first should be at the end of this vec.
+        // We will use pop to get which reg to use next
+        // No callee saved regs.
+        // Use caller saved regs first.
+        X86_64FPReg::XMM15,
+        X86_64FPReg::XMM14,
+        X86_64FPReg::XMM13,
+        X86_64FPReg::XMM12,
+        X86_64FPReg::XMM11,
+        X86_64FPReg::XMM10,
+        X86_64FPReg::XMM9,
+        X86_64FPReg::XMM8,
+        X86_64FPReg::XMM7,
+        X86_64FPReg::XMM6,
+        X86_64FPReg::XMM5,
+        X86_64FPReg::XMM4,
+        X86_64FPReg::XMM3,
+        X86_64FPReg::XMM2,
+        X86_64FPReg::XMM1,
+        X86_64FPReg::XMM0,
+    ];
     const SHADOW_SPACE_SIZE: u8 = 0;
 
     #[inline(always)]
-    fn callee_saved(reg: &X86_64GPReg) -> bool {
+    fn gp_callee_saved(reg: &X86_64GPReg) -> bool {
         matches!(
             reg,
             X86_64GPReg::RBX
@@ -80,27 +134,32 @@ impl CallConv<X86_64GPReg> for X86_64SystemV {
     }
 
     #[inline(always)]
+    fn fp_callee_saved(_reg: &X86_64FPReg) -> bool {
+        false
+    }
+
+    #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
-        saved_regs: &[X86_64GPReg],
+        gp_saved_regs: &[X86_64GPReg],
         requested_stack_size: i32,
     ) -> Result<i32, String> {
-        x86_64_generic_setup_stack(buf, leaf_function, saved_regs, requested_stack_size)
+        x86_64_generic_setup_stack(buf, leaf_function, gp_saved_regs, requested_stack_size)
     }
 
     #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
-        saved_regs: &[X86_64GPReg],
+        gp_saved_regs: &[X86_64GPReg],
         aligned_stack_size: i32,
     ) -> Result<(), String> {
-        x86_64_generic_cleanup_stack(buf, leaf_function, saved_regs, aligned_stack_size)
+        x86_64_generic_cleanup_stack(buf, leaf_function, gp_saved_regs, aligned_stack_size)
     }
 }
 
-impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
+impl CallConv<X86_64GPReg, X86_64FPReg> for X86_64WindowsFastcall {
     const GP_PARAM_REGS: &'static [X86_64GPReg] = &[
         X86_64GPReg::RCX,
         X86_64GPReg::RDX,
@@ -132,10 +191,39 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
         X86_64GPReg::R10,
         X86_64GPReg::R11,
     ];
+    const FP_PARAM_REGS: &'static [X86_64FPReg] = &[
+        X86_64FPReg::XMM0,
+        X86_64FPReg::XMM1,
+        X86_64FPReg::XMM2,
+        X86_64FPReg::XMM3,
+    ];
+    const FP_RETURN_REGS: &'static [X86_64FPReg] = &[X86_64FPReg::XMM0];
+    const FP_DEFAULT_FREE_REGS: &'static [X86_64FPReg] = &[
+        // The regs we want to use first should be at the end of this vec.
+        // We will use pop to get which reg to use next
+        // Use callee saved regs last.
+        X86_64FPReg::XMM15,
+        X86_64FPReg::XMM15,
+        X86_64FPReg::XMM13,
+        X86_64FPReg::XMM12,
+        X86_64FPReg::XMM11,
+        X86_64FPReg::XMM10,
+        X86_64FPReg::XMM9,
+        X86_64FPReg::XMM8,
+        X86_64FPReg::XMM7,
+        X86_64FPReg::XMM6,
+        // Use caller saved regs first.
+        X86_64FPReg::XMM5,
+        X86_64FPReg::XMM4,
+        X86_64FPReg::XMM3,
+        X86_64FPReg::XMM2,
+        X86_64FPReg::XMM1,
+        X86_64FPReg::XMM0,
+    ];
     const SHADOW_SPACE_SIZE: u8 = 32;
 
     #[inline(always)]
-    fn callee_saved(reg: &X86_64GPReg) -> bool {
+    fn gp_callee_saved(reg: &X86_64GPReg) -> bool {
         matches!(
             reg,
             X86_64GPReg::RBX
@@ -147,6 +235,19 @@ impl CallConv<X86_64GPReg> for X86_64WindowsFastcall {
                 | X86_64GPReg::R13
                 | X86_64GPReg::R14
                 | X86_64GPReg::R15
+        )
+    }
+
+    #[inline(always)]
+    fn fp_callee_saved(reg: &X86_64FPReg) -> bool {
+        matches!(
+            reg,
+            X86_64FPReg::XMM0
+                | X86_64FPReg::XMM1
+                | X86_64FPReg::XMM2
+                | X86_64FPReg::XMM3
+                | X86_64FPReg::XMM4
+                | X86_64FPReg::XMM5
         )
     }
 
@@ -240,7 +341,7 @@ fn x86_64_generic_cleanup_stack<'a>(
     Ok(())
 }
 
-impl Assembler<X86_64GPReg> for X86_64Assembler {
+impl Assembler<X86_64GPReg, X86_64FPReg> for X86_64Assembler {
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
     #[inline(always)]
@@ -280,8 +381,25 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
+    fn mov_freg64_imm64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: X86_64FPReg,
+        imm: f64,
+    ) {
+        movsd_freg64_rip_offset32(buf, dst, 0);
+        relocs.push(Relocation::LocalData {
+            offset: buf.len() as u64 - 4,
+            data: imm.to_le_bytes().to_vec(),
+        });
+    }
+    #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i64) {
         mov_reg64_imm64(buf, dst, imm);
+    }
+    #[inline(always)]
+    fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FPReg, src: X86_64FPReg) {
+        movsd_freg64_freg64(buf, dst, src);
     }
     #[inline(always)]
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
@@ -290,6 +408,10 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, offset: i32) {
         mov_reg64_stack32(buf, dst, offset);
+    }
+    #[inline(always)]
+    fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: X86_64FPReg) {
+        unimplemented!("saving floating point reg to stack not yet implemented for X86_64");
     }
     #[inline(always)]
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GPReg) {
@@ -470,6 +592,39 @@ fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GPReg) {
     let src_mod = (src as u8 % 8) << 3;
     buf.reserve(8);
     buf.extend(&[rex, 0x89, 0x84 + src_mod, 0x24]);
+    buf.extend(&offset.to_le_bytes());
+}
+
+/// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
+#[inline(always)]
+fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FPReg, src: X86_64FPReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF2,
+            0x40 + ((dst_high as u8) << 2) + (src_high as u8),
+            0x0F,
+            0x10,
+            0xC0 + (dst_mod << 3) + (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF2, 0x0F, 0x10, 0xC0 + (dst_mod << 3) + (src_mod)])
+    }
+}
+
+// `MOVSD xmm, m64` -> Load scalar double-precision floating-point value from m64 to xmm register.
+fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FPReg, offset: u32) {
+    let dst_mod = dst as u8 % 8;
+    if dst as u8 > 7 {
+        buf.reserve(9);
+        buf.extend(&[0xF2, 0x44, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+    } else {
+        buf.reserve(8);
+        buf.extend(&[0xF2, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+    }
     buf.extend(&offset.to_le_bytes());
 }
 
@@ -672,6 +827,52 @@ mod tests {
             mov_stack32_reg64(&mut buf, *offset, *src);
             assert_eq!(expected, &buf[..4]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
+        }
+    }
+
+    #[test]
+    fn test_movsd_freg64_freg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src), expected) in &[
+            (
+                (X86_64FPReg::XMM0, X86_64FPReg::XMM0),
+                vec![0xF2, 0x0F, 0x10, 0xC0],
+            ),
+            (
+                (X86_64FPReg::XMM0, X86_64FPReg::XMM15),
+                vec![0xF2, 0x41, 0x0F, 0x10, 0xC7],
+            ),
+            (
+                (X86_64FPReg::XMM15, X86_64FPReg::XMM0),
+                vec![0xF2, 0x44, 0x0F, 0x10, 0xF8],
+            ),
+            (
+                (X86_64FPReg::XMM15, X86_64FPReg::XMM15),
+                vec![0xF2, 0x45, 0x0F, 0x10, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            movsd_freg64_freg64(&mut buf, *dst, *src);
+            assert_eq!(&expected[..], &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_movsd_freg64_rip_offset32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, offset), expected) in &[
+            ((X86_64FPReg::XMM0, TEST_I32), vec![0xF2, 0x0F, 0x10, 0x05]),
+            (
+                (X86_64FPReg::XMM15, TEST_I32),
+                vec![0xF2, 0x44, 0x0F, 0x10, 0x3D],
+            ),
+        ] {
+            buf.clear();
+            movsd_freg64_rip_offset32(&mut buf, *dst, *offset as u32);
+            assert_eq!(&expected[..], &buf[..(buf.len() - 4)]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[(buf.len() - 4)..]);
         }
     }
 

@@ -1,4 +1,5 @@
-use crate::generic64::{Assembler, CallConv, GPRegTrait};
+use crate::generic64::{Assembler, CallConv, RegTrait};
+use crate::Relocation;
 use bumpalo::collections::Vec;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
@@ -38,8 +39,12 @@ pub enum AArch64GPReg {
     /// This can mean Zero or Stack Pointer depending on the context.
     ZRSP = 31,
 }
+impl RegTrait for AArch64GPReg {}
 
-impl GPRegTrait for AArch64GPReg {}
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[allow(dead_code)]
+pub enum AArch64FPReg {}
+impl RegTrait for AArch64FPReg {}
 
 pub struct AArch64Assembler {}
 
@@ -49,7 +54,7 @@ pub struct AArch64Call {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<AArch64GPReg> for AArch64Call {
+impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
     const GP_PARAM_REGS: &'static [AArch64GPReg] = &[
         AArch64GPReg::X0,
         AArch64GPReg::X1,
@@ -101,11 +106,14 @@ impl CallConv<AArch64GPReg> for AArch64Call {
         AArch64GPReg::IP0,
         AArch64GPReg::IP1,
     ];
+    const FP_PARAM_REGS: &'static [AArch64FPReg] = &[];
+    const FP_RETURN_REGS: &'static [AArch64FPReg] = Self::FP_PARAM_REGS;
+    const FP_DEFAULT_FREE_REGS: &'static [AArch64FPReg] = &[];
 
     const SHADOW_SPACE_SIZE: u8 = 0;
 
     #[inline(always)]
-    fn callee_saved(reg: &AArch64GPReg) -> bool {
+    fn gp_callee_saved(reg: &AArch64GPReg) -> bool {
         matches!(
             reg,
             AArch64GPReg::X19
@@ -119,6 +127,10 @@ impl CallConv<AArch64GPReg> for AArch64Call {
                 | AArch64GPReg::X27
                 | AArch64GPReg::X28
         )
+    }
+    #[inline(always)]
+    fn fp_callee_saved(_reg: &AArch64FPReg) -> bool {
+        unimplemented!("AArch64 FPRegs not implemented yet");
     }
 
     #[inline(always)]
@@ -206,7 +218,7 @@ impl CallConv<AArch64GPReg> for AArch64Call {
     }
 }
 
-impl Assembler<AArch64GPReg> for AArch64Assembler {
+impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     #[inline(always)]
     fn abs_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GPReg, _src: AArch64GPReg) {
         unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
@@ -241,6 +253,16 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg64_imm64(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _dst: AArch64FPReg,
+        _imm: f64,
+    ) {
+        unimplemented!("loading float literal not yet implemented for AArch64");
+    }
+
+    #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, imm: i64) {
         let mut remaining = imm as u64;
         movz_reg64_imm16(buf, dst, remaining as u16, 0);
@@ -259,6 +281,11 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FPReg, _src: AArch64FPReg) {
+        unimplemented!("moving data between float registers not yet implemented for AArch64");
+    }
+
+    #[inline(always)]
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64GPReg) {
         mov_reg64_reg64(buf, dst, src);
     }
@@ -273,6 +300,11 @@ impl Assembler<AArch64GPReg> for AArch64Assembler {
         } else {
             unimplemented!("stack offsets over 32k are not yet implement for AArch64");
         }
+    }
+
+    #[inline(always)]
+    fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FPReg) {
+        unimplemented!("saving floating point reg to stack not yet implemented for AArch64");
     }
 
     #[inline(always)]

@@ -29,10 +29,21 @@ const INLINED_SYMBOLS: [Symbol; 3] = [Symbol::NUM_ABS, Symbol::NUM_ADD, Symbol::
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
 #[allow(dead_code)]
-enum Relocation<'a> {
-    LocalData { offset: u64, data: &'a [u8] },
-    LinkedFunction { offset: u64, name: &'a str },
-    LinkedData { offset: u64, name: &'a str },
+pub enum Relocation<'a> {
+    LocalData {
+        offset: u64,
+        // This should probably technically be a bumpalo::Vec.
+        // The problem is that it currently is built in a place that can't access the arena.
+        data: std::vec::Vec<u8>,
+    },
+    LinkedFunction {
+        offset: u64,
+        name: &'a str,
+    },
+    LinkedData {
+        offset: u64,
+        name: &'a str,
+    },
 }
 
 trait Backend<'a>
@@ -51,10 +62,10 @@ where
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pionter and setup stack space.
     /// finalize is run at the end of build_proc when all internal code is finalized.
-    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String>;
+    fn finalize(&mut self) -> Result<(&'a [u8], &[&Relocation]), String>;
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
+    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[&Relocation]), String> {
         self.reset();
         // TODO: let the backend know of all the arguments.
         // let start = std::time::Instant::now();

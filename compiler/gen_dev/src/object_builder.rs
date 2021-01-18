@@ -30,6 +30,7 @@ pub fn build_module<'a>(
         } => {
             let backend: Backend64Bit<
                 x86_64::X86_64GPReg,
+                x86_64::X86_64FPReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
             > = Backend::new(env, target)?;
@@ -47,6 +48,7 @@ pub fn build_module<'a>(
         } => {
             let backend: Backend64Bit<
                 aarch64::AArch64GPReg,
+                aarch64::AArch64FPReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
             > = Backend::new(env, target)?;
