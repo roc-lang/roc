@@ -5,7 +5,7 @@ const testing = std.testing;
 // Dict Module
 const dict = @import("dict.zig");
 comptime {
-    exportDictFn(dict.size, "size");
+    exportDictFn(dict.dictSize, "size");
 }
 
 // Num Module
@@ -41,6 +41,9 @@ fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "str." ++ func_name);
+}
+fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "dict." ++ func_name);
 }
 
 // Run all tests in imported modules

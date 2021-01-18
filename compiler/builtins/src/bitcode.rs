@@ -33,3 +33,5 @@ pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
+
+pub const DICT_SIZE: &str = "roc_builtins.dict.size";

@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
-const RocDict = struct {
+pub const RocDict = extern struct {
     size: usize,
 
     pub fn init() RocDict {
@@ -16,7 +16,8 @@ const RocDict = struct {
     }
 };
 
-pub fn dictSize(dict: RocDict) usize {
+// Dict.size
+pub fn dictSize(dict: RocDict) callconv(.C) usize {
     return dict.size;
 }
 

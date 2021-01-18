@@ -720,7 +720,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
-    // empty : Dict k v
+    // size : Dict * * -> Nat
+    add_type(
+        Symbol::DICT_SIZE,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2))],
+            Box::new(nat_type()),
+        ),
+    );
+
+    // empty : Dict * *
     add_type(Symbol::DICT_EMPTY, dict_type(flex(TVAR1), flex(TVAR2)));
 
     // singleton : k, v -> Dict k v

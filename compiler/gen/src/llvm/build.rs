@@ -1,4 +1,5 @@
-use crate::llvm::build_hash::build_hash;
+use crate::llvm::build_dict::dict_size;
+use crate::llvm::build_hash::hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
@@ -3433,8 +3434,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         Hash => {
             let (value, layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            build_hash(env, value, layout)
+            hash(env, value, layout)
         }
+        DictSize => dict_size(env, scope, args[0]),
     }
 }
 

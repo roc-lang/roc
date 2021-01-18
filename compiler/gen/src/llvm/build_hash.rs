@@ -3,7 +3,7 @@ use crate::llvm::build_list::store_list;
 use inkwell::values::BasicValueEnum;
 use roc_mono::layout::{Builtin, Layout};
 
-pub fn build_hash<'a, 'ctx, 'env>(
+pub fn hash<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     val: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
@@ -28,6 +28,7 @@ pub fn build_hash<'a, 'ctx, 'env>(
             | Builtin::Float32
             | Builtin::Float128
             | Builtin::Float16
+            | Builtin::Usize
             | Builtin::Str => {
                 let ptr = val.into_pointer_value();
                 let num_bytes = layout.stack_size(ptr_bytes) as u64;

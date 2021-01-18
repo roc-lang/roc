@@ -361,7 +361,6 @@ impl<'a> Layout<'a> {
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
-
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
@@ -884,6 +883,7 @@ fn layout_from_flat_type<'a>(
 
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
+                Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
                 Symbol::ATTR_ATTR => {
                     debug_assert_eq!(args.len(), 2);
 
@@ -1500,6 +1500,47 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
         }
         other => {
             todo!("TODO non structure Num.@Num flat_type {:?}", other);
+        }
+    }
+}
+
+fn dict_layout_from_key_value<'a>(
+    env: &mut Env<'a, '_>,
+    key_var: Variable,
+    value_var: Variable,
+) -> Result<Layout<'a>, LayoutProblem> {
+    match env.subs.get_without_compacting(key_var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, key_args)) => {
+            debug_assert_eq!(key_args.len(), 2);
+
+            let var = *key_args.get(1).unwrap();
+
+            dict_layout_from_key_value(env, var, value_var)
+        }
+        Content::FlexVar(_) | Content::RigidVar(_) => {
+            // If this was still a (Dict * *) then it must have been an empty dict
+            Ok(Layout::Builtin(Builtin::EmptyDict))
+        }
+        key_content => {
+            match env.subs.get_without_compacting(value_var).content {
+                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, value_args)) => {
+                    debug_assert_eq!(value_args.len(), 2);
+
+                    let var = *value_args.get(1).unwrap();
+
+                    dict_layout_from_key_value(env, key_var, var)
+                }
+                value_content => {
+                    let key_layout = Layout::new_help(env, key_var, key_content)?;
+                    let value_layout = Layout::new_help(env, value_var, value_content)?;
+
+                    // This is a normal list.
+                    Ok(Layout::Builtin(Builtin::Dict(
+                        env.arena.alloc(key_layout),
+                        env.arena.alloc(value_layout),
+                    )))
+                }
+            }
         }
     }
 }
