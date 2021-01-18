@@ -171,6 +171,30 @@ mod cli_run {
         );
     }
 
+    #[test]
+    #[serial(nqueens)]
+    fn run_nqueens_not_optimized() {
+        check_output(
+            &example_file("effect", "NQueens.roc"),
+            "nqueens",
+            &[],
+            "724\n",
+            false,
+        );
+    }
+
+    #[test]
+    #[serial(cfold)]
+    fn run_cfold_not_optimized() {
+        check_output(
+            &example_file("effect", "CFold.roc"),
+            "cfold",
+            &[],
+            "11 & 11\n",
+            false,
+        );
+    }
+
     //    #[test]
     //    #[serial(effect)]
     //    fn run_effect_unoptimized() {

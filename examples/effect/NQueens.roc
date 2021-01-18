@@ -1,4 +1,4 @@
-app "effect-example"
+app "nqueens"
     packages { base: "thing/platform-dir" }
     imports [base.Task]
     provides [ main ] to base
