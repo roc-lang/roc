@@ -38,8 +38,8 @@ mod gen_num {
             3.14159265358979323846264338327950288419716939937510582097494459230781640628620899,
             f64
         );
-        assert_evals_to!(&format!("{}1.0", f64::MIN), f64::MIN, f64);
-        assert_evals_to!(&format!("{}1.0", f64::MAX), f64::MAX, f64);
+        assert_evals_to!(&format!("{:0.1}", f64::MIN), f64::MIN, f64);
+        assert_evals_to!(&format!("{:0.1}", f64::MAX), f64::MAX, f64);
     }
 
     #[test]
@@ -54,6 +54,21 @@ mod gen_num {
             i64
         );
     }
+
+    /*
+    #[test]
+    fn gen_add_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.1 + 2.4 + 3
+                "#
+            ),
+            6.5,
+            f64
+        );
+    }
+    */
 
     #[test]
     fn gen_sub_i64() {
@@ -209,19 +224,6 @@ mod gen_num {
             ),
             true,
             bool
-        );
-    }
-
-    #[test]
-    fn gen_add_f64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    1.1 + 2.4 + 3
-                "#
-            ),
-            6.5,
-            f64
         );
     }
 
