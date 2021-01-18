@@ -952,11 +952,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let internal_type =
                 basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
 
-            cast_basic_basic(
-                builder,
-                struct_val.into_struct_value().into(),
-                internal_type,
-            )
+            cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type)
         }
         Tag {
             arguments,
@@ -1001,10 +997,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         debug_assert!(val.is_pointer_value());
 
                         // we store recursive pointers as `i64*`
-                        let ptr = cast_basic_basic(
-                            builder,
+                        let ptr = env.builder.build_bitcast(
                             val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
                         );
 
                         field_vals.push(ptr);
@@ -1020,12 +1016,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // Create the struct_type
             let data_ptr = reserve_with_refcount(env, &tag_layout);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = cast_basic_basic(
-                builder,
-                data_ptr.into(),
-                struct_type.ptr_type(AddressSpace::Generic).into(),
-            )
-            .into_pointer_value();
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
 
             // Insert field exprs into struct_val
             for (index, field_val) in field_vals.into_iter().enumerate() {
@@ -1098,10 +1096,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         debug_assert!(val.is_pointer_value());
 
                         // we store recursive pointers as `i64*`
-                        let ptr = cast_basic_basic(
-                            builder,
+                        let ptr = env.builder.build_bitcast(
                             val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
                         );
 
                         field_vals.push(ptr);
@@ -1117,12 +1115,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // Create the struct_type
             let data_ptr = reserve_with_refcount(env, &tag_layout);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = cast_basic_basic(
-                builder,
-                data_ptr.into(),
-                struct_type.ptr_type(AddressSpace::Generic).into(),
-            )
-            .into_pointer_value();
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
 
             // Insert field exprs into struct_val
             for (index, field_val) in field_vals.into_iter().enumerate() {
@@ -1197,10 +1197,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         debug_assert!(val.is_pointer_value());
 
                         // we store recursive pointers as `i64*`
-                        let ptr = cast_basic_basic(
-                            builder,
+                        let ptr = env.builder.build_bitcast(
                             val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
                         );
 
                         field_vals.push(ptr);
@@ -1220,12 +1220,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             );
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = cast_basic_basic(
-                builder,
-                data_ptr.into(),
-                struct_type.ptr_type(AddressSpace::Generic).into(),
-            )
-            .into_pointer_value();
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
 
             // Insert field exprs into struct_val
             for (index, field_val) in field_vals.into_iter().enumerate() {
@@ -1331,7 +1333,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .context
                         .struct_type(field_types.into_bump_slice(), false);
 
-                    let struct_value = cast_struct_struct(builder, value, struct_type);
+                    let struct_value = access_index_struct_value(builder, value, struct_type);
 
                     let result = builder
                         .build_extract_value(struct_value, *index as u32, "")
@@ -1342,11 +1344,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                             block_of_memory(env.context, &struct_layout, env.ptr_bytes);
 
                         // the value is a pointer to the actual value; load that value!
-                        let ptr = cast_basic_basic(
-                            builder,
+                        let ptr = env.builder.build_bitcast(
                             result,
-                            desired_type.ptr_type(AddressSpace::Generic).into(),
+                            desired_type.ptr_type(AddressSpace::Generic),
+                            "cast_struct_value_pointer",
                         );
+
                         builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
                     } else {
                         result
@@ -1494,12 +1497,14 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     use inkwell::types::BasicType;
     let builder = env.builder;
 
-    let ptr = cast_basic_basic(
-        builder,
-        value.into(),
-        struct_type.ptr_type(AddressSpace::Generic).into(),
-    )
-    .into_pointer_value();
+    let ptr = env
+        .builder
+        .build_bitcast(
+            value,
+            struct_type.ptr_type(AddressSpace::Generic),
+            "cast_lookup_at_index_ptr",
+        )
+        .into_pointer_value();
 
     let elem_ptr = builder
         .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
@@ -1510,12 +1515,11 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
         // a pointer to the block of memory representation
-        cast_basic_basic(
-            builder,
+        builder.build_bitcast(
             result,
             block_of_memory(env.context, &struct_layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic)
-                .into(),
+                .ptr_type(AddressSpace::Generic),
+            "cast_rec_pointer_lookup_at_index_ptr",
         )
     } else {
         result
@@ -1583,12 +1587,13 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     // We must return a pointer to the first element:
     let data_ptr = {
         let int_type = ptr_int(ctx, env.ptr_bytes);
-        let as_usize_ptr = cast_basic_basic(
-            env.builder,
-            ptr.into(),
-            int_type.ptr_type(AddressSpace::Generic).into(),
-        )
-        .into_pointer_value();
+        let as_usize_ptr = builder
+            .build_bitcast(
+                ptr,
+                int_type.ptr_type(AddressSpace::Generic),
+                "to_usize_ptr",
+            )
+            .into_pointer_value();
 
         let index = match extra_bytes {
             n if n == env.ptr_bytes => 1,
@@ -1601,14 +1606,17 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
         let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
 
         unsafe {
-            cast_basic_basic(
-                env.builder,
-                env.builder
-                    .build_in_bounds_gep(as_usize_ptr, &[index_intvalue], "get_data_ptr")
-                    .into(),
-                ptr_type.into(),
-            )
-            .into_pointer_value()
+            builder
+                .build_bitcast(
+                    env.builder.build_in_bounds_gep(
+                        as_usize_ptr,
+                        &[index_intvalue],
+                        "get_data_ptr",
+                    ),
+                    ptr_type,
+                    "malloc_cast_to_desired",
+                )
+                .into_pointer_value()
         }
     };
 
@@ -1664,7 +1672,7 @@ fn list_literal<'a, 'ctx, 'env>(
     let ptr_bytes = env.ptr_bytes;
 
     let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
-    let generic_ptr = cast_basic_basic(builder, ptr.into(), u8_ptr_type.into());
+    let generic_ptr = builder.build_bitcast(ptr, u8_ptr_type, "to_generic_ptr");
 
     let struct_type = collection(ctx, ptr_bytes);
     let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
@@ -2104,14 +2112,18 @@ pub fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
-
-/// Cast a struct to another struct of the same (or smaller?) size
-pub fn cast_struct_struct<'ctx>(
+fn access_index_struct_value<'ctx>(
     builder: &Builder<'ctx>,
     from_value: StructValue<'ctx>,
     to_type: StructType<'ctx>,
 ) -> StructValue<'ctx> {
-    cast_basic_basic(builder, from_value.into(), to_type.into()).into_struct_value()
+    complex_bitcast(
+        builder,
+        from_value.into(),
+        to_type.into(),
+        "access_index_struct_value",
+    )
+    .into_struct_value()
 }
 
 /// Cast a value to another value of the same (or smaller?) size
@@ -2119,6 +2131,52 @@ pub fn cast_basic_basic<'ctx>(
     builder: &Builder<'ctx>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    complex_bitcast(builder, from_value, to_type, "cast_basic_basic")
+}
+
+pub fn complex_bitcast_struct_struct<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: StructType<'ctx>,
+    name: &str,
+) -> StructValue<'ctx> {
+    complex_bitcast(builder, from_value.into(), to_type.into(), name).into_struct_value()
+}
+
+fn cast_tag_to_block_of_memory<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    complex_bitcast(
+        builder,
+        from_value.into(),
+        to_type,
+        "tag_to_block_of_memory",
+    )
+}
+
+pub fn cast_block_of_memory_to_tag<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+) -> StructValue<'ctx> {
+    complex_bitcast(
+        builder,
+        from_value.into(),
+        to_type,
+        "block_of_memory_to_tag",
+    )
+    .into_struct_value()
+}
+
+/// Cast a value to another value of the same (or smaller?) size
+pub fn complex_bitcast<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+    name: &str,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::types::BasicType;
 
@@ -2135,7 +2193,7 @@ pub fn cast_basic_basic<'ctx>(
         .build_bitcast(
             argument_pointer,
             to_type.ptr_type(inkwell::AddressSpace::Generic),
-            "cast_basic_basic",
+            name,
         )
         .into_pointer_value();
 
@@ -2150,7 +2208,12 @@ fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(
         .context
         .struct_type(&[env.context.i64_type().into()], false);
 
-    let struct_value = cast_struct_struct(env.builder, from_value, struct_type);
+    let struct_value = complex_bitcast_struct_struct(
+        env.builder,
+        from_value,
+        struct_type,
+        "extract_tag_discriminant_struct",
+    );
 
     env.builder
         .build_extract_value(struct_value, 0, "")
@@ -2219,6 +2282,8 @@ fn build_switch_ir<'a, 'ctx, 'env>(
     let scope = &mut copy;
 
     let cond_symbol = &cond_symbol;
+    let (cond_value, stored_layout) = load_symbol_and_layout(env, scope, cond_symbol);
+    debug_assert_eq!(&cond_layout, stored_layout);
 
     let cont_block = context.append_basic_block(parent, "cont");
 
@@ -2227,19 +2292,17 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         Layout::Builtin(Builtin::Float64) => {
             // float matches are done on the bit pattern
             cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond = load_symbol(env, scope, cond_symbol);
 
             builder
-                .build_bitcast(full_cond, env.context.i64_type(), "")
+                .build_bitcast(cond_value, env.context.i64_type(), "")
                 .into_int_value()
         }
         Layout::Builtin(Builtin::Float32) => {
             // float matches are done on the bit pattern
             cond_layout = Layout::Builtin(Builtin::Int32);
-            let full_cond = load_symbol(env, scope, cond_symbol);
 
             builder
-                .build_bitcast(full_cond, env.context.i32_type(), "")
+                .build_bitcast(cond_value, env.context.i32_type(), "")
                 .into_int_value()
         }
         Layout::Union(variant) => {
@@ -2249,7 +2312,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 NonRecursive(_) => {
                     // we match on the discriminant, not the whole Tag
                     cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond = load_symbol(env, scope, cond_symbol).into_struct_value();
+                    let full_cond = cond_value.into_struct_value();
 
                     extract_tag_discriminant_struct(env, full_cond)
                 }
@@ -2257,21 +2320,13 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                     // we match on the discriminant, not the whole Tag
                     cond_layout = Layout::Builtin(Builtin::Int64);
 
-                    use BasicValueEnum::*;
-                    match load_symbol(env, scope, cond_symbol) {
-                        PointerValue(full_cond_ptr) => {
-                            extract_tag_discriminant_ptr(env, full_cond_ptr)
-                        }
-                        StructValue(full_cond_struct) => {
-                            extract_tag_discriminant_struct(env, full_cond_struct)
-                        }
-                        _ => unreachable!(),
-                    }
+                    debug_assert!(cond_value.is_pointer_value());
+                    extract_tag_discriminant_ptr(env, cond_value.into_pointer_value())
                 }
                 NullableWrapped { nullable_id, .. } => {
                     // we match on the discriminant, not the whole Tag
                     cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond_ptr = load_symbol(env, scope, cond_symbol).into_pointer_value();
+                    let full_cond_ptr = cond_value.into_pointer_value();
 
                     let comparison: IntValue =
                         env.builder.build_is_null(full_cond_ptr, "is_null_cond");
@@ -2302,7 +2357,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 }
             }
         }
-        Layout::Builtin(_) => load_symbol(env, scope, cond_symbol).into_int_value(),
+        Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
     };
 

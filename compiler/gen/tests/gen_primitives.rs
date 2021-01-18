@@ -2074,4 +2074,46 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn bug_exposer() {
+        // the decision tree will generate a jump to the `1` branch here
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ ZAdd Expr Expr, Val I64, Var I64 ]
+
+                eval : Expr -> I64
+                eval = \e ->
+                    when e is
+                        Var _ -> 0
+                        Val v -> v
+                        ZAdd l r -> eval l + eval r
+
+                constFolding : Expr -> Expr
+                constFolding = \e ->
+                    when e is
+                        ZAdd e1 e2 ->
+                            when Pair e1 e2 is
+                                Pair (Val a) (Val b) -> Val (a+b)
+                                Pair (Val a) (ZAdd x (Val b)) -> ZAdd (Val (a+b)) x
+                                Pair _ _                     -> ZAdd e1 e2
+
+
+                        _ -> e
+
+
+                expr : Expr
+                expr = ZAdd (Val 3) (ZAdd (Val 4) (Val 5))
+
+                main : I64
+                main = eval (constFolding expr)
+                "#
+            ),
+            12,
+            i64
+        );
+    }
 }
