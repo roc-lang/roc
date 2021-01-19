@@ -4260,4 +4260,33 @@ mod solve_expr {
             "RBTree I64",
         );
     }
+
+    #[test]
+    fn expr_to_str() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Add Expr Expr, Val I64, Var I64 ]
+
+                printExpr : Expr -> Str
+                printExpr = \e ->
+                    when e is
+                        Add a b ->
+                            "Add ("
+                                |> Str.concat (printExpr a)
+                                |> Str.concat ") ("
+                                |> Str.concat (printExpr b)
+                                |> Str.concat ")"
+                        Val v -> Str.fromInt v
+                        Var v -> "Var " |> Str.concat (Str.fromInt v)
+
+                main : Str
+                main = printExpr (Var 3)
+                "#
+            ),
+            "Str",
+        );
+    }
 }

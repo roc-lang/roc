@@ -583,7 +583,7 @@ pub fn sort_can_defs(
             }
 
             let successors_of_group = |group_id: &usize| {
-                let mut result = ImSet::default();
+                let mut result = MutSet::default();
 
                 // for each symbol in this group
                 for symbol in &groups[*group_id] {

@@ -9,8 +9,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, collection, get_fn_type,
-    get_ptr_type, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
+    collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
@@ -42,7 +42,7 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{CallType, JoinPointId, Wrapped};
-use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode};
+use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode, UnionLayout};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -859,13 +859,13 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Tag {
             arguments,
-            tag_layout: Layout::Union(fields),
+            tag_layout: Layout::Union(UnionLayout::NonRecursive(fields)),
             union_size,
             tag_id,
             tag_name,
             ..
         } => {
-            let tag_layout = Layout::Union(fields);
+            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
@@ -952,21 +952,17 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let internal_type =
                 basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
 
-            cast_basic_basic(
-                builder,
-                struct_val.into_struct_value().into(),
-                internal_type,
-            )
+            cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type)
         }
         Tag {
             arguments,
-            tag_layout: Layout::RecursiveUnion(fields),
+            tag_layout: Layout::Union(UnionLayout::Recursive(fields)),
             union_size,
             tag_id,
             tag_name,
             ..
         } => {
-            let tag_layout = Layout::Union(fields);
+            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
@@ -1001,10 +997,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         debug_assert!(val.is_pointer_value());
 
                         // we store recursive pointers as `i64*`
-                        let ptr = cast_basic_basic(
-                            builder,
+                        let ptr = env.builder.build_bitcast(
                             val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
                         );
 
                         field_vals.push(ptr);
@@ -1020,12 +1016,218 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // Create the struct_type
             let data_ptr = reserve_with_refcount(env, &tag_layout);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = cast_basic_basic(
-                builder,
-                data_ptr.into(),
-                struct_type.ptr_type(AddressSpace::Generic).into(),
-            )
-            .into_pointer_value();
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+
+        Tag {
+            arguments,
+            tag_layout:
+                Layout::Union(UnionLayout::NullableWrapped {
+                    nullable_id,
+                    other_tags: fields,
+                }),
+            union_size,
+            tag_id,
+            tag_name,
+            ..
+        } => {
+            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
+            let tag_struct_type =
+                basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
+            if *tag_id == *nullable_id as u8 {
+                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
+
+                return output_type.const_null().into();
+            }
+
+            debug_assert!(*union_size > 1);
+            let ptr_size = env.ptr_bytes;
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
+                // closures ignore (and do not store) the discriminant
+                &fields[*tag_id as usize][1..]
+            } else {
+                use std::cmp::Ordering::*;
+                match tag_id.cmp(&(*nullable_id as u8)) {
+                    Equal => &[] as &[_],
+                    Less => &fields[*tag_id as usize],
+                    Greater => &fields[*tag_id as usize - 1],
+                }
+            };
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(env, scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = env.builder.build_bitcast(
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr = reserve_with_refcount(env, &tag_layout);
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+
+        Tag {
+            arguments,
+            tag_layout:
+                Layout::Union(UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                    ..
+                }),
+            union_size,
+            tag_id,
+            tag_name,
+            ..
+        } => {
+            let other_fields = &other_fields[1..];
+
+            let tag_struct_type =
+                block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+
+            if *tag_id == *nullable_id as u8 {
+                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
+
+                return output_type.const_null().into();
+            }
+
+            // this tag id is not the nullable one. For the type to be recursive, the other
+            // constructor must have at least one argument!
+            debug_assert!(!arguments.is_empty());
+
+            debug_assert!(*union_size == 2);
+            let ptr_size = env.ptr_bytes;
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            debug_assert!(!matches!(tag_name, TagName::Closure(_)));
+
+            let tag_field_layouts = other_fields;
+            let arguments = &arguments[1..];
+
+            debug_assert_eq!(arguments.len(), tag_field_layouts.len());
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(env, scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = env.builder.build_bitcast(
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr = reserve_with_refcount(
+                env,
+                &Layout::Union(UnionLayout::NonRecursive(&[other_fields])),
+            );
+
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
 
             // Insert field exprs into struct_val
             for (index, field_val) in field_vals.into_iter().enumerate() {
@@ -1059,7 +1261,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .build_extract_value(
                             argument,
                             *index as u32,
-                            env.arena.alloc(format!("struct_field_access_{}_", index)),
+                            env.arena
+                                .alloc(format!("struct_field_access_single_element{}", index)),
                         )
                         .unwrap()
                 }
@@ -1080,7 +1283,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     .build_extract_value(
                         argument,
                         *index as u32,
-                        env.arena.alloc(format!("struct_field_access_{}_", index)),
+                        env.arena
+                            .alloc(format!("struct_field_access_record_{}", index)),
                     )
                     .unwrap(),
                 (StructValue(argument), Layout::Closure(_, _, _)) => env
@@ -1119,18 +1323,17 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 field_types.push(field_type);
             }
 
-            // Create the struct_type
-            let struct_type = env
-                .context
-                .struct_type(field_types.into_bump_slice(), false);
-
             // cast the argument bytes into the desired shape for this tag
-            let argument = load_symbol(env, scope, structure);
+            let (argument, structure_layout) = load_symbol_and_layout(env, scope, structure);
 
-            let struct_layout = Layout::Struct(field_layouts);
             match argument {
                 StructValue(value) => {
-                    let struct_value = cast_struct_struct(builder, value, struct_type);
+                    let struct_layout = Layout::Struct(field_layouts);
+                    let struct_type = env
+                        .context
+                        .struct_type(field_types.into_bump_slice(), false);
+
+                    let struct_value = access_index_struct_value(builder, value, struct_type);
 
                     let result = builder
                         .build_extract_value(struct_value, *index as u32, "")
@@ -1141,44 +1344,100 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                             block_of_memory(env.context, &struct_layout, env.ptr_bytes);
 
                         // the value is a pointer to the actual value; load that value!
-                        let ptr = cast_basic_basic(
-                            builder,
+                        let ptr = env.builder.build_bitcast(
                             result,
-                            desired_type.ptr_type(AddressSpace::Generic).into(),
+                            desired_type.ptr_type(AddressSpace::Generic),
+                            "cast_struct_value_pointer",
                         );
+
                         builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
                     } else {
                         result
                     }
                 }
-                PointerValue(value) => {
-                    let ptr = cast_basic_basic(
-                        builder,
-                        value.into(),
-                        struct_type.ptr_type(AddressSpace::Generic).into(),
-                    )
-                    .into_pointer_value();
+                PointerValue(value) => match structure_layout {
+                    Layout::Union(UnionLayout::NullableWrapped { nullable_id, .. })
+                        if *index == 0 =>
+                    {
+                        let ptr = value;
+                        let is_null = env.builder.build_is_null(ptr, "is_null");
 
-                    let elem_ptr = builder
-                        .build_struct_gep(ptr, *index as u32, "at_index_struct_gep")
-                        .unwrap();
+                        let ctx = env.context;
+                        let then_block = ctx.append_basic_block(parent, "then");
+                        let else_block = ctx.append_basic_block(parent, "else");
+                        let cont_block = ctx.append_basic_block(parent, "cont");
 
-                    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+                        let result = builder.build_alloca(ctx.i64_type(), "result");
 
-                    if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
-                        // a recursive field is stored as a `i64*`, to use it we must cast it to
-                        // a pointer to the block of memory representation
-                        cast_basic_basic(
-                            builder,
-                            result,
-                            block_of_memory(env.context, &struct_layout, env.ptr_bytes)
-                                .ptr_type(AddressSpace::Generic)
-                                .into(),
-                        )
-                    } else {
-                        result
+                        env.builder.build_switch(
+                            is_null,
+                            else_block,
+                            &[(ctx.bool_type().const_int(1, false), then_block)],
+                        );
+
+                        {
+                            env.builder.position_at_end(then_block);
+                            let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
+                            env.builder.build_store(result, tag_id);
+                            env.builder.build_unconditional_branch(cont_block);
+                        }
+
+                        {
+                            env.builder.position_at_end(else_block);
+                            let tag_id = extract_tag_discriminant_ptr(env, ptr);
+                            env.builder.build_store(result, tag_id);
+                            env.builder.build_unconditional_branch(cont_block);
+                        }
+
+                        env.builder.position_at_end(cont_block);
+
+                        env.builder.build_load(result, "load_result")
                     }
-                }
+                    Layout::Union(UnionLayout::NullableUnwrapped { nullable_id, .. }) => {
+                        if *index == 0 {
+                            let is_null = env.builder.build_is_null(value, "is_null");
+
+                            let ctx = env.context;
+
+                            let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
+                            let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
+
+                            env.builder.build_select(
+                                is_null,
+                                then_value,
+                                else_value,
+                                "select_tag_id",
+                            )
+                        } else {
+                            let struct_type = env
+                                .context
+                                .struct_type(&field_types.into_bump_slice()[1..], false);
+
+                            lookup_at_index_ptr(
+                                env,
+                                &field_layouts[1..],
+                                *index as usize - 1,
+                                value,
+                                struct_type,
+                                structure_layout,
+                            )
+                        }
+                    }
+                    _ => {
+                        let struct_type = env
+                            .context
+                            .struct_type(field_types.into_bump_slice(), false);
+
+                        lookup_at_index_ptr(
+                            env,
+                            field_layouts,
+                            *index as usize,
+                            value,
+                            struct_type,
+                            structure_layout,
+                        )
+                    }
+                },
                 _ => panic!("cannot look up index in {:?}", argument),
             }
         }
@@ -1222,6 +1481,44 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
         }
         RuntimeErrorFunction(_) => todo!(),
+    }
+}
+
+fn lookup_at_index_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    field_layouts: &[Layout<'_>],
+    index: usize,
+    value: PointerValue<'ctx>,
+    struct_type: StructType<'ctx>,
+    structure_layout: &Layout<'_>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let ptr = env
+        .builder
+        .build_bitcast(
+            value,
+            struct_type.ptr_type(AddressSpace::Generic),
+            "cast_lookup_at_index_ptr",
+        )
+        .into_pointer_value();
+
+    let elem_ptr = builder
+        .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
+        .unwrap();
+
+    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+
+    if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
+        // a recursive field is stored as a `i64*`, to use it we must cast it to
+        // a pointer to the block of memory representation
+        builder.build_bitcast(
+            result,
+            basic_type_from_layout(env.arena, env.context, structure_layout, env.ptr_bytes),
+            "cast_rec_pointer_lookup_at_index_ptr",
+        )
+    } else {
+        result
     }
 }
 
@@ -1286,12 +1583,13 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     // We must return a pointer to the first element:
     let data_ptr = {
         let int_type = ptr_int(ctx, env.ptr_bytes);
-        let as_usize_ptr = cast_basic_basic(
-            env.builder,
-            ptr.into(),
-            int_type.ptr_type(AddressSpace::Generic).into(),
-        )
-        .into_pointer_value();
+        let as_usize_ptr = builder
+            .build_bitcast(
+                ptr,
+                int_type.ptr_type(AddressSpace::Generic),
+                "to_usize_ptr",
+            )
+            .into_pointer_value();
 
         let index = match extra_bytes {
             n if n == env.ptr_bytes => 1,
@@ -1304,14 +1602,17 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
         let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
 
         unsafe {
-            cast_basic_basic(
-                env.builder,
-                env.builder
-                    .build_in_bounds_gep(as_usize_ptr, &[index_intvalue], "get_data_ptr")
-                    .into(),
-                ptr_type.into(),
-            )
-            .into_pointer_value()
+            builder
+                .build_bitcast(
+                    env.builder.build_in_bounds_gep(
+                        as_usize_ptr,
+                        &[index_intvalue],
+                        "get_data_ptr",
+                    ),
+                    ptr_type,
+                    "malloc_cast_to_desired",
+                )
+                .into_pointer_value()
         }
     };
 
@@ -1367,7 +1668,7 @@ fn list_literal<'a, 'ctx, 'env>(
     let ptr_bytes = env.ptr_bytes;
 
     let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
-    let generic_ptr = cast_basic_basic(builder, ptr.into(), u8_ptr_type.into());
+    let generic_ptr = builder.build_bitcast(ptr, u8_ptr_type, "to_generic_ptr");
 
     let struct_type = collection(ctx, ptr_bytes);
     let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
@@ -1807,14 +2108,18 @@ pub fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
-
-/// Cast a struct to another struct of the same (or smaller?) size
-pub fn cast_struct_struct<'ctx>(
+fn access_index_struct_value<'ctx>(
     builder: &Builder<'ctx>,
     from_value: StructValue<'ctx>,
     to_type: StructType<'ctx>,
 ) -> StructValue<'ctx> {
-    cast_basic_basic(builder, from_value.into(), to_type.into()).into_struct_value()
+    complex_bitcast(
+        builder,
+        from_value.into(),
+        to_type.into(),
+        "access_index_struct_value",
+    )
+    .into_struct_value()
 }
 
 /// Cast a value to another value of the same (or smaller?) size
@@ -1823,9 +2128,60 @@ pub fn cast_basic_basic<'ctx>(
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    complex_bitcast(builder, from_value, to_type, "cast_basic_basic")
+}
+
+pub fn complex_bitcast_struct_struct<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: StructType<'ctx>,
+    name: &str,
+) -> StructValue<'ctx> {
+    complex_bitcast(builder, from_value.into(), to_type.into(), name).into_struct_value()
+}
+
+fn cast_tag_to_block_of_memory<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    complex_bitcast(
+        builder,
+        from_value.into(),
+        to_type,
+        "tag_to_block_of_memory",
+    )
+}
+
+pub fn cast_block_of_memory_to_tag<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+) -> StructValue<'ctx> {
+    complex_bitcast(
+        builder,
+        from_value.into(),
+        to_type,
+        "block_of_memory_to_tag",
+    )
+    .into_struct_value()
+}
+
+/// Cast a value to another value of the same (or smaller?) size
+pub fn complex_bitcast<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
     use inkwell::types::BasicType;
+
+    // we can't use the more simple
+    // builder.build_bitcast(from_value, to_type, "cast_basic_basic")
+    // because this does not allow some (valid) bitcasts
+
     // store the value in memory
-    let argument_pointer = builder.build_alloca(from_value.get_type(), "");
+    let argument_pointer = builder.build_alloca(from_value.get_type(), "cast_alloca");
     builder.build_store(argument_pointer, from_value);
 
     // then read it back as a different type
@@ -1833,14 +2189,14 @@ pub fn cast_basic_basic<'ctx>(
         .build_bitcast(
             argument_pointer,
             to_type.ptr_type(inkwell::AddressSpace::Generic),
-            "cast_basic_basic",
+            name,
         )
         .into_pointer_value();
 
-    builder.build_load(to_type_pointer, "")
+    builder.build_load(to_type_pointer, "cast_value")
 }
 
-fn extract_tag_discriminant<'a, 'ctx, 'env>(
+fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -1848,12 +2204,31 @@ fn extract_tag_discriminant<'a, 'ctx, 'env>(
         .context
         .struct_type(&[env.context.i64_type().into()], false);
 
-    let struct_value = cast_struct_struct(env.builder, from_value, struct_type);
+    let struct_value = complex_bitcast_struct_struct(
+        env.builder,
+        from_value,
+        struct_type,
+        "extract_tag_discriminant_struct",
+    );
 
     env.builder
         .build_extract_value(struct_value, 0, "")
         .expect("desired field did not decode")
         .into_int_value()
+}
+
+fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    from_value: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    let tag_id_ptr_type = env.context.i64_type().ptr_type(AddressSpace::Generic);
+
+    let ptr = env
+        .builder
+        .build_bitcast(from_value, tag_id_ptr_type, "extract_tag_discriminant_ptr")
+        .into_pointer_value();
+
+    env.builder.build_load(ptr, "load_tag_id").into_int_value()
 }
 
 struct SwitchArgsIr<'a, 'ctx> {
@@ -1903,6 +2278,8 @@ fn build_switch_ir<'a, 'ctx, 'env>(
     let scope = &mut copy;
 
     let cond_symbol = &cond_symbol;
+    let (cond_value, stored_layout) = load_symbol_and_layout(env, scope, cond_symbol);
+    debug_assert_eq!(&cond_layout, stored_layout);
 
     let cont_block = context.append_basic_block(parent, "cont");
 
@@ -1911,29 +2288,72 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         Layout::Builtin(Builtin::Float64) => {
             // float matches are done on the bit pattern
             cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond = load_symbol(env, scope, cond_symbol);
 
             builder
-                .build_bitcast(full_cond, env.context.i64_type(), "")
+                .build_bitcast(cond_value, env.context.i64_type(), "")
                 .into_int_value()
         }
         Layout::Builtin(Builtin::Float32) => {
             // float matches are done on the bit pattern
             cond_layout = Layout::Builtin(Builtin::Int32);
-            let full_cond = load_symbol(env, scope, cond_symbol);
 
             builder
-                .build_bitcast(full_cond, env.context.i32_type(), "")
+                .build_bitcast(cond_value, env.context.i32_type(), "")
                 .into_int_value()
         }
-        Layout::Union(_) => {
-            // we match on the discriminant, not the whole Tag
-            cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond = load_symbol(env, scope, cond_symbol).into_struct_value();
+        Layout::Union(variant) => {
+            use UnionLayout::*;
 
-            extract_tag_discriminant(env, full_cond)
+            match variant {
+                NonRecursive(_) => {
+                    // we match on the discriminant, not the whole Tag
+                    cond_layout = Layout::Builtin(Builtin::Int64);
+                    let full_cond = cond_value.into_struct_value();
+
+                    extract_tag_discriminant_struct(env, full_cond)
+                }
+                Recursive(_) => {
+                    // we match on the discriminant, not the whole Tag
+                    cond_layout = Layout::Builtin(Builtin::Int64);
+
+                    debug_assert!(cond_value.is_pointer_value());
+                    extract_tag_discriminant_ptr(env, cond_value.into_pointer_value())
+                }
+                NullableWrapped { nullable_id, .. } => {
+                    // we match on the discriminant, not the whole Tag
+                    cond_layout = Layout::Builtin(Builtin::Int64);
+                    let full_cond_ptr = cond_value.into_pointer_value();
+
+                    let comparison: IntValue =
+                        env.builder.build_is_null(full_cond_ptr, "is_null_cond");
+
+                    let when_null = || {
+                        env.context
+                            .i64_type()
+                            .const_int(nullable_id as u64, false)
+                            .into()
+                    };
+                    let when_not_null = || extract_tag_discriminant_ptr(env, full_cond_ptr).into();
+
+                    crate::llvm::build_list::build_basic_phi2(
+                        env,
+                        parent,
+                        comparison,
+                        when_null,
+                        when_not_null,
+                        BasicTypeEnum::IntType(env.context.i64_type()),
+                    )
+                    .into_int_value()
+                }
+                NullableUnwrapped { .. } => {
+                    // there are only two options, so we do a `tag_id == 0` check and branch on that
+                    unreachable!(
+                        "we never switch on the tag id directly for NullableUnwrapped unions"
+                    )
+                }
+            }
         }
-        Layout::Builtin(_) => load_symbol(env, scope, cond_symbol).into_int_value(),
+        Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
     };
 
