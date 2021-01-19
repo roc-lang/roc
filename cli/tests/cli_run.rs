@@ -207,6 +207,18 @@ mod cli_run {
         );
     }
 
+    #[test]
+    #[serial(deriv)]
+    fn run_rbtree_insert_not_optimized() {
+        check_output(
+            &example_file("benchmarks", "RBTreeInsert.roc"),
+            "rbtree-insert",
+            &[],
+            "Node Black 0 {} Empty Empty\n",
+            false,
+        );
+    }
+
     //    #[test]
     //    #[serial(effect)]
     //    fn run_effect_unoptimized() {
