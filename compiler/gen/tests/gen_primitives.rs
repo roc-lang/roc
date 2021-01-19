@@ -564,7 +564,7 @@ mod gen_primitives {
                         Cons _ rest -> 1 + len rest
 
                 main =
-                    nil : LinkedList {}
+                    nil : LinkedList F64
                     nil = Nil
 
                     len nil
@@ -584,7 +584,7 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList (Int *)
+                nil : LinkedList I64
                 nil = Nil
 
                 length : LinkedList a -> Int *
@@ -1145,7 +1145,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList I64 
+                    myList : ConsList I64
                     myList = empty
 
                     isSingleton myList
@@ -1210,7 +1210,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList I64 
+                    myList : ConsList I64
                     myList = Cons 0x1 Nil
 
                     isEmpty myList
@@ -1231,7 +1231,7 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                main : ConsList I64 
+                main : ConsList I64
                 main = Cons 0x1 Nil
                 "#
             ),
@@ -1407,9 +1407,9 @@ mod gen_primitives {
                     balance 0 Empty
                 "#
             ),
-            1,
-            &i64,
-            |x: &i64| *x
+            false,
+            *const i64,
+            |x: *const i64| x.is_null()
         );
     }
 
@@ -1500,14 +1500,14 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree (Int *) (Int *)
+                main : RedBlackTree F64 F64 
                 main =
                     balance Red 0 0 Empty Empty
                 "#
             ),
-            1,
-            &i64,
-            |x: &i64| *x
+            false,
+            *const i64,
+            |x: *const i64| x.is_null()
         );
     }
 
@@ -1861,6 +1861,47 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
+    fn fingertree_basic() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Some a : [ One a, Two a a, Three a a a ]
+
+                Tuple a : [ Pair a a, Triple a a a ]
+
+                # a FingerTree implementation
+                Seq a : [ Nil, Unit a, More (Some a) (Seq (Tuple a)) (Some a) ]
+
+                # cons : a, Seq a -> Seq a
+                cons = \x, s ->
+                    when s is
+                        Nil -> Unit x
+                        Unit y -> More (One x) Nil (One y)
+                        More some q u ->
+                            when some is
+                                One y -> More (Two x y) q u
+                                Two y z -> More (Three x y z) q u
+                                Three y z w -> More (Two x y) (consTuple (Pair z w) q) u
+
+                consTuple : Tuple a, Seq (Tuple a) -> Seq (Tuple a)
+                consTuple = \a, b -> cons a b
+
+                main : Bool
+                main =
+                    when cons 0x1 Nil is
+                        Unit 1 -> True
+                        _ -> False
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
     fn case_or_pattern() {
         // the `0` branch body should only be generated once in the future
         // it is currently duplicated
@@ -1877,6 +1918,38 @@ mod gen_primitives {
             ),
             0,
             i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn rosetree_basic() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                # RoseTree
+                Tree a : [ Tree a (List (Tree a)) ]
+
+                tree : a, List (Tree a) -> Tree a
+                tree = \a, t -> Tree a t
+
+                singleton : a -> Tree a
+                singleton = \x -> Tree x []
+
+                main : Bool
+                main =
+                    x : I64
+                    x = 1
+
+                    when tree x [ singleton 5, singleton 3 ] is
+                        Tree 0x1 _ -> True
+                        _ -> False
+                "#
+            ),
+            true,
+            bool
         );
     }
 

@@ -2,7 +2,7 @@ use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
     DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
 };
-use crate::layout::{Builtin, Layout, LayoutCache};
+use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -210,6 +210,7 @@ fn flatten_patterns(branch: Branch) -> Branch {
     for path_pattern in branch.patterns {
         flatten(path_pattern, &mut result);
     }
+
     Branch {
         goal: branch.goal,
         patterns: result,
@@ -227,7 +228,9 @@ fn flatten<'a>(
             tag_id,
             tag_name,
             layout,
-        } if union.alternatives.len() == 1 => {
+        } if union.alternatives.len() == 1
+            && !matches!(layout, Layout::Union(UnionLayout::NullableWrapped { .. })| Layout::Union(UnionLayout::NullableUnwrapped { .. })) =>
+        {
             // TODO ^ do we need to check that guard.is_none() here?
 
             let path = path_pattern.0;
@@ -1018,23 +1021,70 @@ fn path_to_expr_help<'a>(
                 break;
             }
             Some(wrapped) => {
+                let index = *index;
+
                 let field_layouts = match &layout {
-                    Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
-                        layouts[*tag_id as usize]
+                    Layout::Union(variant) => {
+                        use UnionLayout::*;
+
+                        match variant {
+                            NonRecursive(layouts) | Recursive(layouts) => layouts[*tag_id as usize],
+                            NullableWrapped {
+                                nullable_id,
+                                other_tags: layouts,
+                                ..
+                            } => {
+                                use std::cmp::Ordering;
+                                match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
+                                    Ordering::Equal => {
+                                        // the nullable tag is going to pretend it stores a tag id
+                                        &*env
+                                            .arena
+                                            .alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
+                                    }
+                                    Ordering::Less => layouts[*tag_id as usize],
+                                    Ordering::Greater => layouts[*tag_id as usize - 1],
+                                }
+                            }
+                            NullableUnwrapped {
+                                nullable_id,
+                                other_fields,
+                            } => {
+                                let tag_id = *tag_id != 0;
+
+                                if tag_id == *nullable_id {
+                                    // the nullable tag has no fields; we can only lookup its tag id
+                                    debug_assert_eq!(index, 0);
+
+                                    // the nullable tag is going to pretend it stores a tag id
+                                    &*env.arena.alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
+                                } else {
+                                    *other_fields
+                                }
+                            }
+                        }
                     }
+
                     Layout::Struct(layouts) => layouts,
                     other => env.arena.alloc([other.clone()]),
                 };
 
-                debug_assert!(*index < field_layouts.len() as u64);
+                debug_assert!(
+                    index < field_layouts.len() as u64,
+                    "{} {:?} {:?} {:?}",
+                    index,
+                    field_layouts,
+                    &layout,
+                    tag_id,
+                );
 
-                let inner_layout = match &field_layouts[*index as usize] {
+                let inner_layout = match &field_layouts[index as usize] {
                     Layout::RecursivePointer => layout.clone(),
                     other => other.clone(),
                 };
 
                 let inner_expr = Expr::AccessAtIndex {
-                    index: *index,
+                    index,
                     field_layouts,
                     structure: symbol,
                     wrapped,

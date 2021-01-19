@@ -6,7 +6,7 @@ use roc_gen::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionVariant};
+use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
@@ -153,7 +153,7 @@ fn jit_to_ast_help<'a>(
                 |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
             ))
         }
-        Layout::Union(union_layouts) => match content {
+        Layout::Union(UnionLayout::NonRecursive(union_layouts)) => match content {
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(union_layouts.len(), tags.len());
 
@@ -163,40 +163,50 @@ fn jit_to_ast_help<'a>(
                 let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
 
                 let size = layout.stack_size(env.ptr_bytes);
+                use roc_mono::layout::WrappedVariant::*;
                 match union_variant {
-                    UnionVariant::Wrapped {
-                        sorted_tag_layouts: tags_and_layouts,
-                        ..
-                    } => {
-                        Ok(run_jit_function_dynamic_type!(
-                            lib,
-                            main_fn_name,
-                            size as usize,
-                            |ptr: *const u8| {
-                                // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
-                                let tag_id = *(ptr as *const i64);
-
-                                // use the tag ID as an index, to get its name and layout of any arguments
-                                let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
-
-                                let tag_expr = tag_name_to_expr(env, tag_name);
-                                let loc_tag_expr = &*env.arena.alloc(Located::at_zero(tag_expr));
-
-                                let variables = &tags[tag_name];
-
-                                // because the arg_layouts include the tag ID, it is one longer
-                                debug_assert_eq!(arg_layouts.len() - 1, variables.len());
-
-                                // skip forward to the start of the first element, ignoring the tag id
-                                let ptr = ptr.offset(8);
-
-                                let it = variables.iter().copied().zip(&arg_layouts[1..]);
-                                let output = sequence_of_expr(env, ptr, it);
-                                let output = output.into_bump_slice();
-
-                                Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                    UnionVariant::Wrapped(variant) => {
+                        match variant {
+                            NonRecursive {
+                                sorted_tag_layouts: tags_and_layouts,
                             }
-                        ))
+                            | Recursive {
+                                sorted_tag_layouts: tags_and_layouts,
+                            } => {
+                                Ok(run_jit_function_dynamic_type!(
+                                    lib,
+                                    main_fn_name,
+                                    size as usize,
+                                    |ptr: *const u8| {
+                                        // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
+                                        let tag_id = *(ptr as *const i64);
+
+                                        // use the tag ID as an index, to get its name and layout of any arguments
+                                        let (tag_name, arg_layouts) =
+                                            &tags_and_layouts[tag_id as usize];
+
+                                        let tag_expr = tag_name_to_expr(env, tag_name);
+                                        let loc_tag_expr =
+                                            &*env.arena.alloc(Located::at_zero(tag_expr));
+
+                                        let variables = &tags[tag_name];
+
+                                        // because the arg_layouts include the tag ID, it is one longer
+                                        debug_assert_eq!(arg_layouts.len() - 1, variables.len());
+
+                                        // skip forward to the start of the first element, ignoring the tag id
+                                        let ptr = ptr.offset(8);
+
+                                        let it = variables.iter().copied().zip(&arg_layouts[1..]);
+                                        let output = sequence_of_expr(env, ptr, it);
+                                        let output = output.into_bump_slice();
+
+                                        Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                                    }
+                                ))
+                            }
+                            _ => todo!(),
+                        }
                     }
                     _ => unreachable!("any other variant would have a different layout"),
                 }
@@ -211,7 +221,10 @@ fn jit_to_ast_help<'a>(
             }
             other => unreachable!("Weird content for Union layout: {:?}", other),
         },
-        Layout::RecursiveUnion(_) | Layout::RecursivePointer => {
+        Layout::Union(UnionLayout::Recursive(_))
+        | Layout::Union(UnionLayout::NullableWrapped { .. })
+        | Layout::Union(UnionLayout::NullableUnwrapped { .. })
+        | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
 
