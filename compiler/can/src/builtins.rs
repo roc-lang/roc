@@ -1804,6 +1804,30 @@ fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// Dict.hashTestOnly : k, v -> Nat
+pub fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let key_var = var_store.fresh();
+    let value_var = var_store.fresh();
+    let nat_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::Hash,
+        args: vec![
+            (key_var, Var(Symbol::ARG_1)),
+            (value_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: nat_var,
+    };
+
+    defn(
+        symbol,
+        vec![(key_var, Symbol::ARG_1), (value_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        nat_var,
+    )
+}
+
 /// Dict.size : Dict * * -> Nat
 fn dict_size(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let size_var = var_store.fresh();

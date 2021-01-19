@@ -55,7 +55,7 @@ pub fn canonicalize_module_defs<'a, F>(
     look_up_builtin: F,
 ) -> Result<ModuleOutput, RuntimeError>
 where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def>,
+    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
 {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, var_store);

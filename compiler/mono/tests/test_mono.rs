@@ -12,6 +12,7 @@ mod helpers;
 // Test monomorphization
 #[cfg(test)]
 mod test_mono {
+    use roc_can::builtins::builtin_defs_map;
     use roc_collections::all::MutMap;
     use roc_module::symbol::Symbol;
     use roc_mono::ir::Proc;
@@ -62,6 +63,7 @@ mod test_mono {
             src_dir,
             exposed_types,
             8,
+            builtin_defs_map,
         );
 
         let mut loaded = loaded.expect("failed to load module");

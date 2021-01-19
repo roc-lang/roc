@@ -10,6 +10,7 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
+    use roc_can::builtins::builtin_defs_map;
     use roc_collections::all::MutMap;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -63,6 +64,7 @@ mod solve_expr {
                 dir.path(),
                 exposed_types,
                 8,
+                builtin_defs_map,
             );
 
             dir.close()?;

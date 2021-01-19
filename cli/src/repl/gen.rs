@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
+use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
@@ -46,6 +47,7 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         src_dir,
         exposed_types,
         ptr_bytes,
+        builtin_defs_map,
     );
 
     let mut loaded = loaded.expect("failed to load module");

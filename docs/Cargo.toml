@@ -15,6 +15,7 @@ fs_extra = "1.2.0"
 pulldown-cmark = { version = "0.8", default-features = false }
 roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
+roc_can = { path = "../compiler/can" }
 roc_collections = { path = "../compiler/collections" }
 bumpalo = { version = "3.2", features = ["collections"] }
 

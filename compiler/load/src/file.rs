@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::builtins::builtin_defs_map;
 use roc_can::constraint::Constraint;
-use roc_can::def::Declaration;
+use roc_can::def::{Declaration, Def};
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_constrain::module::{
@@ -942,14 +942,18 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-pub fn load_and_typecheck(
+pub fn load_and_typecheck<F>(
     arena: &Bump,
     filename: PathBuf,
     stdlib: &StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     ptr_bytes: u32,
-) -> Result<LoadedModule, LoadingProblem> {
+    look_up_builtin: F,
+) -> Result<LoadedModule, LoadingProblem>
+where
+    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
+{
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
@@ -962,20 +966,25 @@ pub fn load_and_typecheck(
         exposed_types,
         Phase::SolveTypes,
         ptr_bytes,
+        look_up_builtin,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
 }
 
-pub fn load_and_monomorphize<'a>(
+pub fn load_and_monomorphize<'a, F>(
     arena: &'a Bump,
     filename: PathBuf,
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     ptr_bytes: u32,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
+    look_up_builtin: F,
+) -> Result<MonomorphizedModule<'a>, LoadingProblem>
+where
+    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
+{
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
@@ -988,13 +997,14 @@ pub fn load_and_monomorphize<'a>(
         exposed_types,
         Phase::MakeSpecializations,
         ptr_bytes,
+        look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
     }
 }
 
-pub fn load_and_monomorphize_from_str<'a>(
+pub fn load_and_monomorphize_from_str<'a, F>(
     arena: &'a Bump,
     filename: PathBuf,
     src: &'a str,
@@ -1002,7 +1012,11 @@ pub fn load_and_monomorphize_from_str<'a>(
     src_dir: &Path,
     exposed_types: SubsByModule,
     ptr_bytes: u32,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
+    look_up_builtin: F,
+) -> Result<MonomorphizedModule<'a>, LoadingProblem>
+where
+    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
+{
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, src, stdlib.mode)?;
@@ -1015,6 +1029,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         exposed_types,
         Phase::MakeSpecializations,
         ptr_bytes,
+        look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -1143,7 +1158,7 @@ enum LoadResult<'a> {
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
-fn load<'a>(
+fn load<'a, F>(
     arena: &'a Bump,
     //filename: PathBuf,
     load_start: LoadStart<'a>,
@@ -1152,8 +1167,10 @@ fn load<'a>(
     exposed_types: SubsByModule,
     goal_phase: Phase,
     ptr_bytes: u32,
+    look_up_builtins: F,
 ) -> Result<LoadResult<'a>, LoadingProblem>
 where
+    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
 {
     let LoadStart {
         arc_modules,
@@ -1273,6 +1290,7 @@ where
                                             src_dir,
                                             msg_tx.clone(),
                                             ptr_bytes,
+                                            look_up_builtins,
                                         )
                                         .expect("Msg channel closed unexpectedly.");
                                     }
@@ -3157,7 +3175,7 @@ fn unpack_exposes_entries<'a>(
     output
 }
 
-fn canonicalize_and_constrain<'a>(
+fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
@@ -3165,7 +3183,11 @@ fn canonicalize_and_constrain<'a>(
     aliases: MutMap<Symbol, Alias>,
     mode: Mode,
     parsed: ParsedModule<'a>,
-) -> Result<Msg<'a>, LoadingProblem> {
+    look_up_builtins: F,
+) -> Result<Msg<'a>, LoadingProblem>
+where
+    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
+{
     let canonicalize_start = SystemTime::now();
 
     let ParsedModule {
@@ -3203,7 +3225,7 @@ fn canonicalize_and_constrain<'a>(
         exposed_imports,
         &exposed_symbols,
         &mut var_store,
-        builtin_defs_map,
+        look_up_builtins,
     );
     let canonicalize_end = SystemTime::now();
 
@@ -3627,13 +3649,17 @@ fn add_def_to_module<'a>(
     }
 }
 
-fn run_task<'a>(
+fn run_task<'a, F>(
     task: BuildTask<'a>,
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
     ptr_bytes: u32,
-) -> Result<(), LoadingProblem> {
+    look_up_builtins: F,
+) -> Result<(), LoadingProblem>
+where
+    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
+{
     use BuildTask::*;
 
     let msg = match task {
@@ -3669,6 +3695,7 @@ fn run_task<'a>(
             aliases,
             mode,
             parsed,
+            look_up_builtins,
         ),
         Solve {
             module,

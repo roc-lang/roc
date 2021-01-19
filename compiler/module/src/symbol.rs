@@ -890,6 +890,10 @@ define_builtins! {
         4 DICT_GET: "get"
         5 DICT_INSERT: "insert"
         6 DICT_SIZE: "size"
+
+        // This should not be exposed to users, its for testing the
+        // hash function ONLY
+        7 DICT_TEST_HASH: "hashTestOnly"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
