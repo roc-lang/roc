@@ -564,7 +564,7 @@ mod gen_primitives {
                         Cons _ rest -> 1 + len rest
 
                 main =
-                    nil : LinkedList {}
+                    nil : LinkedList F64
                     nil = Nil
 
                     len nil
@@ -584,7 +584,7 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList (Int *)
+                nil : LinkedList I64
                 nil = Nil
 
                 length : LinkedList a -> Int *
@@ -1145,7 +1145,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList I64 
+                    myList : ConsList I64
                     myList = empty
 
                     isSingleton myList
@@ -1210,7 +1210,7 @@ mod gen_primitives {
 
                 main : Bool
                 main =
-                    myList : ConsList I64 
+                    myList : ConsList I64
                     myList = Cons 0x1 Nil
 
                     isEmpty myList
@@ -1231,7 +1231,7 @@ mod gen_primitives {
 
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                main : ConsList I64 
+                main : ConsList I64
                 main = Cons 0x1 Nil
                 "#
             ),
@@ -1407,9 +1407,9 @@ mod gen_primitives {
                     balance 0 Empty
                 "#
             ),
-            1,
-            &i64,
-            |x: &i64| *x
+            false,
+            *const i64,
+            |x: *const i64| x.is_null()
         );
     }
 
@@ -1500,14 +1500,14 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree (Int *) (Int *)
+                main : RedBlackTree F64 F64
                 main =
                     balance Red 0 0 Empty Empty
                 "#
             ),
-            1,
-            &i64,
-            |x: &i64| *x
+            false,
+            *const i64,
+            |x: *const i64| x.is_null()
         );
     }
 
@@ -1861,6 +1861,47 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
+    fn fingertree_basic() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Some a : [ One a, Two a a, Three a a a ]
+
+                Tuple a : [ Pair a a, Triple a a a ]
+
+                # a FingerTree implementation
+                Seq a : [ Nil, Unit a, More (Some a) (Seq (Tuple a)) (Some a) ]
+
+                # cons : a, Seq a -> Seq a
+                cons = \x, s ->
+                    when s is
+                        Nil -> Unit x
+                        Unit y -> More (One x) Nil (One y)
+                        More some q u ->
+                            when some is
+                                One y -> More (Two x y) q u
+                                Two y z -> More (Three x y z) q u
+                                Three y z w -> More (Two x y) (consTuple (Pair z w) q) u
+
+                consTuple : Tuple a, Seq (Tuple a) -> Seq (Tuple a)
+                consTuple = \a, b -> cons a b
+
+                main : Bool
+                main =
+                    when cons 0x1 Nil is
+                        Unit 1 -> True
+                        _ -> False
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
     fn case_or_pattern() {
         // the `0` branch body should only be generated once in the future
         // it is currently duplicated
@@ -1877,6 +1918,38 @@ mod gen_primitives {
             ),
             0,
             i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn rosetree_basic() {
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                # RoseTree
+                Tree a : [ Tree a (List (Tree a)) ]
+
+                tree : a, List (Tree a) -> Tree a
+                tree = \a, t -> Tree a t
+
+                singleton : a -> Tree a
+                singleton = \x -> Tree x []
+
+                main : Bool
+                main =
+                    x : I64
+                    x = 1
+
+                    when tree x [ singleton 5, singleton 3 ] is
+                        Tree 0x1 _ -> True
+                        _ -> False
+                "#
+            ),
+            true,
+            bool
         );
     }
 
@@ -1901,6 +1974,146 @@ mod gen_primitives {
                 "#
             ),
             1,
+            i64
+        );
+    }
+
+    #[test]
+    fn nullable_eval_cfold() {
+        // the decision tree will generate a jump to the `1` branch here
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Var, Val I64, Add Expr Expr, Mul Expr Expr ]
+
+                mkExpr : I64, I64 -> Expr
+                mkExpr = \n , v ->
+                    when n is
+                        0 -> if v == 0 then Var else Val v
+                        _ -> Add (mkExpr (n-1) (v+1)) (mkExpr (n-1) (max (v-1) 0))
+
+                max : I64, I64 -> I64
+                max = \a, b -> if a > b then a else b
+
+                eval : Expr -> I64
+                eval = \e ->
+                    when e is
+                        Var   -> 0
+                        Val v -> v
+                        Add l r -> eval l + eval r
+                        Mul l r -> eval l * eval r
+
+                main : I64
+                main = eval (mkExpr 3 1)
+                "#
+            ),
+            11,
+            i64
+        );
+    }
+
+    #[test]
+    fn nested_switch() {
+        // exposed bug with passing the right symbol/layout down into switch branch generation
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ ZAdd Expr Expr, Val I64, Var I64 ]
+
+                eval : Expr -> I64
+                eval = \e ->
+                    when e is
+                        Var _ -> 0
+                        Val v -> v
+                        ZAdd l r -> eval l + eval r
+
+                constFolding : Expr -> Expr
+                constFolding = \e ->
+                    when e is
+                        ZAdd e1 e2 ->
+                            when Pair e1 e2 is
+                                Pair (Val a) (Val b) -> Val (a+b)
+                                Pair (Val a) (ZAdd x (Val b)) -> ZAdd (Val (a+b)) x
+                                Pair _ _                     -> ZAdd e1 e2
+
+
+                        _ -> e
+
+
+                expr : Expr
+                expr = ZAdd (Val 3) (ZAdd (Val 4) (Val 5))
+
+                main : I64
+                main = eval (constFolding expr)
+                "#
+            ),
+            12,
+            i64
+        );
+    }
+
+    #[test]
+    fn count_deriv_x() {
+        // exposed bug with basing the block_of_memory on a specific (smaller) tag layout
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Ln Expr, Pow Expr Expr, Var Str ]
+
+                count : Expr -> I64
+                count = \expr ->
+                    when expr is
+                        (Var _) -> 1
+                        (Pow f g) -> count f + count g
+                        (Ln f)    -> count f
+
+                main : I64
+                main = count (Var "x")
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn deriv_pow() {
+        // exposed bug with ordering of variable declarations before switch
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Expr : [ Ln Expr, Pow Expr Expr, Var Str, Val I64 ]
+
+                count : Expr -> I64
+                count = \expr ->
+                    when expr is
+                        (Var _) -> 1
+                        (Val n) -> n
+                        (Pow f g) -> count f + count g
+                        (Ln f)    -> count f
+
+                pow : Expr, Expr -> Expr
+                pow = \a,b ->
+                    when Pair a b is
+                        Pair (Val _) (Val _) -> Val -1
+                        Pair _       (Val 0) -> Val 1
+                        Pair f       (Val 1) -> f
+                        Pair (Val 0) _       -> Val 0
+                        Pair f       g       -> Pow f g
+
+                main : I64
+                main = count (pow (Var "x") (Var "x"))
+                "#
+            ),
+            2,
             i64
         );
     }

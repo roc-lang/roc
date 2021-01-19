@@ -941,4 +941,23 @@ mod gen_tags {
             i64
         );
     }
+
+    #[test]
+    fn nested_recursive_literal() {
+        assert_evals_to!(
+            indoc!(
+                r"#
+                Expr : [ Add Expr Expr, Val I64, Var I64 ]
+
+                e : Expr
+                e = Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))
+
+                e
+                #"
+            ),
+            0,
+            &i64,
+            |x: &i64| *x
+        );
+    }
 }

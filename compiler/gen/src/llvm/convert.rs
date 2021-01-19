@@ -4,7 +4,7 @@ use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
 use inkwell::AddressSpace;
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_ptr_type<'ctx>(
@@ -132,15 +132,23 @@ pub fn basic_type_from_layout<'ctx>(
             .into(),
         PhantomEmptyStruct => context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(arena, context, sorted_fields, ptr_bytes),
-        Union(tags) if tags.len() == 1 => {
-            let sorted_fields = tags.iter().next().unwrap();
-
-            basic_type_from_record(arena, context, sorted_fields, ptr_bytes)
+        Union(variant) => {
+            use UnionLayout::*;
+            match variant {
+                Recursive(tags)
+                | NullableWrapped {
+                    other_tags: tags, ..
+                } => {
+                    let block = block_of_memory_slices(context, tags, ptr_bytes);
+                    block.ptr_type(AddressSpace::Generic).into()
+                }
+                NullableUnwrapped { other_fields, .. } => {
+                    let block = block_of_memory_slices(context, &[&other_fields[1..]], ptr_bytes);
+                    block.ptr_type(AddressSpace::Generic).into()
+                }
+                NonRecursive(_) => block_of_memory(context, layout, ptr_bytes),
+            }
         }
-        RecursiveUnion(_) => block_of_memory(context, layout, ptr_bytes)
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-        Union(_) => block_of_memory(context, layout, ptr_bytes),
         RecursivePointer => {
             // TODO make this dynamic
             context
@@ -180,6 +188,24 @@ pub fn basic_type_from_builtin<'ctx>(
     }
 }
 
+pub fn block_of_memory_slices<'ctx>(
+    context: &'ctx Context,
+    layouts: &[&[Layout<'_>]],
+    ptr_bytes: u32,
+) -> BasicTypeEnum<'ctx> {
+    let mut union_size = 0;
+    for tag in layouts {
+        let mut total = 0;
+        for layout in tag.iter() {
+            total += layout.stack_size(ptr_bytes as u32);
+        }
+
+        union_size = union_size.max(total);
+    }
+
+    block_of_memory_help(context, union_size)
+}
+
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
@@ -188,6 +214,10 @@ pub fn block_of_memory<'ctx>(
     // TODO make this dynamic
     let union_size = layout.stack_size(ptr_bytes as u32);
 
+    block_of_memory_help(context, union_size)
+}
+
+fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_> {
     // The memory layout of Union is a bit tricky.
     // We have tags with different memory layouts, that are part of the same type.
     // For llvm, all tags must have the same memory layout.
