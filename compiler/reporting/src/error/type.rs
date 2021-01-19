@@ -888,12 +888,12 @@ fn add_category<'b>(
         If => alloc.concat(vec![
             alloc.text("This "),
             alloc.keyword("if"),
-            alloc.text("expression produces:"),
+            alloc.text(" expression produces:"),
         ]),
         When => alloc.concat(vec![
             alloc.text("This "),
             alloc.keyword("when"),
-            alloc.text("expression produces:"),
+            alloc.text(" expression produces:"),
         ]),
 
         List => alloc.concat(vec![this_is, alloc.text(" a list of type:")]),
