@@ -2176,24 +2176,34 @@ pub fn complex_bitcast<'ctx>(
 ) -> BasicValueEnum<'ctx> {
     use inkwell::types::BasicType;
 
-    // we can't use the more simple
     // builder.build_bitcast(from_value, to_type, "cast_basic_basic")
     // because this does not allow some (valid) bitcasts
 
-    // store the value in memory
-    let argument_pointer = builder.build_alloca(from_value.get_type(), "cast_alloca");
-    builder.build_store(argument_pointer, from_value);
+    use BasicTypeEnum::*;
+    match (from_value.get_type(), to_type) {
+        (PointerType(_), PointerType(_)) => {
+            // we can't use the more straightforward bitcast in all cases
+            // it seems like a bitcast only works on integers and pointers
+            // and crucially does not work not on arrays
+            builder.build_bitcast(from_value, to_type, name)
+        }
+        _ => {
+            // store the value in memory
+            let argument_pointer = builder.build_alloca(from_value.get_type(), "cast_alloca");
+            builder.build_store(argument_pointer, from_value);
 
-    // then read it back as a different type
-    let to_type_pointer = builder
-        .build_bitcast(
-            argument_pointer,
-            to_type.ptr_type(inkwell::AddressSpace::Generic),
-            name,
-        )
-        .into_pointer_value();
+            // then read it back as a different type
+            let to_type_pointer = builder
+                .build_bitcast(
+                    argument_pointer,
+                    to_type.ptr_type(inkwell::AddressSpace::Generic),
+                    name,
+                )
+                .into_pointer_value();
 
-    builder.build_load(to_type_pointer, "cast_value")
+            builder.build_load(to_type_pointer, "cast_value")
+        }
+    }
 }
 
 fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(

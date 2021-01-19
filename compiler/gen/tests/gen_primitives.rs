@@ -1357,9 +1357,7 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_balance_inc_dec() {
-        // TODO does not define a variable correctly, but all is well with the type signature
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
@@ -1458,13 +1456,19 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : RedBlackTree (Int *) (Int *)
-                main =
-                    balance Red 0 0 Empty Empty
+                show : RedBlackTree * * -> Str
+                show = \tree ->
+                    when tree is
+                        Empty -> "Empty"
+                        Node _ _ _ _ _ -> "Node"
+
+
+                main : Str
+                main = show (balance Red 0 0 Empty Empty)
                 "#
             ),
-            1,
-            i64
+            RocStr::from_slice("Node".as_bytes()),
+            RocStr
         );
     }
 
