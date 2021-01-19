@@ -1357,45 +1357,6 @@ mod gen_primitives {
     }
 
     #[test]
-    fn rbtree_balance_inc_dec() {
-        assert_non_opt_evals_to!(
-            indoc!(
-                r#"
-                app "test" provides [ main ] to "./platform"
-
-                NodeColor : [ Red, Black ]
-
-                RedBlackTree k : [ Node NodeColor k (RedBlackTree k)  (RedBlackTree k), Empty ]
-
-                # balance : NodeColor, k, RedBlackTree k,  RedBlackTree k -> RedBlackTree k
-                balance = \color, key, left, right ->
-                  when right is
-                    Node Red rK rLeft rRight ->
-                      when left is
-                        Node Red _ _ _ ->
-                          Node
-                            Red
-                            key
-                            Empty
-                            Empty
-
-                        _ ->
-                          Node color rK (Node Red key left rLeft) rRight
-
-                    _ ->
-                        Empty
-
-                main : RedBlackTree (Int *)
-                main =
-                    balance Red 0 Empty Empty
-                "#
-            ),
-            0,
-            i64
-        );
-    }
-
-    #[test]
     fn rbtree_balance_3() {
         assert_non_opt_evals_to!(
             indoc!(
