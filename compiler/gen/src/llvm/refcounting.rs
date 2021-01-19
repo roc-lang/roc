@@ -1,5 +1,5 @@
 use crate::llvm::build::{
-    cast_basic_basic, cast_struct_struct, create_entry_block_alloca, set_name, Env, Scope,
+    cast_basic_basic, cast_block_of_memory_to_tag, create_entry_block_alloca, set_name, Env, Scope,
     FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
@@ -45,12 +45,14 @@ impl<'ctx> PointerToRefcount<'ctx> {
         // must make sure it's a pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
 
-        let value = cast_basic_basic(
-            env.builder,
-            ptr.into(),
-            refcount_type.ptr_type(AddressSpace::Generic).into(),
-        )
-        .into_pointer_value();
+        let value = env
+            .builder
+            .build_bitcast(
+                ptr,
+                refcount_type.ptr_type(AddressSpace::Generic),
+                "to_refcount_ptr",
+            )
+            .into_pointer_value();
 
         Self { value }
     }
@@ -64,7 +66,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
         let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
 
-        let ptr_as_usize_ptr = cast_basic_basic(builder, data_ptr.into(), refcount_ptr_type.into())
+        let ptr_as_usize_ptr = builder
+            .build_bitcast(data_ptr, refcount_ptr_type, "as_usize_ptr")
             .into_pointer_value();
 
         // get a pointer to index -1
@@ -1232,12 +1235,14 @@ pub fn build_dec_rec_union_help<'a, 'ctx, 'env>(
         );
 
         // cast the opaque pointer to a pointer of the correct shape
-        let struct_ptr = cast_basic_basic(
-            env.builder,
-            value_ptr.into(),
-            wrapper_type.ptr_type(AddressSpace::Generic).into(),
-        )
-        .into_pointer_value();
+        let struct_ptr = env
+            .builder
+            .build_bitcast(
+                value_ptr,
+                wrapper_type.ptr_type(AddressSpace::Generic),
+                "opaque_to_correct",
+            )
+            .into_pointer_value();
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
@@ -1428,8 +1433,8 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
             env.ptr_bytes,
         );
 
-        let wrapper_struct =
-            cast_struct_struct(env.builder, wrapper_struct, wrapper_type.into_struct_type());
+        debug_assert!(wrapper_type.is_struct_type());
+        let wrapper_struct = cast_block_of_memory_to_tag(env.builder, wrapper_struct, wrapper_type);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
@@ -1528,15 +1533,11 @@ fn rec_union_read_tag<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     // Assumption: the tag is the first thing stored
     // so cast the pointer to the data to a `i64*`
-    let tag_ptr = cast_basic_basic(
-        env.builder,
-        value_ptr.into(),
-        env.context
-            .i64_type()
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-    )
-    .into_pointer_value();
+    let tag_ptr_type = env.context.i64_type().ptr_type(AddressSpace::Generic);
+    let tag_ptr = env
+        .builder
+        .build_bitcast(value_ptr, tag_ptr_type, "cast_tag_ptr")
+        .into_pointer_value();
 
     env.builder
         .build_load(tag_ptr, "load_tag_id")
@@ -1634,12 +1635,14 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
         );
 
         // cast the opaque pointer to a pointer of the correct shape
-        let struct_ptr = cast_basic_basic(
-            env.builder,
-            value_ptr.into(),
-            wrapper_type.ptr_type(AddressSpace::Generic).into(),
-        )
-        .into_pointer_value();
+        let struct_ptr = env
+            .builder
+            .build_bitcast(
+                value_ptr,
+                wrapper_type.ptr_type(AddressSpace::Generic),
+                "opaque_to_correct",
+            )
+            .into_pointer_value();
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
@@ -1657,10 +1660,10 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
 
                 // therefore we must cast it to our desired type
                 let union_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-                let recursive_field_ptr = cast_basic_basic(
-                    env.builder,
+                let recursive_field_ptr = env.builder.build_bitcast(
                     ptr_as_i64_ptr,
-                    union_type.ptr_type(AddressSpace::Generic).into(),
+                    union_type.ptr_type(AddressSpace::Generic),
+                    "recursive_to_desired",
                 );
 
                 // recursively increment the field
@@ -1694,10 +1697,11 @@ pub fn build_inc_rec_union_help<'a, 'ctx, 'env>(
     // read the tag_id
     let tag_id = rec_union_read_tag(env, value_ptr);
 
-    let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
+    let tag_id_u8 = env
+        .builder
+        .build_int_cast(tag_id, env.context.i8_type(), "tag_id_u8");
 
-    env.builder
-        .build_switch(tag_id_u8.into_int_value(), merge_block, &cases);
+    env.builder.build_switch(tag_id_u8, merge_block, &cases);
 
     env.builder.position_at_end(merge_block);
 
@@ -1808,7 +1812,9 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
             .into_int_value()
     };
 
-    let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
+    let tag_id_u8 = env
+        .builder
+        .build_int_cast(tag_id, env.context.i8_type(), "tag_id_u8");
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
@@ -1834,8 +1840,8 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
             env.ptr_bytes,
         );
 
-        let wrapper_struct =
-            cast_struct_struct(env.builder, wrapper_struct, wrapper_type.into_struct_type());
+        debug_assert!(wrapper_type.is_struct_type());
+        let wrapper_struct = cast_block_of_memory_to_tag(env.builder, wrapper_struct, wrapper_type);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
@@ -1849,12 +1855,14 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
                 // therefore we must cast it to our desired type
                 let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
-                let recursive_field_ptr = cast_basic_basic(
-                    env.builder,
-                    ptr_as_i64_ptr,
-                    union_type.ptr_type(AddressSpace::Generic).into(),
-                )
-                .into_pointer_value();
+                let recursive_field_ptr = env
+                    .builder
+                    .build_bitcast(
+                        ptr_as_i64_ptr,
+                        union_type.ptr_type(AddressSpace::Generic),
+                        "recursive_to_desired",
+                    )
+                    .into_pointer_value();
 
                 let recursive_field = env
                     .builder
@@ -1889,8 +1897,7 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
     env.builder.position_at_end(before_block);
 
-    env.builder
-        .build_switch(tag_id_u8.into_int_value(), merge_block, &cases);
+    env.builder.build_switch(tag_id_u8, merge_block, &cases);
 
     env.builder.position_at_end(merge_block);
 
