@@ -604,6 +604,22 @@ mod tests {
     }
 
     #[test]
+    fn test_xor_reg64_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src), expected) in &[
+            ((X86_64GPReg::RAX, X86_64GPReg::RAX), [0x48, 0x31, 0xC0]),
+            ((X86_64GPReg::RAX, X86_64GPReg::R15), [0x4C, 0x31, 0xF8]),
+            ((X86_64GPReg::R15, X86_64GPReg::RAX), [0x49, 0x31, 0xC7]),
+            ((X86_64GPReg::R15, X86_64GPReg::R15), [0x4D, 0x31, 0xFF]),
+        ] {
+            buf.clear();
+            xor_reg64_reg64(&mut buf, *dst, *src);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
     fn test_cmovl_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
@@ -726,6 +742,50 @@ mod tests {
         ] {
             buf.clear();
             neg_reg64(&mut buf, *reg);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_sete_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+
+        // tests for 6 bytes in the output buffer
+        let (reg, expected) = (
+            X86_64GPReg::RAX,
+            [
+                0x48, 0x31, 0xC0, // XOR rax, rax
+                0x0F, 0x94, 0xC0, // SETE al ; al are the 8 lower weight bits of rax
+            ],
+        );
+        buf.clear();
+        sete_reg64(&mut buf, reg);
+        assert_eq!(expected, &buf[..]);
+
+        // tests for 7 bytes in the output buffer
+        for (reg, expected) in &[
+            (
+                X86_64GPReg::RSP,
+                [
+                    // XOR rsp, rsp
+                    0x48, 0x31, 0xE4,
+                    // SETE spl ; spl are the 8 lower weight bits of rsp
+                    0x40, 0x0F, 0x94, 0xC4,
+                ],
+            ),
+            (
+                X86_64GPReg::R15,
+                [
+                    // XOR r15, r15
+                    0x4D, 0x31, 0xFF,
+                    // SETE r15b ; r15b are the 8 lower weight bits of r15
+                    0x41, 0x0F, 0x94, 0xC7,
+                ],
+            ),
+        ] {
+            buf.clear();
+            sete_reg64(&mut buf, *reg);
             assert_eq!(expected, &buf[..]);
         }
     }
