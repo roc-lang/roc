@@ -2659,6 +2659,7 @@ dependencies = [
  "bytemuck",
  "cgmath",
  "colored",
+ "criterion",
  "env_logger 0.7.1",
  "futures",
  "glyph_brush",
