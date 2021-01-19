@@ -13,6 +13,8 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_primitives {
+    use roc_std::RocStr;
+
     #[test]
     fn basic_int() {
         assert_evals_to!("123", 123, i64);
@@ -1268,7 +1270,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_insert() {
         assert_non_opt_evals_to!(
             indoc!(
@@ -1338,13 +1339,20 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree (Int *) {}
+                show : RedBlackTree I64 {} -> Str
+                show = \tree ->
+                    when tree is
+                        Empty -> "Empty"
+                        Node _ _ _ _ _ -> "Node"
+
+
+                main : Str
                 main =
-                    insert 0 {} Empty
+                    show (insert 0 {} Empty)
                 "#
             ),
-            1,
-            i64
+            RocStr::from_slice("Node".as_bytes()),
+            RocStr
         );
     }
 
