@@ -184,6 +184,9 @@ where
                     Layout::Builtin(Builtin::Int64) => {
                         self.build_num_add_i64(sym, &args[0], &args[1])
                     }
+                    Layout::Builtin(Builtin::Float64) => {
+                        self.build_num_add_f64(sym, &args[0], &args[1])
+                    }
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
@@ -207,6 +210,15 @@ where
     /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_add_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String>;
+
+    /// build_num_add_f64 stores the sum of src1 and src2 into dst.
+    /// It only deals with inputs and outputs of f64 type.
+    fn build_num_add_f64(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,

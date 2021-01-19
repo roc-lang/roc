@@ -253,6 +253,16 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn add_freg64_freg64_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FPReg,
+        _src1: AArch64FPReg,
+        _src2: AArch64FPReg,
+    ) {
+        unimplemented!("adding floats not yet implemented for AArch64");
+    }
+
+    #[inline(always)]
     fn mov_freg64_imm64(
         _buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
@@ -300,6 +310,10 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
         } else {
             unimplemented!("stack offsets over 32k are not yet implement for AArch64");
         }
+    }
+
+    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FPReg, _offset: i32) {
+        unimplemented!("loading floating point reg from stack not yet implemented for AArch64");
     }
 
     #[inline(always)]

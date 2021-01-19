@@ -381,6 +381,22 @@ impl Assembler<X86_64GPReg, X86_64FPReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
+    fn add_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FPReg,
+        src1: X86_64FPReg,
+        src2: X86_64FPReg,
+    ) {
+        if dst == src1 {
+            addsd_freg64_freg64(buf, dst, src2);
+        } else if dst == src2 {
+            addsd_freg64_freg64(buf, dst, src1);
+        } else {
+            movsd_freg64_freg64(buf, dst, src1);
+            addsd_freg64_freg64(buf, dst, src2);
+        }
+    }
+    #[inline(always)]
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -404,6 +420,10 @@ impl Assembler<X86_64GPReg, X86_64FPReg> for X86_64Assembler {
     #[inline(always)]
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
         mov_reg64_reg64(buf, dst, src);
+    }
+    #[inline(always)]
+    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: X86_64FPReg, _offset: i32) {
+        unimplemented!("loading floating point reg from stack not yet implemented for X86_64");
     }
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, offset: i32) {
@@ -513,6 +533,26 @@ fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, 0x01, 0xC0 + dst_mod + src_mod]);
+}
+
+/// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FPReg, src: X86_64FPReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF2,
+            0x40 + ((dst_high as u8) << 2) + (src_high as u8),
+            0x0F,
+            0x58,
+            0xC0 + (dst_mod << 3) + (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF2, 0x0F, 0x58, 0xC0 + (dst_mod << 3) + (src_mod)])
+    }
 }
 
 /// `SUB r/m64,r64` -> Sub r64 to r/m64.
@@ -714,6 +754,34 @@ mod tests {
             buf.clear();
             add_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_addsd_freg64_freg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src), expected) in &[
+            (
+                (X86_64FPReg::XMM0, X86_64FPReg::XMM0),
+                vec![0xF2, 0x0F, 0x58, 0xC0],
+            ),
+            (
+                (X86_64FPReg::XMM0, X86_64FPReg::XMM15),
+                vec![0xF2, 0x41, 0x0F, 0x58, 0xC7],
+            ),
+            (
+                (X86_64FPReg::XMM15, X86_64FPReg::XMM0),
+                vec![0xF2, 0x44, 0x0F, 0x58, 0xF8],
+            ),
+            (
+                (X86_64FPReg::XMM15, X86_64FPReg::XMM15),
+                vec![0xF2, 0x45, 0x0F, 0x58, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            addsd_freg64_freg64(&mut buf, *dst, *src);
+            assert_eq!(&expected[..], &buf[..]);
         }
     }
 

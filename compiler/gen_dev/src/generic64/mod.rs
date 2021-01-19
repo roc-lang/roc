@@ -54,6 +54,7 @@ pub trait CallConv<GPReg: RegTrait, FPReg: RegTrait> {
 pub trait Assembler<GPReg: RegTrait, FPReg: RegTrait> {
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src: GPReg);
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, imm32: i32);
+    fn add_freg64_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FPReg, src1: FPReg, src2: FPReg);
     fn add_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
@@ -64,7 +65,7 @@ pub trait Assembler<GPReg: RegTrait, FPReg: RegTrait> {
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: GPReg, imm: i64);
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FPReg, src: FPReg);
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src: GPReg);
-    // fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FPReg, offset: i32);
+    fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FPReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GPReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FPReg);
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GPReg);
@@ -242,6 +243,19 @@ impl<
         Ok(())
     }
 
+    fn build_num_add_f64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String> {
+        let dst_reg = self.claim_fpreg(dst)?;
+        let src1_reg = self.load_to_fpreg(src1)?;
+        let src2_reg = self.load_to_fpreg(src2)?;
+        ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+        Ok(())
+    }
+
     fn build_num_sub_i64(
         &mut self,
         dst: &Symbol,
@@ -382,6 +396,35 @@ impl<
                 self.symbols_map
                     .insert(*sym, SymbolStorage::StackAndGPReg(reg, offset));
                 ASM::mov_reg64_stack32(&mut self.buf, reg, offset as i32);
+                Ok(reg)
+            }
+            None => Err(format!("Unknown symbol: {}", sym)),
+        }
+    }
+
+    fn load_to_fpreg(&mut self, sym: &Symbol) -> Result<FPReg, String> {
+        let val = self.symbols_map.remove(sym);
+        match val {
+            Some(SymbolStorage::GPReg(_reg)) => {
+                Err("Cannot load integer point symbol into FPReg".to_string())
+            }
+            Some(SymbolStorage::FPReg(reg)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::FPReg(reg));
+                Ok(reg)
+            }
+            Some(SymbolStorage::StackAndGPReg(_reg, _offset)) => {
+                Err("Cannot load integer point symbol into FPReg".to_string())
+            }
+            Some(SymbolStorage::StackAndFPReg(reg, offset)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::StackAndFPReg(reg, offset));
+                Ok(reg)
+            }
+            Some(SymbolStorage::Stack(offset)) => {
+                let reg = self.claim_fpreg(sym)?;
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::StackAndFPReg(reg, offset));
+                ASM::mov_freg64_stack32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
             None => Err(format!("Unknown symbol: {}", sym)),

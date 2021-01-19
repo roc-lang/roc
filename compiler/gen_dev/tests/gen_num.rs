@@ -55,7 +55,6 @@ mod gen_num {
         );
     }
 
-    /*
     #[test]
     fn gen_add_f64() {
         assert_evals_to!(
@@ -68,7 +67,6 @@ mod gen_num {
             f64
         );
     }
-    */
 
     #[test]
     fn gen_sub_i64() {
