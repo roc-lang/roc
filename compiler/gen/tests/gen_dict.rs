@@ -12,8 +12,7 @@ extern crate roc_gen;
 mod helpers;
 
 #[cfg(test)]
-mod gen_hash {
-
+mod gen_dict {
     #[test]
     fn dict_empty_len() {
         assert_evals_to!(

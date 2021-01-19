@@ -13,6 +13,10 @@ mod gen_hash {
 
     #[test]
     fn basic_hash() {
-        let value = env.builder;
+
+        // assert_llvm_evals_to(
+        //
+        // )
+        // let value = env.builder;
     }
 }

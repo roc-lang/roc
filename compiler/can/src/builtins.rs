@@ -78,6 +78,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_KEEP_IF => list_keep_if,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
+        DICT_SIZE => dict_size,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -1755,7 +1756,7 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-// List.contains : List elem, elem, -> Bool
+/// List.contains : List elem, elem -> Bool
 fn list_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let elem_var = var_store.fresh();
@@ -1800,6 +1801,26 @@ fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_list_var,
+    )
+}
+
+/// Dict.size : Dict * * -> Nat
+fn dict_size(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let size_var = var_store.fresh();
+    let dict_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictSize,
+        args: vec![(dict_var, Var(Symbol::ARG_1))],
+        ret_var: size_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        size_var,
     )
 }
 
