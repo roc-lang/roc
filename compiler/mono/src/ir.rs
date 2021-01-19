@@ -5584,7 +5584,11 @@ fn call_by_name<'a>(
                                     partial_proc,
                                 ) {
                                     Ok((proc, layout)) => {
-                                        debug_assert_eq!(full_layout, layout);
+                                        debug_assert_eq!(
+                                            &full_layout, &layout,
+                                            "\n\n{:?}\n\n{:?}",
+                                            full_layout, layout
+                                        );
                                         let function_layout =
                                             FunctionLayouts::from_layout(env.arena, layout);
 
