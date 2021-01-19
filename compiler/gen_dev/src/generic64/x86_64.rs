@@ -323,6 +323,18 @@ impl Assembler<X86_64GPReg> for X86_64Assembler {
             sub_reg64_reg64(buf, dst, src2);
         }
     }
+
+    #[inline(always)]
+    fn eq_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GPReg,
+        src1: X86_64GPReg,
+        src2: X86_64GPReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        sete_reg64(buf, dst);
+    }
+
     #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
@@ -371,7 +383,6 @@ const fn add_reg_extension(reg: X86_64GPReg, byte: u8) -> u8 {
 // You should call `buf.reserve()` if you push or extend more than once.
 // Unit tests are added at the bottom of the file to ensure correct asm generation.
 // Please keep these in alphanumeric order.
-
 /// `ADD r/m64, imm32` -> Add imm32 sign-extended to 64-bits from r/m64.
 #[inline(always)]
 fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i32) {
@@ -383,24 +394,36 @@ fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i32) {
     buf.extend(&imm.to_le_bytes());
 }
 
-/// `ADD r/m64,r64` -> Add r64 to r/m64.
-#[inline(always)]
-fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+fn binop_reg64_reg64(op_code: u8, buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
     let rex = add_rm_extension(dst, REX_W);
     let rex = add_reg_extension(src, rex);
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
-    buf.extend(&[rex, 0x01, 0xC0 + dst_mod + src_mod]);
+    buf.extend(&[rex, op_code, 0xC0 + dst_mod + src_mod]);
+}
+
+/// `ADD r/m64,r64` -> Add r64 to r/m64.
+#[inline(always)]
+fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+    binop_reg64_reg64(0x01, buf, dst, src);
 }
 
 /// `SUB r/m64,r64` -> Sub r64 to r/m64.
 #[inline(always)]
 fn sub_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
-    let rex = add_rm_extension(dst, REX_W);
-    let rex = add_reg_extension(src, rex);
-    let dst_mod = dst as u8 % 8;
-    let src_mod = (src as u8 % 8) << 3;
-    buf.extend(&[rex, 0x29, 0xC0 + dst_mod + src_mod]);
+    binop_reg64_reg64(0x29, buf, dst, src);
+}
+
+/// `CMP r/m64,r64` -> Compare r64 to r/m64.
+#[inline(always)]
+fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+    binop_reg64_reg64(0x39, buf, dst, src);
+}
+
+/// `XOR r/m64,r64` -> Xor r64 to r/m64.
+#[inline(always)]
+fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
+    binop_reg64_reg64(0x31, buf, dst, src);
 }
 
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
@@ -440,11 +463,7 @@ fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, imm: i64) {
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GPReg, src: X86_64GPReg) {
-    let rex = add_rm_extension(dst, REX_W);
-    let rex = add_reg_extension(src, rex);
-    let dst_mod = dst as u8 % 8;
-    let src_mod = (src as u8 % 8) << 3;
-    buf.extend(&[rex, 0x89, 0xC0 + dst_mod + src_mod]);
+    binop_reg64_reg64(0x89, buf, dst, src);
 }
 
 /// `MOV r64,r/m64` -> Move r/m64 to r64.
@@ -479,6 +498,28 @@ fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GPReg) {
     let rex = add_rm_extension(reg, REX_W);
     let reg_mod = reg as u8 % 8;
     buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
+}
+
+/// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
+#[inline(always)]
+fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GPReg) {
+    // XOR needs 3 bytes, actual SETE instruction need 3 or 4 bytes
+    buf.reserve(7);
+
+    // We reset reg to 0 because the SETE instruction only applies
+    // to the lower bits of the register
+    xor_reg64_reg64(buf, reg, reg);
+
+    // Actually apply the SETE instruction
+    let reg_mod = reg as u8 % 8;
+    use X86_64GPReg::*;
+    match reg {
+        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, 0x94, 0xC0 + reg_mod]),
+        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, 0x94, 0xC0 + reg_mod]),
+        R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
+            buf.extend(&[REX + 1, 0x0F, 0x94, 0xC0 + reg_mod])
+        }
+    }
 }
 
 /// `RET` -> Near return to calling procedure.
