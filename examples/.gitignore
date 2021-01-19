@@ -1,3 +1,10 @@
 app
 *.o
 *.dSYM
+libhost.a
+roc_app.ll
+roc_app.bc
+benchmarks/nqueens
+benchmarks/deriv
+benchmarks/cfold
+effect-example
