@@ -20,25 +20,20 @@ showRBTree = \tree, showKey, showValue ->
     when tree is
         Empty -> "Empty"
         Node color key value left right -> 
-            "Node "
-                |> Str.concat (showColor color)
-                |> Str.concat " "
-                |> Str.concat (showKey key)
-                |> Str.concat " "
-                |> Str.concat (showValue value) 
-                |> Str.concat " "
-                |> Str.concat (nodeInParens left  showKey showValue)
-                |> Str.concat " "
-                |> Str.concat (nodeInParens right showKey showValue)
+            sColor = showColor color
+            sKey = showKey key
+            sValue = showValue value
+            sL = nodeInParens left  showKey showValue
+            sR = nodeInParens right showKey showValue
+            "Node \(sColor) \(sKey) \(sValue) \(sL) \(sR)"
 
 nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 nodeInParens = \tree, showKey, showValue ->
     when tree is
         Empty -> showRBTree tree showKey showValue
         Node _ _ _ _ _ -> 
-            "(" 
-                |> Str.concat (showRBTree tree showKey showValue)
-                |> Str.concat ")"
+            inner = showRBTree tree showKey showValue
+            "(\(inner))"
     
 showColor : NodeColor -> Str
 showColor = \color ->
