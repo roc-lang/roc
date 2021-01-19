@@ -5,6 +5,7 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
+use roc_can::builtins::builtin_defs_map;
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
@@ -3202,6 +3203,7 @@ fn canonicalize_and_constrain<'a>(
         exposed_imports,
         &exposed_symbols,
         &mut var_store,
+        builtin_defs_map,
     );
     let canonicalize_end = SystemTime::now();
 

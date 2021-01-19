@@ -41,7 +41,7 @@ pub struct ModuleOutput {
 
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
-pub fn canonicalize_module_defs<'a>(
+pub fn canonicalize_module_defs<'a, F>(
     arena: &Bump,
     loc_defs: &'a [Located<ast::Def<'a>>],
     home: ModuleId,
@@ -52,7 +52,11 @@ pub fn canonicalize_module_defs<'a>(
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &MutSet<Symbol>,
     var_store: &mut VarStore,
-) -> Result<ModuleOutput, RuntimeError> {
+    look_up_builtin: F,
+) -> Result<ModuleOutput, RuntimeError>
+where
+    F: Fn(Symbol, &mut VarStore) -> Option<Def>,
+{
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, var_store);
     let num_deps = dep_idents.len();
@@ -284,7 +288,7 @@ pub fn canonicalize_module_defs<'a>(
             for symbol in references.iter() {
                 if symbol.is_builtin() {
                     // this can fail when the symbol is for builtin types, or has no implementation yet
-                    if let Some(def) = builtins::builtin_defs_map(*symbol, var_store) {
+                    if let Some(def) = look_up_builtin(*symbol, var_store) {
                         declarations.push(Declaration::Builtin(def));
                     }
                 }
