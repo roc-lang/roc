@@ -16,6 +16,10 @@ use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::StrLiteral;
+use roc_parse::ast::{self, Attempting};
+use roc_parse::blankspace::space0_before;
+use roc_parse::expr::expr;
+use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -220,6 +224,23 @@ pub fn to_expr_id<'a>(
     let (expr, output) = to_expr2(env, scope, parse_expr, region);
 
     (env.add(expr, region), output)
+}
+
+pub fn str_to_expr2<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    region: Region,
+) -> Result<(Expr2, self::Output), Fail> {
+    let state = State::new(input.trim().as_bytes(), Attempting::Module);
+    let parser = space0_before(loc(expr(0)), 0);
+    let answer = parser.parse(&arena, state);
+
+    answer
+        .map(|(loc_expr, _)| loc_expr)
+        .map(|loc_expr| to_expr2(env, scope, &loc_expr.value, region))
+        .map_err(|(fail, _)| fail)
 }
 
 pub fn to_expr2<'a>(

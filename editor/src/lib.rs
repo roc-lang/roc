@@ -266,6 +266,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     );
                 } else {
                     queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
+                    let ast = crate::lang::expr::str_to_expr2();
+                    render_node(&size, ast, CODE_TXT_XY.into(), &mut glyph_brush);
                 }
 
                 match draw_all_rects(
@@ -362,6 +364,39 @@ fn begin_render_pass<'a>(
         }],
         depth_stencil_attachment: None,
     })
+}
+
+fn render_node(
+    size: &PhysicalSize<u32>,
+    ast: Expr2,
+    position: Vector2<f32>,
+    glyph_brush: &mut GlyphBrush<()>,
+) {
+    use Expr2::*;
+
+    let area_bounds = (size.width as f32, size.height as f32).into();
+
+    match ast {
+        SmallInt {
+            number,
+            ..
+            // text,
+            // style, pretending always decimal for now
+            // var,
+        } => {
+            let code_text = Text {
+                position,
+                area_bounds,
+                color: CODE_COLOR.into(),
+                text: number.into(),
+                size: CODE_FONT_SIZE,
+                ..Default::default()
+            };
+
+            queue_code_text_draw(&code_text, glyph_brush);
+        }
+        _ => 
+    };
 }
 
 // returns bounding boxes for every glyph
