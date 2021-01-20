@@ -12,26 +12,39 @@ Map : Tree I64 Bool
 
 ConsList a : [ Nil, Cons a (ConsList a) ]
 
-makeMap : I64, I64 -> ConsList Map
-makeMap = \freq, n ->
-    makeMapHelp freq n Leaf Nil
+main : Task.Task {} []
+main =
+    m = makeMap 33
 
-makeMapHelp : I64, I64, Map, ConsList Map -> ConsList Map
-makeMapHelp = \freq, n, m, acc ->
+    # val = fold (\_, v, r -> if v then r + 1 else r) m 0
+    val = depth m
+    val
+        |> Str.fromInt
+        |> Task.putLine
+
+makeMap : I64 -> Map
+makeMap = \n ->
+    makeMapHelp n n Leaf
+
+makeMapHelp : I64, I64, Map -> Map
+makeMapHelp = \total, n, m ->
     when n is
-        0 -> Cons m acc
+        0 -> m
         _ ->
+            n1 = n - 1
+
             powerOf10 =
                 (n % 10 |> resultWithDefault 0) == 0
 
-
-            m1 = insert m n powerOf10
+            t1 = insert m n powerOf10
 
             isFrequency =
-                (n % freq |> resultWithDefault 0) == 0
+                (n % 4 |> resultWithDefault 0) == 0
 
-            x = (if isFrequency then (Cons m1 acc) else acc)
-            makeMapHelp freq (n-1) m1 x
+            key = n1 + ((total - n1) // 5 |> resultWithDefault 0)
+            t2 = if isFrequency then delete t1 key else t1
+
+            makeMapHelp total n1 t2
 
 fold : (a, b, omega -> omega), Tree a b, omega -> omega
 fold = \f, tree, b ->
@@ -39,26 +52,18 @@ fold = \f, tree, b ->
         Leaf  -> b
         Node _ l k v r -> fold f r (f k v (fold f l b))
 
+depth : Tree * * -> I64
+depth = \tree ->
+    when tree is
+        Leaf -> 1
+        Node _ l _ _ r -> 1 + depth l + depth r
+
 resultWithDefault : Result a e, a -> a
 resultWithDefault = \res, default ->
     when res is
         Ok v -> v
         Err _ -> default
 
-main : Task.Task {} []
-main =
-    ms : ConsList Map
-    ms = makeMap 5 42_000_00
-
-    when ms is
-        Cons head _ ->
-            val = fold (\_, v, r -> if v then r + 1 else r) head 0
-            val
-                |> Str.fromInt
-                |> Task.putLine
-
-        Nil ->
-            Task.putLine "fail"
 
 insert : Map, I64, Bool -> Map
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v
@@ -94,30 +99,112 @@ ins = \tree, kx, vx ->
 
         Node Black a ky vy b ->
             if lt kx ky then
-              (if isRed a then balance1 (Node Black Leaf ky vy b) (ins a kx vx) else Node Black (ins a kx vx) ky vy b)
+              (if isRed a then balanceLeft (ins a kx vx) ky vy b else Node Black (ins a kx vx) ky vy b)
             else if lt ky kx then
-              (if isRed b then balance2 (Node Black a ky vy Leaf) (ins b kx vx) else Node Black a ky vy (ins b kx vx))
-            else
-                Node Black a kx vx b
+              (if isRed b then balanceRight a ky vy (ins b kx vx) else Node Black a ky vy (ins b kx vx))
+            else Node Black a kx vx b
 
-balance1 : Map, Map -> Map 
-balance1 = \tree1, tree2 ->
-    when tree1 is
-        Leaf -> Leaf
-        Node _ _ kv vv t ->
-            when tree2 is
-                Node _ (Node Red l kx vx r1) ky vy r2 -> Node Red (Node Black l kx vx r1) ky vy (Node Black r2 kv vv t)
-                Node _ l1 ky vy (Node Red l2 kx vx r) -> Node Red (Node Black l1 ky vy l2) kx vx (Node Black r kv vv t)
-                Node _ l  ky vy r                     -> Node Black (Node Red l ky vy r) kv vv t
-                Leaf -> Leaf
+balanceLeft : Tree a b, a, b, Tree a b -> Tree a b
+balanceLeft = \l, k, v, r ->
+    when l is
+      Leaf -> Leaf
+      Node _  (Node Red lx kx vx rx) ky vy ry
+        -> Node Red (Node Black lx kx vx rx) ky vy (Node Black ry k v r)
+      Node _ ly ky vy (Node Red lx kx vx rx)
+        -> Node Red (Node Black ly ky vy lx) kx vx (Node Black rx k v r)
+      Node _ lx kx vx rx
+        -> Node Black (Node Red lx kx vx rx) k v r
 
-balance2 : Map, Map -> Map 
-balance2 = \tree1, tree2 ->
-    when tree1 is
-        Leaf -> Leaf
-        Node _ t kv vv _ ->
-            when tree2 is
-                Node _ (Node Red l kx1 vx1 r1) ky vy r2  -> Node Red (Node Black t kv vv l) kx1 vx1 (Node Black r1 ky vy r2)
-                Node _ l1 ky vy (Node Red l2 kx2 vx2 r2) -> Node Red (Node Black t kv vv l1) ky vy (Node Black l2 kx2 vx2 r2)
-                Node _ l ky vy r                         -> Node Black t kv vv (Node Red l ky vy r)
-                Leaf -> Leaf
+balanceRight : Tree a b, a, b, Tree a b -> Tree a b
+balanceRight = \l, k, v, r ->
+    when r is
+      Leaf -> Leaf
+      Node _ (Node Red lx kx vx rx) ky vy ry
+        -> Node Red (Node Black l k v lx) kx vx (Node Black rx ky vy ry)
+      Node _ lx kx vx (Node Red ly ky vy ry)
+        -> Node Red (Node Black l k v lx) kx vx (Node Black ly ky vy ry)
+      Node _ lx kx vx rx
+        -> Node Black l k v (Node Red lx kx vx rx)
+
+isBlack : Color -> Bool
+isBlack = \c ->
+    when c is
+        Black -> True
+        Red -> False
+
+
+Del a b : [ Del (Tree a b) Bool  ]
+
+setRed : Map -> Map
+setRed = \t ->
+    when t is
+      Node _ l k v r -> Node Red l k v r
+      _ -> t
+
+
+
+makeBlack : Map -> Del I64 Bool
+makeBlack = \t ->
+    when t is
+      Node Red l k v r -> Del (Node Black l k v r) False
+      _                -> Del t True
+
+
+rebalanceLeft = \c, l, k, v, r ->
+  when l is
+      Node Black _ _ _ _   -> Del (balanceLeft (setRed l) k v r) (isBlack c)
+      Node Red lx kx vx rx -> Del (Node Black lx kx vx (balanceLeft (setRed rx) k v r)) False
+
+rebalanceRight  = \c, l, k, v, r ->
+  when r is
+      Node Black _ _ _ _   -> Del (balanceRight l k v (setRed r))  (isBlack c)
+      Node Red lx kx vx rx -> Del (Node Black (balanceRight l k v (setRed lx)) kx vx rx) False
+
+
+
+delMin = \t ->
+    when t is
+        Node Black Leaf k v r ->
+            when r is
+                Leaf -> Delmin (Del Leaf True) k v
+                _    -> Delmin (Del (setBlack r) False) k v
+
+        Node Red Leaf k v r ->
+            Delmin (Del r False) k v
+
+        Node c l k v r ->
+            when delMin l is
+                Delmin (Del lx True) kx vx  -> Delmin (rebalanceRight c lx k v r) kx vx
+                Delmin (Del lx False) kx vx -> Delmin (Del (Node c lx k v r) False) kx vx
+
+        Leaf ->
+            Delmin (Del t False) 0 False
+
+
+
+delete : Map, I64 -> Map
+delete = \t, k ->
+    when del t k is
+      Del tx _ -> setBlack tx
+
+del = \t, k ->
+    when t is
+      Leaf -> Del Leaf False
+      Node cx lx kx vx rx ->
+        if (k < kx) then
+            when (del lx k) is
+                Del ly True  -> rebalanceRight cx ly kx vx rx
+                Del ly False -> Del (Node cx ly kx vx rx) False
+
+        else if (k > kx) then
+            when (del rx k) is
+                Del ry True  -> rebalanceLeft cx lx kx vx ry
+                Del ry False -> Del (Node cx lx kx vx ry) False
+
+        else
+            when rx is
+                Leaf -> if isBlack cx then makeBlack lx else Del lx False
+                Node _ _ _ _ _    ->
+                    when delMin rx is
+                          Delmin (Del ry True) ky vy  -> rebalanceLeft cx lx ky vy ry
+                          Delmin (Del ry False) ky vy -> Del (Node cx lx ky vy ry) False
