@@ -635,7 +635,7 @@ fn pretty_runtime_error<'b>(
                 region
             );
         }
-        RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
+        RuntimeError::NoImplementation(_) => todo!("no implementation, unreachable"),
         RuntimeError::NonExhaustivePattern => {
             unreachable!("not currently reported (but can blow up at runtime)")
         }
