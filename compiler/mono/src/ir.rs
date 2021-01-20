@@ -3067,7 +3067,8 @@ pub fn with_hole<'a>(
                 );
 
                 for (loc_cond, loc_then) in branches.into_iter().rev() {
-                    let branching_symbol = env.unique_symbol();
+                    let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
+
                     let then = with_hole(
                         env,
                         loc_then.value,
@@ -3088,14 +3089,14 @@ pub fn with_hole<'a>(
                     );
 
                     // add condition
-                    stmt = with_hole(
+                    stmt = assign_to_symbol(
                         env,
-                        loc_cond.value,
-                        cond_var,
                         procs,
                         layout_cache,
+                        cond_var,
+                        loc_cond,
                         branching_symbol,
-                        env.arena.alloc(stmt),
+                        stmt,
                     );
                 }
 
@@ -6039,7 +6040,12 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
+                            debug_assert_eq!(
+                                arguments.len(),
+                                argument_layouts[1..].len(),
+                                "{:?}",
+                                tag_name
+                            );
                             let it = argument_layouts[1..].iter();
 
                             for ((_, loc_pat), layout) in arguments.iter().zip(it) {
