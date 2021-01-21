@@ -101,7 +101,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         env.builder.build_store(self.value, refcount);
     }
 
-    fn increment<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) {
+    fn increment<'a, 'env>(&self, amount: u64, env: &Env<'a, 'ctx, 'env>) {
         let refcount = self.get_refcount(env);
         let builder = env.builder;
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
@@ -114,7 +114,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         );
         let incremented = builder.build_int_add(
             refcount,
-            refcount_type.const_int(1_u64, false),
+            refcount_type.const_int(amount, false),
             "increment_refcount",
         );
 
@@ -703,7 +703,7 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
     builder.position_at_end(increment_block);
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
-    refcount_ptr.increment(env);
+    refcount_ptr.increment(1, env);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -943,7 +943,7 @@ fn build_inc_str_help<'a, 'ctx, 'env>(
     builder.position_at_end(decrement_block);
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, str_wrapper);
-    refcount_ptr.increment(env);
+    refcount_ptr.increment(1, env);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -1389,9 +1389,9 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     // increment/decrement the cons-cell itself
     match mode {
-        Mode::Inc(_) => {
+        Mode::Inc(inc_amount) => {
             let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-            refcount_ptr.increment(env);
+            refcount_ptr.increment(inc_amount, env);
         }
         Mode::Dec => {
             let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
@@ -1751,7 +1751,7 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
                 // TODO do this decrement before the recursive call?
                 // Then the recursive call is potentially TCE'd
                 let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, recursive_field_ptr);
-                refcount_ptr.increment(env);
+                refcount_ptr.increment(1, env);
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
