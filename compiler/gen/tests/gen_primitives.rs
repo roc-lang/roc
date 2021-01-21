@@ -2131,4 +2131,36 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn multiple_increment() {
+        // the `leaf` value will be incremented multiple times at once
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Color : [ Red, Black ]
+
+                Tree a b : [ Leaf, Node Color (Tree a b) a b (Tree a b) ]
+
+                Map : Tree I64 Bool
+
+                main : I64
+                main =
+                    leaf : Map
+                    leaf = Leaf
+
+                    m : Map
+                    m = Node Black (Node Black leaf 10 False leaf) 11 False (Node Black leaf 12 False (Node Red leaf 13 False leaf))
+
+                    when m is
+                        Leaf -> 0
+                        Node _ _ _ _ _ -> 1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 }
