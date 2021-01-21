@@ -344,12 +344,10 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                 )
             }
         }
-        PhantomEmptyStruct => {}
 
         Struct(layouts) => {
             modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Dec);
         }
-        RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
 
         Union(variant) => {
             use UnionLayout::*;
@@ -387,6 +385,10 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                 }
             }
         }
+
+        PhantomEmptyStruct => {}
+
+        RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
 
         FunctionPointer(_, _) | Pointer(_) => {}
     }
@@ -525,7 +527,11 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
             modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Inc);
         }
 
-        _ => {}
+        PhantomEmptyStruct => {}
+
+        RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
+
+        FunctionPointer(_, _) | Pointer(_) => {}
     }
 }
 
