@@ -14,13 +14,17 @@ ConsList a : [ Nil, Cons a (ConsList a) ]
 
 main : Task.Task {} []
 main =
-    m = makeMap 33
+    # benchmarks use 4_200_000
+    m = makeMap 420
 
-    # val = fold (\_, v, r -> if v then r + 1 else r) m 0
-    val = depth m
+    val = fold (\_, v, r -> if v then r + 1 else r) m 0
+
     val
         |> Str.fromInt
         |> Task.putLine
+
+boom : Str -> a
+boom = \_ -> boom ""
 
 makeMap : I64 -> Map
 makeMap = \n ->
@@ -154,11 +158,13 @@ rebalanceLeft = \c, l, k, v, r ->
   when l is
       Node Black _ _ _ _   -> Del (balanceLeft (setRed l) k v r) (isBlack c)
       Node Red lx kx vx rx -> Del (Node Black lx kx vx (balanceLeft (setRed rx) k v r)) False
+      _ -> boom "unreachable"
 
 rebalanceRight  = \c, l, k, v, r ->
   when r is
       Node Black _ _ _ _   -> Del (balanceRight l k v (setRed r))  (isBlack c)
       Node Red lx kx vx rx -> Del (Node Black (balanceRight l k v (setRed lx)) kx vx rx) False
+      _ -> boom "unreachable"
 
 
 

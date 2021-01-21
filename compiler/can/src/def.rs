@@ -789,13 +789,19 @@ fn canonicalize_pending_def<'a>(
 
             let arity = typ.arity();
 
-            let def_symbol = match &loc_can_pattern.value {
-                Pattern::Identifier(symbol) => *symbol,
-                _ => panic!("standalone annotations must be on identifiers"),
+            let problem = match &loc_can_pattern.value {
+                Pattern::Identifier(symbol) => RuntimeError::NoImplementationNamed {
+                    def_symbol: *symbol,
+                },
+                Pattern::Shadowed(region, loc_ident) => RuntimeError::Shadowing {
+                    original_region: *region,
+                    shadow: loc_ident.clone(),
+                },
+                _ => RuntimeError::NoImplementation,
             };
 
             // Fabricate a body for this annotation, that will error at runtime
-            let value = Expr::RuntimeError(RuntimeError::NoImplementation(def_symbol));
+            let value = Expr::RuntimeError(problem);
             let is_closure = arity > 0;
             let loc_can_expr = if !is_closure {
                 Located {

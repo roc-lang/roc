@@ -178,7 +178,7 @@ mod cli_run {
             &example_file("benchmarks", "NQueens.roc"),
             "nqueens",
             &[],
-            "724\n",
+            "4\n",
             false,
         );
     }
@@ -215,6 +215,18 @@ mod cli_run {
             "rbtree-insert",
             &[],
             "Node Black 0 {} Empty Empty\n",
+            false,
+        );
+    }
+
+    #[test]
+    #[serial(deriv)]
+    fn run_rbtree_delete_not_optimized() {
+        check_output(
+            &example_file("benchmarks", "RBTreeDel.roc"),
+            "rbtree-del",
+            &[],
+            "30\n",
             false,
         );
     }
