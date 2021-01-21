@@ -1250,24 +1250,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             index,
             structure,
             wrapped: Wrapped::SingleElementRecord,
+            field_layouts,
             ..
         } => {
-            match load_symbol_and_layout(env, scope, structure) {
-                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 =>
-                // TODO so sometimes a value gets Wrapped::SingleElementRecord
-                // but still has multiple fields...
-                {
-                    env.builder
-                        .build_extract_value(
-                            argument,
-                            *index as u32,
-                            env.arena
-                                .alloc(format!("struct_field_access_single_element{}", index)),
-                        )
-                        .unwrap()
-                }
-                (other, _) => other,
-            }
+            debug_assert_eq!(field_layouts.len(), 1);
+            debug_assert_eq!(*index, 0);
+            load_symbol(env, scope, structure)
         }
 
         AccessAtIndex {

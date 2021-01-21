@@ -3255,7 +3255,10 @@ pub fn with_hole<'a>(
 
                 match Wrapped::opt_from_layout(&record_layout) {
                     Some(result) => result,
-                    None => Wrapped::SingleElementRecord,
+                    None => {
+                        debug_assert_eq!(field_layouts.len(), 1);
+                        Wrapped::SingleElementRecord
+                    }
                 }
             };
 
