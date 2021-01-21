@@ -302,7 +302,7 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
                 .unwrap();
 
             match mode {
-                Mode::Inc => {
+                Mode::Inc(_) => {
                     increment_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
                 }
                 Mode::Dec => {
@@ -524,7 +524,7 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
         }
 
         Struct(layouts) => {
-            modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Inc);
+            modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Inc(1));
         }
 
         PhantomEmptyStruct => {}
@@ -1117,7 +1117,7 @@ pub fn build_header_help<'a, 'ctx, 'env>(
 }
 
 enum Mode {
-    Inc,
+    Inc(u64),
     Dec,
 }
 
@@ -1138,7 +1138,7 @@ fn build_inc_rec_union<'a, 'ctx, 'env>(
     value: PointerValue<'ctx>,
     is_nullable: bool,
 ) {
-    build_rec_union(env, layout_ids, Mode::Inc, fields, value, is_nullable)
+    build_rec_union(env, layout_ids, Mode::Inc(1), fields, value, is_nullable)
 }
 
 fn build_rec_union<'a, 'ctx, 'env>(
@@ -1155,7 +1155,7 @@ fn build_rec_union<'a, 'ctx, 'env>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let (call_name, symbol) = match mode {
-        Mode::Inc => ("increment_rec_union", Symbol::INC),
+        Mode::Inc(_) => ("increment_rec_union", Symbol::INC),
         Mode::Dec => ("decrement_rec_union", Symbol::DEC),
     };
 
@@ -1198,7 +1198,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     let context = &env.context;
     let builder = env.builder;
 
-    let pick = |a, b| if let Mode::Inc = mode { a } else { b };
+    let pick = |a, b| if let Mode::Inc(_) = mode { a } else { b };
 
     // Add a basic block for the entry point
     let entry = context.append_basic_block(fn_val, "entry");
@@ -1347,7 +1347,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                 );
 
                 match mode {
-                    Mode::Inc => {
+                    Mode::Inc(_) => {
                         increment_refcount_layout(env, parent, layout_ids, field, field_layout)
                     }
                     Mode::Dec => {
@@ -1389,7 +1389,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     // increment/decrement the cons-cell itself
     match mode {
-        Mode::Inc => {
+        Mode::Inc(_) => {
             let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
             refcount_ptr.increment(env);
         }
