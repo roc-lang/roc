@@ -2026,7 +2026,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // This doesn't currently do anything
             context.i64_type().const_zero().into()
         }
-        Inc(symbol, cont) => {
+        Inc(symbol, _inc, cont) => {
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
 

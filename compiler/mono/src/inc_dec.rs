@@ -52,7 +52,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
             Rethrow => {}
 
-            Inc(symbol, cont) | Dec(symbol, cont) => {
+            Inc(symbol, _, cont) | Dec(symbol, cont) => {
                 result.insert(*symbol);
                 stack.push(cont);
             }
@@ -275,7 +275,7 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
-        self.arena.alloc(Stmt::Inc(symbol, stmt))
+        self.arena.alloc(Stmt::Inc(symbol, 1, stmt))
     }
 
     fn add_dec(&self, symbol: Symbol, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
@@ -851,7 +851,7 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
-            RuntimeError(_) | Inc(_, _) | Dec(_, _) => (stmt, MutSet::default()),
+            RuntimeError(_) | Inc(_, _, _) | Dec(_, _) => (stmt, MutSet::default()),
         }
     }
 }
@@ -902,7 +902,7 @@ pub fn collect_stmt(
             vars
         }
 
-        Inc(symbol, cont) | Dec(symbol, cont) => {
+        Inc(symbol, _, cont) | Dec(symbol, cont) => {
             vars.insert(*symbol);
             collect_stmt(cont, jp_live_vars, vars)
         }

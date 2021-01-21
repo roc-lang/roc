@@ -766,7 +766,7 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Rethrow,
-    Inc(Symbol, &'a Stmt<'a>),
+    Inc(Symbol, u64, &'a Stmt<'a>),
     Dec(Symbol, &'a Stmt<'a>),
     Join {
         id: JoinPointId,
@@ -1263,8 +1263,15 @@ impl<'a> Stmt<'a> {
                     .append(alloc.intersperse(it, alloc.space()))
                     .append(";")
             }
-            Inc(symbol, cont) => alloc
+            Inc(symbol, 1, cont) => alloc
                 .text("inc ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
+            Inc(symbol, n, cont) => alloc
+                .text("inc ")
+                .append(alloc.text(format!("{}", n)))
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";")
                 .append(alloc.hardline())
@@ -4666,8 +4673,8 @@ fn substitute_in_stmt_help<'a>(
             Some(s) => Some(arena.alloc(Ret(s))),
             None => None,
         },
-        Inc(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
-            Some(cont) => Some(arena.alloc(Inc(*symbol, cont))),
+        Inc(symbol, inc, cont) => match substitute_in_stmt_help(arena, cont, subs) {
+            Some(cont) => Some(arena.alloc(Inc(*symbol, *inc, cont))),
             None => None,
         },
         Dec(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
