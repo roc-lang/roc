@@ -325,11 +325,11 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     modify_refcount_layout(env, parent, layout_ids, Mode::Dec, value, layout);
 }
 
-#[inline(always)]
-fn decrement_refcount_builtin<'a, 'ctx, 'env>(
+fn modify_refcount_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
     builtin: &Builtin<'a>,
@@ -347,7 +347,7 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
                 let (len, ptr) = load_list(env.builder, wrapper_struct, ptr_type);
 
                 let loop_fn = |_index, element| {
-                    decrement_refcount_layout(env, parent, layout_ids, element, element_layout);
+                    modify_refcount_layout(env, parent, layout_ids, mode, element, element_layout);
                 };
 
                 incrementing_elem_loop(
@@ -356,13 +356,16 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
                     parent,
                     ptr,
                     len,
-                    "dec_index",
+                    "modify_rc_index",
                     loop_fn,
                 );
             }
 
             if let MemoryMode::Refcounted = memory_mode {
-                build_dec_list(env, layout_ids, layout, wrapper_struct);
+                match mode {
+                    Mode::Inc(_) => build_inc_list(env, layout_ids, layout, wrapper_struct),
+                    Mode::Dec => build_dec_list(env, layout_ids, layout, wrapper_struct),
+                }
             }
         }
         Set(element_layout) => {
@@ -380,9 +383,15 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
         }
         Str => {
             let wrapper_struct = value.into_struct_value();
-            build_dec_str(env, layout_ids, layout, wrapper_struct);
+
+            match mode {
+                Mode::Inc(_) => build_dec_str(env, layout_ids, layout, wrapper_struct),
+                Mode::Dec => build_dec_str(env, layout_ids, layout, wrapper_struct),
+            }
         }
-        _ => {}
+        _ => {
+            debug_assert!(!builtin.is_refcounted());
+        }
     }
 }
 
@@ -397,14 +406,9 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => match mode {
-            Mode::Inc(_) => {
-                increment_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
-            }
-            Mode::Dec => {
-                decrement_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
-            }
-        },
+        Builtin(builtin) => {
+            modify_refcount_builtin(env, parent, layout_ids, mode, value, layout, builtin)
+        }
 
         Union(variant) => {
             use UnionLayout::*;
@@ -498,67 +502,6 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
 ) {
     modify_refcount_layout(env, parent, layout_ids, Mode::Inc(1), value, layout);
-}
-
-#[inline(always)]
-fn increment_refcount_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    layout_ids: &mut LayoutIds<'a>,
-    value: BasicValueEnum<'ctx>,
-    layout: &Layout<'a>,
-    builtin: &Builtin<'a>,
-) {
-    use Builtin::*;
-
-    match builtin {
-        List(memory_mode, element_layout) => {
-            let wrapper_struct = value.into_struct_value();
-            if element_layout.contains_refcounted() {
-                let ptr_type =
-                    basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
-                        .ptr_type(AddressSpace::Generic);
-
-                let (len, ptr) = load_list(env.builder, wrapper_struct, ptr_type);
-
-                let loop_fn = |_index, element| {
-                    increment_refcount_layout(env, parent, layout_ids, element, element_layout);
-                };
-
-                incrementing_elem_loop(
-                    env.builder,
-                    env.context,
-                    parent,
-                    ptr,
-                    len,
-                    "inc_index",
-                    loop_fn,
-                );
-            }
-
-            if let MemoryMode::Refcounted = memory_mode {
-                build_inc_list(env, layout_ids, layout, wrapper_struct);
-            }
-        }
-        Set(element_layout) => {
-            if element_layout.contains_refcounted() {
-                // TODO decrement all values
-            }
-            todo!();
-        }
-        Dict(key_layout, value_layout) => {
-            if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
-                // TODO decrement all values
-            }
-
-            todo!();
-        }
-        Str => {
-            let wrapper_struct = value.into_struct_value();
-            build_inc_str(env, layout_ids, layout, wrapper_struct);
-        }
-        _ => {}
-    }
 }
 
 pub fn build_inc_list<'a, 'ctx, 'env>(
@@ -1081,6 +1024,7 @@ pub fn build_header_help<'a, 'ctx, 'env>(
     fn_val
 }
 
+#[derive(Clone, Copy)]
 enum Mode {
     Inc(u64),
     Dec,
