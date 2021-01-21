@@ -284,12 +284,13 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 }
 
-pub fn decrement_refcount_struct<'a, 'ctx, 'env>(
+fn modify_refcount_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
     layouts: &[Layout<'a>],
+    mode: Mode,
 ) {
     let wrapper_struct = value.into_struct_value();
 
@@ -300,7 +301,14 @@ pub fn decrement_refcount_struct<'a, 'ctx, 'env>(
                 .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                 .unwrap();
 
-            decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
+            match mode {
+                Mode::Inc => {
+                    increment_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
+                }
+                Mode::Dec => {
+                    decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
+                }
+            }
         }
     }
 }
@@ -339,7 +347,7 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
         PhantomEmptyStruct => {}
 
         Struct(layouts) => {
-            decrement_refcount_struct(env, parent, layout_ids, value, layouts);
+            modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Dec);
         }
         RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
 
@@ -512,6 +520,11 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
                 )
             }
         }
+
+        Struct(layouts) => {
+            modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Inc);
+        }
+
         _ => {}
     }
 }
@@ -1262,7 +1275,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
         let block = env
             .context
-            .append_basic_block(parent, pick("tag_id_increment", "tag_id_increment"));
+            .append_basic_block(parent, pick("tag_id_increment", "tag_id_decrement"));
         env.builder.position_at_end(block);
 
         let wrapper_type = basic_type_from_layout(
