@@ -102,6 +102,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 
     fn increment<'a, 'env>(&self, amount: u64, env: &Env<'a, 'ctx, 'env>) {
+        debug_assert!(amount > 0);
+
         let refcount = self.get_refcount(env);
         let builder = env.builder;
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
@@ -320,78 +322,7 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
-    use Layout::*;
-
-    match layout {
-        Builtin(builtin) => {
-            decrement_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
-        }
-        Closure(_, closure_layout, _) => {
-            if closure_layout.contains_refcounted() {
-                let wrapper_struct = value.into_struct_value();
-
-                let field_ptr = env
-                    .builder
-                    .build_extract_value(wrapper_struct, 1, "decrement_closure_data")
-                    .unwrap();
-
-                decrement_refcount_layout(
-                    env,
-                    parent,
-                    layout_ids,
-                    field_ptr,
-                    &closure_layout.as_block_of_memory_layout(),
-                )
-            }
-        }
-
-        Struct(layouts) => {
-            modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Dec);
-        }
-
-        Union(variant) => {
-            use UnionLayout::*;
-
-            match variant {
-                NonRecursive(tags) => {
-                    build_dec_union(env, layout_ids, tags, value);
-                }
-
-                NullableWrapped {
-                    other_tags: tags, ..
-                } => {
-                    debug_assert!(value.is_pointer_value());
-
-                    build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
-                }
-
-                NullableUnwrapped { other_fields, .. } => {
-                    debug_assert!(value.is_pointer_value());
-
-                    let other_fields = &other_fields[1..];
-
-                    build_dec_rec_union(
-                        env,
-                        layout_ids,
-                        &*env.arena.alloc([other_fields]),
-                        value.into_pointer_value(),
-                        true,
-                    );
-                }
-
-                Recursive(tags) => {
-                    debug_assert!(value.is_pointer_value());
-                    build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
-                }
-            }
-        }
-
-        PhantomEmptyStruct => {}
-
-        RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
-
-        FunctionPointer(_, _) | Pointer(_) => {}
-    }
+    modify_refcount_layout(env, parent, layout_ids, Mode::Dec, value, layout);
 }
 
 #[inline(always)]
@@ -454,19 +385,26 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
         _ => {}
     }
 }
-pub fn increment_refcount_layout<'a, 'ctx, 'env>(
+
+fn modify_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => {
-            increment_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
-        }
+        Builtin(builtin) => match mode {
+            Mode::Inc(_) => {
+                increment_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
+            }
+            Mode::Dec => {
+                decrement_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
+            }
+        },
 
         Union(variant) => {
             use UnionLayout::*;
@@ -477,7 +415,14 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
                 } => {
                     debug_assert!(value.is_pointer_value());
 
-                    build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
+                    build_rec_union(
+                        env,
+                        layout_ids,
+                        mode,
+                        tags,
+                        value.into_pointer_value(),
+                        true,
+                    );
                 }
 
                 NullableUnwrapped { other_fields, .. } => {
@@ -485,9 +430,10 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
 
                     let other_fields = &other_fields[1..];
 
-                    build_inc_rec_union(
+                    build_rec_union(
                         env,
                         layout_ids,
+                        mode,
                         &*env.arena.alloc([other_fields]),
                         value.into_pointer_value(),
                         true,
@@ -496,12 +442,20 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
 
                 Recursive(tags) => {
                     debug_assert!(value.is_pointer_value());
-                    build_inc_rec_union(env, layout_ids, tags, value.into_pointer_value(), false);
+                    build_rec_union(
+                        env,
+                        layout_ids,
+                        mode,
+                        tags,
+                        value.into_pointer_value(),
+                        false,
+                    );
                 }
 
-                NonRecursive(tags) => {
-                    build_inc_union(env, layout_ids, tags, value);
-                }
+                NonRecursive(tags) => match mode {
+                    Mode::Inc(_) => build_inc_union(env, layout_ids, tags, value),
+                    Mode::Dec => build_dec_union(env, layout_ids, tags, value),
+                },
             }
         }
         Closure(_, closure_layout, _) => {
@@ -513,10 +467,11 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
                     .build_extract_value(wrapper_struct, 1, "increment_closure_data")
                     .unwrap();
 
-                increment_refcount_layout(
+                modify_refcount_layout(
                     env,
                     parent,
                     layout_ids,
+                    mode,
                     field_ptr,
                     &closure_layout.as_block_of_memory_layout(),
                 )
@@ -524,7 +479,7 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
         }
 
         Struct(layouts) => {
-            modify_refcount_struct(env, parent, layout_ids, value, layouts, Mode::Inc(1));
+            modify_refcount_struct(env, parent, layout_ids, value, layouts, mode);
         }
 
         PhantomEmptyStruct => {}
@@ -533,6 +488,16 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
 
         FunctionPointer(_, _) | Pointer(_) => {}
     }
+}
+
+pub fn increment_refcount_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
+    value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+) {
+    modify_refcount_layout(env, parent, layout_ids, Mode::Inc(1), value, layout);
 }
 
 #[inline(always)]
@@ -1119,26 +1084,6 @@ pub fn build_header_help<'a, 'ctx, 'env>(
 enum Mode {
     Inc(u64),
     Dec,
-}
-
-fn build_dec_rec_union<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    fields: &'a [&'a [Layout<'a>]],
-    value: PointerValue<'ctx>,
-    is_nullable: bool,
-) {
-    build_rec_union(env, layout_ids, Mode::Dec, fields, value, is_nullable)
-}
-
-fn build_inc_rec_union<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    fields: &'a [&'a [Layout<'a>]],
-    value: PointerValue<'ctx>,
-    is_nullable: bool,
-) {
-    build_rec_union(env, layout_ids, Mode::Inc(1), fields, value, is_nullable)
 }
 
 fn build_rec_union<'a, 'ctx, 'env>(
