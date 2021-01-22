@@ -926,6 +926,10 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
         false
     })();
 
+    // to increment/decrement the cons-cell itself
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+
     let ctx = env.context;
     let cont_block = ctx.append_basic_block(parent, "cont");
     if is_nullable {
@@ -988,6 +992,11 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
             )
             .into_pointer_value();
 
+        // defer actually performing the refcount modifications until after the current cell has
+        // been decremented, see below
+        let mut deferred_rec = Vec::new_in(env.arena);
+        let mut deferred_nonrec = Vec::new_in(env.arena);
+
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
                 // this field has type `*i64`, but is really a pointer to the data we want
@@ -1010,13 +1019,8 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                     union_type.ptr_type(AddressSpace::Generic).into(),
                 );
 
-                // recursively decrement the field
-                let call_name = pick("recursive_tag_increment", "recursive_tag_decrement");
-                call_help(env, fn_val, mode, recursive_field_ptr, call_name);
+                deferred_rec.push(recursive_field_ptr);
             } else if field_layout.contains_refcounted() {
-                // TODO this loads the whole field onto the stack;
-                // that's wasteful if e.g. the field is a big record, where only
-                // some fields are actually refcounted.
                 let elem_pointer = env
                     .builder
                     .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
@@ -1027,11 +1031,31 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                     pick("increment_struct_field", "decrement_struct_field"),
                 );
 
-                modify_refcount_layout(env, parent, layout_ids, mode, field, field_layout);
+                deferred_nonrec.push((field, field_layout));
             }
         }
 
-        env.builder.build_unconditional_branch(merge_block);
+        // OPTIMIZATION
+        //
+        // We really would like `inc/dec` to be tail-recursive; it gives roughly a 2X speedup on linked
+        // lists. To achieve it, we must first load all fields that we want to inc/dec (done above)
+        // and store them on the stack, then modify (and potentially free) the current cell, then
+        // actually inc/dec the fields.
+        refcount_ptr.modify(call_mode, &layout, env);
+
+        for (field, field_layout) in deferred_nonrec {
+            modify_refcount_layout(env, parent, layout_ids, mode, field, field_layout);
+        }
+
+        let call_name = pick("recursive_tag_increment", "recursive_tag_decrement");
+        for ptr in deferred_rec {
+            // recursively decrement the field
+            let call = call_help(env, fn_val, mode, ptr, call_name);
+            call.set_tail_call(true);
+        }
+
+        // this function returns void
+        builder.build_return(None);
 
         cases.push((
             env.context.i64_type().const_int(tag_id as u64, false),
@@ -1062,8 +1086,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     env.builder.position_at_end(merge_block);
 
     // increment/decrement the cons-cell itself
-    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-    let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, &layout, env);
 
     // this function returns void
@@ -1093,7 +1115,7 @@ fn call_help<'a, 'ctx, 'env>(
     mode: Mode,
     value: BasicValueEnum<'ctx>,
     call_name: &str,
-) {
+) -> inkwell::values::CallSiteValue<'ctx> {
     let call = match mode {
         Mode::Inc(inc_amount) => {
             let rc_increment = ptr_int(env.context, env.ptr_bytes).const_int(inc_amount, false);
@@ -1105,6 +1127,8 @@ fn call_help<'a, 'ctx, 'env>(
     };
 
     call.set_call_convention(FAST_CALL_CONV);
+
+    call
 }
 
 fn modify_refcount_union<'a, 'ctx, 'env>(
