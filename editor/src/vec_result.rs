@@ -5,10 +5,11 @@ use std::slice::SliceIndex;
 
 // replace vec methods that return Option with ones that return Result and proper Error
 
-pub fn get_res<T>(index: usize, vec: &[T]) -> EdResult<&<usize as SliceIndex<[T]>>::Output> {
-    let elt_ref = vec.get(index).context(OutOfBounds {
+pub fn get_res<T>(index: usize, slice: &[T]) -> EdResult<&<usize as SliceIndex<[T]>>::Output> {
+    let elt_ref = slice.get(index).context(OutOfBounds {
         index,
-        vec_len: vec.len(),
+        collection_name: "Slice",
+        len: slice.len(),
     })?;
 
     Ok(elt_ref)

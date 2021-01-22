@@ -3,7 +3,7 @@
 Run the following from the roc folder:
 
 ```
-cargo run edit
+cargo run edit examples/hello-world/Hello.roc
 ```
 
 ## Troubleshooting

@@ -1,6 +1,7 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
 // by Benjamin Hansen, licensed under the MIT license
 use super::vertex::Vertex;
+use crate::graphics::colors::to_slice;
 use crate::graphics::primitives::rect::Rect;
 use bumpalo::collections::Vec as BumpVec;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
@@ -25,7 +26,7 @@ impl QuadBufferBuilder {
             coords.y,
             coords.x + rect.width,
             coords.y + rect.height,
-            rect.color,
+            to_slice(rect.color),
         )
     }
 
@@ -35,7 +36,7 @@ impl QuadBufferBuilder {
         min_y: f32,
         max_x: f32,
         max_y: f32,
-        color: [f32; 3],
+        color: [f32; 4],
     ) -> Self {
         self.vertex_data.extend(&[
             Vertex {

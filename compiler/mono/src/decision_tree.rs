@@ -2,7 +2,7 @@ use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
     DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
 };
-use crate::layout::{Builtin, Layout, LayoutCache};
+use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -210,6 +210,7 @@ fn flatten_patterns(branch: Branch) -> Branch {
     for path_pattern in branch.patterns {
         flatten(path_pattern, &mut result);
     }
+
     Branch {
         goal: branch.goal,
         patterns: result,
@@ -227,7 +228,9 @@ fn flatten<'a>(
             tag_id,
             tag_name,
             layout,
-        } if union.alternatives.len() == 1 => {
+        } if union.alternatives.len() == 1
+            && !matches!(layout, Layout::Union(UnionLayout::NullableWrapped { .. })| Layout::Union(UnionLayout::NullableUnwrapped { .. })) =>
+        {
             // TODO ^ do we need to check that guard.is_none() here?
 
             let path = path_pattern.0;
@@ -566,6 +569,7 @@ fn to_relevant_branch_help<'a>(
 
         AppliedTag {
             tag_name,
+            tag_id,
             arguments,
             layout,
             ..
@@ -573,15 +577,20 @@ fn to_relevant_branch_help<'a>(
             match test {
                 IsCtor {
                     tag_name: test_name,
-                    tag_id,
+                    tag_id: test_id,
                     ..
                 } if &tag_name == test_name => {
+                    debug_assert_eq!(tag_id, *test_id);
+
+                    // the test matches the constructor of this pattern
+
                     match Wrapped::opt_from_layout(&layout) {
                         None => todo!(),
                         Some(wrapped) => {
                             match wrapped {
                                 Wrapped::SingleElementRecord => {
                                     // Theory: Unbox doesn't have any value for us
+                                    debug_assert_eq!(arguments.len(), 1);
                                     let arg = arguments[0].clone();
                                     {
                                         start.push((
@@ -601,7 +610,7 @@ fn to_relevant_branch_help<'a>(
                                             (
                                                 Path::Index {
                                                     index: 1 + index as u64,
-                                                    tag_id: *tag_id,
+                                                    tag_id,
                                                     path: Box::new(path.clone()),
                                                 },
                                                 Guard::NoGuard,
@@ -996,7 +1005,7 @@ fn path_to_expr_help<'a>(
             None => {
                 // this MUST be an index into a single-element (hence unwrapped) record
 
-                debug_assert_eq!(*index, 0);
+                debug_assert_eq!(*index, 0, "{:?}", &layout);
                 debug_assert_eq!(*tag_id, 0);
                 debug_assert!(it.peek().is_none());
 
@@ -1018,23 +1027,70 @@ fn path_to_expr_help<'a>(
                 break;
             }
             Some(wrapped) => {
+                let index = *index;
+
                 let field_layouts = match &layout {
-                    Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
-                        layouts[*tag_id as usize]
+                    Layout::Union(variant) => {
+                        use UnionLayout::*;
+
+                        match variant {
+                            NonRecursive(layouts) | Recursive(layouts) => layouts[*tag_id as usize],
+                            NullableWrapped {
+                                nullable_id,
+                                other_tags: layouts,
+                                ..
+                            } => {
+                                use std::cmp::Ordering;
+                                match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
+                                    Ordering::Equal => {
+                                        // the nullable tag is going to pretend it stores a tag id
+                                        &*env
+                                            .arena
+                                            .alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
+                                    }
+                                    Ordering::Less => layouts[*tag_id as usize],
+                                    Ordering::Greater => layouts[*tag_id as usize - 1],
+                                }
+                            }
+                            NullableUnwrapped {
+                                nullable_id,
+                                other_fields,
+                            } => {
+                                let tag_id = *tag_id != 0;
+
+                                if tag_id == *nullable_id {
+                                    // the nullable tag has no fields; we can only lookup its tag id
+                                    debug_assert_eq!(index, 0);
+
+                                    // the nullable tag is going to pretend it stores a tag id
+                                    &*env.arena.alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
+                                } else {
+                                    *other_fields
+                                }
+                            }
+                        }
                     }
+
                     Layout::Struct(layouts) => layouts,
                     other => env.arena.alloc([other.clone()]),
                 };
 
-                debug_assert!(*index < field_layouts.len() as u64);
+                debug_assert!(
+                    index < field_layouts.len() as u64,
+                    "{} {:?} {:?} {:?}",
+                    index,
+                    field_layouts,
+                    &layout,
+                    tag_id,
+                );
 
-                let inner_layout = match &field_layouts[*index as usize] {
+                let inner_layout = match &field_layouts[index as usize] {
                     Layout::RecursivePointer => layout.clone(),
                     other => other.clone(),
                 };
 
                 let inner_expr = Expr::AccessAtIndex {
-                    index: *index,
+                    index,
                     field_layouts,
                     structure: symbol,
                     wrapped,
@@ -1371,6 +1427,8 @@ fn decide_to_branching<'a>(
         } => {
             // generate a (nested) if-then-else
 
+            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+
             let pass_expr = decide_to_branching(
                 env,
                 procs,
@@ -1392,8 +1450,6 @@ fn decide_to_branching<'a>(
                 *failure,
                 jumps,
             );
-
-            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
 
             let number_of_tests = tests.len() as i64 + guard.is_some() as i64;
 
@@ -1427,8 +1483,8 @@ fn decide_to_branching<'a>(
             // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
-            let (cond, cond_stores_vec, cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout);
+            let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
+                path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
 
             let default_branch = decide_to_branching(
                 env,
@@ -1467,15 +1523,17 @@ fn decide_to_branching<'a>(
                 branches.push((tag, branch));
             }
 
+            // We have learned more about the exact layout of the cond (based on the path)
+            // but tests are still relative to the original cond symbol
             let mut switch = Stmt::Switch {
-                cond_layout,
-                cond_symbol: cond,
+                cond_layout: inner_cond_layout,
+                cond_symbol: inner_cond_symbol,
                 branches: branches.into_bump_slice(),
                 default_branch: env.arena.alloc(default_branch),
                 ret_layout,
             };
 
-            for (symbol, layout, expr) in cond_stores_vec.into_iter() {
+            for (symbol, layout, expr) in cond_stores_vec.into_iter().rev() {
                 switch = Stmt::Let(symbol, expr, layout, env.arena.alloc(switch));
             }
 

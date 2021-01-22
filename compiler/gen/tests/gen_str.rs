@@ -61,10 +61,10 @@ mod gen_str {
                     when List.first (Str.split "JJJ" "JJJJ there") is
                         Ok str ->
                             Str.countGraphemes str
-        
+
                         _ ->
                             -1
-        
+
                 "#
             ),
             3,
@@ -84,10 +84,10 @@ mod gen_str {
                                 |> Str.concat str
                                 |> Str.concat str
                                 |> Str.concat str
-        
+
                         _ ->
                             "Not Str!"
-        
+
                 "#
             ),
             "JJJJJJJJJJJJJJJJJJJJJJJJJ",
@@ -103,7 +103,7 @@ mod gen_str {
                     when
                         List.first
                             (Str.split "JJJ" "0123456789abcdefghi")
-                    is 
+                    is
                         Ok str -> str
                         _ -> ""
                 "#
@@ -118,7 +118,7 @@ mod gen_str {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Str.split "01234567789abcdefghi?01234567789abcdefghi" "?" 
+                    Str.split "01234567789abcdefghi?01234567789abcdefghi" "?"
                 "#
             ),
             &["01234567789abcdefghi", "01234567789abcdefghi"],
@@ -128,7 +128,7 @@ mod gen_str {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch" 
+                    Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
                 "#
             ),
             &["01234567789abcdefghi ", " 01234567789abcdefghi"],
@@ -154,8 +154,8 @@ mod gen_str {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Str.split 
-                        "string to split is shorter" 
+                    Str.split
+                        "string to split is shorter"
                         "than the delimiter which happens to be very very long"
                 "#
             ),
@@ -537,5 +537,35 @@ mod gen_str {
         debug_assert_eq!(long.clone(), long);
         debug_assert_eq!(short.clone(), short);
         debug_assert_eq!(empty.clone(), empty);
+    }
+
+    #[test]
+    fn nested_recursive_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Expr : [ Add Expr Expr, Val I64, Var I64 ]
+
+                expr : Expr
+                expr = Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))
+
+                printExpr : Expr -> Str
+                printExpr = \e ->
+                    when e is
+                        Add a b ->
+                            "Add ("
+                                |> Str.concat (printExpr a)
+                                |> Str.concat ") ("
+                                |> Str.concat (printExpr b)
+                                |> Str.concat ")"
+                        Val v -> "Val " |> Str.concat (Str.fromInt v)
+                        Var v -> "Var " |> Str.concat (Str.fromInt v)
+
+                printExpr expr
+                "#
+            ),
+            "Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))",
+            &'static str
+        );
     }
 }

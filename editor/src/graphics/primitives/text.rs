@@ -2,10 +2,12 @@
 // by Benjamin Hansen, licensed under the MIT license
 
 use super::rect::Rect;
-use crate::graphics::colors::CODE_COLOR;
+use crate::graphics::colors;
 use crate::graphics::style::{CODE_FONT_SIZE, CODE_TXT_XY};
+use crate::graphics::syntax_highlight;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
+use colors::{ColorTup, CODE_COLOR, WHITE};
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 
 #[derive(Debug)]
@@ -82,11 +84,52 @@ fn section_from_text(
     )
 }
 
-// returns glyphs per line
+fn section_from_glyph_text(
+    text: Vec<wgpu_glyph::Text>,
+    screen_position: (f32, f32),
+    area_bounds: (f32, f32),
+    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
+) -> wgpu_glyph::Section {
+    Section {
+        screen_position,
+        bounds: area_bounds,
+        layout,
+        text,
+    }
+}
+
+fn colored_text_to_glyph_text(text_tups: &[(String, ColorTup)]) -> Vec<wgpu_glyph::Text> {
+    text_tups
+        .iter()
+        .map(|(word_string, color_tup)| {
+            wgpu_glyph::Text::new(&word_string)
+                .with_color(colors::to_slice(*color_tup))
+                .with_scale(CODE_FONT_SIZE)
+        })
+        .collect()
+}
+
 pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
     let layout = layout_from_text(text);
 
     let section = section_from_text(text, layout);
+
+    glyph_brush.queue(section.clone());
+}
+
+pub fn queue_code_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
+    let layout = layout_from_text(text);
+
+    let mut all_text_tups: Vec<(String, ColorTup)> = Vec::new();
+    syntax_highlight::highlight_code(text, &mut all_text_tups);
+    let glyph_text_vec = colored_text_to_glyph_text(&all_text_tups);
+
+    let section = section_from_glyph_text(
+        glyph_text_vec,
+        text.position.into(),
+        text.area_bounds.into(),
+        layout,
+    );
 
     glyph_brush.queue(section.clone());
 }
@@ -102,7 +145,7 @@ fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
         top_left_coords: [position.x, top_y].into(),
         width,
         height,
-        color: [1.0, 1.0, 1.0],
+        color: WHITE,
     }
 }
 

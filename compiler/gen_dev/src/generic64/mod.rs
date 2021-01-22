@@ -52,6 +52,7 @@ pub trait Assembler<GPReg: GPRegTrait> {
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GPReg);
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, imm32: i32);
     fn sub_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
+    fn eq_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -59,9 +60,9 @@ pub trait Assembler<GPReg: GPRegTrait> {
 enum SymbolStorage<GPReg: GPRegTrait> {
     // These may need layout, but I am not sure.
     // I think whenever a symbol would be used, we specify layout anyways.
-    GPRegeg(GPReg),
+    GPReg(GPReg),
     Stack(i32),
-    StackAndGPRegeg(GPReg, i32),
+    StackAndGPReg(GPReg, i32),
 }
 
 pub trait GPRegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
@@ -208,6 +209,14 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         Ok(())
     }
 
+    fn build_eq_i64(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol) -> Result<(), String> {
+        let dst_reg = self.claim_gp_reg(dst)?;
+        let src1_reg = self.load_to_reg(src1)?;
+        let src2_reg = self.load_to_reg(src2)?;
+        ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+        Ok(())
+    }
+
     fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String> {
         match lit {
             Literal::Int(x) => {
@@ -235,8 +244,8 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.get(sym);
         match val {
-            Some(SymbolStorage::GPRegeg(reg)) if *reg == CC::GP_RETURN_REGS[0] => Ok(()),
-            Some(SymbolStorage::GPRegeg(reg)) => {
+            Some(SymbolStorage::GPReg(reg)) if *reg == CC::GP_RETURN_REGS[0] => Ok(()),
+            Some(SymbolStorage::GPReg(reg)) => {
                 // If it fits in a general purpose register, just copy it over to.
                 // Technically this can be optimized to produce shorter instructions if less than 64bits.
                 ASM::mov_reg64_reg64(&mut self.buf, CC::GP_RETURN_REGS[0], *reg);
@@ -272,26 +281,26 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
         }?;
 
         self.gp_used_regs.push((reg, *sym));
-        self.symbols_map.insert(*sym, SymbolStorage::GPRegeg(reg));
+        self.symbols_map.insert(*sym, SymbolStorage::GPReg(reg));
         Ok(reg)
     }
 
     fn load_to_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
         let val = self.symbols_map.remove(sym);
         match val {
-            Some(SymbolStorage::GPRegeg(reg)) => {
-                self.symbols_map.insert(*sym, SymbolStorage::GPRegeg(reg));
+            Some(SymbolStorage::GPReg(reg)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::GPReg(reg));
                 Ok(reg)
             }
-            Some(SymbolStorage::StackAndGPRegeg(reg, offset)) => {
+            Some(SymbolStorage::StackAndGPReg(reg, offset)) => {
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndGPRegeg(reg, offset));
+                    .insert(*sym, SymbolStorage::StackAndGPReg(reg, offset));
                 Ok(reg)
             }
             Some(SymbolStorage::Stack(offset)) => {
                 let reg = self.claim_gp_reg(sym)?;
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndGPRegeg(reg, offset));
+                    .insert(*sym, SymbolStorage::StackAndGPReg(reg, offset));
                 ASM::mov_reg64_stack32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
@@ -302,13 +311,13 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
     fn free_to_stack(&mut self, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.remove(sym);
         match val {
-            Some(SymbolStorage::GPRegeg(reg)) => {
+            Some(SymbolStorage::GPReg(reg)) => {
                 let offset = self.increase_stack_size(8)?;
                 ASM::mov_stack32_reg64(&mut self.buf, offset as i32, reg);
                 self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
                 Ok(())
             }
-            Some(SymbolStorage::StackAndGPRegeg(_, offset)) => {
+            Some(SymbolStorage::StackAndGPReg(_, offset)) => {
                 self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
                 Ok(())
             }
