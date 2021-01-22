@@ -24,7 +24,12 @@ pub struct Env<'a> {
 }
 
 // INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
-const INLINED_SYMBOLS: [Symbol; 3] = [Symbol::NUM_ABS, Symbol::NUM_ADD, Symbol::NUM_SUB];
+const INLINED_SYMBOLS: [Symbol; 4] = [
+    Symbol::NUM_ABS,
+    Symbol::NUM_ADD,
+    Symbol::NUM_SUB,
+    Symbol::BOOL_EQ,
+];
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
@@ -145,6 +150,10 @@ where
                                 // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
                             }
+                            Symbol::BOOL_EQ => {
+                                // Instead of calling the function, just inline it.
+                                self.build_run_low_level(sym, &LowLevel::Eq, arguments, layout)
+                            }
                             x => Err(format!("the function, {:?}, is not yet implemented", x)),
                         }
                     }
@@ -199,6 +208,12 @@ where
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
+            LowLevel::Eq => match layout {
+                Layout::Builtin(Builtin::Int1) => self.build_eq_i64(sym, &args[0], &args[1]),
+                // Should we panic?
+                x => Err(format!("wrong layout, {:?}, for LowLevel::Eq", x)),
+            },
+
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
@@ -233,6 +248,10 @@ where
         src1: &Symbol,
         src2: &Symbol,
     ) -> Result<(), String>;
+
+    /// build_eq_i64 stores the result of `src1 == src2` into dst.
+    /// It only deals with inputs and outputs of i64 type.
+    fn build_eq_i64(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol) -> Result<(), String>;
 
     /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;

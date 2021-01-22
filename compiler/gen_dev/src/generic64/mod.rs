@@ -71,6 +71,7 @@ pub trait Assembler<GPReg: RegTrait, FPReg: RegTrait> {
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GPReg);
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, imm32: i32);
     fn sub_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
+    fn eq_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -266,6 +267,14 @@ impl<
         let src1_reg = self.load_to_gpreg(src1)?;
         let src2_reg = self.load_to_gpreg(src2)?;
         ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+        Ok(())
+    }
+
+    fn build_eq_i64(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol) -> Result<(), String> {
+        let dst_reg = self.claim_gpreg(dst)?;
+        let src1_reg = self.load_to_gpreg(src1)?;
+        let src2_reg = self.load_to_gpreg(src2)?;
+        ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
         Ok(())
     }
 

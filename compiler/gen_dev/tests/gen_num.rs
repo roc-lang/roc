@@ -255,7 +255,7 @@ mod gen_num {
             f64
         );
     }
-
+    */
     #[test]
     fn gen_int_eq() {
         assert_evals_to!(
@@ -268,7 +268,7 @@ mod gen_num {
             bool
         );
     }
-
+    /*
     #[test]
     fn gen_int_neq() {
         assert_evals_to!(
