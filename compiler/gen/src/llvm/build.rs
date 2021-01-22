@@ -2026,12 +2026,12 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // This doesn't currently do anything
             context.i64_type().const_zero().into()
         }
-        Inc(symbol, _inc, cont) => {
+        Inc(symbol, inc_amount, cont) => {
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
 
             if layout.contains_refcounted() {
-                increment_refcount_layout(env, parent, layout_ids, value, &layout);
+                increment_refcount_layout(env, parent, layout_ids, *inc_amount, value, &layout);
             }
 
             build_exp_stmt(env, layout_ids, scope, parent, cont)
