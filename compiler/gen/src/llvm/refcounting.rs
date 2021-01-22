@@ -540,7 +540,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     call_help(env, function, mode, original_wrapper.into(), call_name);
 }
 
-fn mode_to_call_mode<'a, 'ctx, 'env>(function: FunctionValue<'ctx>, mode: Mode) -> CallMode<'ctx> {
+fn mode_to_call_mode(function: FunctionValue<'_>, mode: Mode) -> CallMode<'_> {
     match mode {
         Mode::Dec => CallMode::Dec,
         Mode::Inc(num) => CallMode::Inc(num, function.get_nth_param(1).unwrap().into_int_value()),
@@ -923,7 +923,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                 return true;
             }
         }
-        return false;
+        false
     })();
 
     let ctx = env.context;
