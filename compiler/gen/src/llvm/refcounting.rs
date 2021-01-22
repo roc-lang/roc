@@ -911,6 +911,21 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
 
+    // branches that are not/don't contain anything refcounted
+    // if there is only one branch, we don't need to switch
+    let switch_needed: bool = (|| {
+        for field_layouts in tags.iter() {
+            // if none of the fields are or contain anything refcounted, just move on
+            if !field_layouts
+                .iter()
+                .any(|x| x.is_refcounted() || x.contains_refcounted())
+            {
+                return true;
+            }
+        }
+        return false;
+    })();
+
     let ctx = env.context;
     let cont_block = ctx.append_basic_block(parent, "cont");
     if is_nullable {
@@ -941,22 +956,19 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     builder.set_current_debug_location(&context, loc);
 
-    // branches that are not/don't contain anything refcounted
-    let mut switch_needed = false;
-
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
         if !field_layouts
             .iter()
             .any(|x| x.is_refcounted() || x.contains_refcounted())
         {
-            switch_needed = true;
             continue;
         }
 
         let block = env
             .context
             .append_basic_block(parent, pick("tag_id_increment", "tag_id_decrement"));
+
         env.builder.position_at_end(block);
 
         let wrapper_type = basic_type_from_layout(
