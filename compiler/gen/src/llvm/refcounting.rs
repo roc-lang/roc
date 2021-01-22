@@ -1000,8 +1000,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
                 // recursively decrement the field
                 let call_name = pick("recursive_tag_increment", "recursive_tag_decrement");
-                let call_mode = mode_to_call_mode(fn_val, mode);
-                recursive_call_help(env, fn_val, call_mode, recursive_field_ptr, call_name);
+                call_help(env, fn_val, mode, recursive_field_ptr, call_name);
             } else if field_layout.contains_refcounted() {
                 // TODO this loads the whole field onto the stack;
                 // that's wasteful if e.g. the field is a big record, where only
@@ -1091,24 +1090,6 @@ fn call_help<'a, 'ctx, 'env>(
                 .build_call(function, &[value, rc_increment.into()], call_name)
         }
         Mode::Dec => env.builder.build_call(function, &[value], call_name),
-    };
-
-    call.set_call_convention(FAST_CALL_CONV);
-}
-
-fn recursive_call_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    function: FunctionValue<'ctx>,
-    mode: CallMode,
-    value: BasicValueEnum<'ctx>,
-    call_name: &str,
-) {
-    let call = match mode {
-        CallMode::Inc(_, inc_amount) => {
-            env.builder
-                .build_call(function, &[value, inc_amount.into()], call_name)
-        }
-        CallMode::Dec => env.builder.build_call(function, &[value], call_name),
     };
 
     call.set_call_convention(FAST_CALL_CONV);
