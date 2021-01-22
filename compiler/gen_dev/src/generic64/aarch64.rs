@@ -4,7 +4,7 @@ use bumpalo::collections::Vec;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
-pub enum AArch64GPReg {
+pub enum AArch64GeneralReg {
     X0 = 0,
     X1 = 1,
     X2 = 2,
@@ -39,12 +39,12 @@ pub enum AArch64GPReg {
     /// This can mean Zero or Stack Pointer depending on the context.
     ZRSP = 31,
 }
-impl RegTrait for AArch64GPReg {}
+impl RegTrait for AArch64GeneralReg {}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
-pub enum AArch64FPReg {}
-impl RegTrait for AArch64FPReg {}
+pub enum AArch64FloatReg {}
+impl RegTrait for AArch64FloatReg {}
 
 pub struct AArch64Assembler {}
 
@@ -54,90 +54,90 @@ pub struct AArch64Call {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
-    const GP_PARAM_REGS: &'static [AArch64GPReg] = &[
-        AArch64GPReg::X0,
-        AArch64GPReg::X1,
-        AArch64GPReg::X2,
-        AArch64GPReg::X3,
-        AArch64GPReg::X4,
-        AArch64GPReg::X5,
-        AArch64GPReg::X6,
-        AArch64GPReg::X7,
+impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
+    const GENERAL_PARAM_REGS: &'static [AArch64GeneralReg] = &[
+        AArch64GeneralReg::X0,
+        AArch64GeneralReg::X1,
+        AArch64GeneralReg::X2,
+        AArch64GeneralReg::X3,
+        AArch64GeneralReg::X4,
+        AArch64GeneralReg::X5,
+        AArch64GeneralReg::X6,
+        AArch64GeneralReg::X7,
     ];
-    const GP_RETURN_REGS: &'static [AArch64GPReg] = Self::GP_PARAM_REGS;
-    const GP_DEFAULT_FREE_REGS: &'static [AArch64GPReg] = &[
+    const GENERAL_RETURN_REGS: &'static [AArch64GeneralReg] = Self::GENERAL_PARAM_REGS;
+    const GENERAL_DEFAULT_FREE_REGS: &'static [AArch64GeneralReg] = &[
         // The regs we want to use first should be at the end of this vec.
         // We will use pop to get which reg to use next
 
-        // Don't use frame pointer: AArch64GPReg::FP,
-        // Don't user indirect result location: AArch64GPReg::XR,
-        // Don't use platform register: AArch64GPReg::PR,
-        // Don't use link register: AArch64GPReg::LR,
-        // Don't use zero register/stack pointer: AArch64GPReg::ZRSP,
+        // Don't use frame pointer: AArch64GeneralReg::FP,
+        // Don't user indirect result location: AArch64GeneralReg::XR,
+        // Don't use platform register: AArch64GeneralReg::PR,
+        // Don't use link register: AArch64GeneralReg::LR,
+        // Don't use zero register/stack pointer: AArch64GeneralReg::ZRSP,
 
         // Use callee saved regs last.
-        AArch64GPReg::X19,
-        AArch64GPReg::X20,
-        AArch64GPReg::X21,
-        AArch64GPReg::X22,
-        AArch64GPReg::X23,
-        AArch64GPReg::X24,
-        AArch64GPReg::X25,
-        AArch64GPReg::X26,
-        AArch64GPReg::X27,
-        AArch64GPReg::X28,
+        AArch64GeneralReg::X19,
+        AArch64GeneralReg::X20,
+        AArch64GeneralReg::X21,
+        AArch64GeneralReg::X22,
+        AArch64GeneralReg::X23,
+        AArch64GeneralReg::X24,
+        AArch64GeneralReg::X25,
+        AArch64GeneralReg::X26,
+        AArch64GeneralReg::X27,
+        AArch64GeneralReg::X28,
         // Use caller saved regs first.
-        AArch64GPReg::X0,
-        AArch64GPReg::X1,
-        AArch64GPReg::X2,
-        AArch64GPReg::X3,
-        AArch64GPReg::X4,
-        AArch64GPReg::X5,
-        AArch64GPReg::X6,
-        AArch64GPReg::X7,
-        AArch64GPReg::X9,
-        AArch64GPReg::X10,
-        AArch64GPReg::X11,
-        AArch64GPReg::X12,
-        AArch64GPReg::X13,
-        AArch64GPReg::X14,
-        AArch64GPReg::X15,
-        AArch64GPReg::IP0,
-        AArch64GPReg::IP1,
+        AArch64GeneralReg::X0,
+        AArch64GeneralReg::X1,
+        AArch64GeneralReg::X2,
+        AArch64GeneralReg::X3,
+        AArch64GeneralReg::X4,
+        AArch64GeneralReg::X5,
+        AArch64GeneralReg::X6,
+        AArch64GeneralReg::X7,
+        AArch64GeneralReg::X9,
+        AArch64GeneralReg::X10,
+        AArch64GeneralReg::X11,
+        AArch64GeneralReg::X12,
+        AArch64GeneralReg::X13,
+        AArch64GeneralReg::X14,
+        AArch64GeneralReg::X15,
+        AArch64GeneralReg::IP0,
+        AArch64GeneralReg::IP1,
     ];
-    const FP_PARAM_REGS: &'static [AArch64FPReg] = &[];
-    const FP_RETURN_REGS: &'static [AArch64FPReg] = Self::FP_PARAM_REGS;
-    const FP_DEFAULT_FREE_REGS: &'static [AArch64FPReg] = &[];
+    const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = &[];
+    const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = Self::FLOAT_PARAM_REGS;
+    const FLOAT_DEFAULT_FREE_REGS: &'static [AArch64FloatReg] = &[];
 
     const SHADOW_SPACE_SIZE: u8 = 0;
 
     #[inline(always)]
-    fn gp_callee_saved(reg: &AArch64GPReg) -> bool {
+    fn general_callee_saved(reg: &AArch64GeneralReg) -> bool {
         matches!(
             reg,
-            AArch64GPReg::X19
-                | AArch64GPReg::X20
-                | AArch64GPReg::X21
-                | AArch64GPReg::X22
-                | AArch64GPReg::X23
-                | AArch64GPReg::X24
-                | AArch64GPReg::X25
-                | AArch64GPReg::X26
-                | AArch64GPReg::X27
-                | AArch64GPReg::X28
+            AArch64GeneralReg::X19
+                | AArch64GeneralReg::X20
+                | AArch64GeneralReg::X21
+                | AArch64GeneralReg::X22
+                | AArch64GeneralReg::X23
+                | AArch64GeneralReg::X24
+                | AArch64GeneralReg::X25
+                | AArch64GeneralReg::X26
+                | AArch64GeneralReg::X27
+                | AArch64GeneralReg::X28
         )
     }
     #[inline(always)]
-    fn fp_callee_saved(_reg: &AArch64FPReg) -> bool {
-        unimplemented!("AArch64 FPRegs not implemented yet");
+    fn float_callee_saved(_reg: &AArch64FloatReg) -> bool {
+        unimplemented!("AArch64 FloatRegs not implemented yet");
     }
 
     #[inline(always)]
     fn setup_stack(
         buf: &mut Vec<'_, u8>,
         leaf_function: bool,
-        saved_regs: &[AArch64GPReg],
+        saved_regs: &[AArch64GeneralReg],
         requested_stack_size: i32,
     ) -> Result<i32, String> {
         // full size is upcast to i64 to make sure we don't overflow here.
@@ -161,8 +161,8 @@ impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
             if aligned_stack_size > 0 {
                 AArch64Assembler::sub_reg64_reg64_imm32(
                     buf,
-                    AArch64GPReg::ZRSP,
-                    AArch64GPReg::ZRSP,
+                    AArch64GeneralReg::ZRSP,
+                    AArch64GeneralReg::ZRSP,
                     aligned_stack_size,
                 );
 
@@ -170,9 +170,9 @@ impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
                 let mut offset = aligned_stack_size;
                 if !leaf_function {
                     offset -= 8;
-                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GPReg::LR);
+                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::LR);
                     offset -= 8;
-                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GPReg::FP);
+                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
                 }
                 for reg in saved_regs {
                     offset -= 8;
@@ -191,7 +191,7 @@ impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
     fn cleanup_stack(
         buf: &mut Vec<'_, u8>,
         leaf_function: bool,
-        saved_regs: &[AArch64GPReg],
+        saved_regs: &[AArch64GeneralReg],
         aligned_stack_size: i32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
@@ -199,9 +199,9 @@ impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
             let mut offset = aligned_stack_size;
             if !leaf_function {
                 offset -= 8;
-                AArch64Assembler::mov_reg64_stack32(buf, AArch64GPReg::LR, offset);
+                AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, offset);
                 offset -= 8;
-                AArch64Assembler::mov_reg64_stack32(buf, AArch64GPReg::FP, offset);
+                AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
             }
             for reg in saved_regs {
                 offset -= 8;
@@ -209,8 +209,8 @@ impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
             }
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
-                AArch64GPReg::ZRSP,
-                AArch64GPReg::ZRSP,
+                AArch64GeneralReg::ZRSP,
+                AArch64GeneralReg::ZRSP,
                 aligned_stack_size,
             );
         }
@@ -218,17 +218,17 @@ impl CallConv<AArch64GPReg, AArch64FPReg> for AArch64Call {
     }
 }
 
-impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
+impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
-    fn abs_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GPReg, _src: AArch64GPReg) {
+    fn abs_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
         unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
     }
 
     #[inline(always)]
     fn add_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
-        dst: AArch64GPReg,
-        src: AArch64GPReg,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
         imm32: i32,
     ) {
         if imm32 < 0 {
@@ -245,9 +245,9 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     #[inline(always)]
     fn add_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
-        dst: AArch64GPReg,
-        src1: AArch64GPReg,
-        src2: AArch64GPReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
         add_reg64_reg64_reg64(buf, dst, src1, src2);
     }
@@ -255,9 +255,9 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     #[inline(always)]
     fn add_freg64_freg64_freg64(
         _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FPReg,
-        _src1: AArch64FPReg,
-        _src2: AArch64FPReg,
+        _dst: AArch64FloatReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
     ) {
         unimplemented!("adding floats not yet implemented for AArch64");
     }
@@ -266,14 +266,14 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     fn mov_freg64_imm64(
         _buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
-        _dst: AArch64FPReg,
+        _dst: AArch64FloatReg,
         _imm: f64,
     ) {
         unimplemented!("loading float literal not yet implemented for AArch64");
     }
 
     #[inline(always)]
-    fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, imm: i64) {
+    fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm: i64) {
         let mut remaining = imm as u64;
         movz_reg64_imm16(buf, dst, remaining as u16, 0);
         remaining >>= 16;
@@ -291,43 +291,43 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn mov_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FPReg, _src: AArch64FPReg) {
+    fn mov_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
         unimplemented!("moving data between float registers not yet implemented for AArch64");
     }
 
     #[inline(always)]
-    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64GPReg) {
+    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
         mov_reg64_reg64(buf, dst, src);
     }
 
     #[inline(always)]
-    fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, offset: i32) {
+    fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
             unimplemented!("negative stack offsets are not yet implement for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_imm12(buf, dst, AArch64GPReg::ZRSP, (offset as u16) >> 3);
+            ldr_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
             unimplemented!("stack offsets over 32k are not yet implement for AArch64");
         }
     }
 
-    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FPReg, _offset: i32) {
+    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
         unimplemented!("loading floating point reg from stack not yet implemented for AArch64");
     }
 
     #[inline(always)]
-    fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FPReg) {
+    fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
         unimplemented!("saving floating point reg to stack not yet implemented for AArch64");
     }
 
     #[inline(always)]
-    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GPReg) {
+    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
             unimplemented!("negative stack offsets are not yet implement for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_imm12(buf, src, AArch64GPReg::ZRSP, (offset as u16) >> 3);
+            str_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
             unimplemented!("stack offsets over 32k are not yet implement for AArch64");
         }
@@ -336,8 +336,8 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     #[inline(always)]
     fn sub_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
-        dst: AArch64GPReg,
-        src: AArch64GPReg,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
         imm32: i32,
     ) {
         if imm32 < 0 {
@@ -356,9 +356,9 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     #[inline(always)]
     fn sub_reg64_reg64_reg64(
         _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GPReg,
-        _src1: AArch64GPReg,
-        _src2: AArch64GPReg,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
     ) {
         unimplemented!("registers subtractions not implemented yet for AArch64");
     }
@@ -366,15 +366,15 @@ impl Assembler<AArch64GPReg, AArch64FPReg> for AArch64Assembler {
     #[inline(always)]
     fn eq_reg64_reg64_reg64(
         _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GPReg,
-        _src1: AArch64GPReg,
-        _src2: AArch64GPReg,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
     ) {
         unimplemented!("registers equality not implemented yet for AArch64");
     }
     #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
-        ret_reg64(buf, AArch64GPReg::LR)
+        ret_reg64(buf, AArch64GeneralReg::LR)
     }
 }
 
@@ -401,7 +401,7 @@ enum BranchGroup {
         opc: u8,
         op2: u8,
         op3: u8,
-        reg_n: AArch64GPReg,
+        reg_n: AArch64GeneralReg,
         op4: u8,
     },
 }
@@ -413,19 +413,19 @@ enum DPRegGroup {
         subtract: bool,
         set_flags: bool,
         shift: u8,
-        reg_m: AArch64GPReg,
+        reg_m: AArch64GeneralReg,
         imm6: u8,
-        reg_n: AArch64GPReg,
-        reg_d: AArch64GPReg,
+        reg_n: AArch64GeneralReg,
+        reg_d: AArch64GeneralReg,
     },
     Logical {
         sf: bool,
         op: DPRegLogicalOp,
         shift: u8,
-        reg_m: AArch64GPReg,
+        reg_m: AArch64GeneralReg,
         imm6: u8,
-        reg_n: AArch64GPReg,
-        reg_d: AArch64GPReg,
+        reg_n: AArch64GeneralReg,
+        reg_d: AArch64GeneralReg,
     },
 }
 
@@ -437,15 +437,15 @@ enum DPImmGroup {
         set_flags: bool,
         shift: bool,
         imm12: u16,
-        reg_n: AArch64GPReg,
-        reg_d: AArch64GPReg,
+        reg_n: AArch64GeneralReg,
+        reg_d: AArch64GeneralReg,
     },
     MoveWide {
         sf: bool,
         opc: u8,
         hw: u8,
         imm16: u16,
-        reg_d: AArch64GPReg,
+        reg_d: AArch64GeneralReg,
     },
 }
 
@@ -456,8 +456,8 @@ enum LdStrGroup {
         v: bool,
         opc: u8,
         imm12: u16,
-        reg_n: AArch64GPReg,
-        reg_t: AArch64GPReg,
+        reg_n: AArch64GeneralReg,
+        reg_t: AArch64GeneralReg,
     },
 }
 
@@ -633,7 +633,12 @@ fn build_instruction(inst: AArch64Instruction) -> [u8; 4] {
 
 /// `ADD Xd, Xn, imm12` -> Add Xn and imm12 and place the result into Xd.
 #[inline(always)]
-fn add_reg64_reg64_imm12(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64GPReg, imm12: u16) {
+fn add_reg64_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+    imm12: u16,
+) {
     buf.extend(&build_instruction(AArch64Instruction::DPImm(
         DPImmGroup::AddSubImm {
             sf: true,
@@ -651,9 +656,9 @@ fn add_reg64_reg64_imm12(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64G
 #[inline(always)]
 fn add_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
-    dst: AArch64GPReg,
-    src1: AArch64GPReg,
-    src2: AArch64GPReg,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
 ) {
     buf.extend(&build_instruction(AArch64Instruction::DPReg(
         DPRegGroup::AddSubShifted {
@@ -672,7 +677,12 @@ fn add_reg64_reg64_reg64(
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn ldr_reg64_imm12(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, base: AArch64GPReg, imm12: u16) {
+fn ldr_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    base: AArch64GeneralReg,
+    imm12: u16,
+) {
     debug_assert!(imm12 <= 0xFFF);
     buf.extend(&build_instruction(AArch64Instruction::LdStr(
         LdStrGroup::UnsignedImm {
@@ -688,7 +698,7 @@ fn ldr_reg64_imm12(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, base: AArch64GPReg,
 
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
-fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64GPReg) {
+fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
     buf.extend(&build_instruction(AArch64Instruction::DPReg(
         DPRegGroup::Logical {
@@ -697,7 +707,7 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64GPReg) 
             shift: 0,
             reg_m: src,
             imm6: 0,
-            reg_n: AArch64GPReg::ZRSP,
+            reg_n: AArch64GeneralReg::ZRSP,
             reg_d: dst,
         },
     )));
@@ -705,7 +715,7 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64GPReg) 
 
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
-fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, imm16: u16, hw: u8) {
+fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     debug_assert!(hw <= 0b11);
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
     buf.extend(&build_instruction(AArch64Instruction::DPImm(
@@ -721,7 +731,7 @@ fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, imm16: u16, hw: u8
 
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
-fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, imm16: u16, hw: u8) {
+fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     debug_assert!(hw <= 0b11);
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
     buf.extend(&build_instruction(AArch64Instruction::DPImm(
@@ -738,7 +748,12 @@ fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, imm16: u16, hw: u8
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn str_reg64_imm12(buf: &mut Vec<'_, u8>, src: AArch64GPReg, base: AArch64GPReg, imm12: u16) {
+fn str_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    src: AArch64GeneralReg,
+    base: AArch64GeneralReg,
+    imm12: u16,
+) {
     debug_assert!(imm12 <= 0xFFF);
     buf.extend(&build_instruction(AArch64Instruction::LdStr(
         LdStrGroup::UnsignedImm {
@@ -754,7 +769,12 @@ fn str_reg64_imm12(buf: &mut Vec<'_, u8>, src: AArch64GPReg, base: AArch64GPReg,
 
 /// `SUB Xd, Xn, imm12` -> Subtract Xn and imm12 and place the result into Xd.
 #[inline(always)]
-fn sub_reg64_reg64_imm12(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64GPReg, imm12: u16) {
+fn sub_reg64_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+    imm12: u16,
+) {
     buf.extend(&build_instruction(AArch64Instruction::DPImm(
         DPImmGroup::AddSubImm {
             sf: true,
@@ -770,7 +790,7 @@ fn sub_reg64_reg64_imm12(buf: &mut Vec<'_, u8>, dst: AArch64GPReg, src: AArch64G
 
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
-fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GPReg) {
+fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
     buf.extend(&build_instruction(AArch64Instruction::Branch(
         BranchGroup::UnconditionBranchReg {
             opc: 0b0010,
@@ -796,9 +816,9 @@ mod tests {
         let mut buf = bumpalo::vec![in &arena];
         add_reg64_reg64_reg64(
             &mut buf,
-            AArch64GPReg::X10,
-            AArch64GPReg::ZRSP,
-            AArch64GPReg::X21,
+            AArch64GeneralReg::X10,
+            AArch64GeneralReg::ZRSP,
+            AArch64GeneralReg::X21,
         );
         assert_eq!(&buf, &[0xAA, 0x02, 0x1F, 0x8B]);
     }
@@ -807,7 +827,12 @@ mod tests {
     fn test_add_reg64_reg64_imm12() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        add_reg64_reg64_imm12(&mut buf, AArch64GPReg::X10, AArch64GPReg::X21, 0x123);
+        add_reg64_reg64_imm12(
+            &mut buf,
+            AArch64GeneralReg::X10,
+            AArch64GeneralReg::X21,
+            0x123,
+        );
         assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0x91]);
     }
 
@@ -815,7 +840,12 @@ mod tests {
     fn test_ldr_reg64_imm12() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        ldr_reg64_imm12(&mut buf, AArch64GPReg::X21, AArch64GPReg::ZRSP, 0x123);
+        ldr_reg64_imm12(
+            &mut buf,
+            AArch64GeneralReg::X21,
+            AArch64GeneralReg::ZRSP,
+            0x123,
+        );
         assert_eq!(&buf, &[0xF5, 0x8F, 0x44, 0xF9]);
     }
 
@@ -823,7 +853,7 @@ mod tests {
     fn test_mov_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        mov_reg64_reg64(&mut buf, AArch64GPReg::X10, AArch64GPReg::X21);
+        mov_reg64_reg64(&mut buf, AArch64GeneralReg::X10, AArch64GeneralReg::X21);
         assert_eq!(&buf, &[0xEA, 0x03, 0x15, 0xAA]);
     }
 
@@ -831,7 +861,7 @@ mod tests {
     fn test_movk_reg64_imm16() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        movk_reg64_imm16(&mut buf, AArch64GPReg::X21, TEST_U16, 3);
+        movk_reg64_imm16(&mut buf, AArch64GeneralReg::X21, TEST_U16, 3);
         assert_eq!(&buf, &[0x95, 0x46, 0xE2, 0xF2]);
     }
 
@@ -839,7 +869,7 @@ mod tests {
     fn test_movz_reg64_imm16() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        movz_reg64_imm16(&mut buf, AArch64GPReg::X21, TEST_U16, 3);
+        movz_reg64_imm16(&mut buf, AArch64GeneralReg::X21, TEST_U16, 3);
         assert_eq!(&buf, &[0x95, 0x46, 0xE2, 0xD2]);
     }
 
@@ -847,7 +877,12 @@ mod tests {
     fn test_str_reg64_imm12() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        str_reg64_imm12(&mut buf, AArch64GPReg::X21, AArch64GPReg::ZRSP, 0x123);
+        str_reg64_imm12(
+            &mut buf,
+            AArch64GeneralReg::X21,
+            AArch64GeneralReg::ZRSP,
+            0x123,
+        );
         assert_eq!(&buf, &[0xF5, 0x8F, 0x04, 0xF9]);
     }
 
@@ -855,7 +890,12 @@ mod tests {
     fn test_sub_reg64_reg64_imm12() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        sub_reg64_reg64_imm12(&mut buf, AArch64GPReg::X10, AArch64GPReg::X21, 0x123);
+        sub_reg64_reg64_imm12(
+            &mut buf,
+            AArch64GeneralReg::X10,
+            AArch64GeneralReg::X21,
+            0x123,
+        );
         assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0xD1]);
     }
 
@@ -863,7 +903,7 @@ mod tests {
     fn test_ret_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        ret_reg64(&mut buf, AArch64GPReg::LR);
+        ret_reg64(&mut buf, AArch64GeneralReg::LR);
         assert_eq!(&buf, &[0xC0, 0x03, 0x5F, 0xD6]);
     }
 }
