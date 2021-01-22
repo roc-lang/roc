@@ -512,7 +512,11 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let symbol = Symbol::INC;
+    let (call_name, symbol) = match mode {
+        Mode::Inc(_) => ("increment_list", Symbol::INC),
+        Mode::Dec => ("decrement_list", Symbol::DEC),
+    };
+
     let fn_name = layout_ids
         .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
@@ -534,7 +538,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
         .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
-        .build_call(function, &[original_wrapper.into()], "increment_list");
+        .build_call(function, &[original_wrapper.into()], call_name);
 
     call.set_call_convention(FAST_CALL_CONV);
 }
@@ -1070,7 +1074,11 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let symbol = Symbol::INC;
+    let (call_name, symbol) = match mode {
+        Mode::Inc(_) => ("increment_union", Symbol::INC),
+        Mode::Dec => ("decrement_union", Symbol::DEC),
+    };
+
     let fn_name = layout_ids
         .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
@@ -1090,9 +1098,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     env.builder
         .set_current_debug_location(env.context, di_location);
-    let call = env
-        .builder
-        .build_call(function, &[value], "increment_union");
+    let call = env.builder.build_call(function, &[value], call_name);
 
     call.set_call_convention(FAST_CALL_CONV);
 }
