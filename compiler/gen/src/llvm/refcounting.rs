@@ -1,6 +1,6 @@
 use crate::llvm::build::{
-    cast_basic_basic, cast_block_of_memory_to_tag, create_entry_block_alloca, set_name, Env, Scope,
-    FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
+    cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
+    LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{
@@ -578,24 +578,11 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     );
     builder.set_current_debug_location(&ctx, loc);
 
-    let mut scope = Scope::default();
-
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
     set_name(arg_val, arg_symbol.ident_string(&env.interns));
-
-    let alloca = create_entry_block_alloca(
-        env,
-        fn_val,
-        arg_val.get_type(),
-        arg_symbol.ident_string(&env.interns),
-    );
-
-    builder.build_store(alloca, arg_val);
-
-    scope.insert(arg_symbol, (layout.clone(), alloca));
 
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
@@ -698,24 +685,11 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     );
     builder.set_current_debug_location(&ctx, loc);
 
-    let mut scope = Scope::default();
-
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
     set_name(arg_val, arg_symbol.ident_string(&env.interns));
-
-    let alloca = create_entry_block_alloca(
-        env,
-        fn_val,
-        arg_val.get_type(),
-        arg_symbol.ident_string(&env.interns),
-    );
-
-    builder.build_store(alloca, arg_val);
-
-    scope.insert(arg_symbol, (layout.clone(), alloca));
 
     let parent = fn_val;
 
