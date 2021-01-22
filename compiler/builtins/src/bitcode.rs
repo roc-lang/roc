@@ -34,3 +34,4 @@ pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
+pub const STR_NUMBER_OF_NEXT_CODEPOINT_BYTES: &str = "number_of_next_codepoint_bytes";

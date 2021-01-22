@@ -857,6 +857,9 @@ define_builtins! {
         8 STR_STARTS_WITH: "startsWith"
         9 STR_ENDS_WITH: "endsWith"
         10 STR_FROM_INT: "fromInt"
+        11 STR_FROM_UTF8: "fromUtf8"
+        12 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
+        13 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

@@ -517,6 +517,21 @@ mod gen_str {
     }
 
     #[test]
+    fn str_from_utf8() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97 ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
     fn str_equality() {
         assert_evals_to!(r#""a" == "a""#, true, bool);
         assert_evals_to!(

@@ -209,6 +209,30 @@ mod solve_expr {
         );
     }
 
+    #[test]
+    fn string_from_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.fromInt
+                "#
+            ),
+            "Int -> Str",
+        );
+    }
+
+    #[test]
+    fn string_from_utf8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.fromUtf8
+                "#
+            ),
+            "List U8 -> Result Str [ BadUtf8 Utf8Problem ]*",
+        );
+    }
+
     // #[test]
     // fn block_string_literal() {
     //     infer_eq(

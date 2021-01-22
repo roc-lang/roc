@@ -255,6 +255,21 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     zig_str_to_struct(env, zig_result).into()
 }
 
+/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+pub fn str_from_utf8<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    bytes_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let bytes = load_symbol(env, scope, &bytes_symbol);
+
+    // TODO fromUtf8:
+    // let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
+    // zig_str_to_struct(env, zig_result).into()
+
+    panic!("TODO fromUtf8")
+}
+
 /// Str.equal : Str, Str -> Bool
 pub fn str_equal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

@@ -60,6 +60,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
+        STR_FROM_UTF8 => str_from_utf8,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -155,6 +156,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_ENDS_WITH => str_ends_with,
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::STR_FROM_INT => str_from_int,
+        Symbol::STR_FROM_UTF8 => str_from_utf8,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -1368,6 +1370,26 @@ fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        str_var,
+    )
+}
+
+/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bytes_var = var_store.fresh();
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrFromUtf8,
+        args: vec![(bytes_var, Var(Symbol::ARG_1))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(bytes_var, Symbol::ARG_1)],
         var_store,
         body,
         str_var,

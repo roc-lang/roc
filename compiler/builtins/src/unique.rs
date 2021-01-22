@@ -1187,6 +1187,23 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![int_type(star1, int)], str_type(star2))
     });
 
+    // fromUtf8 : Attr * (List U8) -> Attr * (Result Str [ BadUtf8 Utf8Problem ]*)
+    let bad_utf8 = SolvedType::TagUnion(
+        vec![(
+            TagName::Global("BadUtf8".into()),
+            vec![builtin_aliases::str_utf8_problem_type()],
+        )],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(Symbol::STR_FROM_UTF8, {
+        let_tvars! { star1, star2, star3, star4 };
+        unique_function(
+            vec![u8_type(star1)],
+            result_type(star2, str_type(star3), lift(star4, bad_utf8)),
+        )
+    });
+
     // Result module
 
     // map : Attr * (Result (Attr a e))
@@ -1293,6 +1310,11 @@ fn int_type(u: VarId, range: VarId) -> SolvedType {
             ),
         ],
     )
+}
+
+#[inline(always)]
+fn u8_type(u: VarId) -> SolvedType {
+    SolvedType::Apply(Symbol::ATTR_ATTR, vec![flex(u), builtin_aliases::u8_type()])
 }
 
 #[inline(always)]
