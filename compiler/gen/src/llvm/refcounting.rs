@@ -705,7 +705,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
         IntPredicate::SGT,
         len,
         ptr_int(ctx, env.ptr_bytes).const_zero(),
-        "len > 0",
+        "is_big_str",
     );
 
     // the block we'll always jump to when we're done
@@ -928,10 +928,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
-    let merge_block = env
-        .context
-        .append_basic_block(parent, pick("increment_merge", "decrement_merge"));
-
     builder.set_current_debug_location(&context, loc);
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
@@ -1052,18 +1048,22 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
         // read the tag_id
         let current_tag_id = rec_union_read_tag(env, value_ptr);
 
+        let merge_block = env
+            .context
+            .append_basic_block(parent, pick("increment_merge", "decrement_merge"));
+
         // switch on it
         env.builder
             .build_switch(current_tag_id, merge_block, &cases);
+
+        env.builder.position_at_end(merge_block);
+
+        // increment/decrement the cons-cell itself
+        refcount_ptr.modify(call_mode, &layout, env);
+
+        // this function returns void
+        builder.build_return(None);
     }
-
-    env.builder.position_at_end(merge_block);
-
-    // increment/decrement the cons-cell itself
-    refcount_ptr.modify(call_mode, &layout, env);
-
-    // this function returns void
-    builder.build_return(None);
 }
 
 fn rec_union_read_tag<'a, 'ctx, 'env>(
