@@ -18,7 +18,7 @@ mod gen_dict {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Dict.size Dict.empty
+                    Dict.len Dict.empty
                 "#
             ),
             1,

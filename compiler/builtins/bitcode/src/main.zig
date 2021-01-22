@@ -5,7 +5,7 @@ const testing = std.testing;
 // Dict Module
 const dict = @import("dict.zig");
 comptime {
-    exportDictFn(dict.dictSize, "size");
+    exportDictFn(dict.dictLen, "len");
 }
 
 // Num Module

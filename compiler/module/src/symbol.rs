@@ -889,7 +889,7 @@ define_builtins! {
         3 DICT_SINGLETON: "singleton"
         4 DICT_GET: "get"
         5 DICT_INSERT: "insert"
-        6 DICT_SIZE: "size"
+        6 DICT_LEN: "len"
 
         // This should not be exposed to users, its for testing the
         // hash function ONLY

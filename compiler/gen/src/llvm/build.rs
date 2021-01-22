@@ -1,4 +1,4 @@
-use crate::llvm::build_dict::dict_size;
+use crate::llvm::build_dict::dict_len;
 use crate::llvm::build_hash::hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
@@ -3856,7 +3856,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             hash(env, value, layout)
         }
-        DictSize => dict_size(env, scope, args[0]),
+        DictSize => dict_len(env, scope, args[0]),
     }
 }
 

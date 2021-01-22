@@ -5,7 +5,7 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
-pub fn dict_size<'a, 'ctx, 'env>(
+pub fn dict_len<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     dict_symbol: Symbol,
@@ -18,10 +18,10 @@ pub fn dict_size<'a, 'ctx, 'env>(
         Layout::Builtin(Builtin::Dict(_, _)) => {
             let dict_as_int = dict_symbol_to_i128(env, scope, dict_symbol);
 
-            call_bitcode_fn(env, &[dict_as_int.into()], &bitcode::DICT_SIZE)
+            call_bitcode_fn(env, &[dict_as_int.into()], &bitcode::DICT_LEN)
         }
         Layout::Builtin(Builtin::EmptyDict) => ctx.i64_type().const_zero().into(),
-        _ => unreachable!("Invalid layout given to Dict.size : {:?}", dict_layout),
+        _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
     }
 }
 

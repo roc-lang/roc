@@ -3,7 +3,7 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
 pub const RocDict = extern struct {
-    size: usize,
+    len: usize,
 
     pub fn init() RocDict {
         return RocDict{
@@ -16,9 +16,9 @@ pub const RocDict = extern struct {
     }
 };
 
-// Dict.size
-pub fn dictSize(dict: RocDict) callconv(.C) usize {
-    return dict.size;
+// Dict.len
+pub fn dictLen(dict: RocDict) callconv(.C) usize {
+    return dict.len;
 }
 
 test "RocDict.init() contains nothing" {

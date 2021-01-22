@@ -78,7 +78,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_KEEP_IF => list_keep_if,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
-        DICT_SIZE => dict_size,
+        DICT_LEN => dict_len,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -1828,8 +1828,8 @@ pub fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Dict.size : Dict * * -> Nat
-fn dict_size(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Dict.len : Dict * * -> Nat
+fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let size_var = var_store.fresh();
     let dict_var = var_store.fresh();
 
