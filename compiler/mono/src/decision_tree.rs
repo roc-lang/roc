@@ -602,7 +602,21 @@ fn to_relevant_branch_help<'a>(
                                     }
                                 }
                                 Wrapped::RecordOrSingleTagUnion => {
-                                    todo!("this should need a special index, right?")
+                                    let sub_positions = arguments.into_iter().enumerate().map(
+                                        |(index, (pattern, _))| {
+                                            (
+                                                Path::Index {
+                                                    index: index as u64,
+                                                    tag_id,
+                                                    path: Box::new(path.clone()),
+                                                },
+                                                Guard::NoGuard,
+                                                pattern,
+                                            )
+                                        },
+                                    );
+                                    start.extend(sub_positions);
+                                    start.extend(end);
                                 }
                                 Wrapped::MultiTagUnion => {
                                     let sub_positions = arguments.into_iter().enumerate().map(
@@ -1035,6 +1049,10 @@ fn path_to_expr_help<'a>(
 
                         match variant {
                             NonRecursive(layouts) | Recursive(layouts) => layouts[*tag_id as usize],
+                            NonNullableUnwrapped(fields) => {
+                                debug_assert_eq!(*tag_id, 0);
+                                fields
+                            }
                             NullableWrapped {
                                 nullable_id,
                                 other_tags: layouts,

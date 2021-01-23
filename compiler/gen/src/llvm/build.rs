@@ -805,8 +805,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Tag {
             union_size,
             arguments,
+            tag_layout,
             ..
-        } if *union_size == 1 => {
+        } if *union_size == 1
+            && matches!(tag_layout, Layout::Union(UnionLayout::NonRecursive(_))) =>
+        {
             let it = arguments.iter();
 
             let ctx = env.context;
@@ -1015,6 +1018,83 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             // Create the struct_type
             let data_ptr = reserve_with_refcount(env, &tag_layout);
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+
+        Tag {
+            arguments,
+            tag_layout: Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
+            union_size,
+            tag_id,
+            ..
+        } => {
+            debug_assert_eq!(*union_size, 1);
+            debug_assert_eq!(*tag_id, 0);
+            debug_assert_eq!(arguments.len(), fields.len());
+
+            let struct_layout =
+                Layout::Union(UnionLayout::NonRecursive(env.arena.alloc([*fields])));
+
+            let ptr_size = env.ptr_bytes;
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
+                let val = load_symbol(env, scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = env.builder.build_bitcast(
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr = reserve_with_refcount(env, &struct_layout);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
                 .builder
@@ -1278,15 +1358,17 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         } => {
             // extract field from a record
             match load_symbol_and_layout(env, scope, structure) {
-                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 => env
-                    .builder
-                    .build_extract_value(
-                        argument,
-                        *index as u32,
-                        env.arena
-                            .alloc(format!("struct_field_access_record_{}", index)),
-                    )
-                    .unwrap(),
+                (StructValue(argument), Layout::Struct(fields)) => {
+                    debug_assert!(fields.len() > 1);
+                    env.builder
+                        .build_extract_value(
+                            argument,
+                            *index as u32,
+                            env.arena
+                                .alloc(format!("struct_field_access_record_{}", index)),
+                        )
+                        .unwrap()
+                }
                 (StructValue(argument), Layout::Closure(_, _, _)) => env
                     .builder
                     .build_extract_value(
@@ -1295,6 +1377,38 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env.arena.alloc(format!("closure_field_access_{}_", index)),
                     )
                     .unwrap(),
+                (
+                    PointerValue(argument),
+                    Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
+                ) => {
+                    let struct_layout = Layout::Struct(fields);
+                    let struct_type = basic_type_from_layout(
+                        env.arena,
+                        env.context,
+                        &struct_layout,
+                        env.ptr_bytes,
+                    );
+
+                    let cast_argument = env
+                        .builder
+                        .build_bitcast(
+                            argument,
+                            struct_type.ptr_type(AddressSpace::Generic),
+                            "cast_rosetree_like",
+                        )
+                        .into_pointer_value();
+
+                    let ptr = env
+                        .builder
+                        .build_struct_gep(
+                            cast_argument,
+                            *index as u32,
+                            env.arena.alloc(format!("non_nullable_unwrapped_{}", index)),
+                        )
+                        .unwrap();
+
+                    env.builder.build_load(ptr, "load_rosetree_like")
+                }
                 (other, layout) => unreachable!(
                     "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
                     other, layout, index
@@ -1826,6 +1940,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 } else {
                     basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
                 };
+
                 let alloca = create_entry_block_alloca(
                     env,
                     parent,
@@ -2319,6 +2434,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                     debug_assert!(cond_value.is_pointer_value());
                     extract_tag_discriminant_ptr(env, cond_value.into_pointer_value())
                 }
+                NonNullableUnwrapped(_) => unreachable!("there is no tag to switch on"),
                 NullableWrapped { nullable_id, .. } => {
                     // we match on the discriminant, not the whole Tag
                     cond_layout = Layout::Builtin(Builtin::Int64);

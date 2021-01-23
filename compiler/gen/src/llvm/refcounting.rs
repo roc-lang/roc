@@ -359,6 +359,18 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                     build_dec_rec_union(env, layout_ids, tags, value.into_pointer_value(), true);
                 }
 
+                NonNullableUnwrapped(fields) => {
+                    debug_assert!(value.is_pointer_value());
+
+                    build_dec_rec_union(
+                        env,
+                        layout_ids,
+                        &*env.arena.alloc([*fields]),
+                        value.into_pointer_value(),
+                        true,
+                    );
+                }
+
                 NullableUnwrapped { other_fields, .. } => {
                     debug_assert!(value.is_pointer_value());
 
@@ -479,6 +491,18 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         &*env.arena.alloc([other_fields]),
+                        value.into_pointer_value(),
+                        true,
+                    );
+                }
+
+                NonNullableUnwrapped(fields) => {
+                    debug_assert!(value.is_pointer_value());
+
+                    build_inc_rec_union(
+                        env,
+                        layout_ids,
+                        &*env.arena.alloc([*fields]),
                         value.into_pointer_value(),
                         true,
                     );
