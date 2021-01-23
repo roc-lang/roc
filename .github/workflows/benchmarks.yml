@@ -1,0 +1,14 @@
+on: [pull_request]
+
+name: Benchmarks
+
+jobs:
+  benchmark:
+    name: benchmark
+    runs-on: self-hosted
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Log CPU model
+        run: sudo cat /proc/cpuinfo | grep name | uniq
