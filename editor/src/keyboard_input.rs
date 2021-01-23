@@ -1,8 +1,10 @@
+use crate::mvc;
 use crate::mvc::ed_model::EdModel;
 use crate::mvc::update::{
     move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
 };
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
+use clipboard::{ClipboardProvider, ClipboardContext};
 
 pub fn handle_keydown(
     elem_state: ElementState,
@@ -16,14 +18,14 @@ pub fn handle_keydown(
         return;
     }
 
+    println!("keycode: {:?}", virtual_keycode);
+
     match virtual_keycode {
         Left => handle_arrow(move_caret_left, &modifiers, ed_model),
         Up => handle_arrow(move_caret_up, &modifiers, ed_model),
         Right => handle_arrow(move_caret_right, &modifiers, ed_model),
         Down => handle_arrow(move_caret_down, &modifiers, ed_model),
-        Copy => {
-            todo!("copy");
-        }
+        Copy => handle_copy(ed_model),
         Paste => {
             todo!("paste");
         }
@@ -43,6 +45,18 @@ fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_mod
     );
     ed_model.caret_pos = new_caret_pos;
     ed_model.selection_opt = new_selection_opt;
+}
+
+fn handle_copy(ed_model: &EdModel) {
+    //TODO don't use unwrap
+    let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
+    let selected_str_opt = mvc::ed_model::get_selected_str(ed_model);
+
+    if let Some(selected_str) = selected_str_opt {
+        ctx.set_contents(selected_str.to_owned()).unwrap();
+    }
+    
+    println!("COPY");
 }
 
 // pub fn handle_text_input(
