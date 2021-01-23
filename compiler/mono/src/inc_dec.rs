@@ -52,7 +52,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
             Rethrow => {}
 
-            Inc(symbol, cont) | Dec(symbol, cont) => {
+            Inc(symbol, _, cont) | Dec(symbol, cont) => {
                 result.insert(*symbol);
                 stack.push(cont);
             }
@@ -262,7 +262,9 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn add_inc(&self, symbol: Symbol, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
+    fn add_inc(&self, symbol: Symbol, inc_amount: u64, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
+        debug_assert!(inc_amount > 0);
+
         let info = self.get_var_info(symbol);
 
         if info.persistent {
@@ -275,7 +277,7 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
-        self.arena.alloc(Stmt::Inc(symbol, stmt))
+        self.arena.alloc(Stmt::Inc(symbol, inc_amount, stmt))
     }
 
     fn add_dec(&self, symbol: Symbol, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
@@ -335,11 +337,8 @@ impl<'a> Context<'a> {
                     num_consumptions - 1
                 };
 
-                // verify that this is indeed always 1
-                debug_assert!(num_incs <= 1);
-
-                if num_incs == 1 {
-                    b = self.add_inc(*x, b)
+                if num_incs >= 1 {
+                    b = self.add_inc(*x, num_incs as u64, b)
                 }
             }
         }
@@ -524,7 +523,7 @@ impl<'a> Context<'a> {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
                 let b = if info_x.consume {
-                    self.add_inc(z, b)
+                    self.add_inc(z, 1, b)
                 } else {
                     b
                 };
@@ -786,7 +785,7 @@ impl<'a> Context<'a> {
                 live_vars.insert(*x);
 
                 if info.reference && !info.consume {
-                    (self.add_inc(*x, stmt), live_vars)
+                    (self.add_inc(*x, 1, stmt), live_vars)
                 } else {
                     (stmt, live_vars)
                 }
@@ -851,7 +850,7 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
-            RuntimeError(_) | Inc(_, _) | Dec(_, _) => (stmt, MutSet::default()),
+            RuntimeError(_) | Inc(_, _, _) | Dec(_, _) => (stmt, MutSet::default()),
         }
     }
 }
@@ -902,7 +901,7 @@ pub fn collect_stmt(
             vars
         }
 
-        Inc(symbol, cont) | Dec(symbol, cont) => {
+        Inc(symbol, _, cont) | Dec(symbol, cont) => {
             vars.insert(*symbol);
             collect_stmt(cont, jp_live_vars, vars)
         }
