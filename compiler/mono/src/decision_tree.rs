@@ -1027,6 +1027,8 @@ fn path_to_expr_help<'a>(
 
                 debug_assert!(*index < field_layouts.len() as u64);
 
+                debug_assert_eq!(field_layouts.len(), 1);
+
                 let inner_layout = field_layouts[*index as usize].clone();
                 let inner_expr = Expr::AccessAtIndex {
                     index: *index,

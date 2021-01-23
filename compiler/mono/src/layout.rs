@@ -1806,8 +1806,8 @@ pub fn list_layout_from_elem<'a>(
             // If this was still a (List *) then it must have been an empty list
             Ok(Layout::Builtin(Builtin::EmptyList))
         }
-        content => {
-            let elem_layout = Layout::new_help(env, elem_var, content)?;
+        _ => {
+            let elem_layout = Layout::from_var(env, elem_var)?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::List(

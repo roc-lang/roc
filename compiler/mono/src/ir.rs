@@ -766,7 +766,7 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Rethrow,
-    Inc(Symbol, &'a Stmt<'a>),
+    Inc(Symbol, u64, &'a Stmt<'a>),
     Dec(Symbol, &'a Stmt<'a>),
     Join {
         id: JoinPointId,
@@ -1267,8 +1267,15 @@ impl<'a> Stmt<'a> {
                     .append(alloc.intersperse(it, alloc.space()))
                     .append(";")
             }
-            Inc(symbol, cont) => alloc
+            Inc(symbol, 1, cont) => alloc
                 .text("inc ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
+            Inc(symbol, n, cont) => alloc
+                .text("inc ")
+                .append(alloc.text(format!("{}", n)))
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";")
                 .append(alloc.hardline())
@@ -3102,7 +3109,8 @@ pub fn with_hole<'a>(
                 );
 
                 for (loc_cond, loc_then) in branches.into_iter().rev() {
-                    let branching_symbol = env.unique_symbol();
+                    let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
+
                     let then = with_hole(
                         env,
                         loc_then.value,
@@ -3123,14 +3131,14 @@ pub fn with_hole<'a>(
                     );
 
                     // add condition
-                    stmt = with_hole(
+                    stmt = assign_to_symbol(
                         env,
-                        loc_cond.value,
-                        cond_var,
                         procs,
                         layout_cache,
+                        cond_var,
+                        loc_cond,
                         branching_symbol,
-                        env.arena.alloc(stmt),
+                        stmt,
                     );
                 }
 
@@ -3289,7 +3297,10 @@ pub fn with_hole<'a>(
 
                 match Wrapped::opt_from_layout(&record_layout) {
                     Some(result) => result,
-                    None => Wrapped::SingleElementRecord,
+                    None => {
+                        debug_assert_eq!(field_layouts.len(), 1);
+                        Wrapped::SingleElementRecord
+                    }
                 }
             };
 
@@ -4697,8 +4708,8 @@ fn substitute_in_stmt_help<'a>(
             Some(s) => Some(arena.alloc(Ret(s))),
             None => None,
         },
-        Inc(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
-            Some(cont) => Some(arena.alloc(Inc(*symbol, cont))),
+        Inc(symbol, inc, cont) => match substitute_in_stmt_help(arena, cont, subs) {
+            Some(cont) => Some(arena.alloc(Inc(*symbol, *inc, cont))),
             None => None,
         },
         Dec(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
@@ -5619,7 +5630,11 @@ fn call_by_name<'a>(
                                     partial_proc,
                                 ) {
                                     Ok((proc, layout)) => {
-                                        debug_assert_eq!(full_layout, layout);
+                                        debug_assert_eq!(
+                                            &full_layout, &layout,
+                                            "\n\n{:?}\n\n{:?}",
+                                            full_layout, layout
+                                        );
                                         let function_layout =
                                             FunctionLayouts::from_layout(env.arena, layout);
 
@@ -6070,7 +6085,12 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
+                            debug_assert_eq!(
+                                arguments.len(),
+                                argument_layouts[1..].len(),
+                                "{:?}",
+                                tag_name
+                            );
                             let it = argument_layouts[1..].iter();
 
                             for ((_, loc_pat), layout) in arguments.iter().zip(it) {
