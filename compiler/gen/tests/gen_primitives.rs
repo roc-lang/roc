@@ -13,6 +13,8 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_primitives {
+    use roc_std::RocStr;
+
     #[test]
     fn basic_int() {
         assert_evals_to!("123", 123, i64);
@@ -1268,7 +1270,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_insert() {
         assert_non_opt_evals_to!(
             indoc!(
@@ -1338,54 +1339,20 @@ mod gen_primitives {
                         _ ->
                           Node color key value left right
 
-                main : RedBlackTree (Int *) {}
+                show : RedBlackTree I64 {} -> Str
+                show = \tree ->
+                    when tree is
+                        Empty -> "Empty"
+                        Node _ _ _ _ _ -> "Node"
+
+
+                main : Str
                 main =
-                    insert 0 {} Empty
+                    show (insert 0 {} Empty)
                 "#
             ),
-            1,
-            i64
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn rbtree_balance_inc_dec() {
-        // TODO does not define a variable correctly, but all is well with the type signature
-        assert_non_opt_evals_to!(
-            indoc!(
-                r#"
-                app "test" provides [ main ] to "./platform"
-
-                NodeColor : [ Red, Black ]
-
-                RedBlackTree k : [ Node NodeColor k (RedBlackTree k)  (RedBlackTree k), Empty ]
-
-                # balance : NodeColor, k, RedBlackTree k,  RedBlackTree k -> RedBlackTree k
-                balance = \color, key, left, right ->
-                  when right is
-                    Node Red rK rLeft rRight ->
-                      when left is
-                        Node Red _ _ _ ->
-                          Node
-                            Red
-                            key
-                            Empty
-                            Empty
-
-                        _ ->
-                          Node color rK (Node Red key left rLeft) rRight
-
-                    _ ->
-                        Empty
-
-                main : RedBlackTree (Int *)
-                main =
-                    balance Red 0 Empty Empty
-                "#
-            ),
-            0,
-            i64
+            RocStr::from_slice("Node".as_bytes()),
+            RocStr
         );
     }
 
@@ -1410,6 +1377,47 @@ mod gen_primitives {
             false,
             *const i64,
             |x: *const i64| x.is_null()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn rbtree_layout_issue() {
+        // there is a flex var in here somewhere that blows up layout creation
+        assert_non_opt_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                NodeColor : [ Red, Black ]
+
+                RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+
+                # balance : NodeColor, k, v, RedBlackTree k v -> RedBlackTree k v
+                balance = \color, key, value, right ->
+                  when right is
+                    Node Red _ _ rLeft rRight ->
+                        Node color key value rLeft rRight
+
+
+                    _ ->
+                        Empty
+
+                show : RedBlackTree * * -> Str
+                show = \tree ->
+                    when tree is
+                        Empty -> "Empty"
+                        Node _ _ _ _ _ -> "Node"
+
+                zero : I64
+                zero = 0
+
+                main : Str
+                main = show (balance Red zero zero Empty)
+                "#
+            ),
+            RocStr::from_slice("Empty".as_bytes()),
+            RocStr
         );
     }
 
@@ -1450,13 +1458,19 @@ mod gen_primitives {
                     _ ->
                         Empty
 
-                main : RedBlackTree (Int *) (Int *)
-                main =
-                    balance Red 0 0 Empty Empty
+                show : RedBlackTree * * -> Str
+                show = \tree ->
+                    when tree is
+                        Empty -> "Empty"
+                        Node _ _ _ _ _ -> "Node"
+
+
+                main : Str
+                main = show (balance Red 0 0 Empty Empty)
                 "#
             ),
-            1,
-            i64
+            RocStr::from_slice("Empty".as_bytes()),
+            RocStr
         );
     }
 
