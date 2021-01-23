@@ -235,11 +235,11 @@ pub fn str_to_expr2<'a>(
 ) -> Result<(Expr2, self::Output), Fail> {
     let state = State::new(input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(expr(0)), 0);
-    let answer = parser.parse(&arena, state);
+    let parse_res = parser.parse(&arena, state);
 
-    answer
-        .map(|(loc_expr, _)| loc_expr)
-        .map(|loc_expr| to_expr2(env, scope, &loc_expr.value, region))
+    parse_res
+        .map(|(loc_expr, _)| arena.alloc(loc_expr.value))
+        .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
         .map_err(|(fail, _)| fail)
 }
 
