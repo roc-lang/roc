@@ -26,7 +26,7 @@ use crate::graphics::style::CODE_TXT_XY;
 use crate::mvc::app_model::AppModel;
 use crate::mvc::ed_model::EdModel;
 use crate::mvc::{ed_model, ed_view, update};
-use crate::resources::strings::NOTHING_OPENED;
+// use crate::resources::strings::NOTHING_OPENED;
 use crate::vec_result::get_res;
 use bumpalo::Bump;
 use cgmath::Vector2;
@@ -34,7 +34,7 @@ use ed_model::Position;
 use lang::{ast::Expr2, pool::Pool, scope::Scope};
 use pipelines::RectResources;
 use roc_collections::all::MutMap;
-use roc_module::symbol::{IdentIds, ModuleId, ModuleIds};
+use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
 use std::error::Error;
@@ -270,7 +270,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &mut glyph_brush,
                     );
                 } else {
-                    queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
+                    // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
 
                     let mut pool = Pool::with_capacity(12);
                     let mut var_store = VarStore::default();
@@ -419,7 +419,7 @@ fn render_node(
                 position,
                 area_bounds,
                 color: CODE_COLOR.into(),
-                text: String::from("1"),
+                text: format!("{:?}", number),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
             };
@@ -463,7 +463,7 @@ fn queue_editor_text(
     queue_code_text_draw(&code_text, glyph_brush);
 }
 
-fn queue_no_file_text(
+fn _queue_no_file_text(
     size: &PhysicalSize<u32>,
     text: &str,
     text_coords: Vector2<f32>,
