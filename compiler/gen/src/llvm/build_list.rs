@@ -576,7 +576,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 
             let result = builder.build_load(elem_ptr, "List.get");
 
-            increment_refcount_layout(env, parent, layout_ids, result, elem_layout);
+            increment_refcount_layout(env, parent, layout_ids, 1, result, elem_layout);
 
             result
         }
@@ -1369,11 +1369,11 @@ macro_rules! list_map_help {
             let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
 
             let list_loop = |index, before_elem| {
-                increment_refcount_layout($env, parent, layout_ids, before_elem, elem_layout);
+                increment_refcount_layout($env, parent, layout_ids, 1, before_elem, elem_layout);
 
                 let arguments = match closure_info {
                     Some((closure_data_layout, closure_data)) => {
-                        increment_refcount_layout( $env, parent, layout_ids, closure_data, closure_data_layout);
+                        increment_refcount_layout( $env, parent, layout_ids, 1, closure_data, closure_data_layout);
 
                         bumpalo::vec![in $env.arena; before_elem, closure_data]
                     }

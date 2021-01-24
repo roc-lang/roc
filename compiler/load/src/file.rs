@@ -1822,6 +1822,8 @@ fn update<'a>(
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
+
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -1834,8 +1836,6 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
-
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {

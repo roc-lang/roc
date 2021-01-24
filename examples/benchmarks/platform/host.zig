@@ -88,13 +88,8 @@ fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) vo
 pub export fn roc_fx_putLine(rocPath: str.RocStr) i64 {
     const stdout = std.io.getStdOut().writer();
 
-    const u8_ptr = rocPath.asU8ptr();
-
-    var i: usize = 0;
-    while (i < rocPath.len()) {
-        stdout.print("{c}", .{u8_ptr[i]}) catch unreachable;
-
-        i += 1;
+    for (rocPath.asSlice()) |char| {
+        stdout.print("{c}", .{char}) catch unreachable;
     }
 
     stdout.print("\n", .{}) catch unreachable;

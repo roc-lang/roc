@@ -82,15 +82,6 @@ pub fn helper<'a>(
     debug_assert_eq!(exposed_to_host.len(), 1);
     let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
-    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(found) => found.clone(),
-        None => panic!(
-            "The main function symbol {:?} does not have a procedure in {:?}",
-            main_fn_symbol,
-            &procedures.keys()
-        ),
-    };
-
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
     let mut delayed_errors = Vec::new();
@@ -173,6 +164,15 @@ pub fn helper<'a>(
             assert_eq!(0, 1, "Mistakes were made");
         }
     }
+
+    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
+        Some(found) => found.clone(),
+        None => panic!(
+            "The main function symbol {:?} does not have a procedure in {:?}",
+            main_fn_symbol,
+            &procedures.keys()
+        ),
+    };
 
     let module = roc_gen::llvm::build::module_from_builtins(context, "app", ptr_bytes);
 
