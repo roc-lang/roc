@@ -1264,6 +1264,7 @@ where
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
                         // Keep listening until we receive a Shutdown msg
+
                         for msg in worker_msg_rx.iter() {
                             match msg {
                                 WorkerMsg::Shutdown => {
