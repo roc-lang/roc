@@ -167,6 +167,36 @@ pub fn str_concat<'a, 'ctx, 'env>(
     zig_str_to_struct(env, zig_result).into()
 }
 
+/// Str.join : List Str, Str -> Str
+pub fn str_join_with<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _inplace: InPlace,
+    scope: &Scope<'a, 'ctx>,
+    list_symbol: Symbol,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    // dirty hack; pretend a `list` is a `str` that works because
+    // they have the same stack layout `{ u8*, usize }`
+    let list_i128 = str_symbol_to_i128(env, scope, list_symbol);
+    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+
+    let zig_result = call_bitcode_fn(
+        env,
+        &[
+            env.context
+                .i32_type()
+                .const_int(env.ptr_bytes as u64, false)
+                .into(),
+            list_i128.into(),
+            str_i128.into(),
+        ],
+        &bitcode::STR_JOIN_WITH,
+    )
+    .into_struct_value();
+
+    zig_str_to_struct(env, zig_result).into()
+}
+
 pub fn str_number_of_bytes<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
