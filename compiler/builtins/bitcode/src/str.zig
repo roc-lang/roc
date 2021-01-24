@@ -28,39 +28,10 @@ pub const RocStr = extern struct {
     pub fn init(allocator: *Allocator, bytes_ptr: [*]const u8, length: usize) RocStr {
         const roc_str_size = @sizeOf(RocStr);
 
-        if (length < roc_str_size) {
-            var ret_small_str = RocStr.empty();
-            const target_ptr = @ptrToInt(&ret_small_str);
-            var index: u8 = 0;
+        var result = RocStr.allocate(allocator, u64, InPlace.Clone, length);
+        @memcpy(result.asU8ptr(), bytes_ptr, length);
 
-            // TODO isn't there a way to bulk-zero data in Zig?
-            // Zero out the data, just to be safe
-            while (index < roc_str_size) {
-                var offset_ptr = @intToPtr(*u8, target_ptr + index);
-                offset_ptr.* = 0;
-                index += 1;
-            }
-
-            // TODO rewrite this into a for loop
-            index = 0;
-            while (index < length) {
-                var offset_ptr = @intToPtr(*u8, target_ptr + index);
-                offset_ptr.* = bytes_ptr[index];
-                index += 1;
-            }
-
-            // set the final byte to be the length
-            const final_byte_ptr = @intToPtr(*u8, target_ptr + roc_str_size - 1);
-            final_byte_ptr.* = @truncate(u8, length) ^ 0b10000000;
-
-            return ret_small_str;
-        } else {
-            var result = RocStr.initBig(allocator, u64, InPlace.Clone, length);
-
-            @memcpy(@ptrCast([*]u8, result.str_bytes), bytes_ptr, length);
-
-            return result;
-        }
+        return result;
     }
 
     pub fn initBig(allocator: *Allocator, comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
@@ -80,6 +51,25 @@ pub const RocStr = extern struct {
             .str_bytes = first_element,
             .str_len = number_of_chars,
         };
+    }
+
+    // allocate space for a (big or small) RocStr, but put nothing in it yet
+    pub fn allocate(allocator: *Allocator, comptime T: type, result_in_place: InPlace, number_of_chars: usize) RocStr {
+        const small_str_bytes = 2 * @sizeOf(T);
+        const result_is_big = number_of_chars >= small_str_bytes;
+
+        if (result_is_big) {
+            return RocStr.initBig(allocator, T, result_in_place, number_of_chars);
+        } else {
+            var t = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+            const mask: u8 = 0b1000_0000;
+            const final_byte = @truncate(u8, number_of_chars) | mask;
+
+            t[small_str_bytes - 1] = final_byte;
+
+            return @bitCast(RocStr, t);
+        }
     }
 
     pub fn deinit(self: RocStr, allocator: *Allocator) void {
@@ -163,6 +153,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isSmallStr(self: RocStr) bool {
+        // NOTE: returns False for empty string!
         return @bitCast(isize, self.str_len) < 0;
     }
 
@@ -199,9 +190,9 @@ pub const RocStr = extern struct {
     // One use for this function is writing into an `alloca` for a C string that
     // only needs to live long enough to be passed as an argument to
     // a C function - like the file path argument to `fopen`.
-    pub fn memcpy(self: RocStr, dest: [*]u8, length: usize) void {
+    pub fn memcpy(self: RocStr, dest: [*]u8) void {
         const src = self.asU8ptr();
-        @memcpy(dest, src, length);
+        @memcpy(dest, src, self.len());
     }
 
     test "RocStr.eq: equal" {
@@ -824,53 +815,11 @@ fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPla
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        const small_str_bytes = 2 * @sizeOf(T);
-        const result_is_big = combined_length >= small_str_bytes;
+        var result = RocStr.allocate(allocator, T, result_in_place, combined_length);
+        var result_ptr = result.asU8ptr();
 
-        if (result_is_big) {
-            var result = RocStr.initBig(allocator, T, result_in_place, combined_length);
-
-            {
-                const old_bytes = arg1.asU8ptr();
-                const new_bytes = @ptrCast([*]u8, result.str_bytes);
-
-                @memcpy(new_bytes, old_bytes, arg1.len());
-            }
-
-            {
-                const old_bytes = arg2.asU8ptr();
-                const new_bytes = @ptrCast([*]u8, result.str_bytes) + arg1.len();
-
-                @memcpy(new_bytes, old_bytes, arg2.len());
-            }
-
-            return result;
-        } else {
-            var result = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-
-            // if the result is small, then for sure arg1 and arg2 are also small
-
-            {
-                var old_bytes: [*]u8 = @ptrCast([*]u8, &@bitCast([16]u8, arg1));
-                var new_bytes: [*]u8 = @ptrCast([*]u8, &result);
-
-                @memcpy(new_bytes, old_bytes, arg1.len());
-            }
-
-            {
-                var old_bytes: [*]u8 = @ptrCast([*]u8, &@bitCast([16]u8, arg2));
-                var new_bytes = @ptrCast([*]u8, &result) + arg1.len();
-
-                @memcpy(new_bytes, old_bytes, arg2.len());
-            }
-
-            const mask: u8 = 0b1000_0000;
-            const final_byte = @truncate(u8, combined_length) | mask;
-
-            result[small_str_bytes - 1] = final_byte;
-
-            return @bitCast(RocStr, result);
-        }
+        arg1.memcpy(result_ptr);
+        arg2.memcpy(result_ptr + arg1.len());
 
         return result;
     }
@@ -903,4 +852,92 @@ test "RocStr.concat: small concat small" {
     defer result.deinit(testing.allocator);
 
     expect(roc_str3.eq(result));
+}
+
+pub const RocListStr = extern struct {
+    list_elements: ?[*]RocStr,
+    list_length: usize,
+};
+
+// Str.joinWith
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
+pub fn strJoinWithC(ptr_size: u32, list: RocListStr, separator: RocStr) callconv(.C) RocStr {
+    return @call(.{ .modifier = always_inline }, strJoinWith, .{ std.heap.c_allocator, ptr_size, list, separator });
+}
+
+fn strJoinWith(allocator: *Allocator, ptr_size: u32, list: RocListStr, separator: RocStr) RocStr {
+    return switch (ptr_size) {
+        4 => strJoinWithHelp(allocator, i32, list, separator),
+        8 => strJoinWithHelp(allocator, i64, list, separator),
+        else => unreachable,
+    };
+}
+
+fn strJoinWithHelp(allocator: *Allocator, comptime T: type, list: RocListStr, separator: RocStr) RocStr {
+    const len = list.list_length;
+
+    if (len == 0) {
+        return RocStr.empty();
+    } else {
+        const ptr = @ptrCast([*]RocStr, list.list_elements);
+        const slice: []RocStr = ptr[0..len];
+
+        // determine the size of the result
+        var total_size: usize = 0;
+        for (slice) |substr| {
+            total_size += substr.len();
+        }
+
+        // include size of the separator
+        total_size += separator.len() * (len - 1);
+
+        var result = RocStr.allocate(allocator, T, InPlace.Clone, total_size);
+        var result_ptr = result.asU8ptr();
+
+        var offset: usize = 0;
+        for (slice[0 .. len - 1]) |substr| {
+            substr.memcpy(result_ptr + offset);
+            offset += substr.len();
+
+            separator.memcpy(result_ptr + offset);
+            offset += separator.len();
+        }
+
+        const substr = slice[len - 1];
+        substr.memcpy(result_ptr + offset);
+
+        return result;
+    }
+}
+
+test "RocStr.joinWith: result is big" {
+    const sep_len = 2;
+    var sep: [sep_len]u8 = ", ".*;
+    const sep_ptr: [*]u8 = &sep;
+    var roc_sep = RocStr.init(testing.allocator, sep_ptr, sep_len);
+
+    const elem_len = 13;
+    var elem: [elem_len]u8 = "foobarbazspam".*;
+    const elem_ptr: [*]u8 = &elem;
+    var roc_elem = RocStr.init(testing.allocator, elem_ptr, elem_len);
+
+    const result_len = 43;
+    var xresult: [result_len]u8 = "foobarbazspam, foobarbazspam, foobarbazspam".*;
+    const result_ptr: [*]u8 = &xresult;
+    var roc_result = RocStr.init(testing.allocator, result_ptr, result_len);
+
+    var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
+    const list = RocListStr{ .list_length = 3, .list_elements = @ptrCast([*]RocStr, &elements) };
+
+    defer {
+        roc_sep.deinit(testing.allocator);
+        roc_elem.deinit(testing.allocator);
+        roc_result.deinit(testing.allocator);
+    }
+
+    const result = strJoinWith(testing.allocator, 8, list, roc_sep);
+
+    defer result.deinit(testing.allocator);
+
+    expect(roc_result.eq(result));
 }
