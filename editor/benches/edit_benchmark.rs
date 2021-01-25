@@ -115,7 +115,6 @@ fn get_line_helper(nr_lines: usize, c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let rand_indx = rand_gen.gen_range(0..nr_lines);
-                println!("{:?}", rand_indx);
                 text_buf.line(rand_indx).unwrap()
             })
         },
