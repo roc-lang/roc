@@ -852,7 +852,7 @@ test "RocStr.concat: small concat small" {
         roc_str3.deinit(testing.allocator);
     }
 
-    const result = strConcat(testing.allocator, 8, InPlace.Clone, roc_str1, roc_str2);
+    const result = strConcat(testing.allocator, InPlace.Clone, roc_str1, roc_str2);
 
     defer result.deinit(testing.allocator);
 
@@ -932,7 +932,7 @@ test "RocStr.joinWith: result is big" {
         roc_result.deinit(testing.allocator);
     }
 
-    const result = strJoinWith(testing.allocator, 8, list, roc_sep);
+    const result = strJoinWith(testing.allocator, list, roc_sep);
 
     defer result.deinit(testing.allocator);
 
