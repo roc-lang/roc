@@ -1936,29 +1936,23 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn rosetree_basic() {
         assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app "test" provides [ main ] to "./platform"
 
-                # RoseTree
                 Tree a : [ Tree a (List (Tree a)) ]
-
-                tree : a, List (Tree a) -> Tree a
-                tree = \a, t -> Tree a t
 
                 singleton : a -> Tree a
                 singleton = \x -> Tree x []
 
                 main : Bool
                 main =
-                    x : I64
-                    x = 1
-
-                    when tree x [ singleton 5, singleton 3 ] is
-                        Tree 0x1 _ -> True
+                    x : Tree F64
+                    x = singleton 3
+                    when x is 
+                        Tree 3.0 _ -> True
                         _ -> False
                 "#
             ),

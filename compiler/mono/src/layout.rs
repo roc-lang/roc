@@ -43,8 +43,11 @@ pub enum UnionLayout<'a> {
     /// e.g. `Result a e : [ Ok a, Err e ]`
     NonRecursive(&'a [&'a [Layout<'a>]]),
     /// A recursive tag union
-    /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+    /// e.g. `Expr : [ Sym Str, Add Expr Expr ]`
     Recursive(&'a [&'a [Layout<'a>]]),
+    /// A recursive tag union with just one constructor
+    /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+    NonNullableUnwrapped(&'a [Layout<'a>]),
     /// A recursive tag union where the non-nullable variant(s) store the tag id
     /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
@@ -485,7 +488,10 @@ impl<'a> Layout<'a> {
                     NonRecursive(tags) => tags
                         .iter()
                         .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
-                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. } => {
+                    Recursive(_)
+                    | NullableWrapped { .. }
+                    | NullableUnwrapped { .. }
+                    | NonNullableUnwrapped(_) => {
                         // a recursive union will always contain a pointer, and is thus not safe to memcpy
                         false
                     }
@@ -549,9 +555,10 @@ impl<'a> Layout<'a> {
                         .max()
                         .unwrap_or_default(),
 
-                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. } => {
-                        pointer_size
-                    }
+                    Recursive(_)
+                    | NullableWrapped { .. }
+                    | NullableUnwrapped { .. }
+                    | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
             Closure(_, closure_layout, _) => pointer_size + closure_layout.stack_size(pointer_size),
@@ -580,9 +587,10 @@ impl<'a> Layout<'a> {
                         .map(|x| x.alignment_bytes(pointer_size))
                         .max()
                         .unwrap_or(0),
-                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. } => {
-                        pointer_size
-                    }
+                    Recursive(_)
+                    | NullableWrapped { .. }
+                    | NullableUnwrapped { .. }
+                    | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
@@ -634,7 +642,10 @@ impl<'a> Layout<'a> {
                         .map(|ls| ls.iter())
                         .flatten()
                         .any(|f| f.contains_refcounted()),
-                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. } => true,
+                    Recursive(_)
+                    | NullableWrapped { .. }
+                    | NullableUnwrapped { .. }
+                    | NonNullableUnwrapped(_) => true,
                 }
             }
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
@@ -1116,6 +1127,9 @@ fn layout_from_flat_type<'a>(
                         other_tags: many,
                     },
                 }
+            } else if tag_layouts.len() == 1 {
+                // drop the tag id
+                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap()[1..])
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
@@ -1220,6 +1234,10 @@ pub enum WrappedVariant<'a> {
         nullable_name: TagName,
         sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
     },
+    NonNullableUnwrapped {
+        tag_name: TagName,
+        fields: &'a [Layout<'a>],
+    },
     NullableUnwrapped {
         nullable_id: bool,
         nullable_name: TagName,
@@ -1281,6 +1299,7 @@ impl<'a> WrappedVariant<'a> {
                     (!*nullable_id as u8, *other_fields)
                 }
             }
+            NonNullableUnwrapped { fields, .. } => (0, fields),
         }
     }
 
@@ -1299,6 +1318,7 @@ impl<'a> WrappedVariant<'a> {
                 sorted_tag_layouts.len() + 1
             }
             NullableUnwrapped { .. } => 2,
+            NonNullableUnwrapped { .. } => 1,
         }
     }
 }
@@ -1409,6 +1429,11 @@ pub fn union_sorted_tags_help<'a>(
                 } else {
                     UnionVariant::Unit
                 }
+            } else if opt_rec_var.is_some() {
+                UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
+                    tag_name,
+                    fields: layouts.into_bump_slice(),
+                })
             } else {
                 UnionVariant::Unwrapped(layouts)
             }
@@ -1517,6 +1542,7 @@ pub fn union_sorted_tags_help<'a>(
                             }
                         }
                     } else if is_recursive {
+                        debug_assert!(answer.len() > 1);
                         WrappedVariant::Recursive {
                             sorted_tag_layouts: answer,
                         }
@@ -1585,6 +1611,7 @@ pub fn layout_from_tag_union<'a>(
                             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
                             tag_layouts.extend(tags.iter().map(|r| r.1));
 
+                            debug_assert!(tag_layouts.len() > 1);
                             Layout::Union(UnionLayout::Recursive(tag_layouts.into_bump_slice()))
                         }
 
@@ -1603,6 +1630,7 @@ pub fn layout_from_tag_union<'a>(
                         }
 
                         NullableUnwrapped { .. } => todo!(),
+                        NonNullableUnwrapped { .. } => todo!(),
                     }
                 }
             }
@@ -1778,8 +1806,8 @@ pub fn list_layout_from_elem<'a>(
             // If this was still a (List *) then it must have been an empty list
             Ok(Layout::Builtin(Builtin::EmptyList))
         }
-        content => {
-            let elem_layout = Layout::new_help(env, elem_var, content)?;
+        _ => {
+            let elem_layout = Layout::from_var(env, elem_var)?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::List(

@@ -146,6 +146,10 @@ pub fn basic_type_from_layout<'ctx>(
                     let block = block_of_memory_slices(context, &[&other_fields[1..]], ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
+                NonNullableUnwrapped(fields) => {
+                    let block = block_of_memory_slices(context, &[fields], ptr_bytes);
+                    block.ptr_type(AddressSpace::Generic).into()
+                }
                 NonRecursive(_) => block_of_memory(context, layout, ptr_bytes),
             }
         }
