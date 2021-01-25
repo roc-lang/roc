@@ -870,19 +870,15 @@ pub const RocListStr = extern struct {
 
 // Str.joinWith
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
-pub fn strJoinWithC(ptr_size: u32, list: RocListStr, separator: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strJoinWith, .{ std.heap.c_allocator, ptr_size, list, separator });
+pub fn strJoinWithC(list: RocListStr, separator: RocStr) callconv(.C) RocStr {
+    return @call(.{ .modifier = always_inline }, strJoinWith, .{ std.heap.c_allocator, list, separator });
 }
 
-fn strJoinWith(allocator: *Allocator, ptr_size: u32, list: RocListStr, separator: RocStr) RocStr {
-    return switch (ptr_size) {
-        4 => strJoinWithHelp(allocator, i32, list, separator),
-        8 => strJoinWithHelp(allocator, i64, list, separator),
-        else => unreachable,
-    };
+fn strJoinWith(allocator: *Allocator, list: RocListStr, separator: RocStr) RocStr {
+    return strJoinWithHelp(allocator, list, separator);
 }
 
-fn strJoinWithHelp(allocator: *Allocator, comptime T: type, list: RocListStr, separator: RocStr) RocStr {
+fn strJoinWithHelp(allocator: *Allocator, list: RocListStr, separator: RocStr) RocStr {
     const len = list.list_length;
 
     if (len == 0) {

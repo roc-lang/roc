@@ -178,14 +178,7 @@ pub fn str_join_with<'a, 'ctx, 'env>(
 
     let zig_result = call_bitcode_fn(
         env,
-        &[
-            env.context
-                .i32_type()
-                .const_int(env.ptr_bytes as u64, false)
-                .into(),
-            list_i128.into(),
-            str_i128.into(),
-        ],
+        &[list_i128.into(), str_i128.into()],
         &bitcode::STR_JOIN_WITH,
     )
     .into_struct_value();
