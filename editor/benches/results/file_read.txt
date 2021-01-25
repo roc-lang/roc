@@ -1,0 +1,26 @@
+System info:
+- CPU: Intel i7 4770k
+- SSD: Samsung 970 EVO PLUS M.2 1TB
+- OS: Ubuntu 20.04
+
+c.bench_function(
+        "read file into textbuffer", 
+        |b| b.iter(|| text_buffer::from_path(black_box(Path::new(path_str))))
+    );                                                           
+
+10 lines, 285 B                 time:   [3.2343 us]
+
+100 lines, 4.2 KiB              time:   [6.1810 us]
+                                                                
+500 lines, 22.2 KiB             time:   [15.689 us]
+                                                                                                
+1000 lines, 44.6 KiB            time:   [29.591 us]
+                                                                                    
+10000 lines, 448 KiB            time:   [376.22 us]                                
+                                
+50000 lines, 2.2 MiB            time:   [2.0329 ms]                    
+                                                                
+100000 lines, 4.4 MiB           time:   [4.4221 ms]
+                                                                                        
+25000000 lines, 1.1 GiB         time:   [1.1333 s]
+                        
