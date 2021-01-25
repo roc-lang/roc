@@ -21,7 +21,7 @@ mod gen_dict {
                     Dict.len Dict.empty
                 "#
             ),
-            1,
+            0,
             usize
         );
     }

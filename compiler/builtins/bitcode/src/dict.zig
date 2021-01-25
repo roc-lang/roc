@@ -3,12 +3,11 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
 pub const RocDict = extern struct {
-    len: usize,
+    dict_bytes: ?[*]u8,
+    dict_len: usize,
 
     pub fn init() RocDict {
-        return RocDict{
-            .len = 0
-        };
+        return RocDict{ .dict_len = 0, .dict_bytes = null };
     }
 
     pub fn contains(self: RocDict, key_size: usize, key_ptr: *const c_void, hash_code: u64) bool {
@@ -16,9 +15,14 @@ pub const RocDict = extern struct {
     }
 };
 
+// Dict.empty
+pub fn dictEmpty() callconv(.C) RocDict {
+    return RocDict.init();
+}
+
 // Dict.len
 pub fn dictLen(dict: RocDict) callconv(.C) usize {
-    return dict.len;
+    return dict.dict_len;
 }
 
 test "RocDict.init() contains nothing" {

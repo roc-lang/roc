@@ -35,3 +35,4 @@ pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 
 pub const DICT_LEN: &str = "roc_builtins.dict.len";
+pub const DICT_EMPTY: &str = "roc_builtins.dict.empty";

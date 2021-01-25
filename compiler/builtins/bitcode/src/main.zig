@@ -6,6 +6,7 @@ const testing = std.testing;
 const dict = @import("dict.zig");
 comptime {
     exportDictFn(dict.dictLen, "len");
+    exportDictFn(dict.dictEmpty, "empty");
 }
 
 // Num Module
