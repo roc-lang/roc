@@ -28,6 +28,17 @@ mod gen_num {
     }
 
     #[test]
+    fn f64_values() {
+        assert_evals_to!("0.0", 0.0, f64);
+        assert_evals_to!("-0.0", 0.0, f64);
+        assert_evals_to!("1.0", 1.0, f64);
+        assert_evals_to!("-1.0", -1.0, f64);
+        assert_evals_to!("3.1415926535897932", 3.1415926535897932, f64);
+        assert_evals_to!(&format!("{:0.1}", f64::MIN), f64::MIN, f64);
+        assert_evals_to!(&format!("{:0.1}", f64::MAX), f64::MAX, f64);
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(
@@ -37,6 +48,19 @@ mod gen_num {
             ),
             6,
             i64
+        );
+    }
+
+    #[test]
+    fn gen_add_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.1 + 2.4 + 3
+                "#
+            ),
+            6.5,
+            f64
         );
     }
 
@@ -198,19 +222,6 @@ mod gen_num {
     }
 
     #[test]
-    fn gen_add_f64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    1.1 + 2.4 + 3
-                "#
-            ),
-            6.5,
-            f64
-        );
-    }
-
-    #[test]
     fn gen_wrap_add_nums() {
         assert_evals_to!(
             indoc!(
@@ -240,7 +251,7 @@ mod gen_num {
             f64
         );
     }
-
+    */
     #[test]
     fn gen_int_eq() {
         assert_evals_to!(
@@ -253,7 +264,7 @@ mod gen_num {
             bool
         );
     }
-
+    /*
     #[test]
     fn gen_int_neq() {
         assert_evals_to!(
