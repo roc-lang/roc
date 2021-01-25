@@ -16,7 +16,6 @@ jobs:
       - name: Expose needed modules
         run: cd editor && ./prep_benchmarks.sh && cd ..
 
-      - uses: actions-rs/cargo@v1
-        name: cargo bench
+      - name: cargo bench
         with:
           command: bench
