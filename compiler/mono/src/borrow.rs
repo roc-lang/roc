@@ -589,5 +589,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrFromInt => arena.alloc_slice_copy(&[irrelevant]),
         Hash => arena.alloc_slice_copy(&[borrowed]),
         DictSize => arena.alloc_slice_copy(&[borrowed]),
+        DictEmpty => &[],
     }
 }

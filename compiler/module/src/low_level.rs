@@ -28,6 +28,7 @@ pub enum LowLevel {
     ListWalkBackwards,
     ListSum,
     DictSize,
+    DictEmpty,
     NumAdd,
     NumAddWrap,
     NumAddChecked,

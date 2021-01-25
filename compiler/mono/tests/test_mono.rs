@@ -642,21 +642,18 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                procedure List.5 (#Attr.2, #Attr.3):
-                    let Test.7 = lowlevel ListAppend #Attr.2 #Attr.3;
-                    ret Test.7;
-    
-                procedure Test.1 (Test.2):
-                    let Test.6 = 42i64;
-                    let Test.5 = CallByName List.5 Test.2 Test.6;
-                    ret Test.5;
-    
-                procedure Test.0 ():
-                    let Test.8 = 1i64;
-                    let Test.9 = 2i64;
-                    let Test.4 = Array [Test.8, Test.9];
-                    let Test.3 = CallByName Test.1 Test.4;
+                procedure Dict.2 ():
+                    let Test.4 = lowlevel DictEmpty ;
+                    ret Test.4;
+
+                procedure Dict.6 (#Attr.2):
+                    let Test.3 = lowlevel DictSize #Attr.2;
                     ret Test.3;
+
+                procedure Test.0 ():
+                    let Test.2 = FunctionPointer Dict.2;
+                    let Test.1 = CallByName Dict.6 Test.2;
+                    ret Test.1;
                 "#
             ),
         )

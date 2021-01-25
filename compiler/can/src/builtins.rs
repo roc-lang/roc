@@ -79,6 +79,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
         DICT_LEN => dict_len,
+        DICT_EMPTY => dict_empty,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -173,6 +174,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_KEEP_IF => list_keep_if,
         Symbol::LIST_WALK => list_walk,
         Symbol::LIST_WALK_BACKWARDS => list_walk_backwards,
+        Symbol::DICT_LEN => dict_len,
+        Symbol::DICT_EMPTY => dict_empty,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -1846,6 +1849,24 @@ fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         size_var,
     )
+}
+
+/// Dict.empty : Dict * *
+fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let body = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: dict_var,
+    };
+
+    Def {
+        annotation: None,
+        expr_var: dict_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
 }
 
 /// Num.rem : Int, Int -> Result Int [ DivByZero ]*

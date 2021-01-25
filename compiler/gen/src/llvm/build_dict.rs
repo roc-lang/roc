@@ -25,6 +25,28 @@ pub fn dict_len<'a, 'ctx, 'env>(
     }
 }
 
+pub fn dict_empty<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    /*
+    let (_, dict_layout) = load_symbol_and_layout(env, scope, &dict_symbol);
+
+    match dict_layout {
+        Layout::Builtin(Builtin::Dict(_, _)) => {
+            let dict_as_int = dict_symbol_to_i128(env, scope, dict_symbol);
+
+            call_bitcode_fn(env, &[dict_as_int.into()], &bitcode::DICT_LEN)
+        }
+        Layout::Builtin(Builtin::EmptyDict) => ctx.i64_type().const_zero().into(),
+        _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
+    }
+    */
+    todo!()
+}
+
 fn dict_symbol_to_i128<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
