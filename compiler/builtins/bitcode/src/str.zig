@@ -813,10 +813,6 @@ pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv
 }
 
 fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
-    return strConcatHelp(allocator, result_in_place, arg1, arg2);
-}
-
-fn strConcatHelp(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
         return RocStr.clone(allocator, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
@@ -875,10 +871,6 @@ pub fn strJoinWithC(list: RocListStr, separator: RocStr) callconv(.C) RocStr {
 }
 
 fn strJoinWith(allocator: *Allocator, list: RocListStr, separator: RocStr) RocStr {
-    return strJoinWithHelp(allocator, list, separator);
-}
-
-fn strJoinWithHelp(allocator: *Allocator, list: RocListStr, separator: RocStr) RocStr {
     const len = list.list_length;
 
     if (len == 0) {
