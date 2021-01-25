@@ -1,5 +1,6 @@
 use crate::llvm::build::{
-    allocate_with_refcount_help, build_num_binop, cast_basic_basic, Env, InPlace,
+    allocate_with_refcount_help, build_num_binop, call_void_bitcode_fn, cast_basic_basic, Env,
+    InPlace,
 };
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
@@ -9,6 +10,7 @@ use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
 /// List.single : a -> List a
@@ -377,6 +379,30 @@ pub fn list_join<'a, 'ctx, 'env>(
 }
 
 /// List.reverse : List elem -> List elem
+pub fn list_reverse_help_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _parent: FunctionValue<'ctx>,
+    _inplace: InPlace,
+    length: IntValue<'ctx>,
+    source_ptr: PointerValue<'ctx>,
+    dest_ptr: PointerValue<'ctx>,
+) {
+    // let element_width = source_ptr.get_type().get_element_type().size_of().unwrap();
+    let element_width = env.context.i64_type().const_int(8, false);
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            element_width.into(),
+            length.into(),
+            source_ptr.into(),
+            dest_ptr.into(),
+        ],
+        &bitcode::LIST_REVERSE,
+    );
+}
+
+/// List.reverse : List elem -> List elem
 pub fn list_reverse_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -385,6 +411,9 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
     source_ptr: PointerValue<'ctx>,
     dest_ptr: PointerValue<'ctx>,
 ) {
+    list_reverse_help_help(env, parent, inplace, length, source_ptr, dest_ptr);
+    return;
+
     let builder = env.builder;
     let ctx = env.context;
 

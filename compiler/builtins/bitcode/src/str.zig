@@ -904,3 +904,62 @@ test "RocStr.concat: small concat small" {
 
     expect(roc_str3.eq(result));
 }
+
+pub const RocList = extern struct {
+    list_bytes: ?[*]u8,
+    list_len: usize,
+};
+
+pub fn listReverseC(element_width: u64, length: usize, source_ptr: [*]u64, target_ptr: [*]u64) callconv(.C) void {
+    return @call(.{ .modifier = always_inline }, listReverse, .{ std.heap.c_allocator, element_width, length, @ptrCast([*]u8, source_ptr), @ptrCast([*]u8, target_ptr) });
+}
+
+fn listReverse(allocator: *Allocator, element_width: u64, length: usize, source_ptr: [*]u8, target_ptr: [*]u8) void {
+    if (length == 0) {
+        return;
+    }
+
+    comptime const stack_alloc_threshold = 8;
+
+    const heap_alloc = element_width > stack_alloc_threshold;
+
+    var value1: [*]u8 = undefined;
+    var value2: [*]u8 = undefined;
+
+    if (heap_alloc) {
+        var value1_alloc: []u8 = allocator.alloc(u8, element_width) catch unreachable;
+        var value2_alloc: []u8 = allocator.alloc(u8, element_width) catch unreachable;
+
+        value1 = @ptrCast([*]u8, value1_alloc[0..element_width]);
+        value2 = @ptrCast([*]u8, value2_alloc[0..element_width]);
+    } else {
+        var value1_alloc: [stack_alloc_threshold]u8 = undefined;
+        var value2_alloc: [stack_alloc_threshold]u8 = undefined;
+
+        value1 = @ptrCast([*]u8, value1_alloc[0..element_width]);
+        value2 = @ptrCast([*]u8, value2_alloc[0..element_width]);
+    }
+
+    var low: usize = 0;
+    var high: usize = length - 1;
+    while (low <= high) {
+        const low_start = low * element_width;
+        const low_end = low_start + element_width;
+        @memcpy(value1, @ptrCast([*]u8, source_ptr[low_start..low_end]), element_width);
+
+        const high_start = high * element_width;
+        const high_end = high_start + element_width;
+        @memcpy(value2, @ptrCast([*]u8, source_ptr[high_start..high_end]), element_width);
+
+        @memcpy(@ptrCast([*]u8, target_ptr[low_start..low_end]), value2, element_width);
+        @memcpy(@ptrCast([*]u8, target_ptr[high_start..high_end]), value1, element_width);
+
+        low += 1;
+        high -= 1;
+    }
+
+    if (heap_alloc) {
+        allocator.free(value1[0..0]);
+        allocator.free(value2[0..0]);
+    }
+}
