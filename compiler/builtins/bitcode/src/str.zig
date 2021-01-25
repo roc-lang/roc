@@ -42,7 +42,7 @@ pub const RocStr = extern struct {
     pub fn init(allocator: *Allocator, bytes_ptr: [*]const u8, length: usize) RocStr {
         const roc_str_size = @sizeOf(RocStr);
 
-        var result = RocStr.allocate(allocator, u64, InPlace.Clone, length);
+        var result = RocStr.allocate(allocator, InPlace.Clone, length);
         @memcpy(result.asU8ptr(), bytes_ptr, length);
 
         return result;
@@ -68,7 +68,7 @@ pub const RocStr = extern struct {
     }
 
     // allocate space for a (big or small) RocStr, but put nothing in it yet
-    pub fn allocate(allocator: *Allocator, comptime T: type, result_in_place: InPlace, number_of_chars: usize) RocStr {
+    pub fn allocate(allocator: *Allocator, result_in_place: InPlace, number_of_chars: usize) RocStr {
         const result_is_big = number_of_chars >= small_string_size;
 
         if (result_is_big) {
@@ -149,7 +149,7 @@ pub const RocStr = extern struct {
         return true;
     }
 
-    pub fn clone(allocator: *Allocator, comptime T: type, in_place: InPlace, str: RocStr) RocStr {
+    pub fn clone(allocator: *Allocator, in_place: InPlace, str: RocStr) RocStr {
         if (str.isSmallStr() or str.isEmpty()) {
             // just return the bytes
             return str;
@@ -808,27 +808,23 @@ test "endsWith: hello world ends with world" {
 
 // Str.concat
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
-pub fn strConcatC(ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strConcat, .{ std.heap.c_allocator, ptr_size, result_in_place, arg1, arg2 });
+pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
+    return @call(.{ .modifier = always_inline }, strConcat, .{ std.heap.c_allocator, result_in_place, arg1, arg2 });
 }
 
-fn strConcat(allocator: *Allocator, ptr_size: u32, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
-    return switch (ptr_size) {
-        4 => strConcatHelp(allocator, i32, result_in_place, arg1, arg2),
-        8 => strConcatHelp(allocator, i64, result_in_place, arg1, arg2),
-        else => unreachable,
-    };
+fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
+    return strConcatHelp(allocator, result_in_place, arg1, arg2);
 }
 
-fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
+fn strConcatHelp(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
-        return RocStr.clone(allocator, T, result_in_place, arg2);
+        return RocStr.clone(allocator, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
-        return RocStr.clone(allocator, T, result_in_place, arg1);
+        return RocStr.clone(allocator, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        var result = RocStr.allocate(allocator, T, result_in_place, combined_length);
+        var result = RocStr.allocate(allocator, result_in_place, combined_length);
         var result_ptr = result.asU8ptr();
 
         arg1.memcpy(result_ptr);
@@ -904,7 +900,7 @@ fn strJoinWithHelp(allocator: *Allocator, comptime T: type, list: RocListStr, se
         // include size of the separator
         total_size += separator.len() * (len - 1);
 
-        var result = RocStr.allocate(allocator, T, InPlace.Clone, total_size);
+        var result = RocStr.allocate(allocator, InPlace.Clone, total_size);
         var result_ptr = result.asU8ptr();
 
         var offset: usize = 0;

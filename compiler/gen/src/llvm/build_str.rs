@@ -150,10 +150,6 @@ pub fn str_concat<'a, 'ctx, 'env>(
         env,
         &[
             env.context
-                .i32_type()
-                .const_int(env.ptr_bytes as u64, false)
-                .into(),
-            env.context
                 .i8_type()
                 .const_int(inplace as u64, false)
                 .into(),
