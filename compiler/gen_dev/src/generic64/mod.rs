@@ -9,29 +9,38 @@ use target_lexicon::Triple;
 pub mod aarch64;
 pub mod x86_64;
 
-pub trait CallConv<GPReg: GPRegTrait> {
-    const GP_PARAM_REGS: &'static [GPReg];
-    const GP_RETURN_REGS: &'static [GPReg];
-    const GP_DEFAULT_FREE_REGS: &'static [GPReg];
+pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
+    const GENERAL_PARAM_REGS: &'static [GeneralReg];
+    const GENERAL_RETURN_REGS: &'static [GeneralReg];
+    const GENERAL_DEFAULT_FREE_REGS: &'static [GeneralReg];
+
+    const FLOAT_PARAM_REGS: &'static [FloatReg];
+    const FLOAT_RETURN_REGS: &'static [FloatReg];
+    const FLOAT_DEFAULT_FREE_REGS: &'static [FloatReg];
 
     const SHADOW_SPACE_SIZE: u8;
 
-    fn callee_saved(reg: &GPReg) -> bool;
+    fn general_callee_saved(reg: &GeneralReg) -> bool;
     #[inline(always)]
-    fn caller_saved_regs(reg: &GPReg) -> bool {
-        !Self::callee_saved(reg)
+    fn general_caller_saved(reg: &GeneralReg) -> bool {
+        !Self::general_callee_saved(reg)
+    }
+    fn float_callee_saved(reg: &FloatReg) -> bool;
+    #[inline(always)]
+    fn float_caller_saved(reg: &FloatReg) -> bool {
+        !Self::float_callee_saved(reg)
     }
 
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
-        saved_regs: &[GPReg],
+        general_saved_regs: &[GeneralReg],
         requested_stack_size: i32,
     ) -> Result<i32, String>;
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         leaf_function: bool,
-        saved_regs: &[GPReg],
+        general_saved_regs: &[GeneralReg],
         aligned_stack_size: i32,
     ) -> Result<(), String>;
 }
@@ -42,36 +51,76 @@ pub trait CallConv<GPReg: GPRegTrait> {
 /// Thus, some backends will need to use mulitiple instructions to preform a single one of this calls.
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
-pub trait Assembler<GPReg: GPRegTrait> {
-    fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src: GPReg);
-    fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, imm32: i32);
-    fn add_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
-    fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: GPReg, imm: i64);
-    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src: GPReg);
-    fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GPReg, offset: i32);
-    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GPReg);
-    fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, imm32: i32);
-    fn sub_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
-    fn eq_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GPReg, src1: GPReg, src2: GPReg);
+pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
+    fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
+    fn add_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn add_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+    fn mov_freg64_imm64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        imm: f64,
+    );
+    fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: GeneralReg, imm: i64);
+    fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
+    fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
+    fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
+    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
+    fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
+    fn sub_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+    fn eq_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum SymbolStorage<GPReg: GPRegTrait> {
+#[allow(dead_code)]
+enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // These may need layout, but I am not sure.
     // I think whenever a symbol would be used, we specify layout anyways.
-    GPReg(GPReg),
+    GeneralReg(GeneralReg),
+    FloatReg(FloatReg),
     Stack(i32),
-    StackAndGPReg(GPReg, i32),
+    StackAndGeneralReg(GeneralReg, i32),
+    StackAndFloatReg(FloatReg, i32),
 }
 
-pub trait GPRegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
+pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
 
-pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> {
+pub struct Backend64Bit<
+    'a,
+    GeneralReg: RegTrait,
+    FloatReg: RegTrait,
+    ASM: Assembler<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg>,
+> {
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
     buf: Vec<'a, u8>,
+    relocs: Vec<'a, Relocation<'a>>,
 
     /// leaf_function is true if the only calls this function makes are tail calls.
     /// If that is the case, we can skip emitting the frame pointer and updating the stack.
@@ -79,26 +128,34 @@ pub struct Backend64Bit<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallCo
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
-    symbols_map: MutMap<Symbol, SymbolStorage<GPReg>>,
+    symbols_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
     literal_map: MutMap<Symbol, Literal<'a>>,
 
     // This should probably be smarter than a vec.
     // There are certain registers we should always use first. With pushing and popping, this could get mixed.
-    gp_free_regs: Vec<'a, GPReg>,
+    general_free_regs: Vec<'a, GeneralReg>,
+    float_free_regs: Vec<'a, FloatReg>,
 
     // The last major thing we need is a way to decide what reg to free when all of them are full.
     // Theoretically we want a basic lru cache for the currently loaded symbols.
     // For now just a vec of used registers and the symbols they contain.
-    gp_used_regs: Vec<'a, (GPReg, Symbol)>,
-
-    stack_size: i32,
+    general_used_regs: Vec<'a, (GeneralReg, Symbol)>,
+    float_used_regs: Vec<'a, (FloatReg, Symbol)>,
 
     // used callee saved regs must be tracked for pushing and popping at the beginning/end of the function.
-    used_callee_saved_regs: MutSet<GPReg>,
+    general_used_callee_saved_regs: MutSet<GeneralReg>,
+    float_used_callee_saved_regs: MutSet<FloatReg>,
+
+    stack_size: i32,
 }
 
-impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<'a>
-    for Backend64Bit<'a, GPReg, ASM, CC>
+impl<
+        'a,
+        GeneralReg: RegTrait,
+        FloatReg: RegTrait,
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg>,
+    > Backend<'a> for Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
     fn new(env: &'a Env, _target: &Triple) -> Result<Self, String> {
         Ok(Backend64Bit {
@@ -107,14 +164,18 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
             env,
             leaf_function: true,
             buf: bumpalo::vec!(in env.arena),
+            relocs: bumpalo::vec!(in env.arena),
             last_seen_map: MutMap::default(),
             free_map: MutMap::default(),
             symbols_map: MutMap::default(),
             literal_map: MutMap::default(),
-            gp_free_regs: bumpalo::vec![in env.arena],
-            gp_used_regs: bumpalo::vec![in env.arena],
+            general_free_regs: bumpalo::vec![in env.arena],
+            general_used_regs: bumpalo::vec![in env.arena],
+            general_used_callee_saved_regs: MutSet::default(),
+            float_free_regs: bumpalo::vec![in env.arena],
+            float_used_regs: bumpalo::vec![in env.arena],
+            float_used_callee_saved_regs: MutSet::default(),
             stack_size: 0,
-            used_callee_saved_regs: MutSet::default(),
         })
     }
 
@@ -129,11 +190,16 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         self.free_map.clear();
         self.symbols_map.clear();
         self.buf.clear();
-        self.used_callee_saved_regs.clear();
-        self.gp_free_regs.clear();
-        self.gp_used_regs.clear();
-        self.gp_free_regs
-            .extend_from_slice(CC::GP_DEFAULT_FREE_REGS);
+        self.general_used_callee_saved_regs.clear();
+        self.general_free_regs.clear();
+        self.general_used_regs.clear();
+        self.general_free_regs
+            .extend_from_slice(CC::GENERAL_DEFAULT_FREE_REGS);
+        self.float_used_callee_saved_regs.clear();
+        self.float_free_regs.clear();
+        self.float_used_regs.clear();
+        self.float_free_regs
+            .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
     }
 
     fn set_not_leaf_function(&mut self) {
@@ -157,12 +223,12 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         &mut self.free_map
     }
 
-    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
+    fn finalize(&mut self) -> Result<(&'a [u8], &[&Relocation]), String> {
         let mut out = bumpalo::vec![in self.env.arena];
 
         // Setup stack.
         let mut used_regs = bumpalo::vec![in self.env.arena];
-        used_regs.extend(&self.used_callee_saved_regs);
+        used_regs.extend(&self.general_used_callee_saved_regs);
         let aligned_stack_size =
             CC::setup_stack(&mut out, self.leaf_function, &used_regs, self.stack_size)?;
 
@@ -173,12 +239,14 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         CC::cleanup_stack(&mut out, self.leaf_function, &used_regs, aligned_stack_size)?;
         ASM::ret(&mut out);
 
-        Ok((out.into_bump_slice(), &[]))
+        let mut out_relocs = bumpalo::vec![in self.env.arena];
+        out_relocs.extend(&self.relocs);
+        Ok((out.into_bump_slice(), out_relocs.into_bump_slice()))
     }
 
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
-        let dst_reg = self.claim_gp_reg(dst)?;
-        let src_reg = self.load_to_reg(src)?;
+        let dst_reg = self.claim_general_reg(dst)?;
+        let src_reg = self.load_to_general_reg(src)?;
         ASM::abs_reg64_reg64(&mut self.buf, dst_reg, src_reg);
         Ok(())
     }
@@ -189,10 +257,23 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         src1: &Symbol,
         src2: &Symbol,
     ) -> Result<(), String> {
-        let dst_reg = self.claim_gp_reg(dst)?;
-        let src1_reg = self.load_to_reg(src1)?;
-        let src2_reg = self.load_to_reg(src2)?;
+        let dst_reg = self.claim_general_reg(dst)?;
+        let src1_reg = self.load_to_general_reg(src1)?;
+        let src2_reg = self.load_to_general_reg(src2)?;
         ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+        Ok(())
+    }
+
+    fn build_num_add_f64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String> {
+        let dst_reg = self.claim_float_reg(dst)?;
+        let src1_reg = self.load_to_float_reg(src1)?;
+        let src2_reg = self.load_to_float_reg(src2)?;
+        ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
         Ok(())
     }
 
@@ -202,17 +283,17 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
         src1: &Symbol,
         src2: &Symbol,
     ) -> Result<(), String> {
-        let dst_reg = self.claim_gp_reg(dst)?;
-        let src1_reg = self.load_to_reg(src1)?;
-        let src2_reg = self.load_to_reg(src2)?;
+        let dst_reg = self.claim_general_reg(dst)?;
+        let src1_reg = self.load_to_general_reg(src1)?;
+        let src2_reg = self.load_to_general_reg(src2)?;
         ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
         Ok(())
     }
 
     fn build_eq_i64(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol) -> Result<(), String> {
-        let dst_reg = self.claim_gp_reg(dst)?;
-        let src1_reg = self.load_to_reg(src1)?;
-        let src2_reg = self.load_to_reg(src2)?;
+        let dst_reg = self.claim_general_reg(dst)?;
+        let src1_reg = self.load_to_general_reg(src1)?;
+        let src2_reg = self.load_to_general_reg(src2)?;
         ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
         Ok(())
     }
@@ -220,9 +301,15 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String> {
         match lit {
             Literal::Int(x) => {
-                let reg = self.claim_gp_reg(sym)?;
+                let reg = self.claim_general_reg(sym)?;
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, val);
+                Ok(())
+            }
+            Literal::Float(x) => {
+                let reg = self.claim_float_reg(sym)?;
+                let val = *x;
+                ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
                 Ok(())
             }
             x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
@@ -231,11 +318,11 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
 
     fn free_symbol(&mut self, sym: &Symbol) {
         self.symbols_map.remove(sym);
-        for i in 0..self.gp_used_regs.len() {
-            let (reg, saved_sym) = self.gp_used_regs[i];
+        for i in 0..self.general_used_regs.len() {
+            let (reg, saved_sym) = self.general_used_regs[i];
             if saved_sym == *sym {
-                self.gp_free_regs.push(reg);
-                self.gp_used_regs.remove(i);
+                self.general_free_regs.push(reg);
+                self.general_used_regs.remove(i);
                 break;
             }
         }
@@ -244,11 +331,16 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
     fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.get(sym);
         match val {
-            Some(SymbolStorage::GPReg(reg)) if *reg == CC::GP_RETURN_REGS[0] => Ok(()),
-            Some(SymbolStorage::GPReg(reg)) => {
+            Some(SymbolStorage::GeneralReg(reg)) if *reg == CC::GENERAL_RETURN_REGS[0] => Ok(()),
+            Some(SymbolStorage::GeneralReg(reg)) => {
                 // If it fits in a general purpose register, just copy it over to.
                 // Technically this can be optimized to produce shorter instructions if less than 64bits.
-                ASM::mov_reg64_reg64(&mut self.buf, CC::GP_RETURN_REGS[0], *reg);
+                ASM::mov_reg64_reg64(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *reg);
+                Ok(())
+            }
+            Some(SymbolStorage::FloatReg(reg)) if *reg == CC::FLOAT_RETURN_REGS[0] => Ok(()),
+            Some(SymbolStorage::FloatReg(reg)) => {
+                ASM::mov_freg64_freg64(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *reg);
                 Ok(())
             }
             Some(x) => Err(format!(
@@ -262,46 +354,108 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>> Backend<
 
 /// This impl block is for ir related instructions that need backend specific information.
 /// For example, loading a symbol for doing a computation.
-impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
-    Backend64Bit<'a, GPReg, ASM, CC>
+impl<
+        'a,
+        FloatReg: RegTrait,
+        GeneralReg: RegTrait,
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg>,
+    > Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
-    fn claim_gp_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
-        let reg = if !self.gp_free_regs.is_empty() {
-            let free_reg = self.gp_free_regs.pop().unwrap();
-            if CC::callee_saved(&free_reg) {
-                self.used_callee_saved_regs.insert(free_reg);
+    fn claim_general_reg(&mut self, sym: &Symbol) -> Result<GeneralReg, String> {
+        let reg = if !self.general_free_regs.is_empty() {
+            let free_reg = self.general_free_regs.pop().unwrap();
+            if CC::general_callee_saved(&free_reg) {
+                self.general_used_callee_saved_regs.insert(free_reg);
             }
             Ok(free_reg)
-        } else if !self.gp_used_regs.is_empty() {
-            let (reg, sym) = self.gp_used_regs.remove(0);
+        } else if !self.general_used_regs.is_empty() {
+            let (reg, sym) = self.general_used_regs.remove(0);
             self.free_to_stack(&sym)?;
             Ok(reg)
         } else {
-            Err("completely out of registers".to_string())
+            Err("completely out of general purpose registers".to_string())
         }?;
 
-        self.gp_used_regs.push((reg, *sym));
-        self.symbols_map.insert(*sym, SymbolStorage::GPReg(reg));
+        self.general_used_regs.push((reg, *sym));
+        self.symbols_map
+            .insert(*sym, SymbolStorage::GeneralReg(reg));
         Ok(reg)
     }
 
-    fn load_to_reg(&mut self, sym: &Symbol) -> Result<GPReg, String> {
+    fn claim_float_reg(&mut self, sym: &Symbol) -> Result<FloatReg, String> {
+        let reg = if !self.float_free_regs.is_empty() {
+            let free_reg = self.float_free_regs.pop().unwrap();
+            if CC::float_callee_saved(&free_reg) {
+                self.float_used_callee_saved_regs.insert(free_reg);
+            }
+            Ok(free_reg)
+        } else if !self.float_used_regs.is_empty() {
+            let (reg, sym) = self.float_used_regs.remove(0);
+            self.free_to_stack(&sym)?;
+            Ok(reg)
+        } else {
+            Err("completely out of floating point registers".to_string())
+        }?;
+
+        self.float_used_regs.push((reg, *sym));
+        self.symbols_map.insert(*sym, SymbolStorage::FloatReg(reg));
+        Ok(reg)
+    }
+
+    fn load_to_general_reg(&mut self, sym: &Symbol) -> Result<GeneralReg, String> {
         let val = self.symbols_map.remove(sym);
         match val {
-            Some(SymbolStorage::GPReg(reg)) => {
-                self.symbols_map.insert(*sym, SymbolStorage::GPReg(reg));
+            Some(SymbolStorage::GeneralReg(reg)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::GeneralReg(reg));
                 Ok(reg)
             }
-            Some(SymbolStorage::StackAndGPReg(reg, offset)) => {
+            Some(SymbolStorage::FloatReg(_reg)) => {
+                Err("Cannot load floating point symbol into GeneralReg".to_string())
+            }
+            Some(SymbolStorage::StackAndGeneralReg(reg, offset)) => {
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndGPReg(reg, offset));
+                    .insert(*sym, SymbolStorage::StackAndGeneralReg(reg, offset));
+                Ok(reg)
+            }
+            Some(SymbolStorage::StackAndFloatReg(_reg, _offset)) => {
+                Err("Cannot load floating point symbol into GeneralReg".to_string())
+            }
+            Some(SymbolStorage::Stack(offset)) => {
+                let reg = self.claim_general_reg(sym)?;
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::StackAndGeneralReg(reg, offset));
+                ASM::mov_reg64_stack32(&mut self.buf, reg, offset as i32);
+                Ok(reg)
+            }
+            None => Err(format!("Unknown symbol: {}", sym)),
+        }
+    }
+
+    fn load_to_float_reg(&mut self, sym: &Symbol) -> Result<FloatReg, String> {
+        let val = self.symbols_map.remove(sym);
+        match val {
+            Some(SymbolStorage::GeneralReg(_reg)) => {
+                Err("Cannot load integer point symbol into FloatReg".to_string())
+            }
+            Some(SymbolStorage::FloatReg(reg)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::FloatReg(reg));
+                Ok(reg)
+            }
+            Some(SymbolStorage::StackAndGeneralReg(_reg, _offset)) => {
+                Err("Cannot load integer point symbol into FloatReg".to_string())
+            }
+            Some(SymbolStorage::StackAndFloatReg(reg, offset)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::StackAndFloatReg(reg, offset));
                 Ok(reg)
             }
             Some(SymbolStorage::Stack(offset)) => {
-                let reg = self.claim_gp_reg(sym)?;
+                let reg = self.claim_float_reg(sym)?;
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndGPReg(reg, offset));
-                ASM::mov_reg64_stack32(&mut self.buf, reg, offset as i32);
+                    .insert(*sym, SymbolStorage::StackAndFloatReg(reg, offset));
+                ASM::mov_freg64_stack32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
             None => Err(format!("Unknown symbol: {}", sym)),
@@ -311,13 +465,23 @@ impl<'a, GPReg: GPRegTrait, ASM: Assembler<GPReg>, CC: CallConv<GPReg>>
     fn free_to_stack(&mut self, sym: &Symbol) -> Result<(), String> {
         let val = self.symbols_map.remove(sym);
         match val {
-            Some(SymbolStorage::GPReg(reg)) => {
+            Some(SymbolStorage::GeneralReg(reg)) => {
                 let offset = self.increase_stack_size(8)?;
                 ASM::mov_stack32_reg64(&mut self.buf, offset as i32, reg);
                 self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
                 Ok(())
             }
-            Some(SymbolStorage::StackAndGPReg(_, offset)) => {
+            Some(SymbolStorage::FloatReg(reg)) => {
+                let offset = self.increase_stack_size(8)?;
+                ASM::mov_stack32_freg64(&mut self.buf, offset as i32, reg);
+                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
+                Ok(())
+            }
+            Some(SymbolStorage::StackAndGeneralReg(_, offset)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
+                Ok(())
+            }
+            Some(SymbolStorage::StackAndFloatReg(_, offset)) => {
                 self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
                 Ok(())
             }

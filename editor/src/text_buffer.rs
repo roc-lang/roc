@@ -91,7 +91,7 @@ impl TextBuffer {
     }
 
     // expensive function, don't use it if it can be done with a specialized, more efficient function
-    // TODO use bump allocation here
+    // TODO use pool allocation here
     pub fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a> {
         let mut lines = BumpString::with_capacity_in(self.text_rope.len_chars(), arena);
 
