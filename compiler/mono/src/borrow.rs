@@ -168,7 +168,7 @@ impl<'a> ParamMap<'a> {
                     stack.extend(branches.iter().map(|b| &b.1));
                     stack.push(default_branch);
                 }
-                Inc(_, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
+                Inc(_, _, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
 
                 Ret(_) | Rethrow | Jump(_, _) | RuntimeError(_) => {
                     // these are terminal, do nothing
@@ -513,7 +513,7 @@ impl<'a> BorrowInfState<'a> {
                 }
                 self.collect_stmt(default_branch);
             }
-            Inc(_, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
+            Inc(_, _, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
 
             Ret(_) | RuntimeError(_) | Rethrow => {
                 // these are terminal, do nothing

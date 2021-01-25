@@ -260,6 +260,11 @@ pub const RocStr = extern struct {
     }
 };
 
+// Str.equal
+pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
+    return self.eq(other);
+}
+
 // Str.numberOfBytes
 pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
@@ -603,99 +608,7 @@ test "countSegments: delimiter interspered" {
     expectEqual(segments_count, 3);
 }
 
-// Str.countGraphemeClusters
-const grapheme = @import("helpers/grapheme.zig");
-pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
-    if (string.isEmpty()) {
-        return 0;
-    }
-
-    const bytes_len = string.len();
-    const bytes_ptr = string.asU8ptr();
-
-    var bytes = bytes_ptr[0..bytes_len];
-    var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
-
-    var count: usize = 0;
-    var grapheme_break_state: ?grapheme.BoundClass = null;
-    var grapheme_break_state_ptr = &grapheme_break_state;
-    var opt_last_codepoint: ?u21 = null;
-    while (iter.nextCodepoint()) |cur_codepoint| {
-        if (opt_last_codepoint) |last_codepoint| {
-            var did_break = grapheme.isGraphemeBreak(last_codepoint, cur_codepoint, grapheme_break_state_ptr);
-            if (did_break) {
-                count += 1;
-                grapheme_break_state = null;
-            }
-        }
-        opt_last_codepoint = cur_codepoint;
-    }
-
-    // If there are no breaks, but the str is not empty, then there
-    // must be a single grapheme
-    if (bytes_len != 0) {
-        count += 1;
-    }
-
-    return count;
-}
-
 fn rocStrFromLiteral(bytes_arr: *const []u8) RocStr {}
-
-test "countGraphemeClusters: empty string" {
-    const count = countGraphemeClusters(RocStr.empty());
-    expectEqual(count, 0);
-}
-
-test "countGraphemeClusters: ascii characters" {
-    const bytes_arr = "abcd";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(testing.allocator, bytes_arr, bytes_len);
-    defer str.deinit(testing.allocator);
-
-    const count = countGraphemeClusters(str);
-    expectEqual(count, 4);
-}
-
-test "countGraphemeClusters: utf8 characters" {
-    const bytes_arr = "ãxā";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(testing.allocator, bytes_arr, bytes_len);
-    defer str.deinit(testing.allocator);
-
-    const count = countGraphemeClusters(str);
-    expectEqual(count, 3);
-}
-
-test "countGraphemeClusters: emojis" {
-    const bytes_arr = "🤔🤔🤔";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(testing.allocator, bytes_arr, bytes_len);
-    defer str.deinit(testing.allocator);
-
-    const count = countGraphemeClusters(str);
-    expectEqual(count, 3);
-}
-
-test "countGraphemeClusters: emojis and ut8 characters" {
-    const bytes_arr = "🤔å🤔¥🤔ç";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(testing.allocator, bytes_arr, bytes_len);
-    defer str.deinit(testing.allocator);
-
-    const count = countGraphemeClusters(str);
-    expectEqual(count, 6);
-}
-
-test "countGraphemeClusters: emojis, ut8, and ascii characters" {
-    const bytes_arr = "6🤔å🤔e¥🤔çpp";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(testing.allocator, bytes_arr, bytes_len);
-    defer str.deinit(testing.allocator);
-
-    const count = countGraphemeClusters(str);
-    expectEqual(count, 10);
-}
 
 // Str.startsWith
 pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
@@ -826,9 +739,7 @@ fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPla
             var result = RocStr.initBig(allocator, T, result_in_place, combined_length);
 
             {
-                const old_if_small = &@bitCast([16]u8, arg1);
-                const old_if_big = @ptrCast([*]u8, arg1.str_bytes);
-                const old_bytes = if (arg1.isSmallStr()) old_if_small else old_if_big;
+                const old_bytes = arg1.asU8ptr();
 
                 const new_bytes: [*]u8 = @ptrCast([*]u8, result.str_bytes);
 
@@ -836,9 +747,7 @@ fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPla
             }
 
             {
-                const old_if_small = &@bitCast([16]u8, arg2);
-                const old_if_big = @ptrCast([*]u8, arg2.str_bytes);
-                const old_bytes = if (arg2.isSmallStr()) old_if_small else old_if_big;
+                const old_bytes = arg2.asU8ptr();
 
                 const new_bytes = @ptrCast([*]u8, result.str_bytes) + arg1.len();
 

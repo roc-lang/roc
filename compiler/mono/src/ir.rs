@@ -766,7 +766,7 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Rethrow,
-    Inc(Symbol, &'a Stmt<'a>),
+    Inc(Symbol, u64, &'a Stmt<'a>),
     Dec(Symbol, &'a Stmt<'a>),
     Join {
         id: JoinPointId,
@@ -834,6 +834,8 @@ impl Wrapped {
                         },
                         _ => Some(Wrapped::MultiTagUnion),
                     },
+                    NonNullableUnwrapped(_) => Some(Wrapped::RecordOrSingleTagUnion),
+
                     NullableWrapped { .. } | NullableUnwrapped { .. } => {
                         Some(Wrapped::MultiTagUnion)
                     }
@@ -1127,9 +1129,11 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Let(symbol, expr, _, cont) => alloc
+            Let(symbol, expr, _layout, cont) => alloc
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol))
+                //.append(" : ")
+                //.append(alloc.text(format!("{:?}", layout)))
                 .append(" = ")
                 .append(expr.to_doc(alloc))
                 .append(";")
@@ -1263,8 +1267,15 @@ impl<'a> Stmt<'a> {
                     .append(alloc.intersperse(it, alloc.space()))
                     .append(";")
             }
-            Inc(symbol, cont) => alloc
+            Inc(symbol, 1, cont) => alloc
                 .text("inc ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
+            Inc(symbol, n, cont) => alloc
+                .text("inc ")
+                .append(alloc.text(format!("{}", n)))
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";")
                 .append(alloc.hardline())
@@ -2731,6 +2742,7 @@ pub fn with_hole<'a>(
                     use WrappedVariant::*;
                     let (tag, layout) = match variant {
                         Recursive { sorted_tag_layouts } => {
+                            debug_assert!(sorted_tag_layouts.len() > 1);
                             let tag_id_symbol = env.unique_symbol();
                             opt_tag_id_symbol = Some(tag_id_symbol);
 
@@ -2751,8 +2763,38 @@ pub fn with_hole<'a>(
                                 layouts.push(arg_layouts);
                             }
 
+                            debug_assert!(layouts.len() > 1);
                             let layout =
                                 Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
+
+                            let tag = Expr::Tag {
+                                tag_layout: layout.clone(),
+                                tag_name,
+                                tag_id: tag_id as u8,
+                                union_size,
+                                arguments: field_symbols,
+                            };
+
+                            (tag, layout)
+                        }
+                        NonNullableUnwrapped {
+                            fields,
+                            tag_name: wrapped_tag_name,
+                        } => {
+                            debug_assert_eq!(tag_name, wrapped_tag_name);
+
+                            opt_tag_id_symbol = None;
+
+                            field_symbols = {
+                                let mut temp =
+                                    Vec::with_capacity_in(field_symbols_temp.len(), arena);
+
+                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                                temp.into_bump_slice()
+                            };
+
+                            let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
 
                             let tag = Expr::Tag {
                                 tag_layout: layout.clone(),
@@ -3067,7 +3109,8 @@ pub fn with_hole<'a>(
                 );
 
                 for (loc_cond, loc_then) in branches.into_iter().rev() {
-                    let branching_symbol = env.unique_symbol();
+                    let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
+
                     let then = with_hole(
                         env,
                         loc_then.value,
@@ -3088,14 +3131,14 @@ pub fn with_hole<'a>(
                     );
 
                     // add condition
-                    stmt = with_hole(
+                    stmt = assign_to_symbol(
                         env,
-                        loc_cond.value,
-                        cond_var,
                         procs,
                         layout_cache,
+                        cond_var,
+                        loc_cond,
                         branching_symbol,
-                        env.arena.alloc(stmt),
+                        stmt,
                     );
                 }
 
@@ -3254,7 +3297,10 @@ pub fn with_hole<'a>(
 
                 match Wrapped::opt_from_layout(&record_layout) {
                     Some(result) => result,
-                    None => Wrapped::SingleElementRecord,
+                    None => {
+                        debug_assert_eq!(field_layouts.len(), 1);
+                        Wrapped::SingleElementRecord
+                    }
                 }
             };
 
@@ -4662,8 +4708,8 @@ fn substitute_in_stmt_help<'a>(
             Some(s) => Some(arena.alloc(Ret(s))),
             None => None,
         },
-        Inc(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
-            Some(cont) => Some(arena.alloc(Inc(*symbol, cont))),
+        Inc(symbol, inc, cont) => match substitute_in_stmt_help(arena, cont, subs) {
+            Some(cont) => Some(arena.alloc(Inc(*symbol, *inc, cont))),
             None => None,
         },
         Dec(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
@@ -5584,7 +5630,11 @@ fn call_by_name<'a>(
                                     partial_proc,
                                 ) {
                                     Ok((proc, layout)) => {
-                                        debug_assert_eq!(full_layout, layout);
+                                        debug_assert_eq!(
+                                            &full_layout, &layout,
+                                            "\n\n{:?}\n\n{:?}",
+                                            full_layout, layout
+                                        );
                                         let function_layout =
                                             FunctionLayouts::from_layout(env.arena, layout);
 
@@ -6035,7 +6085,12 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
+                            debug_assert_eq!(
+                                arguments.len(),
+                                argument_layouts[1..].len(),
+                                "{:?}",
+                                tag_name
+                            );
                             let it = argument_layouts[1..].iter();
 
                             for ((_, loc_pat), layout) in arguments.iter().zip(it) {
@@ -6118,8 +6173,54 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
+                            debug_assert!(layouts.len() > 1);
                             let layout =
                                 Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
+
+                            Pattern::AppliedTag {
+                                tag_name: tag_name.clone(),
+                                tag_id: tag_id as u8,
+                                arguments: mono_args,
+                                union,
+                                layout,
+                            }
+                        }
+
+                        NonNullableUnwrapped {
+                            tag_name: w_tag_name,
+                            fields,
+                        } => {
+                            debug_assert_eq!(&w_tag_name, tag_name);
+
+                            ctors.push(Ctor {
+                                tag_id: TagId(0_u8),
+                                name: tag_name.clone(),
+                                arity: fields.len(),
+                            });
+
+                            let union = crate::exhaustive::Union {
+                                render_as: RenderAs::Tag,
+                                alternatives: ctors,
+                            };
+
+                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+
+                            debug_assert_eq!(arguments.len(), argument_layouts.len());
+                            let it = argument_layouts.iter();
+
+                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
+                                mono_args.push((
+                                    from_can_pattern_help(
+                                        env,
+                                        layout_cache,
+                                        &loc_pat.value,
+                                        assignments,
+                                    )?,
+                                    layout.clone(),
+                                ));
+                            }
+
+                            let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),

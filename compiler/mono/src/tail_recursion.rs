@@ -228,8 +228,8 @@ fn insert_jumps<'a>(
                 None
             }
         }
-        Inc(symbol, cont) => match insert_jumps(arena, cont, goal_id, needle) {
-            Some(cont) => Some(arena.alloc(Inc(*symbol, cont))),
+        Inc(symbol, inc, cont) => match insert_jumps(arena, cont, goal_id, needle) {
+            Some(cont) => Some(arena.alloc(Inc(*symbol, *inc, cont))),
             None => None,
         },
         Dec(symbol, cont) => match insert_jumps(arena, cont, goal_id, needle) {

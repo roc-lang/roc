@@ -200,6 +200,11 @@ mod repl_eval {
     }
 
     #[test]
+    fn literal_empty_list_empty_record() {
+        expect_success("[ {} ]", "[ {} ] : List {}");
+    }
+
+    #[test]
     fn literal_num_list() {
         expect_success("[ 1, 2, 3 ]", "[ 1, 2, 3 ] : List (Num *)");
     }

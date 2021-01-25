@@ -404,7 +404,7 @@ where
                 self.set_last_seen(*sym, stmt);
             }
             Stmt::Rethrow => {}
-            Stmt::Inc(sym, following) => {
+            Stmt::Inc(sym, _inc, following) => {
                 self.set_last_seen(*sym, stmt);
                 self.scan_ast(following);
             }

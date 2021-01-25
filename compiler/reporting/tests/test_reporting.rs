@@ -1129,7 +1129,7 @@ mod test_reporting {
                 3│>      when True is
                 4│>          _ -> 3.14
 
-                This `when`expression produces:
+                This `when` expression produces:
 
                     Float a
 

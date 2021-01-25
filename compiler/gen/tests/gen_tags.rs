@@ -960,4 +960,27 @@ mod gen_tags {
             |x: &i64| *x
         );
     }
+
+    #[test]
+    fn newtype_wrapper() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                ConsList a : [ Nil, Cons a (ConsList a) ]
+
+                foo : ConsList I64 -> ConsList I64
+                foo = \t ->
+                    when Delmin (Del t 0.0) is
+                        Delmin (Del ry _) -> Cons 42 ry
+
+                main = foo Nil
+                "#
+            ),
+            42,
+            &i64,
+            |x: &i64| *x
+        );
+    }
 }
