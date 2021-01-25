@@ -109,7 +109,7 @@ fn file_read_bench_helper(nr_lines: usize, c: &mut Criterion) {
     );
 }
 
-fn file_read_bench(c: &mut Criterion) {
+fn file_read_bench_10(c: &mut Criterion) {
     // generate dummy files
     /*let lines_vec = vec![100, 500, 1000, 10000, 50000, 100000, 25000000];
 
@@ -120,5 +120,33 @@ fn file_read_bench(c: &mut Criterion) {
     file_read_bench_helper(10, c)
 }
 
-criterion_group!(benches, file_read_bench);
+fn file_read_bench_100(c: &mut Criterion) {
+    file_read_bench_helper(100, c)
+}
+fn file_read_bench_500(c: &mut Criterion) {
+    file_read_bench_helper(500, c)
+}
+fn file_read_bench_1k(c: &mut Criterion) {
+    file_read_bench_helper(1000, c)
+}
+fn file_read_bench_10k(c: &mut Criterion) {
+    file_read_bench_helper(10000, c)
+}
+fn file_read_bench_100k(c: &mut Criterion) {
+    file_read_bench_helper(100000, c)
+}
+fn file_read_bench_25m(c: &mut Criterion) {
+    file_read_bench_helper(25000000, c)
+}
+
+criterion_group!(
+    benches,
+    file_read_bench_10,
+    file_read_bench_100,
+    file_read_bench_500,
+    file_read_bench_1k,
+    file_read_bench_10k,
+    file_read_bench_100k,
+    file_read_bench_25m
+);
 criterion_main!(benches);

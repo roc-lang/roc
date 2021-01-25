@@ -11,4 +11,12 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Log CPU model
-        run: sudo cat /proc/cpuinfo | grep name | uniq
+        run: cat /proc/cpuinfo  | grep name | uniq
+
+      - name: Expose needed modules
+        run: cd editor && ./prep_benchmarks.sh && cd ..
+
+      - uses: actions-rs/cargo@v1
+        name: cargo bench
+        with:
+          command: bench
