@@ -32,6 +32,7 @@ fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
     TextBuffer {
         text_rope: Rope::from_str(lines_str),
         path_str: "".to_owned(),
+        mem_arena: Bump::new(),
     }
 }
 
@@ -111,7 +112,13 @@ fn get_line_helper(nr_lines: usize, c: &mut Criterion) {
 
     c.bench_function(
         &format!("get random line from {:?}-line textbuffer", nr_lines),
-        |b| b.iter(|| text_buf.line(rand_gen.gen_range(0..nr_lines)).unwrap()),
+        |b| {
+            b.iter(|| {
+                let rand_indx = rand_gen.gen_range(0..nr_lines);
+                println!("{:?}", rand_indx);
+                text_buf.line(rand_indx).unwrap()
+            })
+        },
     );
 }
 

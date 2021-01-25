@@ -13,3 +13,12 @@ vgcore.*
 .idea/
 .vscode/
 
+#files too big to track in git
+editor/benches/resources/100000_lines.roc
+editor/benches/resources/10000_lines.roc
+editor/benches/resources/1000_lines.roc
+editor/benches/resources/100_lines.roc
+editor/benches/resources/25000000_lines.roc
+editor/benches/resources/50000_lines.roc
+editor/benches/resources/500_lines.roc
+
