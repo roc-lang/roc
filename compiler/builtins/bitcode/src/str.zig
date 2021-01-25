@@ -831,20 +831,14 @@ fn strConcatHelp(allocator: *Allocator, comptime T: type, result_in_place: InPla
             var result = RocStr.initBig(allocator, T, result_in_place, combined_length);
 
             {
-                const old_if_small = &@bitCast([16]u8, arg1);
-                const old_if_big = @ptrCast([*]u8, arg1.str_bytes);
-                const old_bytes = if (arg1.isSmallStr()) old_if_small else old_if_big;
-
-                const new_bytes: [*]u8 = @ptrCast([*]u8, result.str_bytes);
+                const old_bytes = arg1.asU8ptr();
+                const new_bytes = @ptrCast([*]u8, result.str_bytes);
 
                 @memcpy(new_bytes, old_bytes, arg1.len());
             }
 
             {
-                const old_if_small = &@bitCast([16]u8, arg2);
-                const old_if_big = @ptrCast([*]u8, arg2.str_bytes);
-                const old_bytes = if (arg2.isSmallStr()) old_if_small else old_if_big;
-
+                const old_bytes = arg2.asU8ptr();
                 const new_bytes = @ptrCast([*]u8, result.str_bytes) + arg1.len();
 
                 @memcpy(new_bytes, old_bytes, arg2.len());
