@@ -17,5 +17,4 @@ jobs:
         run: cd editor && ./prep_benchmarks.sh && cd ..
 
       - name: cargo bench
-        with:
-          command: bench
+        run: cargo bench
