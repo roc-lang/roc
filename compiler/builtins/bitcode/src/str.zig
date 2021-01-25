@@ -12,6 +12,20 @@ const InPlace = packed enum(u8) {
     Clone,
 };
 
+const small_string_size = 2 * @sizeOf(usize);
+const blank_small_string: [16]u8 = init_blank_small_string(small_string_size);
+
+fn init_blank_small_string(comptime n: usize) [n]u8 {
+    var prime_list: [n]u8 = undefined;
+
+    var i = 0;
+    while (i < n) : (i += 1) {
+        prime_list[i] = 0;
+    }
+
+    return prime_list;
+}
+
 pub const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
@@ -34,17 +48,17 @@ pub const RocStr = extern struct {
         return result;
     }
 
-    pub fn initBig(allocator: *Allocator, comptime T: type, in_place: InPlace, number_of_chars: u64) RocStr {
-        const length = @sizeOf(T) + number_of_chars;
-        var new_bytes: []T = allocator.alloc(T, length) catch unreachable;
+    pub fn initBig(allocator: *Allocator, in_place: InPlace, number_of_chars: u64) RocStr {
+        const length = @sizeOf(usize) + number_of_chars;
+        var new_bytes: []usize = allocator.alloc(usize, length) catch unreachable;
 
         if (in_place == InPlace.InPlace) {
-            new_bytes[0] = @intCast(T, number_of_chars);
+            new_bytes[0] = @intCast(usize, number_of_chars);
         } else {
-            new_bytes[0] = std.math.minInt(T);
+            new_bytes[0] = std.math.minInt(usize);
         }
 
-        var first_element = @ptrCast([*]align(@alignOf(T)) u8, new_bytes);
+        var first_element = @ptrCast([*]align(@alignOf(usize)) u8, new_bytes);
         first_element += @sizeOf(usize);
 
         return RocStr{
@@ -55,18 +69,17 @@ pub const RocStr = extern struct {
 
     // allocate space for a (big or small) RocStr, but put nothing in it yet
     pub fn allocate(allocator: *Allocator, comptime T: type, result_in_place: InPlace, number_of_chars: usize) RocStr {
-        const small_str_bytes = 2 * @sizeOf(T);
-        const result_is_big = number_of_chars >= small_str_bytes;
+        const result_is_big = number_of_chars >= small_string_size;
 
         if (result_is_big) {
-            return RocStr.initBig(allocator, T, result_in_place, number_of_chars);
+            return RocStr.initBig(allocator, result_in_place, number_of_chars);
         } else {
-            var t = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+            var t = blank_small_string;
 
             const mask: u8 = 0b1000_0000;
             const final_byte = @truncate(u8, number_of_chars) | mask;
 
-            t[small_str_bytes - 1] = final_byte;
+            t[small_string_size - 1] = final_byte;
 
             return @bitCast(RocStr, t);
         }
@@ -141,7 +154,7 @@ pub const RocStr = extern struct {
             // just return the bytes
             return str;
         } else {
-            var new_str = RocStr.initBig(allocator, T, in_place, str.str_len);
+            var new_str = RocStr.initBig(allocator, in_place, str.str_len);
 
             var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
             var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
