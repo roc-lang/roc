@@ -455,6 +455,19 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
                     );
                 }
 
+                NonNullableUnwrapped(fields) => {
+                    debug_assert!(value.is_pointer_value());
+
+                    build_rec_union(
+                        env,
+                        layout_ids,
+                        mode,
+                        &*env.arena.alloc([*fields]),
+                        value.into_pointer_value(),
+                        true,
+                    );
+                }
+
                 Recursive(tags) => {
                     debug_assert!(value.is_pointer_value());
                     build_rec_union(
