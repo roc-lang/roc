@@ -677,7 +677,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 Vec::with_capacity_in(arguments.len(), env.arena);
 
             for symbol in arguments.iter() {
-                arg_tuples.push(load_symbol( scope, symbol));
+                arg_tuples.push(load_symbol(scope, symbol));
             }
 
             call_with_args(
@@ -691,13 +691,13 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         }
 
         CallType::ByPointer { name, .. } => {
-            let sub_expr = load_symbol( scope, name);
+            let sub_expr = load_symbol(scope, name);
 
             let mut arg_vals: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(arguments.len(), env.arena);
 
             for arg in arguments.iter() {
-                arg_vals.push(load_symbol( scope, arg));
+                arg_vals.push(load_symbol(scope, arg));
             }
 
             let call = match sub_expr {
@@ -1064,7 +1064,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
-                let val = load_symbol( scope, field_symbol);
+                let val = load_symbol(scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -1162,7 +1162,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             };
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let val = load_symbol( scope, field_symbol);
+                let val = load_symbol(scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -1263,7 +1263,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             debug_assert_eq!(arguments.len(), tag_field_layouts.len());
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let val = load_symbol( scope, field_symbol);
+                let val = load_symbol(scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -1335,7 +1335,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         } => {
             debug_assert_eq!(field_layouts.len(), 1);
             debug_assert_eq!(*index, 0);
-            load_symbol( scope, structure)
+            load_symbol(scope, structure)
         }
 
         AccessAtIndex {
@@ -1760,7 +1760,7 @@ fn list_literal<'a, 'ctx, 'env>(
 
     // Copy the elements from the list literal into the array
     for (index, symbol) in elems.iter().enumerate() {
-        let val = load_symbol( scope, symbol);
+        let val = load_symbol(scope, symbol);
         let index_val = ctx.i64_type().const_int(index as u64, false);
         let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
@@ -1817,7 +1817,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
 
     for arg in arguments.iter() {
-        arg_vals.push(load_symbol( scope, arg));
+        arg_vals.push(load_symbol(scope, arg));
     }
 
     let pass_block = context.append_basic_block(parent, "invoke_pass");
@@ -1932,7 +1932,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             result
         }
         Ret(symbol) => {
-            let value = load_symbol( scope, symbol);
+            let value = load_symbol(scope, symbol);
 
             if let Some(block) = env.builder.get_insert_block() {
                 if block.get_terminator().is_none() {
@@ -1985,7 +1985,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 )
             }
             CallType::ByPointer { name, .. } => {
-                let sub_expr = load_symbol( scope, &name);
+                let sub_expr = load_symbol(scope, &name);
 
                 let function_ptr = match sub_expr {
                     BasicValueEnum::PointerValue(ptr) => ptr,
@@ -2107,7 +2107,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let (cont_block, argument_pointers) = scope.join_points.get(join_point).unwrap();
 
             for (pointer, argument) in argument_pointers.iter().zip(arguments.iter()) {
-                let value = load_symbol( scope, argument);
+                let value = load_symbol(scope, argument);
                 builder.build_store(*pointer, value);
             }
 
@@ -3470,7 +3470,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
 
-            let arg = load_symbol( scope, &args[0]);
+            let arg = load_symbol(scope, &args[0]);
 
             list_len(env.builder, arg.into_struct_value()).into()
         }
@@ -3488,7 +3488,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.repeat : Int, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let list_len = load_symbol( scope, &args[0]).into_int_value();
+            let list_len = load_symbol(scope, &args[0]).into_int_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let inplace = get_inplace_from_layout(layout);
@@ -3510,7 +3510,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (first_list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let second_list = load_symbol( scope, &args[1]);
+            let second_list = load_symbol(scope, &args[1]);
 
             let inplace = get_inplace_from_layout(layout);
 
@@ -3620,7 +3620,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         ListSum => {
             debug_assert_eq!(args.len(), 1);
 
-            let list = load_symbol( scope, &args[0]);
+            let list = load_symbol(scope, &args[0]);
 
             list_sum(env, parent, list, layout)
         }
@@ -3628,7 +3628,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol( scope, &args[0]).into_struct_value();
+            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let inplace = get_inplace_from_layout(layout);
@@ -3639,7 +3639,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.prepend : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol( scope, &args[0]).into_struct_value();
+            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let inplace = get_inplace_from_layout(layout);
@@ -3813,8 +3813,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             // The (&&) operator
             debug_assert_eq!(args.len(), 2);
 
-            let lhs_arg = load_symbol( scope, &args[0]);
-            let rhs_arg = load_symbol( scope, &args[1]);
+            let lhs_arg = load_symbol(scope, &args[0]);
+            let rhs_arg = load_symbol(scope, &args[1]);
             let bool_val = env.builder.build_and(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
@@ -3827,8 +3827,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             // The (||) operator
             debug_assert_eq!(args.len(), 2);
 
-            let lhs_arg = load_symbol( scope, &args[0]);
-            let rhs_arg = load_symbol( scope, &args[1]);
+            let lhs_arg = load_symbol(scope, &args[0]);
+            let rhs_arg = load_symbol(scope, &args[1]);
             let bool_val = env.builder.build_or(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
@@ -3841,7 +3841,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // The (!) operator
             debug_assert_eq!(args.len(), 1);
 
-            let arg = load_symbol( scope, &args[0]);
+            let arg = load_symbol(scope, &args[0]);
             let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
 
             BasicValueEnum::IntValue(bool_val)
@@ -3852,7 +3852,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let wrapper_struct = wrapper_struct.into_struct_value();
-            let elem_index = load_symbol( scope, &args[1]).into_int_value();
+            let elem_index = load_symbol(scope, &args[1]).into_int_value();
 
             list_get_unsafe(
                 env,
