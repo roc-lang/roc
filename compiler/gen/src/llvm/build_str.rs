@@ -1,5 +1,5 @@
 use crate::llvm::build::{
-    call_bitcode_fn, call_void_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope,
+    call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, Env, InPlace, Scope,
 };
 use crate::llvm::build_list::{allocate_list, store_list};
 use crate::llvm::convert::collection;
@@ -61,20 +61,11 @@ fn str_symbol_to_i128<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
 ) -> IntValue<'ctx> {
-    let str_ptr = ptr_from_symbol(scope, symbol);
+    let string = load_symbol(scope, &symbol);
 
-    let i128_ptr = env
-        .builder
-        .build_bitcast(
-            *str_ptr,
-            env.context.i128_type().ptr_type(AddressSpace::Generic),
-            "cast",
-        )
-        .into_pointer_value();
+    let i128_type = env.context.i128_type().into();
 
-    env.builder
-        .build_load(i128_ptr, "load_as_i128")
-        .into_int_value()
+    complex_bitcast(&env.builder, string, i128_type, "str_to_i128").into_int_value()
 }
 
 fn str_to_i128<'a, 'ctx, 'env>(
@@ -257,7 +248,7 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     int_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let int = load_symbol(env, scope, &int_symbol);
+    let int = load_symbol(scope, &int_symbol);
 
     let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
 
