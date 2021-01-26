@@ -55,7 +55,8 @@ pub const RocStr = extern struct {
         if (in_place == InPlace.InPlace) {
             new_bytes[0] = @intCast(usize, number_of_chars);
         } else {
-            new_bytes[0] = std.math.minInt(usize);
+            const v: isize = std.math.minInt(isize);
+            new_bytes[0] = @bitCast(usize, v);
         }
 
         var first_element = @ptrCast([*]align(@alignOf(usize)) u8, new_bytes);
