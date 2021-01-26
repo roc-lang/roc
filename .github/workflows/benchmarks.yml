@@ -6,6 +6,7 @@ env:
   CARGO_HOME: /root/.cargo
   RUSTUP_HOME: /root/.rustup
   BENCH_RESOURCE_PATH: /downloads/resources/
+  CRITERION_HOME: /criterion/
 
 jobs:
   benchmark:
