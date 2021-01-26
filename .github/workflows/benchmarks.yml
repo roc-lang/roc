@@ -15,6 +15,9 @@ jobs:
       - name: print PATH
         run: echo $PATH
 
+      - name: check toolchain
+        run: rustup show
+
       - uses: actions/checkout@v2
 
       - name: Expose needed modules
