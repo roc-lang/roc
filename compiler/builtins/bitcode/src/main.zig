@@ -21,6 +21,7 @@ comptime {
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
+    exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strEqual, "equal");
