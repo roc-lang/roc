@@ -133,7 +133,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         self.set_refcount(env, new_refcount);
     }
 
-    fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
+    pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
         let context = env.context;
         let block = env.builder.get_insert_block().expect("to be in a function");
         let di_location = env.builder.get_current_debug_location().unwrap();

@@ -500,6 +500,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![str_type(), str_type()], Box::new(str_type())),
     );
 
+    // Str.joinWith : List Str, Str -> Str
+    add_type(
+        Symbol::STR_JOIN_WITH,
+        top_level_function(
+            vec![list_type(str_type()), str_type()],
+            Box::new(str_type()),
+        ),
+    );
+
     // isEmpty : Str -> Bool
     add_type(
         Symbol::STR_IS_EMPTY,
@@ -678,6 +687,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_JOIN,
         top_level_function(
             vec![list_type(list_type(flex(TVAR1)))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // intersperse : List a, a -> List a
+    add_type(
+        Symbol::LIST_INTERSPERSE,
+        top_level_function(
+            vec![list_type(flex(TVAR1)), flex(TVAR1)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );

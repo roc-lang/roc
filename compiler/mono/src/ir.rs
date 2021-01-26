@@ -17,7 +17,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {

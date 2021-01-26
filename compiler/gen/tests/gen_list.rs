@@ -1759,4 +1759,46 @@ mod gen_list {
             RocList<bool>
         );
     }
+
+    #[test]
+    fn intersperse_zero_one() {
+        assert_evals_to!(
+            r#"List.intersperse [ 1, 2, 3 ] 5""#,
+            RocList::from_slice(&[1, 5, 2, 5, 3]),
+            RocList<i64>
+        );
+    }
+
+    #[test]
+    fn intersperse_single_element() {
+        assert_evals_to!(
+            r#"List.intersperse [ 1 ] 5""#,
+            RocList::from_slice(&[1]),
+            RocList<i64>
+        );
+    }
+
+    #[test]
+    fn intersperse_no_elements() {
+        assert_evals_to!(
+            r#"List.intersperse [ ] 5""#,
+            RocList::from_slice(&[]),
+            RocList<i64>
+        );
+    }
+
+    #[test]
+    fn intersperse_string() {
+        assert_evals_to!(
+            r#"List.intersperse [ "foo", "bar", "baz" ] "a"""#,
+            RocList::from_slice(&[
+                "foo".into(),
+                "a".into(),
+                "bar".into(),
+                "a".into(),
+                "baz".into()
+            ]),
+            RocList<RocStr>
+        );
+    }
 }

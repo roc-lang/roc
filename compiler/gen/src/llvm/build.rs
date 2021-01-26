@@ -1,11 +1,11 @@
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
-    list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
+    list_get_unsafe, list_intersperse, list_join, list_keep_if, list_len, list_map, list_prepend,
+    list_repeat, list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_int, str_number_of_bytes, str_split,
-    str_starts_with, CHAR_LAYOUT,
+    str_concat, str_count_graphemes, str_ends_with, str_from_int, str_join_with,
+    str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -406,6 +406,9 @@ pub fn construct_optimization_passes<'a>(
 
     // remove unused global values (e.g. those defined by zig, but unused in user code)
     mpm.add_global_dce_pass();
+
+    // mpm.add_function_inlining_pass();
+    mpm.add_always_inliner_pass();
 
     let pmb = PassManagerBuilder::create();
     match opt_level {
@@ -3465,6 +3468,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_concat(env, inplace, scope, args[0], args[1])
         }
+        StrJoinWith => {
+            // Str.joinWith : List Str, Str -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let inplace = get_inplace_from_layout(layout);
+
+            str_join_with(env, inplace, scope, args[0], args[1])
+        }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
@@ -3699,6 +3710,18 @@ fn run_low_level<'a, 'ctx, 'env>(
             let inplace = get_inplace_from_layout(layout);
 
             list_join(env, inplace, parent, list, outer_list_layout)
+        }
+        ListIntersperse => {
+            // List.intersperse : List a, a -> List a
+            debug_assert_eq!(args.len(), 2);
+
+            let list = load_symbol(env, scope, &args[0]);
+
+            let (inter, inter_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            let inplace = get_inplace_from_layout(layout);
+
+            list_intersperse(env, parent, inplace, list, inter, inter_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
         | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
@@ -4218,6 +4241,13 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
         .module
         .get_function(fn_name)
         .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+
+    use inkwell::attributes::{Attribute, AttributeLoc};
+
+    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    debug_assert!(kind_id > 0);
+    let attr = env.context.create_enum_attribute(kind_id, 1);
+    fn_val.add_attribute(AttributeLoc::Function, attr);
 
     let call = env.builder.build_call(fn_val, args, "call_builtin");
 

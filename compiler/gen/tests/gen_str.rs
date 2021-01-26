@@ -18,6 +18,7 @@ const ROC_STR_MEM_SIZE: usize = core::mem::size_of::<RocStr>();
 #[cfg(test)]
 mod gen_str {
     use crate::ROC_STR_MEM_SIZE;
+    use roc_std::RocStr;
     use std::cmp::min;
 
     fn small_str(str: &str) -> [u8; ROC_STR_MEM_SIZE] {
@@ -567,5 +568,28 @@ mod gen_str {
             "Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))",
             &'static str
         );
+    }
+
+    #[test]
+    fn str_join_comma_small() {
+        assert_evals_to!(
+            r#"Str.joinWith ["1", "2"] ", " "#,
+            RocStr::from("1, 2"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn str_join_comma_big() {
+        assert_evals_to!(
+            r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
+            RocStr::from("10000000, 2000000, 30000000"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn str_join_comma_single() {
+        assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
     }
 }

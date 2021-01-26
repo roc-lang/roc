@@ -150,7 +150,7 @@ Once all that was done, `cargo` ran successfully for Roc!
 Using [`lld` for Rust's linker](https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306)
 makes build times a lot faster, and I highly recommend it.
 
-Create `~/.config/cargo` and add this to it:
+Create `~/.cargo/config.toml` if it does not exist and add this to it:
 
 ```
 [build]

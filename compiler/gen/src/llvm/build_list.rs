@@ -4,7 +4,9 @@ use crate::llvm::build::{
 };
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
-use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout};
+use crate::llvm::refcounting::{
+    decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
+};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
@@ -387,8 +389,7 @@ pub fn list_reverse_help_help<'a, 'ctx, 'env>(
     source_ptr: PointerValue<'ctx>,
     dest_ptr: PointerValue<'ctx>,
 ) {
-    // let element_width = source_ptr.get_type().get_element_type().size_of().unwrap();
-    let element_width = env.context.i64_type().const_int(8, false);
+    let element_width = source_ptr.get_type().get_element_type().size_of().unwrap();
 
     call_void_bitcode_fn(
         env,
@@ -411,8 +412,8 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
     source_ptr: PointerValue<'ctx>,
     dest_ptr: PointerValue<'ctx>,
 ) {
-    list_reverse_help_help(env, parent, inplace, length, source_ptr, dest_ptr);
-    return;
+    //list_reverse_help_help(env, parent, inplace, length, source_ptr, dest_ptr);
+    //return;
 
     let builder = env.builder;
     let ctx = env.context;
@@ -477,6 +478,104 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
 
     // continuation
     builder.position_at_end(cont_bb);
+}
+
+/// List.reverse : List elem -> List elem
+pub fn list_intersperse<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    output_inplace: InPlace,
+    list: BasicValueEnum<'ctx>,
+    inter: BasicValueEnum<'ctx>,
+    inter_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
+
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let element_layout = inter_layout;
+    let list_type = basic_type_from_layout(env.arena, env.context, &element_layout, env.ptr_bytes);
+    let ptr_type = list_type.ptr_type(AddressSpace::Generic);
+
+    let wrapper_struct = list.into_struct_value();
+    let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+    let length = list_len(builder, list.into_struct_value());
+
+    let len_0_block = ctx.append_basic_block(parent, "len_0_block");
+    let len_n_block = ctx.append_basic_block(parent, "len_n_block");
+    let cont_block = ctx.append_basic_block(parent, "cont_block");
+
+    let zero = ctx.i64_type().const_zero();
+    let one = env.context.i64_type().const_int(1, false);
+    let two = env.context.i64_type().const_int(2, false);
+
+    let result = builder.build_alloca(ptr_type, "result");
+    let result_length = builder.build_alloca(ctx.i64_type(), "result_length");
+
+    builder.build_switch(length, len_n_block, &[(zero, len_0_block)]);
+
+    // build block for length 0
+    {
+        builder.position_at_end(len_0_block);
+
+        // store NULL pointer there
+        builder.build_store(result, ptr_type.const_zero());
+        builder.build_store(result_length, zero);
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    // build block for length > 1
+    {
+        builder.position_at_end(len_n_block);
+
+        let new_length = env.builder.build_int_mul(length, two, "mul_two");
+        let new_length = env.builder.build_int_sub(new_length, one, "sub_one");
+
+        let source_ptr = list_ptr;
+        let dest_ptr = allocate_list(env, output_inplace, &element_layout, new_length);
+        let element_width = source_ptr.get_type().get_element_type().size_of().unwrap();
+        let inter_ptr = env.builder.build_alloca(inter.get_type(), "typ");
+        env.builder.build_store(inter_ptr, inter);
+
+        let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+        let u8_source_ptr = env.builder.build_bitcast(source_ptr, u8_ptr, "to_u8");
+        let u8_dest_ptr = env.builder.build_bitcast(dest_ptr, u8_ptr, "to_u8");
+        let u8_inter_ptr = env.builder.build_bitcast(inter_ptr, u8_ptr, "to_u8");
+
+        call_void_bitcode_fn(
+            env,
+            &[
+                element_width.into(),
+                length.into(),
+                u8_source_ptr,
+                u8_dest_ptr,
+                u8_inter_ptr,
+            ],
+            &bitcode::LIST_INTERSPERSE,
+        );
+
+        // decrement the input list
+        let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, list_ptr);
+        refcount_ptr.decrement(env, &element_layout);
+
+        builder.build_store(result, dest_ptr);
+        builder.build_store(result_length, new_length);
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    // combine both paths together
+    builder.position_at_end(cont_block);
+
+    let new_list_ptr = builder
+        .build_load(result, "load_result")
+        .into_pointer_value();
+
+    let new_length = builder
+        .build_load(result_length, "load_result_length")
+        .into_int_value();
+
+    store_list(env, new_list_ptr, new_length)
 }
 
 /// List.reverse : List elem -> List elem

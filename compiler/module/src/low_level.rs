@@ -4,6 +4,7 @@
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LowLevel {
     StrConcat,
+    StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
     StrEndsWith,
@@ -22,6 +23,7 @@ pub enum LowLevel {
     ListAppend,
     ListPrepend,
     ListJoin,
+    ListIntersperse,
     ListMap,
     ListKeepIf,
     ListWalk,
