@@ -5,7 +5,7 @@ app "nqueens"
 
 main : Task.Task {} []
 main =
-    queens 6
+    queens 10
         |> Str.fromInt
         |> Task.putLine
 

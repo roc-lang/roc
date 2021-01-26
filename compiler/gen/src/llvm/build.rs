@@ -70,16 +70,16 @@ impl Into<OptimizationLevel> for OptLevel {
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
-    symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,
+    symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
     pub top_level_thunks: ImMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
 impl<'a, 'ctx> Scope<'a, 'ctx> {
-    fn get(&self, symbol: &Symbol) -> Option<&(Layout<'a>, PointerValue<'ctx>)> {
+    fn get(&self, symbol: &Symbol) -> Option<&(Layout<'a>, BasicValueEnum<'ctx>)> {
         self.symbols.get(symbol)
     }
-    pub fn insert(&mut self, symbol: Symbol, value: (Layout<'a>, PointerValue<'ctx>)) {
+    pub fn insert(&mut self, symbol: Symbol, value: (Layout<'a>, BasicValueEnum<'ctx>)) {
         self.symbols.insert(symbol, value);
     }
     pub fn insert_top_level_thunk(
@@ -1814,9 +1814,6 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let context = env.context;
 
-    let call_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
-    let alloca = create_entry_block_alloca(env, parent, call_bt, symbol.ident_string(&env.interns));
-
     let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
 
     for arg in arguments.iter() {
@@ -1852,8 +1849,9 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     {
         env.builder.position_at_end(pass_block);
 
-        env.builder.build_store(alloca, call_result);
-        scope.insert(symbol, (layout, alloca));
+        // env.builder.build_store(alloca, call_result);
+        // scope.insert(symbol, (layout, alloca));
+        scope.insert(symbol, (layout, call_result));
 
         build_exp_stmt(env, layout_ids, scope, parent, pass);
 
@@ -1911,32 +1909,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             for (symbol, expr, layout) in queue {
                 debug_assert!(layout != &Layout::RecursivePointer);
-                let context = &env.context;
 
                 let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
-                let expr_bt = if let Layout::RecursivePointer = layout {
-                    match expr {
-                        Expr::AccessAtIndex { field_layouts, .. } => {
-                            let layout = Layout::Struct(field_layouts);
-
-                            block_of_memory(env.context, &layout, env.ptr_bytes)
-                        }
-                        _ => unreachable!(
-                            "a recursive pointer can only be loaded from a recursive tag union"
-                        ),
-                    }
-                } else {
-                    basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
-                };
-
-                let alloca = create_entry_block_alloca(
-                    env,
-                    parent,
-                    expr_bt,
-                    symbol.ident_string(&env.interns),
-                );
-
-                env.builder.build_store(alloca, val);
 
                 // Make a new scope which includes the binding we just encountered.
                 // This should be done *after* compiling the bound expr, since any
@@ -1945,7 +1919,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 // access itself!
                 // scope = scope.clone();
 
-                scope.insert(*symbol, (layout.clone(), alloca));
+                scope.insert(*symbol, (layout.clone(), val));
                 stack.push(*symbol);
             }
 
@@ -2107,14 +2081,15 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // construct the blocks that may jump to this join point
             build_exp_stmt(env, layout_ids, scope, parent, remainder);
 
-            for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
-                scope.insert(param.symbol, (param.layout.clone(), *ptr));
-            }
-
             let phi_block = builder.get_insert_block().unwrap();
 
             // put the cont block at the back
             builder.position_at_end(cont_block);
+
+            for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
+                let value = env.builder.build_load(*ptr, "load_jp_argument");
+                scope.insert(param.symbol, (param.layout.clone(), value));
+            }
 
             // put the continuation in
             let result = build_exp_stmt(env, layout_ids, scope, parent, continuation);
@@ -2177,23 +2152,12 @@ pub fn load_symbol<'a, 'ctx, 'env>(
     symbol: &Symbol,
 ) -> BasicValueEnum<'ctx> {
     match scope.get(symbol) {
-        Some((_, ptr)) => env
-            .builder
-            .build_load(*ptr, symbol.ident_string(&env.interns)),
+        Some((_, ptr)) => *ptr,
+
         None => panic!(
             "There was no entry for {:?} {} in scope {:?}",
             symbol, symbol, scope
         ),
-    }
-}
-
-pub fn ptr_from_symbol<'a, 'ctx, 'scope>(
-    scope: &'scope Scope<'a, 'ctx>,
-    symbol: Symbol,
-) -> &'scope PointerValue<'ctx> {
-    match scope.get(&symbol) {
-        Some((_, ptr)) => ptr,
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
 
@@ -2203,11 +2167,7 @@ pub fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
     symbol: &Symbol,
 ) -> (BasicValueEnum<'ctx>, &'b Layout<'a>) {
     match scope.get(symbol) {
-        Some((layout, ptr)) => (
-            env.builder
-                .build_load(*ptr, symbol.ident_string(&env.interns)),
-            layout,
-        ),
+        Some((layout, ptr)) => (*ptr, layout),
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
@@ -3342,17 +3302,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
-
-        let alloca = create_entry_block_alloca(
-            env,
-            fn_val,
-            arg_val.get_type(),
-            arg_symbol.ident_string(&env.interns),
-        );
-
-        builder.build_store(alloca, arg_val);
-
-        scope.insert(*arg_symbol, (layout.clone(), alloca));
+        scope.insert(*arg_symbol, (layout.clone(), arg_val));
     }
 
     let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
