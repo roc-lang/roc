@@ -6,12 +6,10 @@ jobs:
   benchmark:
     name: benchmark
     runs-on: self-hosted
+    container: vulpix:ubuntu-20-04-benchmarks
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v2
-
-      - name: Log CPU model
-        run: cat /proc/cpuinfo  | grep name | uniq
 
       - name: Expose needed modules
         run: cd editor && ./prep_benchmarks.sh && cd ..
