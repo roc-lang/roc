@@ -2,6 +2,10 @@ on: [pull_request]
 
 name: Benchmarks
 
+env:
+  CARGO_HOME: /root/.cargo
+  RUSTUP_HOME: /root/.rustup
+
 jobs:
   benchmark:
     name: benchmark
