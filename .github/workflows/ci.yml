@@ -21,66 +21,66 @@ jobs:
       - name: Log CPU model
         run: sudo cat /proc/cpuinfo | grep name | uniq
 
-      # - name: Install CI Libraries
-      #   run: sudo ./ci/install-ci-libraries.sh 10
+      - name: Install CI Libraries
+        run: sudo ./ci/install-ci-libraries.sh 10
 
-      # - name: scope sccache to CPU model
-      #   run: |
-      #     export SCCACHE_S3_KEY_PREFIX=`sudo cat /proc/cpuinfo | grep name | uniq | awk -F: {'print $2'} | awk -F@ {'print$1'} | xargs | sed -e 's/\s/_/g'`
-      #     echo "SCCACHE_S3_KEY_PREFIX=$SCCACHE_S3_KEY_PREFIX" >> $GITHUB_ENV
+      - name: scope sccache to CPU model
+        run: |
+          export SCCACHE_S3_KEY_PREFIX=`sudo cat /proc/cpuinfo | grep name | uniq | awk -F: {'print $2'} | awk -F@ {'print$1'} | xargs | sed -e 's/\s/_/g'`
+          echo "SCCACHE_S3_KEY_PREFIX=$SCCACHE_S3_KEY_PREFIX" >> $GITHUB_ENV
 
-      # - name: print SCCACHE_S3_KEY_PREFIX
-      #   run: echo $SCCACHE_S3_KEY_PREFIX
+      - name: print SCCACHE_S3_KEY_PREFIX
+        run: echo $SCCACHE_S3_KEY_PREFIX
 
-      # - name: sccache version
-      #   run: /usr/local/bin/sccache -V
+      - name: sccache version
+        run: /usr/local/bin/sccache -V
 
-      # - name: Run Zig tests
-      #   run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
+      - name: Run Zig tests
+        run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
 
-      # - name: Enable LLD
-      #   run: sudo ./ci/enable-lld.sh
+      - name: Enable LLD
+        run: sudo ./ci/enable-lld.sh
 
-      # - uses: actions-rs/toolchain@v1
-      #   name: Install Rust Toolchain
-      #   with:
-      #     profile: minimal
-      #     toolchain: stable
-      #     override: true
+      - uses: actions-rs/toolchain@v1
+        name: Install Rust Toolchain
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
 
-      # - run: rustup component add rustfmt
+      - run: rustup component add rustfmt
 
-      # - uses: actions-rs/cargo@v1
-      #   name: rustfmt version
-      #   with:
-      #     command: fmt
-      #     args: --version
+      - uses: actions-rs/cargo@v1
+        name: rustfmt version
+        with:
+          command: fmt
+          args: --version
 
-      # - uses: actions-rs/cargo@v1
-      #   name: cargo fmt --check
-      #   with:
-      #     command: fmt
-      #     args: --all -- --check
+      - uses: actions-rs/cargo@v1
+        name: cargo fmt --check
+        with:
+          command: fmt
+          args: --all -- --check
 
-      # - run: rustup component add clippy
+      - run: rustup component add clippy
 
-      # - uses: actions-rs/cargo@v1
-      #   name: clippy version
-      #   with:
-      #     command: clippy
-      #     args: -V
+      - uses: actions-rs/cargo@v1
+        name: clippy version
+        with:
+          command: clippy
+          args: -V
 
-      # - uses: actions-rs/cargo@v1
-      #   name: cargo clippy
-      #   with:
-      #     command: clippy
-      #     args: -- -D warnings
+      - uses: actions-rs/cargo@v1
+        name: cargo clippy
+        with:
+          command: clippy
+          args: -- -D warnings
 
-      # - uses: actions-rs/cargo@v1
-      #   name: cargo test --release
-      #   with:
-      #     command: test
-      #     args: --release
+      - uses: actions-rs/cargo@v1
+        name: cargo test --release
+        with:
+          command: test
+          args: --release
 
-      # - name: sccache stats
-      #   run: /usr/local/bin/sccache --show-stats
+      - name: sccache stats
+        run: /usr/local/bin/sccache --show-stats
