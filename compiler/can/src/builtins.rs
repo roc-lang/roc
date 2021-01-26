@@ -53,6 +53,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         BOOL_OR => bool_or,
         BOOL_NOT => bool_not,
         STR_CONCAT => str_concat,
+        STR_JOIN_WITH => str_join_with,
         STR_SPLIT => str_split,
         STR_IS_EMPTY => str_is_empty,
         STR_STARTS_WITH => str_starts_with,
@@ -147,6 +148,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_OR => bool_or,
         Symbol::BOOL_NOT => bool_not,
         Symbol::STR_CONCAT => str_concat,
+        Symbol::STR_JOIN_WITH => str_join_with,
         Symbol::STR_SPLIT => str_split,
         Symbol::STR_IS_EMPTY => str_is_empty,
         Symbol::STR_STARTS_WITH => str_starts_with,
@@ -1243,6 +1245,29 @@ fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        str_var,
+    )
+}
+
+/// Str.joinWith : List Str, Str -> Str
+fn str_join_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_str_var = var_store.fresh();
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrJoinWith,
+        args: vec![
+            (list_str_var, Var(Symbol::ARG_1)),
+            (str_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
         var_store,
         body,
         str_var,
