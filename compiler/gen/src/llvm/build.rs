@@ -2143,10 +2143,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     }
 }
 
-pub fn load_symbol<'a, 'ctx, 'env>(
-    scope: &Scope<'a, 'ctx>,
-    symbol: &Symbol,
-) -> BasicValueEnum<'ctx> {
+pub fn load_symbol<'a, 'ctx>(scope: &Scope<'a, 'ctx>, symbol: &Symbol) -> BasicValueEnum<'ctx> {
     match scope.get(symbol) {
         Some((_, ptr)) => *ptr,
 
@@ -2157,7 +2154,7 @@ pub fn load_symbol<'a, 'ctx, 'env>(
     }
 }
 
-pub fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
+pub fn load_symbol_and_layout<'a, 'ctx, 'b>(
     scope: &'b Scope<'a, 'ctx>,
     symbol: &Symbol,
 ) -> (BasicValueEnum<'ctx>, &'b Layout<'a>) {
