@@ -61,7 +61,7 @@ fn str_symbol_to_i128<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
 ) -> IntValue<'ctx> {
-    let string = load_symbol(env, scope, &symbol);
+    let string = load_symbol(scope, &symbol);
 
     let i128_type = env.context.i128_type().into();
 
@@ -248,7 +248,7 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     int_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let int = load_symbol(env, scope, &int_symbol);
+    let int = load_symbol(scope, &int_symbol);
 
     let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
 
