@@ -1471,11 +1471,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                         let result = builder.build_alloca(ctx.i64_type(), "result");
 
-                        env.builder.build_switch(
-                            is_null,
-                            else_block,
-                            &[(ctx.bool_type().const_int(1, false), then_block)],
-                        );
+                        env.builder
+                            .build_conditional_branch(is_null, then_block, else_block);
 
                         {
                             env.builder.position_at_end(then_block);
@@ -2431,59 +2428,97 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
     // Build the cases
     let mut incoming = Vec::with_capacity_in(branches.len(), arena);
-    let mut cases = Vec::with_capacity_in(branches.len(), arena);
 
-    for (int, _) in branches.iter() {
-        // Switch constants must all be same type as switch value!
-        // e.g. this is incorrect, and will trigger a LLVM warning:
-        //
-        //   switch i8 %apple1, label %default [
-        //     i64 2, label %branch2
-        //     i64 0, label %branch0
-        //     i64 1, label %branch1
-        //   ]
-        //
-        // they either need to all be i8, or i64
-        let int_val = match cond_layout {
-            Layout::Builtin(Builtin::Usize) => {
-                ptr_int(env.context, env.ptr_bytes).const_int(*int as u64, false)
+    if let Layout::Builtin(Builtin::Int1) = cond_layout {
+        match (branches, default_branch) {
+            ([(0, false_branch)], true_branch) | ([(1, true_branch)], false_branch) => {
+                let then_block = context.append_basic_block(parent, "then_block");
+                let else_block = context.append_basic_block(parent, "else_block");
+
+                builder.build_conditional_branch(cond, then_block, else_block);
+
+                {
+                    builder.position_at_end(then_block);
+
+                    let branch_val = build_exp_stmt(env, layout_ids, scope, parent, true_branch);
+
+                    if then_block.get_terminator().is_none() {
+                        builder.build_unconditional_branch(cont_block);
+                        incoming.push((branch_val, then_block));
+                    }
+                }
+
+                {
+                    builder.position_at_end(else_block);
+
+                    let branch_val = build_exp_stmt(env, layout_ids, scope, parent, false_branch);
+
+                    if else_block.get_terminator().is_none() {
+                        builder.build_unconditional_branch(cont_block);
+                        incoming.push((branch_val, else_block));
+                    }
+                }
             }
-            Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Int128) => const_i128(env, *int as i128),
-            Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Int1) => context.bool_type().const_int(*int as u64, false),
-            _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
-        };
-        let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
-        cases.push((int_val, block));
-    }
-
-    let default_block = context.append_basic_block(parent, "default");
-
-    builder.build_switch(cond, default_block, &cases);
-
-    for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
-        builder.position_at_end(block);
-
-        let branch_val = build_exp_stmt(env, layout_ids, scope, parent, branch_expr);
-
-        if block.get_terminator().is_none() {
-            builder.build_unconditional_branch(cont_block);
-            incoming.push((branch_val, block));
+            _ => {
+                dbg!(branches);
+                unreachable!()
+            }
         }
-    }
+    } else {
+        let default_block = context.append_basic_block(parent, "default");
+        let mut cases = Vec::with_capacity_in(branches.len(), arena);
 
-    // The block for the conditional's default branch.
-    builder.position_at_end(default_block);
+        for (int, _) in branches.iter() {
+            // Switch constants must all be same type as switch value!
+            // e.g. this is incorrect, and will trigger a LLVM warning:
+            //
+            //   switch i8 %apple1, label %default [
+            //     i64 2, label %branch2
+            //     i64 0, label %branch0
+            //     i64 1, label %branch1
+            //   ]
+            //
+            // they either need to all be i8, or i64
+            let int_val = match cond_layout {
+                Layout::Builtin(Builtin::Usize) => {
+                    ptr_int(env.context, env.ptr_bytes).const_int(*int as u64, false)
+                }
+                Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
+                Layout::Builtin(Builtin::Int128) => const_i128(env, *int as i128),
+                Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
+                Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
+                Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
+                Layout::Builtin(Builtin::Int1) => context.bool_type().const_int(*int as u64, false),
+                _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
+            };
+            let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
-    let default_val = build_exp_stmt(env, layout_ids, scope, parent, default_branch);
+            cases.push((int_val, block));
+        }
 
-    if default_block.get_terminator().is_none() {
-        builder.build_unconditional_branch(cont_block);
-        incoming.push((default_val, default_block));
+        builder.build_switch(cond, default_block, &cases);
+
+        for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
+            builder.position_at_end(block);
+
+            let branch_val = build_exp_stmt(env, layout_ids, scope, parent, branch_expr);
+
+            if block.get_terminator().is_none() {
+                builder.build_unconditional_branch(cont_block);
+                incoming.push((branch_val, block));
+            }
+        }
+
+        // The block for the conditional's default branch.
+        builder.position_at_end(default_block);
+
+        let default_val = build_exp_stmt(env, layout_ids, scope, parent, default_branch);
+
+        if default_block.get_terminator().is_none() {
+            builder.build_unconditional_branch(cont_block);
+            incoming.push((default_val, default_block));
+        }
     }
 
     // emit merge block

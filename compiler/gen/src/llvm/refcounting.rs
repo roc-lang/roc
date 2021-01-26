@@ -924,11 +924,8 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
         let then_block = ctx.append_basic_block(parent, "then");
 
-        env.builder.build_switch(
-            is_null,
-            cont_block,
-            &[(ctx.bool_type().const_int(1, false), then_block)],
-        );
+        env.builder
+            .build_conditional_branch(is_null, then_block, cont_block);
 
         {
             env.builder.position_at_end(then_block);
