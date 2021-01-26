@@ -65,7 +65,7 @@ fn line_count(lines: &str) -> usize {
 
 pub fn gen_file(nr_lines: usize) {
     let nr_of_str_lines = nr_lines - line_count(ROC_SOURCE_START);
-    let path_str = format!("benches/resources/{:?}_lines.roc", nr_lines);
+    let path_str = bench_resource_path(nr_lines);
     let path = Path::new(&path_str);
     let display = path.display();
 
@@ -100,8 +100,20 @@ pub fn gen_file(nr_lines: usize) {
         .expect("Failed to write String to file.");
 }
 
+fn bench_resource_path(nr_lines: usize) -> String {
+    let resource_path_res = std::env::var("BENCH_RESOURCE_PATH");
+    let resource_path_str = 
+        if let Ok(resource_path) = resource_path_res {
+            resource_path
+        } else {
+            "benches/resources/".to_owned()
+        };
+
+    format!("{}{}_lines.roc", resource_path_str, nr_lines)
+}
+
 fn file_read_bench_helper(nr_lines: usize, c: &mut Criterion) {
-    let path_str = format!("benches/resources/{}_lines.roc", nr_lines);
+    let path_str = bench_resource_path(nr_lines);
     text_buffer::from_path(Path::new(&path_str)).expect("Failed to read file at given path.");
     c.bench_function(
         &format!("read {:?} line file into textbuffer", nr_lines),

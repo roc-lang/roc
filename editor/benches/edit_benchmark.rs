@@ -48,6 +48,18 @@ pub fn char_insert_bench(c: &mut Criterion) {
     });
 }
 
+fn bench_resource_path(nr_lines: usize) -> String {
+    let resource_path_res = std::env::var("BENCH_RESOURCE_PATH");
+    let resource_path_str = 
+        if let Ok(resource_path) = resource_path_res {
+            resource_path
+        } else {
+            "benches/resources/".to_owned()
+        };
+
+    format!("{}{}_lines.roc", resource_path_str, nr_lines)
+}
+
 pub fn char_pop_bench(c: &mut Criterion) {
     let nr_lines = 50000;
     let mut text_buf = buf_from_dummy_file(nr_lines);
@@ -186,7 +198,7 @@ fn gen_rand_selection(rand_gen: &mut StdRng, text_buf: &TextBuffer) -> RawSelect
 }
 
 fn buf_from_dummy_file(nr_lines: usize) -> TextBuffer {
-    let path_str = format!("benches/resources/{}_lines.roc", nr_lines);
+    let path_str = bench_resource_path(nr_lines);
 
     text_buffer::from_path(Path::new(&path_str)).expect("Failed to read file at given path.")
 }
