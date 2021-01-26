@@ -102,12 +102,11 @@ pub fn gen_file(nr_lines: usize) {
 
 fn bench_resource_path(nr_lines: usize) -> String {
     let resource_path_res = std::env::var("BENCH_RESOURCE_PATH");
-    let resource_path_str = 
-        if let Ok(resource_path) = resource_path_res {
-            resource_path
-        } else {
-            "benches/resources/".to_owned()
-        };
+    let resource_path_str = if let Ok(resource_path) = resource_path_res {
+        resource_path
+    } else {
+        "benches/resources/".to_owned()
+    };
 
     format!("{}{}_lines.roc", resource_path_str, nr_lines)
 }
