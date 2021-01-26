@@ -9,6 +9,9 @@ jobs:
     container: vulpix/ubuntu-20-04-benchmarks
     timeout-minutes: 60
     steps:
+      - name: print PATH
+        run: echo $PATH
+
       - uses: actions/checkout@v2
 
       - name: Expose needed modules
