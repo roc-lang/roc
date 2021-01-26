@@ -6,7 +6,7 @@ jobs:
   benchmark:
     name: benchmark
     runs-on: self-hosted
-    container: vulpix:ubuntu-20-04-benchmarks
+    container: vulpix/ubuntu-20-04-benchmarks
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v2
