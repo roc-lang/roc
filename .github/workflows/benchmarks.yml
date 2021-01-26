@@ -13,6 +13,9 @@ jobs:
     container: vulpix/ubuntu-20-04-benchmarks
     timeout-minutes: 60
     steps:
+      - name: add cargo to PATH
+        run: echo "/root/.cargo/bin" >> $GITHUB_PATH
+
       - name: check toolchain
         run: rustup show
 
