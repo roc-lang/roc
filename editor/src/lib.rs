@@ -298,7 +298,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         crate::lang::expr::str_to_expr2(&arena, "1", &mut env, &mut scope, region)
                             .unwrap();
 
-                    render_node(&size, ast, CODE_TXT_XY.into(), &mut glyph_brush);
+                    render_node(&size, &ast, CODE_TXT_XY.into(), &mut glyph_brush);
                 }
 
                 match draw_all_rects(
@@ -399,7 +399,7 @@ fn begin_render_pass<'a>(
 
 fn render_node(
     size: &PhysicalSize<u32>,
-    ast: Expr2,
+    ast: &Expr2,
     position: Vector2<f32>,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
