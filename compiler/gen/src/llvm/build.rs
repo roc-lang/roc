@@ -3695,13 +3695,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.intersperse : List a, a -> List a
             debug_assert_eq!(args.len(), 2);
 
-            let list = load_symbol(env, scope, &args[0]);
+            let list = load_symbol(scope, &args[0]);
 
-            let (inter, inter_layout) = load_symbol_and_layout(env, scope, &args[1]);
+            let (inter, inter_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_intersperse(env, parent, inplace, list, inter, inter_layout)
+            list_intersperse(env, layout_ids, parent, inplace, list, inter, inter_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
         | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {

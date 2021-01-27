@@ -1341,3 +1341,80 @@ fn get_refcount_ptr_help<'a, 'ctx, 'env>(
         "get_refcount_ptr",
     )
 }
+
+pub fn build_inc_for_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::INC;
+
+    let base_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let fn_name = env.arena.alloc(format!("{}_by_ptr", base_name));
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let function_value = build_header_help(
+                env,
+                fn_name,
+                AnyTypeEnum::VoidType(env.context.void_type()),
+                &[env.ptr_int().into(), u8_ptr.into()],
+            );
+
+            let entry_block = env.context.append_basic_block(function_value, "entry");
+            env.builder.position_at_end(entry_block);
+
+            let func_scope = function_value.get_subprogram().unwrap();
+            let lexical_block = env.dibuilder.create_lexical_block(
+                /* scope */ func_scope.as_debug_info_scope(),
+                /* file */ env.compile_unit.get_file(),
+                /* line_no */ 0,
+                /* column_no */ 0,
+            );
+
+            let loc = env.dibuilder.create_debug_location(
+                env.context,
+                /* line */ 0,
+                /* column */ 0,
+                /* current_scope */ lexical_block.as_debug_info_scope(),
+                /* inlined_at */ None,
+            );
+            env.builder.set_current_debug_location(&env.context, loc);
+
+            let _inc_amount = function_value.get_nth_param(0).unwrap().into_int_value();
+
+            let opaque_pointer = function_value.get_nth_param(1).unwrap();
+            debug_assert!(opaque_pointer.is_pointer_value());
+
+            let bt = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+            let bt_ptr = bt.ptr_type(AddressSpace::Generic);
+
+            let pointer = env
+                .builder
+                .build_bitcast(opaque_pointer, bt_ptr, "to_known")
+                .into_pointer_value();
+
+            let value = env.builder.build_load(pointer, "load_value");
+
+            increment_refcount_layout(env, function_value, layout_ids, 1, value, layout);
+
+            env.builder.build_return(None);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    function
+}

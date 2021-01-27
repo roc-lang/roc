@@ -999,12 +999,17 @@ fn listReverse(allocator: *Allocator, element_width: u64, length: usize, source_
     }
 }
 
-pub fn listIntersperseC(element_width: u64, length: usize, source_ptr: [*]u8, target_ptr: [*]u8, inter: [*]u8) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, listIntersperse, .{ std.heap.c_allocator, element_width, length, source_ptr, target_ptr, inter });
+pub fn listIntersperseC(element_width: u64, length: usize, source_ptr: [*]u8, target_ptr: [*]u8, inter: [*]u8, inc_ptr: *usize) callconv(.C) void {
+    const inc = @ptrCast(opaque_inc, inc_ptr);
+
+    return listIntersperse(std.heap.c_allocator, element_width, length, source_ptr, target_ptr, inter, inc);
 }
 
-fn listIntersperse(allocator: *Allocator, element_width: u64, length: usize, source_ptr: [*]u8, target_ptr: [*]u8, inter: [*]u8) void {
+const opaque_inc = fn (amount: usize, ptr: [*]u8) void;
+
+inline fn listIntersperse(allocator: *Allocator, element_width: u64, length: usize, source_ptr: [*]u8, target_ptr: [*]u8, inter: [*]u8, inc: opaque_inc) void {
     var target_offset: usize = 0;
+    var increments: usize = 0;
 
     var i: usize = 0;
     while (i < length) {
@@ -1016,8 +1021,14 @@ fn listIntersperse(allocator: *Allocator, element_width: u64, length: usize, sou
         if (!is_final) {
             @memcpy(target_ptr + target_offset, inter, element_width);
             target_offset += element_width;
+
+            increments += 1;
         }
 
         i += 1;
+    }
+
+    if (increments > 1) {
+        inc(increments - 1, inter);
     }
 }

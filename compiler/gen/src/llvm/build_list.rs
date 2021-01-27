@@ -5,7 +5,7 @@ use crate::llvm::build::{
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
+    build_inc_for_layout, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -483,6 +483,7 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
 /// List.reverse : List elem -> List elem
 pub fn list_intersperse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     output_inplace: InPlace,
     list: BasicValueEnum<'ctx>,
@@ -538,10 +539,17 @@ pub fn list_intersperse<'a, 'ctx, 'env>(
         let inter_ptr = env.builder.build_alloca(inter.get_type(), "typ");
         env.builder.build_store(inter_ptr, inter);
 
+        let inc = build_inc_for_layout(env, layout_ids, element_layout)
+            .as_global_value()
+            .as_pointer_value();
+
         let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
         let u8_source_ptr = env.builder.build_bitcast(source_ptr, u8_ptr, "to_u8");
         let u8_dest_ptr = env.builder.build_bitcast(dest_ptr, u8_ptr, "to_u8");
         let u8_inter_ptr = env.builder.build_bitcast(inter_ptr, u8_ptr, "to_u8");
+
+        let usize_ptr = env.ptr_int().ptr_type(AddressSpace::Generic);
+        let usize_inc = env.builder.build_bitcast(inc, usize_ptr, "to_usize");
 
         call_void_bitcode_fn(
             env,
@@ -551,6 +559,7 @@ pub fn list_intersperse<'a, 'ctx, 'env>(
                 u8_source_ptr,
                 u8_dest_ptr,
                 u8_inter_ptr,
+                usize_inc,
             ],
             &bitcode::LIST_INTERSPERSE,
         );

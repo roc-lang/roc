@@ -252,7 +252,7 @@ pub fn helper<'a>(
             );
 
             fn_val.print_to_stderr();
-            // module.print_to_stderr();
+            module.print_to_stderr();
 
             panic!(
                 "The preceding code was from {:?}, which failed LLVM verification in {} build.",
