@@ -108,7 +108,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         env: &Env<'a, 'ctx, 'env>,
     ) {
         match mode {
-            CallMode::Inc(_, inc_amount) => self.increment(inc_amount, env),
+            CallMode::Inc(inc_amount) => self.increment(inc_amount, env),
             CallMode::Dec => self.decrement(env, layout),
         }
     }
@@ -299,7 +299,7 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
     layouts: &[Layout<'a>],
-    mode: Mode,
+    mode: Mode<'ctx>,
 ) {
     let wrapper_struct = value.into_struct_value();
 
@@ -319,7 +319,7 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
-    inc_amount: u64,
+    inc_amount: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
@@ -347,7 +347,7 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
     builtin: &Builtin<'a>,
@@ -410,7 +410,7 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
@@ -518,7 +518,7 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
 fn modify_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     layout: &Layout<'a>,
     original_wrapper: StructValue<'ctx>,
 ) {
@@ -553,16 +553,16 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     call_help(env, function, mode, original_wrapper.into(), call_name);
 }
 
-fn mode_to_call_mode(function: FunctionValue<'_>, mode: Mode) -> CallMode<'_> {
+fn mode_to_call_mode<'ctx>(function: FunctionValue<'ctx>, mode: Mode<'ctx>) -> CallMode<'ctx> {
     match mode {
         Mode::Dec => CallMode::Dec,
-        Mode::Inc(num) => CallMode::Inc(num, function.get_nth_param(1).unwrap().into_int_value()),
+        Mode::Inc(_) => CallMode::Inc(function.get_nth_param(1).unwrap().into_int_value()),
     }
 }
 
 fn modify_refcount_list_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     layout: &Layout<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
@@ -632,7 +632,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 fn modify_refcount_str<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     layout: &Layout<'a>,
     original_wrapper: StructValue<'ctx>,
 ) {
@@ -669,7 +669,7 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
 
 fn modify_refcount_str_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     layout: &Layout<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
@@ -744,7 +744,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 fn build_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg_type: BasicTypeEnum<'ctx>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
     match mode {
@@ -793,21 +793,21 @@ pub fn build_header_help<'a, 'ctx, 'env>(
 }
 
 #[derive(Clone, Copy)]
-enum Mode {
-    Inc(u64),
+enum Mode<'ctx> {
+    Inc(IntValue<'ctx>),
     Dec,
 }
 
 #[derive(Clone, Copy)]
 enum CallMode<'ctx> {
-    Inc(u64, IntValue<'ctx>),
+    Inc(IntValue<'ctx>),
     Dec,
 }
 
 fn build_rec_union<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     fields: &'a [&'a [Layout<'a>]],
     value: PointerValue<'ctx>,
     is_nullable: bool,
@@ -850,7 +850,7 @@ fn build_rec_union<'a, 'ctx, 'env>(
 fn build_rec_union_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     tags: &[&[Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
     is_nullable: bool,
@@ -1096,16 +1096,14 @@ fn rec_union_read_tag<'a, 'ctx, 'env>(
 fn call_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     function: FunctionValue<'ctx>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     value: BasicValueEnum<'ctx>,
     call_name: &str,
 ) -> inkwell::values::CallSiteValue<'ctx> {
     let call = match mode {
         Mode::Inc(inc_amount) => {
-            let rc_increment = ptr_int(env.context, env.ptr_bytes).const_int(inc_amount, false);
-
             env.builder
-                .build_call(function, &[value, rc_increment.into()], call_name)
+                .build_call(function, &[value, inc_amount.into()], call_name)
         }
         Mode::Dec => env.builder.build_call(function, &[value], call_name),
     };
@@ -1118,7 +1116,7 @@ fn call_help<'a, 'ctx, 'env>(
 fn modify_refcount_union<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     fields: &'a [&'a [Layout<'a>]],
     value: BasicValueEnum<'ctx>,
 ) {
@@ -1158,7 +1156,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
 fn modify_refcount_union_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
+    mode: Mode<'ctx>,
     tags: &[&[Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
 ) {
@@ -1389,7 +1387,7 @@ pub fn build_inc_for_layout<'a, 'ctx, 'env>(
             );
             env.builder.set_current_debug_location(&env.context, loc);
 
-            let _inc_amount = function_value.get_nth_param(0).unwrap().into_int_value();
+            let inc_amount = function_value.get_nth_param(0).unwrap().into_int_value();
 
             let opaque_pointer = function_value.get_nth_param(1).unwrap();
             debug_assert!(opaque_pointer.is_pointer_value());
@@ -1404,7 +1402,7 @@ pub fn build_inc_for_layout<'a, 'ctx, 'env>(
 
             let value = env.builder.build_load(pointer, "load_value");
 
-            increment_refcount_layout(env, function_value, layout_ids, 1, value, layout);
+            increment_refcount_layout(env, function_value, layout_ids, inc_amount, value, layout);
 
             env.builder.build_return(None);
 

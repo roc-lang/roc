@@ -2120,8 +2120,17 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let (value, layout) = load_symbol_and_layout(scope, symbol);
             let layout = layout.clone();
 
+            let inc_amount_intval = env.ptr_int().const_int(*inc_amount, false);
+
             if layout.contains_refcounted() {
-                increment_refcount_layout(env, parent, layout_ids, *inc_amount, value, &layout);
+                increment_refcount_layout(
+                    env,
+                    parent,
+                    layout_ids,
+                    inc_amount_intval,
+                    value,
+                    &layout,
+                );
             }
 
             build_exp_stmt(env, layout_ids, scope, parent, cont)
