@@ -28,6 +28,11 @@ mod gen_list {
     }
 
     #[test]
+    fn list_literal_empty_record() {
+        assert_evals_to!("[{}]", RocList::from_slice(&[()]), RocList<()>);
+    }
+
+    #[test]
     fn int_singleton_list_literal() {
         assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
     }

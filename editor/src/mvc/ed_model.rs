@@ -3,6 +3,7 @@ use crate::graphics::primitives::rect::Rect;
 use crate::text_buffer;
 use crate::text_buffer::TextBuffer;
 use std::cmp::Ordering;
+use std::fmt;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -62,4 +63,14 @@ impl Eq for Position {}
 pub struct RawSelection {
     pub start_pos: Position,
     pub end_pos: Position,
+}
+
+impl std::fmt::Display for RawSelection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "RawSelection: start_pos: line:{} col:{}, end_pos: line:{} col:{}",
+            self.start_pos.line, self.start_pos.column, self.end_pos.line, self.end_pos.column
+        )
+    }
 }

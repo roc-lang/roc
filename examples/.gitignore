@@ -7,4 +7,5 @@ roc_app.bc
 benchmarks/nqueens
 benchmarks/deriv
 benchmarks/cfold
+benchmarks/rbtree-insert
 effect-example

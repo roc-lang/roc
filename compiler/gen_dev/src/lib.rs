@@ -34,10 +34,21 @@ const INLINED_SYMBOLS: [Symbol; 4] = [
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
 #[allow(dead_code)]
-enum Relocation<'a> {
-    LocalData { offset: u64, data: &'a [u8] },
-    LinkedFunction { offset: u64, name: &'a str },
-    LinkedData { offset: u64, name: &'a str },
+pub enum Relocation<'a> {
+    LocalData {
+        offset: u64,
+        // This should probably technically be a bumpalo::Vec.
+        // The problem is that it currently is built in a place that can't access the arena.
+        data: std::vec::Vec<u8>,
+    },
+    LinkedFunction {
+        offset: u64,
+        name: &'a str,
+    },
+    LinkedData {
+        offset: u64,
+        name: &'a str,
+    },
 }
 
 trait Backend<'a>
@@ -56,10 +67,10 @@ where
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pionter and setup stack space.
     /// finalize is run at the end of build_proc when all internal code is finalized.
-    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String>;
+    fn finalize(&mut self) -> Result<(&'a [u8], &[&Relocation]), String>;
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
+    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[&Relocation]), String> {
         self.reset();
         // TODO: let the backend know of all the arguments.
         // let start = std::time::Instant::now();
@@ -182,6 +193,9 @@ where
                     Layout::Builtin(Builtin::Int64) => {
                         self.build_num_add_i64(sym, &args[0], &args[1])
                     }
+                    Layout::Builtin(Builtin::Float64) => {
+                        self.build_num_add_f64(sym, &args[0], &args[1])
+                    }
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
@@ -211,6 +225,15 @@ where
     /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_add_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String>;
+
+    /// build_num_add_f64 stores the sum of src1 and src2 into dst.
+    /// It only deals with inputs and outputs of f64 type.
+    fn build_num_add_f64(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
@@ -381,7 +404,7 @@ where
                 self.set_last_seen(*sym, stmt);
             }
             Stmt::Rethrow => {}
-            Stmt::Inc(sym, following) => {
+            Stmt::Inc(sym, _inc, following) => {
                 self.set_last_seen(*sym, stmt);
                 self.scan_ast(following);
             }

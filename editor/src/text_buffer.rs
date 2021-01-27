@@ -9,14 +9,15 @@ use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use ropey::Rope;
 use snafu::{ensure, OptionExt};
+use std::fmt;
 use std::fs::File;
 use std::io;
 use std::path::Path;
 
-#[derive(Debug)]
 pub struct TextBuffer {
     pub text_rope: Rope,
     pub path_str: String,
+    pub mem_arena: Bump,
 }
 
 impl TextBuffer {
@@ -64,7 +65,15 @@ impl TextBuffer {
 
     pub fn line(&self, line_nr: usize) -> Option<&str> {
         if line_nr < self.text_rope.len_lines() {
-            self.text_rope.line(line_nr).as_str()
+            let rope_slice = self.text_rope.line(line_nr);
+            if let Some(line_str_ref) = rope_slice.as_str() {
+                Some(line_str_ref)
+            } else {
+                // happens very rarely
+                let line_str = rope_slice.chunks().collect::<String>();
+                let arena_str_ref = self.mem_arena.alloc(line_str);
+                Some(arena_str_ref)
+            }
         } else {
             None
         }
@@ -91,7 +100,7 @@ impl TextBuffer {
     }
 
     // expensive function, don't use it if it can be done with a specialized, more efficient function
-    // TODO use bump allocation here
+    // TODO use pool allocation here
     pub fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a> {
         let mut lines = BumpString::with_capacity_in(self.text_rope.len_chars(), arena);
 
@@ -119,10 +128,12 @@ pub fn from_path(path: &Path) -> EdResult<TextBuffer> {
     // TODO benchmark different file reading methods, see #886
     let text_rope = rope_from_path(path)?;
     let path_str = path_to_string(path);
+    let mem_arena = Bump::new();
 
     Ok(TextBuffer {
         text_rope,
         path_str,
+        mem_arena,
     })
 }
 
@@ -149,5 +160,14 @@ fn rope_from_path(path: &Path) -> EdResult<Rope> {
             path_str: path_to_string(path),
             err_msg: e.to_string(),
         }),
+    }
+}
+
+impl fmt::Debug for TextBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextBuffer")
+            .field("text_rope", &self.text_rope)
+            .field("path_str", &self.path_str)
+            .finish()
     }
 }

@@ -82,9 +82,14 @@ indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 criterion = "0.3"
+rand = "0.8.2"
 
 [[bench]]
-name = "my_benchmark"
+name = "file_benchmark"
+harness = false
+
+[[bench]]
+name = "edit_benchmark"
 harness = false
 
 # uncomment everything below if you have made changes to any shaders and
