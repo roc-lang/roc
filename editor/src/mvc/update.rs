@@ -322,6 +322,8 @@ pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResu
 
                     ed_model.text_buf.pop_char(old_caret_pos);
                 }
+
+                ed_model.selection_opt = None;
             }
             ch if is_newline(ch) => {
                 if let Some(selection) = ed_model.selection_opt {
@@ -335,10 +337,11 @@ pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResu
                         column: 0,
                     };
                 }
+
+                ed_model.selection_opt = None;
             }
-            '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
-                // These are private use characters; ignore them.
-                // See http://www.unicode.org/faq/private_use.html
+            '\u{0}'..='\u{32}' | '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
+                // chars that can be ignored
             }
             _ => {
                 if let Some(selection) = ed_model.selection_opt {
@@ -359,10 +362,10 @@ pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResu
                         column: old_caret_pos.column + 1,
                     };
                 }
+
+                ed_model.selection_opt = None;
             }
         }
-
-        ed_model.selection_opt = None;
     }
 
     Ok(())
@@ -393,15 +396,17 @@ mod test_update {
         caret_pos: Position,
         selection_opt: Option<RawSelection>,
     ) -> AppModel {
-        AppModel {
-            ed_model_opt: Some(EdModel {
-                text_buf,
-                caret_pos,
-                selection_opt,
-                glyph_dim_rect_opt: None,
-                has_focus: true,
-            }),
-        }
+        AppModel::init(
+            Some(
+                EdModel {
+                    text_buf,
+                    caret_pos,
+                    selection_opt,
+                    glyph_dim_rect_opt: None,
+                    has_focus: true,
+                }
+            )
+        )
     }
 
     fn assert_insert(

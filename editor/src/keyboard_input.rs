@@ -1,39 +1,64 @@
 use crate::mvc;
-use crate::mvc::ed_model::EdModel;
+use crate::mvc::ed_model::{EdModel, Position};
+use crate::error::EdResult;
+use crate::mvc::app_model::AppModel;
 use crate::mvc::update::{
     move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
 };
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
-use clipboard::{ClipboardProvider, ClipboardContext};
+use winit::event::VirtualKeyCode::*;
 
 pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
     modifiers: ModifiersState,
-    ed_model: &mut EdModel,
-) {
-    use winit::event::VirtualKeyCode::*;
+    app_model: &mut AppModel,
+) -> EdResult<()> {
 
     if let ElementState::Released = elem_state {
-        return;
+        return Ok(())
     }
 
-    println!("keycode: {:?}", virtual_keycode);
-
     match virtual_keycode {
-        Left => handle_arrow(move_caret_left, &modifiers, ed_model),
-        Up => handle_arrow(move_caret_up, &modifiers, ed_model),
-        Right => handle_arrow(move_caret_right, &modifiers, ed_model),
-        Down => handle_arrow(move_caret_down, &modifiers, ed_model),
-        Copy => handle_copy(ed_model),
-        Paste => {
-            todo!("paste");
-        }
+        Left => pass_to_focused(app_model, &modifiers, virtual_keycode),
+        Up => pass_to_focused(app_model, &modifiers, virtual_keycode),
+        Right => pass_to_focused(app_model, &modifiers, virtual_keycode),
+        Down => pass_to_focused(app_model, &modifiers, virtual_keycode),
+
+        Copy => handle_copy(app_model),
+        Paste => handle_paste(app_model),
         Cut => {
             todo!("cut");
         }
-        _ => {}
+
+        C => if modifiers.ctrl() {
+            handle_copy(app_model)
+        } else { Ok(()) },
+        V => if modifiers.ctrl() {
+            handle_paste(app_model)
+        } else { Ok(()) },
+        _ => Ok(())
     }
+}
+
+fn pass_to_focused(
+    app_model: &mut AppModel,
+    modifiers: &ModifiersState,
+    virtual_keycode: VirtualKeyCode,
+) -> EdResult<()> {
+    if let Some(ref mut ed_model) = app_model.ed_model_opt {
+        if ed_model.has_focus {
+            match virtual_keycode {
+                Left => handle_arrow(move_caret_left, modifiers, ed_model),
+                Up => handle_arrow(move_caret_up, modifiers, ed_model),
+                Right => handle_arrow(move_caret_right, modifiers, ed_model),
+                Down => handle_arrow(move_caret_down, modifiers, ed_model),
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) {
@@ -47,16 +72,69 @@ fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_mod
     ed_model.selection_opt = new_selection_opt;
 }
 
-fn handle_copy(ed_model: &EdModel) {
-    //TODO don't use unwrap
-    let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
-    let selected_str_opt = mvc::ed_model::get_selected_str(ed_model);
+fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
+    if let Some(ref mut ed_model) = app_model.ed_model_opt {
+        if ed_model.has_focus {
+            let selected_str_opt = mvc::ed_model::get_selected_str(ed_model)?;
 
-    if let Some(selected_str) = selected_str_opt {
-        ctx.set_contents(selected_str.to_owned()).unwrap();
+            if let Some(selected_str) = selected_str_opt {
+                if let Ok(ref mut clipboard) = app_model.clipboard_res {
+                    clipboard.set_content(selected_str.to_owned())?;
+                    return Ok(())
+                } else if let Err(ref mut e) = app_model.clipboard_res {
+                    return Err(e)
+                }
+            }
+        }
     }
-    
-    println!("COPY");
+
+    Ok(())
+}
+
+fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
+
+    if let Some(ref mut ed_model) = app_model.ed_model_opt {
+        if ed_model.has_focus {
+            let clipboard_content = app_model.clipboard_res?.get_content()?;
+            if !clipboard_content.is_empty() {
+
+                let mut rsplit_iter = clipboard_content.rsplit('\n');
+                // safe unwrap because we checked if empty
+                let last_line_nr_chars = rsplit_iter.next().unwrap().len();
+                let clipboard_nr_lines = rsplit_iter.count();
+
+                let old_caret_pos = ed_model.caret_pos;
+
+                if let Some(selection) = ed_model.selection_opt {
+                    let start_caret_pos = selection.start_pos;
+                    ed_model.text_buf.del_selection(selection)?;
+                    ed_model.selection_opt = None;
+
+                    ed_model.text_buf.insert_str(
+                        start_caret_pos,
+                        &clipboard_content
+                    )?;
+
+                    ed_model.caret_pos = Position {
+                        line: start_caret_pos.line + clipboard_nr_lines,
+                        column: start_caret_pos.column + last_line_nr_chars
+                    }
+                } else {
+                    ed_model.text_buf.insert_str(
+                        old_caret_pos,
+                        &clipboard_content
+                    )?;
+
+                    ed_model.caret_pos = Position {
+                        line: old_caret_pos.line + clipboard_nr_lines,
+                        column: old_caret_pos.column + last_line_nr_chars
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // pub fn handle_text_input(

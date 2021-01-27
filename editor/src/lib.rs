@@ -157,7 +157,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         None
     };
 
-    let mut app_model = AppModel { ed_model_opt };
+    let mut app_model = AppModel::init(ed_model_opt);
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
@@ -229,7 +229,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                                 input.state,
                                 virtual_keycode,
                                 keyboard_modifiers,
-                                ed_model,
+                                &mut app_model,
                             );
                         }
                     }
