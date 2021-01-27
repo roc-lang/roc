@@ -1,0 +1,30 @@
+on: [pull_request]
+
+name: Benchmarks
+
+env:
+  CARGO_HOME: /root/.cargo
+  RUSTUP_HOME: /root/.rustup
+  BENCH_RESOURCE_PATH: /downloads/resources/
+  CRITERION_HOME: /criterion/
+
+jobs:
+  benchmark:
+    name: benchmark
+    runs-on: self-hosted
+    container: vulpix/ubuntu-20-04-benchmarks
+    timeout-minutes: 60
+    steps:
+      - name: add cargo to PATH
+        run: echo "/root/.cargo/bin" >> $GITHUB_PATH
+
+      - name: check toolchain
+        run: rustup show
+
+      - uses: actions/checkout@v2
+
+      - name: Expose needed modules
+        run: cd editor && ./prep_benchmarks.sh
+
+      - name: cargo bench
+        run: cargo bench

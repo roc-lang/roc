@@ -33,6 +33,7 @@ fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
     TextBuffer {
         text_rope: Rope::from_str(lines_str),
         path_str: "".to_owned(),
+        mem_arena: bumpalo::Bump::new(),
     }
 }
 
@@ -64,7 +65,7 @@ fn line_count(lines: &str) -> usize {
 
 pub fn gen_file(nr_lines: usize) {
     let nr_of_str_lines = nr_lines - line_count(ROC_SOURCE_START);
-    let path_str = format!("benches/resources/{:?}_lines.roc", nr_lines);
+    let path_str = bench_resource_path(nr_lines);
     let path = Path::new(&path_str);
     let display = path.display();
 
@@ -99,8 +100,19 @@ pub fn gen_file(nr_lines: usize) {
         .expect("Failed to write String to file.");
 }
 
+fn bench_resource_path(nr_lines: usize) -> String {
+    let resource_path_res = std::env::var("BENCH_RESOURCE_PATH");
+    let resource_path_str = if let Ok(resource_path) = resource_path_res {
+        resource_path
+    } else {
+        "benches/resources/".to_owned()
+    };
+
+    format!("{}{}_lines.roc", resource_path_str, nr_lines)
+}
+
 fn file_read_bench_helper(nr_lines: usize, c: &mut Criterion) {
-    let path_str = format!("benches/resources/{}_lines.roc", nr_lines);
+    let path_str = bench_resource_path(nr_lines);
     text_buffer::from_path(Path::new(&path_str)).expect("Failed to read file at given path.");
     c.bench_function(
         &format!("read {:?} line file into textbuffer", nr_lines),
@@ -108,7 +120,7 @@ fn file_read_bench_helper(nr_lines: usize, c: &mut Criterion) {
     );
 }
 
-fn file_read_bench(c: &mut Criterion) {
+fn file_read_bench_10(c: &mut Criterion) {
     // generate dummy files
     /*let lines_vec = vec![100, 500, 1000, 10000, 50000, 100000, 25000000];
 
@@ -119,5 +131,33 @@ fn file_read_bench(c: &mut Criterion) {
     file_read_bench_helper(10, c)
 }
 
-criterion_group!(benches, file_read_bench);
+fn file_read_bench_100(c: &mut Criterion) {
+    file_read_bench_helper(100, c)
+}
+fn file_read_bench_500(c: &mut Criterion) {
+    file_read_bench_helper(500, c)
+}
+fn file_read_bench_1k(c: &mut Criterion) {
+    file_read_bench_helper(1000, c)
+}
+fn file_read_bench_10k(c: &mut Criterion) {
+    file_read_bench_helper(10000, c)
+}
+fn file_read_bench_100k(c: &mut Criterion) {
+    file_read_bench_helper(100000, c)
+}
+fn file_read_bench_25m(c: &mut Criterion) {
+    file_read_bench_helper(25000000, c)
+}
+
+criterion_group!(
+    benches,
+    file_read_bench_10,
+    file_read_bench_100,
+    file_read_bench_500,
+    file_read_bench_1k,
+    file_read_bench_10k,
+    file_read_bench_100k,
+    file_read_bench_25m
+);
 criterion_main!(benches);
