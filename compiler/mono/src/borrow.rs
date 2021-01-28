@@ -156,9 +156,6 @@ impl<'a> ParamMap<'a> {
                 Let(_, _, _, cont) => {
                     stack.push(cont);
                 }
-                Info(_, cont) => {
-                    stack.push(cont);
-                }
                 Invoke { pass, fail, .. } => {
                     stack.push(pass);
                     stack.push(fail);
@@ -463,10 +460,6 @@ impl<'a> BorrowInfState<'a> {
                 self.update_param_map(Key::JoinPoint(*j));
 
                 self.collect_stmt(b);
-            }
-
-            Info(_, cont) => {
-                self.collect_stmt(cont);
             }
 
             Let(x, Expr::FunctionPointer(fsymbol, layout), _, b) => {

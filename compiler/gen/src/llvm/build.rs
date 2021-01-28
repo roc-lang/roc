@@ -2162,18 +2162,17 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 }
                 DecRef(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
-                    debug_assert!(layout.is_refcounted());
 
-                    let value_ptr = value.into_pointer_value();
-                    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-                    refcount_ptr.decrement(env, layout);
+                    if layout.is_refcounted() {
+                        let value_ptr = value.into_pointer_value();
+                        let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                        refcount_ptr.decrement(env, layout);
+                    }
 
                     build_exp_stmt(env, layout_ids, scope, parent, cont)
                 }
             }
         }
-
-        Info(_, cont) => build_exp_stmt(env, layout_ids, scope, parent, cont),
 
         RuntimeError(error_msg) => {
             throw_exception(env, error_msg);

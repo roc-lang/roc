@@ -32,10 +32,6 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 stack.push(cont);
             }
 
-            Info(_, cont) => {
-                stack.push(cont);
-            }
-
             Invoke {
                 symbol,
                 call,
@@ -712,16 +708,6 @@ impl<'a> Context<'a> {
                 )
             }
 
-            Info(info, cont) => {
-                let (cont, live_vars) = self.visit_stmt(cont);
-
-                let stmt = Info(info.clone(), cont);
-
-                let stmt = self.arena.alloc(stmt);
-
-                (stmt, live_vars)
-            }
-
             Invoke {
                 symbol,
                 call,
@@ -928,20 +914,6 @@ pub fn collect_stmt(
             collect_stmt(cont, jp_live_vars, vars)
         }
 
-        Info(_, cont) => collect_stmt(cont, jp_live_vars, vars),
-
-        Jump(id, arguments) => {
-            vars.extend(arguments.iter().copied());
-
-            // NOTE deviation from Lean
-            // we fall through when no join point is available
-            if let Some(jvars) = jp_live_vars.get(id) {
-                vars.extend(jvars);
-            }
-
-            vars
-        }
-
         Join {
             id: j,
             parameters,
@@ -957,6 +929,18 @@ pub fn collect_stmt(
             jp_live_vars.insert(*j, j_live_vars);
 
             collect_stmt(b, &jp_live_vars, vars)
+        }
+
+        Jump(id, arguments) => {
+            vars.extend(arguments.iter().copied());
+
+            // NOTE deviation from Lean
+            // we fall through when no join point is available
+            if let Some(jvars) = jp_live_vars.get(id) {
+                vars.extend(jvars);
+            }
+
+            vars
         }
 
         Switch {

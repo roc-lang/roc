@@ -1783,20 +1783,24 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
+            state.procedures.extend(procedures);
+            state.timings.insert(module_id, module_timing);
+
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
-                Proc::optimize_refcount_operations(
-                    arena,
-                    module_id,
-                    &mut ident_ids,
-                    &mut state.procedures,
-                );
 
-                state.procedures.extend(procedures);
+                if false {
+                    Proc::optimize_refcount_operations(
+                        arena,
+                        module_id,
+                        &mut ident_ids,
+                        &mut state.procedures,
+                    );
+                }
+
                 state.constrained_ident_ids.insert(module_id, ident_ids);
-                state.timings.insert(module_id, module_timing);
 
                 for (module_id, requested) in external_specializations_requested {
                     let existing = match state
@@ -1836,9 +1840,7 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
-                state.procedures.extend(procedures);
                 state.constrained_ident_ids.insert(module_id, ident_ids);
-                state.timings.insert(module_id, module_timing);
 
                 for (module_id, requested) in external_specializations_requested {
                     let existing = match state

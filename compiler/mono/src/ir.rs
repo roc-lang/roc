@@ -17,7 +17,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
@@ -796,7 +796,6 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Rethrow,
-    Info(ConstructorInfo<'a>, &'a Stmt<'a>),
     Refcounting(ModifyRc, &'a Stmt<'a>),
     Join {
         id: JoinPointId,
@@ -893,14 +892,6 @@ impl ModifyRc {
             DecRef(symbol) => *symbol,
         }
     }
-}
-
-/// in the block below, symbol `scrutinee` is assumed be be of shape `tag_id`
-#[derive(Clone, Debug, PartialEq)]
-pub struct ConstructorInfo<'a> {
-    pub scrutinee: Symbol,
-    pub layout: Layout<'a>,
-    pub tag_id: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1256,24 +1247,9 @@ impl<'a> Stmt<'a> {
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol))
                 //.append(" : ")
-                //.append(alloc.text(format!("{:?}", layout)))
+                //.append(alloc.text(format!("{:?}", _layout)))
                 .append(" = ")
                 .append(expr.to_doc(alloc))
-                .append(";")
-                .append(alloc.hardline())
-                .append(cont.to_doc(alloc)),
-
-            Info(info, cont) => alloc
-                .text("info:")
-                .append(alloc.hardline())
-                .append(alloc.text("    scrutinee: "))
-                .append(symbol_to_doc(alloc, info.scrutinee))
-                .append(alloc.hardline())
-                .append(alloc.text("    tag_id: "))
-                .append(format!("{:?}", info.tag_id))
-                .append(alloc.hardline())
-                .append(alloc.text("    layout: "))
-                .append(format!("{:?}", info.layout))
                 .append(";")
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
@@ -4844,10 +4820,6 @@ fn substitute_in_stmt_help<'a>(
                 None => None,
             }
         }
-        Info(info, cont) => match substitute_in_stmt_help(arena, cont, subs) {
-            Some(cont) => Some(arena.alloc(Info(info.clone(), cont))),
-            None => None,
-        },
 
         Jump(id, args) => {
             let mut did_change = false;

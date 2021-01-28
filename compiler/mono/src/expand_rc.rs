@@ -178,6 +178,7 @@ fn layout_for_constructor<'a>(
     layout: &Layout<'a>,
     constructor: u64,
 ) -> ConstructorLayout<&'a [Layout<'a>]> {
+    use ConstructorLayout::*;
     use Layout::*;
 
     match layout {
@@ -194,7 +195,21 @@ fn layout_for_constructor<'a>(
                         ConstructorLayout::HasFields(other_fields)
                     }
                 }
-                _ => todo!(),
+                NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => {
+                    if constructor as i64 == *nullable_id {
+                        ConstructorLayout::IsNull
+                    } else {
+                        ConstructorLayout::HasFields(other_tags[constructor as usize])
+                    }
+                }
+                NonRecursive(fields) | Recursive(fields) => HasFields(fields[constructor as usize]),
+                NonNullableUnwrapped(fields) => {
+                    debug_assert_eq!(constructor, 0);
+                    HasFields(fields)
+                }
             }
         }
         _ => unreachable!(),
@@ -404,22 +419,6 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                 expand_and_cancel(env, cont)
             }
 
-            Info(info, cont) => {
-                env.constructor_map
-                    .insert(info.scrutinee, info.tag_id as u64);
-
-                env.layout_map.insert(info.scrutinee, info.layout.clone());
-
-                let cont = expand_and_cancel(env, cont);
-
-                env.constructor_map.remove(&info.scrutinee);
-                env.layout_map.remove(&info.scrutinee);
-
-                let stmt = Info(info.clone(), cont);
-
-                env.arena.alloc(stmt)
-            }
-
             Invoke {
                 symbol,
                 call,
@@ -469,6 +468,27 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
         result = env.arena.alloc(stmt);
     }
 
+    // do all decrements
+    for (symbol, amount) in deferred.inc_dec_map.iter().rev() {
+        use std::cmp::Ordering;
+        match amount.cmp(&0) {
+            Ordering::Equal => {
+                // do nothing else
+            }
+            Ordering::Greater => {
+                // do nothing yet
+            }
+            Ordering::Less => {
+                // the RC insertion should not double decrement in a block
+                debug_assert_eq!(*amount, -1);
+
+                // insert missing decrements
+                let stmt = Refcounting(ModifyRc::Dec(*symbol), result);
+                result = env.arena.alloc(stmt);
+            }
+        }
+    }
+
     for (symbol, amount) in deferred.inc_dec_map.into_iter().rev() {
         use std::cmp::Ordering;
         match amount.cmp(&0) {
@@ -481,12 +501,7 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                 result = env.arena.alloc(stmt);
             }
             Ordering::Less => {
-                // the RC insertion should not double decrement in a block
-                debug_assert_eq!(amount, -1);
-
-                // insert missing decrements
-                let stmt = Refcounting(ModifyRc::Dec(symbol), result);
-                result = env.arena.alloc(stmt);
+                // already done
             }
         }
     }

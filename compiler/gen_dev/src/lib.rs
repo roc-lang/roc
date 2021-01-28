@@ -410,9 +410,6 @@ where
                 self.set_last_seen(sym, stmt);
                 self.scan_ast(following);
             }
-            Stmt::Info(_, following) => {
-                self.scan_ast(following);
-            }
             Stmt::Join {
                 parameters,
                 continuation,

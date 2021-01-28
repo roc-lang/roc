@@ -235,10 +235,6 @@ fn insert_jumps<'a>(
             Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
             None => None,
         },
-        Info(info, cont) => match insert_jumps(arena, cont, goal_id, needle) {
-            Some(cont) => Some(arena.alloc(Info(info.clone(), cont))),
-            None => None,
-        },
 
         Rethrow => None,
         Ret(_) => None,
