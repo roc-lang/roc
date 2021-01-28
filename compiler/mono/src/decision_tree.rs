@@ -1369,7 +1369,7 @@ fn compile_test<'a>(
     )
 }
 
-#[warn(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn compile_test_help<'a>(
     env: &mut Env<'a, '_>,
     branch_info: ConstructorKnown<'a>,
