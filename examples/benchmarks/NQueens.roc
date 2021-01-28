@@ -18,10 +18,10 @@ length : ConsList a -> I64
 length = \xs -> lengthHelp xs 0
 
 lengthHelp : ConsList a, I64 -> I64
-lengthHelp = \xs, acc ->
-    when xs is
+lengthHelp = \foobar, acc ->
+    when foobar is
+        Cons _ lrest -> lengthHelp lrest (1 + acc)
         Nil -> acc
-        Cons _ rest -> lengthHelp rest (1 + acc)
 
 safe : I64, I64, ConsList I64 -> Bool
 safe = \queen, diagonal, xs ->
@@ -41,8 +41,8 @@ appendSafe = \k, soln, solns ->
     else
         appendSafe (k - 1) soln solns
 
-extend = \n, acc, solns ->
-    when solns is
+extend = \n, acc, solutions ->
+    when solutions is
         Nil -> acc
         Cons soln rest -> extend n (appendSafe n soln acc) rest
 
