@@ -8,9 +8,16 @@ use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::{
+    solved_types::{FreeVars, SolvedType},
+    subs::{VarStore, Variable},
+};
 
-fn solved_type_to_type_id() -> TypeId {
+fn solved_type_to_type_id(
+    _solved_type: &SolvedType,
+    _free_vars: &mut FreeVars,
+    _var_store: &mut VarStore,
+) -> TypeId {
     todo!()
 }
 
@@ -33,45 +40,45 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId, pool: &mut Pool, _var_store: &mut VarStore) -> Scope {
+    pub fn new(home: ModuleId, _pool: &mut Pool, _var_store: &mut VarStore) -> Scope {
         use roc_types::solved_types::{BuiltinAlias, FreeVars};
-        let solved_aliases = roc_types::builtin_aliases::aliases();
-        let mut aliases = MutMap::default();
+        let _solved_aliases = roc_types::builtin_aliases::aliases();
+        let aliases = MutMap::default();
 
-        for (symbol, builtin_alias) in solved_aliases {
-            // let BuiltinAlias { region, vars, typ } = builtin_alias;
-            let BuiltinAlias { vars, .. } = builtin_alias;
+        // for (symbol, builtin_alias) in solved_aliases {
+        //     // let BuiltinAlias { region, vars, typ } = builtin_alias;
+        //     let BuiltinAlias { vars, typ, .. } = builtin_alias;
 
-            let free_vars = FreeVars::default();
-            let typ = solved_type_to_type_id();
-            // roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+        //     let mut free_vars = FreeVars::default();
+        //     let typ = solved_type_to_type_id(&typ, &mut free_vars, var_store);
+        //     // roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
 
-            // make sure to sort these variables to make them line up with the type arguments
-            let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
-            type_variables.sort();
+        //     // make sure to sort these variables to make them line up with the type arguments
+        //     let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
+        //     type_variables.sort();
 
-            debug_assert_eq!(vars.len(), type_variables.len());
-            let variables = PoolVec::with_capacity(vars.len() as u32, pool);
+        //     debug_assert_eq!(vars.len(), type_variables.len());
+        //     let variables = PoolVec::with_capacity(vars.len() as u32, pool);
 
-            let it = variables
-                .iter_node_ids()
-                .zip(vars.iter())
-                .zip(type_variables);
-            for ((node_id, loc_name), (_, var)) in it {
-                // TODO region is ignored, but "fake" anyway. How to resolve?
-                let name = PoolStr::new(loc_name.value.as_str(), pool);
-                pool[node_id] = (name, var);
-            }
+        //     let it = variables
+        //         .iter_node_ids()
+        //         .zip(vars.iter())
+        //         .zip(type_variables);
+        //     for ((node_id, loc_name), (_, var)) in it {
+        //         // TODO region is ignored, but "fake" anyway. How to resolve?
+        //         let name = PoolStr::new(loc_name.value.as_str(), pool);
+        //         pool[node_id] = (name, var);
+        //     }
 
-            let alias = Alias {
-                actual: typ,
-                /// We know that builtin aliases have no hiddden variables (e.g. in closures)
-                hidden_variables: PoolVec::empty(pool),
-                targs: variables,
-            };
+        //     let alias = Alias {
+        //         actual: typ,
+        //         /// We know that builtin aliases have no hiddden variables (e.g. in closures)
+        //         hidden_variables: PoolVec::empty(pool),
+        //         targs: variables,
+        //     };
 
-            aliases.insert(symbol, alias);
-        }
+        //     aliases.insert(symbol, alias);
+        // }
 
         let idents = Symbol::default_in_scope();
         let idents: MutMap<_, _> = idents.into_iter().collect();

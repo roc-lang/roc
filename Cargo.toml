@@ -34,6 +34,6 @@ members = [
 [profile.release]
 lto = "fat"
 codegen-units = 1
-debug = true # enable when profiling
+# debug = true # enable when profiling
 
 

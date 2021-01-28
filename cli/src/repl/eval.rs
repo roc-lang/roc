@@ -224,6 +224,7 @@ fn jit_to_ast_help<'a>(
         Layout::Union(UnionLayout::Recursive(_))
         | Layout::Union(UnionLayout::NullableWrapped { .. })
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
+        | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
@@ -304,6 +305,9 @@ fn ptr_to_ast<'a>(
 
                 let (tag_name, payload_vars) = tags.iter().next().unwrap();
                 single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+            }
+            Content::Structure(FlatType::EmptyRecord) => {
+                struct_to_ast(env, ptr, &[], &MutMap::default())
             }
             other => {
                 unreachable!(

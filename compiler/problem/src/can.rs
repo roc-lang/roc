@@ -145,6 +145,9 @@ pub enum RuntimeError {
     InvalidUnicodeCodePoint(Region),
 
     /// When the author specifies a type annotation but no implementation
+    NoImplementationNamed {
+        def_symbol: Symbol,
+    },
     NoImplementation,
 
     /// cases where the `[]` value (or equivalently, `forall a. a`) pops up
