@@ -1767,7 +1767,7 @@ fn update<'a>(
         }
         MadeSpecializations {
             module_id,
-            ident_ids,
+            mut ident_ids,
             subs,
             procedures,
             external_specializations_requested,
@@ -1779,23 +1779,6 @@ fn update<'a>(
 
             state.module_cache.mono_problems.insert(module_id, problems);
 
-            state.procedures.extend(procedures);
-            state.constrained_ident_ids.insert(module_id, ident_ids);
-            state.timings.insert(module_id, module_timing);
-
-            for (module_id, requested) in external_specializations_requested {
-                let existing = match state
-                    .module_cache
-                    .external_specializations_requested
-                    .entry(module_id)
-                {
-                    Vacant(entry) => entry.insert(ExternalSpecializations::default()),
-                    Occupied(entry) => entry.into_mut(),
-                };
-
-                existing.extend(requested);
-            }
-
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
@@ -1804,6 +1787,29 @@ fn update<'a>(
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
+                Proc::optimize_refcount_operations(
+                    arena,
+                    module_id,
+                    &mut ident_ids,
+                    &mut state.procedures,
+                );
+
+                state.procedures.extend(procedures);
+                state.constrained_ident_ids.insert(module_id, ident_ids);
+                state.timings.insert(module_id, module_timing);
+
+                for (module_id, requested) in external_specializations_requested {
+                    let existing = match state
+                        .module_cache
+                        .external_specializations_requested
+                        .entry(module_id)
+                    {
+                        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+                        Occupied(entry) => entry.into_mut(),
+                    };
+
+                    existing.extend(requested);
+                }
 
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
@@ -1830,6 +1836,23 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
+                state.procedures.extend(procedures);
+                state.constrained_ident_ids.insert(module_id, ident_ids);
+                state.timings.insert(module_id, module_timing);
+
+                for (module_id, requested) in external_specializations_requested {
+                    let existing = match state
+                        .module_cache
+                        .external_specializations_requested
+                        .entry(module_id)
+                    {
+                        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+                        Occupied(entry) => entry.into_mut(),
+                    };
+
+                    existing.extend(requested);
+                }
+
                 start_tasks(work, &mut state, &injector, worker_listeners)?;
             }
 

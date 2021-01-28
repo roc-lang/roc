@@ -181,17 +181,17 @@ fn insert_jumps<'a>(
             default_branch,
             ret_layout,
         } => {
-            let opt_default = insert_jumps(arena, default_branch, goal_id, needle);
+            let opt_default = insert_jumps(arena, default_branch.1, goal_id, needle);
 
             let mut did_change = false;
 
             let opt_branches = Vec::from_iter_in(
-                branches.iter().map(|(label, branch)| {
+                branches.iter().map(|(label, info, branch)| {
                     match insert_jumps(arena, branch, goal_id, needle) {
                         None => None,
                         Some(branch) => {
                             did_change = true;
-                            Some((*label, branch.clone()))
+                            Some((*label, info.clone(), branch.clone()))
                         }
                     }
                 }),
@@ -199,7 +199,10 @@ fn insert_jumps<'a>(
             );
 
             if opt_default.is_some() || did_change {
-                let default_branch = opt_default.unwrap_or(default_branch);
+                let default_branch = (
+                    default_branch.0.clone(),
+                    opt_default.unwrap_or(default_branch.1),
+                );
 
                 let branches = if did_change {
                     let new = Vec::from_iter_in(
@@ -228,12 +231,12 @@ fn insert_jumps<'a>(
                 None
             }
         }
-        Inc(symbol, inc, cont) => match insert_jumps(arena, cont, goal_id, needle) {
-            Some(cont) => Some(arena.alloc(Inc(*symbol, *inc, cont))),
+        Refcounting(modify, cont) => match insert_jumps(arena, cont, goal_id, needle) {
+            Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
             None => None,
         },
-        Dec(symbol, cont) => match insert_jumps(arena, cont, goal_id, needle) {
-            Some(cont) => Some(arena.alloc(Dec(*symbol, cont))),
+        Info(info, cont) => match insert_jumps(arena, cont, goal_id, needle) {
+            Some(cont) => Some(arena.alloc(Info(info.clone(), cont))),
             None => None,
         },
 

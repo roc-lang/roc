@@ -1,0 +1,489 @@
+use crate::ir::{BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, Stmt, Wrapped};
+use crate::layout::{
+    Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout, WrappedVariant,
+    TAG_SIZE,
+};
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
+use linked_hash_map::LinkedHashMap;
+use roc_collections::all::{MutMap, MutSet};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+
+// This file is heavily inspired by the Perceus paper
+//
+// https://www.microsoft.com/en-us/research/uploads/prod/2020/11/perceus-tr-v1.pdf
+//
+// With how we insert RC instructions, this pattern is very common:
+//
+//  when xs is
+//      Cons x xx ->
+//          inc x;
+//          inc xx;
+//          dec xs;
+//          ...
+//
+// This pattern is very inefficient, because it will first increment the tail (recursively),
+// and then decrement it again. We can see this more clearly if we inline/specialize the `dec xs`
+//
+//  when xs is
+//      Cons x xx ->
+//          inc x;
+//          inc xx;
+//          dec x;
+//          dec xx;
+//          decref xs
+//          ...
+//
+// Here `decref` non-recursively decrements (and possibly frees) `xs`. Now the idea is that we can
+// fuse `inc x; dec x` by just doing nothing: they cancel out
+//
+// We can do slightly more, in the `Nil` case
+//
+//  when xs is
+//      ...
+//      Nil ->
+//          dec xs;
+//          accum
+//
+// Here we know that `Nil` is represented by NULL (a linked list has a NullableUnwrapped layout),
+// so we  can just drop the `dec xs`
+//
+// # complications
+//
+// Let's work through the `Cons x xx` example
+//
+// First we need to know the constructor of `xs` in the particular block. This information would
+// normally be lost when we compile pattern matches, but we keep it in the `BrachInfo` field of
+// switch branches. here we also store the symbol that was switched on, and the layout of that
+// symbol.
+//
+// Next, we need to know that `x` and `xx` alias the head and tail of `xs`. We store that
+// information when encountering a `AccessAtIndex` into `xs`.
+//
+// In most cases these two pieces of information are enough. We keep track of a
+// `LinkedHashMap<Symbol, i64>`: `LinkedHashMap` remembers insertion order, which is crucial here.
+// The `i64` value represents the increment (positive value) or decrement (negative value). When
+// the value is 0, increments and decrements have cancelled out and we just emit nothing.
+//
+// We need to do slightly more work in the case of
+//
+//  when xs is
+//      Cons _ xx ->
+//          recurse xx (1 + accum)
+//
+// In this case, the head is not bound. That's OK when the list elements are not refcounted (or
+// contain anything refcounted). But when they do, we can't expand the `dec xs` because there is no
+// way to reference the head element.
+//
+// Our refcounting mechanism can't deal well with unused variables (it'll leak their memory). But
+// we can insert the access after RC instructions have been inserted. So in the above case we
+// actually get
+//
+//  when xs is
+//      Cons _ xx ->
+//          let v1 = AccessAtIndex 1 xs
+//          inc v1;
+//          let xx = AccessAtIndex 2 xs
+//          inc xx;
+//          dec v1;
+//          dec xx;
+//          decref xs;
+//          recurse xx (1 + accum)
+//
+// Here we see another problem: the increments and decrements cannot be fused immediately.
+// Therefore we add a rule that we can "push down" increments and decrements past
+//
+//  - `Let`s binding a `AccessAtIndex`
+//  - refcount operations
+//
+// This allows the aforementioned `LinkedHashMap` to accumulate all changes, and then emit
+// all (uncancelled) modifications at once before any "non-push-downable-stmt", hence:
+//
+//  when xs is
+//      Cons _ xx ->
+//          let v1 = AccessAtIndex 1 xs
+//          let xx = AccessAtIndex 2 xs
+//          dec v1;
+//          decref xs;
+//          recurse xx (1 + accum)
+
+pub struct Env<'a, 'i> {
+    /// bump allocator
+    pub arena: &'a Bump,
+
+    /// required for creating new `Symbol`s
+    pub home: ModuleId,
+    pub ident_ids: &'i mut IdentIds,
+
+    /// layout of the symbol
+    pub layout_map: MutMap<Symbol, Layout<'a>>,
+
+    /// record for each symbol, the aliases of its fields
+    pub alias_map: MutMap<Symbol, MutMap<u64, Symbol>>,
+
+    /// for a symbol (found in a `when x is`), record in which branch we are
+    pub constructor_map: MutMap<Symbol, u64>,
+
+    /// increments and decrements deferred until later
+    pub deferred: Deferred<'a>,
+}
+
+pub struct Deferred<'a> {
+    pub inc_dec_map: LinkedHashMap<Symbol, i64>,
+    pub assignments: Vec<'a, (Symbol, Expr<'a>, Layout<'a>)>,
+    pub decrefs: Vec<'a, Symbol>,
+}
+
+impl<'a, 'i> Env<'a, 'i> {
+    fn insert_branch_info(&mut self, info: &BranchInfo<'a>) {
+        match info {
+            BranchInfo::Constructor {
+                layout,
+                scrutinee,
+                tag_id,
+            } => {
+                self.constructor_map.insert(*scrutinee, *tag_id as u64);
+                self.layout_map.insert(*scrutinee, layout.clone());
+            }
+            BranchInfo::None => (),
+        }
+    }
+
+    fn remove_branch_info(&mut self, info: &BranchInfo) {
+        match info {
+            BranchInfo::Constructor { scrutinee, .. } => {
+                self.constructor_map.remove(scrutinee);
+                self.layout_map.remove(scrutinee);
+            }
+            BranchInfo::None => (),
+        }
+    }
+
+    pub fn unique_symbol(&mut self) -> Symbol {
+        let ident_id = self.ident_ids.gen_unique();
+
+        self.home.register_debug_idents(&self.ident_ids);
+
+        Symbol::new(self.home, ident_id)
+    }
+}
+
+fn layout_for_constructor<'a>(
+    arena: &'a Bump,
+    layout: &Layout<'a>,
+    constructor: u64,
+) -> ConstructorLayout<&'a [Layout<'a>]> {
+    use Layout::*;
+
+    match layout {
+        Union(variant) => {
+            use UnionLayout::*;
+            match variant {
+                NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                } => {
+                    if (constructor > 0) == *nullable_id {
+                        ConstructorLayout::IsNull
+                    } else {
+                        ConstructorLayout::HasFields(other_fields)
+                    }
+                }
+                _ => todo!(),
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[derive(Debug)]
+enum ConstructorLayout<T> {
+    IsNull,
+    HasFields(T),
+    Unknown,
+}
+
+pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
+    use Stmt::*;
+
+    let can_push_inc_through = match stmt {
+        Let(symbol, expr, _, _) => {
+            // make sure there is no shadowing
+            debug_assert!(!env.deferred.inc_dec_map.contains_key(symbol));
+
+            match expr {
+                Expr::AccessAtIndex { .. } => {
+                    // !env.inc_dec_map.contains_key(structure),
+                    true
+                }
+                _ => false,
+            }
+        }
+
+        Refcounting(ModifyRc::Inc(_, _), _) => true,
+        Refcounting(ModifyRc::Dec(_), _) => true,
+
+        _ => false,
+    };
+
+    let mut deferred_default = Deferred {
+        inc_dec_map: Default::default(),
+        assignments: Vec::new_in(env.arena),
+        decrefs: Vec::new_in(env.arena),
+    };
+
+    let mut deferred = if can_push_inc_through {
+        deferred_default
+    } else {
+        std::mem::swap(&mut deferred_default, &mut env.deferred);
+
+        deferred_default
+    };
+
+    let mut result = {
+        match stmt {
+            Let(symbol, expr, layout, cont) => {
+                let symbol = *symbol;
+
+                env.layout_map.insert(symbol, layout.clone());
+
+                match expr {
+                    Expr::AccessAtIndex {
+                        structure, index, ..
+                    } => {
+                        let entry = env.alias_map.entry(*structure).or_insert(MutMap::default());
+
+                        entry.insert(*index, symbol);
+                    }
+                    _ => {}
+                }
+
+                let cont = expand_and_cancel(env, cont);
+                let stmt = Let(symbol, expr.clone(), layout.clone(), cont);
+
+                &*env.arena.alloc(stmt)
+            }
+
+            Switch {
+                cond_symbol,
+                cond_layout,
+                ret_layout,
+                branches,
+                default_branch,
+            } => {
+                let mut new_branches = Vec::with_capacity_in(branches.len(), env.arena);
+
+                for (id, info, branch) in branches.iter() {
+                    env.insert_branch_info(info);
+
+                    let branch = expand_and_cancel(env, branch);
+
+                    env.remove_branch_info(info);
+
+                    env.constructor_map.remove(cond_symbol);
+
+                    new_branches.push((*id, info.clone(), branch.clone()));
+                }
+
+                env.insert_branch_info(&default_branch.0);
+                let new_default = (
+                    default_branch.0.clone(),
+                    expand_and_cancel(env, default_branch.1),
+                );
+                env.remove_branch_info(&default_branch.0);
+
+                let stmt = Switch {
+                    cond_symbol: *cond_symbol,
+                    cond_layout: cond_layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    branches: new_branches.into_bump_slice(),
+                    default_branch: new_default,
+                };
+
+                &*env.arena.alloc(stmt)
+            }
+            Refcounting(ModifyRc::DecRef(_symbol), _cont) => todo!(),
+
+            Refcounting(ModifyRc::Dec(symbol), cont) => {
+                use ConstructorLayout::*;
+
+                let mut result = Vec::new_in(env.arena);
+                // going for the specific case of linked list length for now
+                let opt_dec_symbols: ConstructorLayout<Vec<'a, Symbol>> = (|| {
+                    let alias_symbol = env.unique_symbol();
+                    let constructor = match env.constructor_map.get(symbol) {
+                        None => return ConstructorLayout::Unknown,
+                        Some(v) => v,
+                    };
+                    let full_layout = match env.layout_map.get(symbol) {
+                        None => return ConstructorLayout::Unknown,
+                        Some(v) => v,
+                    };
+
+                    let field_aliases = env.alias_map.get(symbol);
+
+                    match layout_for_constructor(env.arena, full_layout, *constructor) {
+                        Unknown => return Unknown,
+                        IsNull => return IsNull,
+                        HasFields(cons_layout) => {
+                            // for each field, if it has refcounted content, check if it has an alias
+                            for (i, field_layout) in cons_layout.iter().enumerate() {
+                                if field_layout.contains_refcounted() {
+                                    match field_aliases.and_then(|map| map.get(&(i as u64))) {
+                                        None => {
+                                            //    return ConstructorLayout::Unknown
+                                            let expr = Expr::AccessAtIndex {
+                                                index: i as u64,
+                                                field_layouts: cons_layout,
+                                                structure: *symbol,
+                                                wrapped: Wrapped::MultiTagUnion,
+                                            };
+
+                                            env.deferred.assignments.push((
+                                                alias_symbol,
+                                                expr,
+                                                if let Layout::RecursivePointer = field_layout {
+                                                    full_layout.clone()
+                                                } else {
+                                                    field_layout.clone()
+                                                },
+                                            ));
+                                            result.push(alias_symbol);
+                                        }
+                                        Some(alias_symbol) => {
+                                            result.push(*alias_symbol);
+                                        }
+                                    }
+                                }
+                            }
+                            ConstructorLayout::HasFields(result)
+                        }
+                    }
+                })();
+                dbg!(&opt_dec_symbols);
+
+                match &opt_dec_symbols {
+                    HasFields(dec_symbols) => {
+                        env.deferred.decrefs.push(*symbol);
+                        for dec_symbol in dec_symbols {
+                            //let stmt = Refcounting(ModifyRc::Dec(dec_symbol), cont);
+                            //cont = env.arena.alloc(stmt);
+                            let count = env.deferred.inc_dec_map.entry(*dec_symbol).or_insert(0);
+                            *count -= 1;
+                        }
+                    }
+                    Unknown => {
+                        let count = env.deferred.inc_dec_map.entry(*symbol).or_insert(0);
+                        *count -= 1;
+                    }
+                    IsNull => {}
+                }
+
+                expand_and_cancel(env, cont)
+            }
+
+            Refcounting(ModifyRc::Inc(symbol, inc_amount), cont) => {
+                let count = env.deferred.inc_dec_map.entry(*symbol).or_insert(0);
+                *count += *inc_amount as i64;
+
+                expand_and_cancel(env, cont)
+            }
+
+            Info(info, cont) => {
+                env.constructor_map
+                    .insert(info.scrutinee, info.tag_id as u64);
+
+                env.layout_map.insert(info.scrutinee, info.layout.clone());
+
+                println!(
+                    "---> set {:?} tag_id {:?} and layout",
+                    info.scrutinee, info.tag_id
+                );
+
+                let cont = expand_and_cancel(env, cont);
+
+                env.constructor_map.remove(&info.scrutinee);
+                env.layout_map.remove(&info.scrutinee);
+
+                let stmt = Info(info.clone(), cont);
+
+                env.arena.alloc(stmt)
+            }
+
+            Invoke {
+                symbol,
+                call,
+                layout,
+                pass,
+                fail,
+            } => {
+                let pass = expand_and_cancel(env, pass);
+                let fail = expand_and_cancel(env, fail);
+
+                let stmt = Invoke {
+                    symbol: *symbol,
+                    call: call.clone(),
+                    layout: layout.clone(),
+                    pass,
+                    fail,
+                };
+
+                env.arena.alloc(stmt)
+            }
+
+            Join {
+                id,
+                parameters,
+                continuation,
+                remainder,
+            } => {
+                let continuation = expand_and_cancel(env, continuation);
+                let remainder = expand_and_cancel(env, remainder);
+
+                let stmt = Join {
+                    id: *id,
+                    parameters,
+                    continuation,
+                    remainder,
+                };
+
+                env.arena.alloc(stmt)
+            }
+
+            Rethrow | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+        }
+    };
+
+    for symbol in deferred.decrefs {
+        let stmt = Refcounting(ModifyRc::DecRef(symbol), result);
+        result = env.arena.alloc(stmt);
+    }
+
+    for (symbol, amount) in deferred.inc_dec_map.into_iter().rev() {
+        use std::cmp::Ordering;
+        match amount.cmp(&0) {
+            Ordering::Equal => {
+                // do nothing else
+            }
+            Ordering::Greater => {
+                // insert missing increments
+                let stmt = Refcounting(ModifyRc::Inc(symbol, amount as u64), result);
+                result = env.arena.alloc(stmt);
+            }
+            Ordering::Less => {
+                debug_assert_eq!(amount, -1);
+                // insert missing decrements
+                let stmt = Refcounting(ModifyRc::Dec(symbol), result);
+                result = env.arena.alloc(stmt);
+            }
+        }
+    }
+
+    for (symbol, expr, layout) in deferred.assignments {
+        //
+        let stmt = Stmt::Let(symbol, expr, layout, result);
+        result = env.arena.alloc(stmt);
+    }
+
+    result
+}

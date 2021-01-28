@@ -156,6 +156,9 @@ impl<'a> ParamMap<'a> {
                 Let(_, _, _, cont) => {
                     stack.push(cont);
                 }
+                Info(_, cont) => {
+                    stack.push(cont);
+                }
                 Invoke { pass, fail, .. } => {
                     stack.push(pass);
                     stack.push(fail);
@@ -165,10 +168,10 @@ impl<'a> ParamMap<'a> {
                     default_branch,
                     ..
                 } => {
-                    stack.extend(branches.iter().map(|b| &b.1));
-                    stack.push(default_branch);
+                    stack.extend(branches.iter().map(|b| &b.2));
+                    stack.push(default_branch.1);
                 }
-                Inc(_, _, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
+                Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
                 Ret(_) | Rethrow | Jump(_, _) | RuntimeError(_) => {
                     // these are terminal, do nothing
@@ -462,6 +465,10 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(b);
             }
 
+            Info(_, cont) => {
+                self.collect_stmt(cont);
+            }
+
             Let(x, Expr::FunctionPointer(fsymbol, layout), _, b) => {
                 // ensure that the function pointed to is in the param map
                 if let Some(params) = self.param_map.get_symbol(*fsymbol) {
@@ -508,12 +515,12 @@ impl<'a> BorrowInfState<'a> {
                 default_branch,
                 ..
             } => {
-                for (_, b) in branches.iter() {
+                for (_, _, b) in branches.iter() {
                     self.collect_stmt(b);
                 }
-                self.collect_stmt(default_branch);
+                self.collect_stmt(default_branch.1);
             }
-            Inc(_, _, _) | Dec(_, _) => unreachable!("these have not been introduced yet"),
+            Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
             Ret(_) | RuntimeError(_) | Rethrow => {
                 // these are terminal, do nothing

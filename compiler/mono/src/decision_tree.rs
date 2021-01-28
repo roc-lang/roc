@@ -1,6 +1,6 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
-    DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
+    BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
 };
 use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
 use roc_collections::all::{MutMap, MutSet};
@@ -1355,20 +1355,85 @@ fn compile_test<'a>(
     lhs: Symbol,
     rhs: Symbol,
     fail: &'a Stmt<'a>,
+    cond: Stmt<'a>,
+) -> Stmt<'a> {
+    compile_test_help(
+        env,
+        ChainBranchInfo::NeitherKnown,
+        ret_layout,
+        stores,
+        lhs,
+        rhs,
+        fail,
+        cond,
+    )
+}
+
+fn compile_test_help<'a>(
+    env: &mut Env<'a, '_>,
+    branch_info: ChainBranchInfo<'a>,
+    ret_layout: Layout<'a>,
+    stores: bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    lhs: Symbol,
+    rhs: Symbol,
+    fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
 ) -> Stmt<'a> {
     // if test_symbol then cond else fail
     let test_symbol = env.unique_symbol();
     let arena = env.arena;
 
-    cond = crate::ir::cond(
-        env,
-        test_symbol,
-        Layout::Builtin(Builtin::Int1),
-        cond,
-        fail.clone(),
+    let (pass_info, fail_info) = {
+        use ChainBranchInfo::*;
+        match branch_info {
+            BothKnown {
+                scrutinee,
+                layout,
+                pass,
+                fail,
+            } => {
+                let pass_info = BranchInfo::Constructor {
+                    scrutinee,
+                    layout: layout.clone(),
+                    tag_id: pass,
+                };
+                let fail_info = BranchInfo::Constructor {
+                    scrutinee,
+                    layout: layout.clone(),
+                    tag_id: fail,
+                };
+
+                (pass_info, fail_info)
+            }
+
+            OnlyPassKnown {
+                scrutinee,
+                layout,
+                tag_id,
+            } => {
+                let pass_info = BranchInfo::Constructor {
+                    scrutinee,
+                    layout: layout.clone(),
+                    tag_id,
+                };
+
+                (pass_info, BranchInfo::None)
+            }
+
+            NeitherKnown => (BranchInfo::None, BranchInfo::None),
+        }
+    };
+
+    let branches = env.arena.alloc([(1u64, pass_info, cond)]);
+    let default_branch = (fail_info, &*env.arena.alloc(fail.clone()));
+
+    cond = Stmt::Switch {
+        cond_symbol: test_symbol,
+        cond_layout: Layout::Builtin(Builtin::Int1),
         ret_layout,
-    );
+        branches,
+        default_branch,
+    };
 
     let test = Expr::Call(crate::ir::Call {
         call_type: crate::ir::CallType::LowLevel { op: LowLevel::Eq },
@@ -1412,6 +1477,53 @@ fn compile_tests<'a>(
     cond
 }
 
+enum ChainBranchInfo<'a> {
+    BothKnown {
+        scrutinee: Symbol,
+        layout: Layout<'a>,
+        pass: u8,
+        fail: u8,
+    },
+    OnlyPassKnown {
+        scrutinee: Symbol,
+        layout: Layout<'a>,
+        tag_id: u8,
+    },
+    NeitherKnown,
+}
+
+impl<'a> ChainBranchInfo<'a> {
+    fn from_test_chain(
+        cond_symbol: Symbol,
+        cond_layout: &Layout<'a>,
+        test_chain: &[(Path, Test)],
+    ) -> Self {
+        match test_chain {
+            [(path, test)] => match (path, test) {
+                (Path::Empty, Test::IsCtor { tag_id, union, .. }) => {
+                    if union.alternatives.len() == 2 {
+                        // excluded middle: we also know the tag_id in the fail branch
+                        ChainBranchInfo::BothKnown {
+                            layout: cond_layout.clone(),
+                            scrutinee: cond_symbol,
+                            pass: *tag_id,
+                            fail: (*tag_id == 0) as u8,
+                        }
+                    } else {
+                        ChainBranchInfo::OnlyPassKnown {
+                            layout: cond_layout.clone(),
+                            scrutinee: cond_symbol,
+                            tag_id: *tag_id,
+                        }
+                    }
+                }
+                _ => ChainBranchInfo::NeitherKnown,
+            },
+            _ => ChainBranchInfo::NeitherKnown,
+        }
+    }
+}
+
 // TODO procs and layout are currently unused, but potentially required
 // for defining optional fields?
 // if not, do remove
@@ -1447,8 +1559,6 @@ fn decide_to_branching<'a>(
         } => {
             // generate a (nested) if-then-else
 
-            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
-
             let pass_expr = decide_to_branching(
                 env,
                 procs,
@@ -1471,6 +1581,11 @@ fn decide_to_branching<'a>(
                 jumps,
             );
 
+            let chain_branch_info =
+                ChainBranchInfo::from_test_chain(cond_symbol, &cond_layout, &test_chain);
+
+            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+
             let number_of_tests = tests.len() as i64 + guard.is_some() as i64;
 
             debug_assert!(number_of_tests > 0);
@@ -1478,7 +1593,26 @@ fn decide_to_branching<'a>(
             let fail = env.arena.alloc(fail_expr);
             if number_of_tests == 1 {
                 // if there is just one test, compile to a simple if-then-else
-                compile_tests(env, ret_layout, tests, guard, fail, pass_expr)
+
+                if guard.is_none() {
+                    // use knowledge about constructors for optimization
+                    debug_assert_eq!(tests.len(), 1);
+
+                    let (new_stores, lhs, rhs, _layout) = tests.into_iter().next().unwrap();
+
+                    compile_test_help(
+                        env,
+                        chain_branch_info,
+                        ret_layout.clone(),
+                        new_stores,
+                        lhs,
+                        rhs,
+                        fail,
+                        pass_expr,
+                    )
+                } else {
+                    compile_tests(env, ret_layout, tests, guard, fail, pass_expr)
+                }
             } else {
                 // otherwise, we use a join point so the code for the `else` case
                 // is only generated once.
@@ -1540,7 +1674,7 @@ fn decide_to_branching<'a>(
                     other => todo!("other {:?}", other),
                 };
 
-                branches.push((tag, branch));
+                branches.push((tag, BranchInfo::None, branch));
             }
 
             // We have learned more about the exact layout of the cond (based on the path)
@@ -1549,7 +1683,7 @@ fn decide_to_branching<'a>(
                 cond_layout: inner_cond_layout,
                 cond_symbol: inner_cond_symbol,
                 branches: branches.into_bump_slice(),
-                default_branch: env.arena.alloc(default_branch),
+                default_branch: (BranchInfo::None, env.arena.alloc(default_branch)),
                 ret_layout,
             };
 

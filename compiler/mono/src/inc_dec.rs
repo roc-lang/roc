@@ -1,5 +1,5 @@
 use crate::borrow::ParamMap;
-use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt};
+use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -32,6 +32,10 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 stack.push(cont);
             }
 
+            Info(_, cont) => {
+                stack.push(cont);
+            }
+
             Invoke {
                 symbol,
                 call,
@@ -52,8 +56,9 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
             Rethrow => {}
 
-            Inc(symbol, _, cont) | Dec(symbol, cont) => {
-                result.insert(*symbol);
+            Refcounting(modify, cont) => {
+                let symbol = modify.get_symbol();
+                result.insert(symbol);
                 stack.push(cont);
             }
 
@@ -81,8 +86,8 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
             } => {
                 result.insert(*cond_symbol);
 
-                stack.extend(branches.iter().map(|(_, s)| s));
-                stack.push(default_branch);
+                stack.extend(branches.iter().map(|(_, _, s)| s));
+                stack.push(default_branch.1);
             }
 
             RuntimeError(_) => {}
@@ -277,7 +282,8 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
-        self.arena.alloc(Stmt::Inc(symbol, inc_amount, stmt))
+        let modify = ModifyRc::Inc(symbol, inc_amount);
+        self.arena.alloc(Stmt::Refcounting(modify, stmt))
     }
 
     fn add_dec(&self, symbol: Symbol, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
@@ -293,7 +299,8 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
-        self.arena.alloc(Stmt::Dec(symbol, stmt))
+        let modify = ModifyRc::Dec(symbol);
+        self.arena.alloc(Stmt::Refcounting(modify, stmt))
     }
 
     fn add_inc_before_consume_all(
@@ -705,6 +712,16 @@ impl<'a> Context<'a> {
                 )
             }
 
+            Info(info, cont) => {
+                let (cont, live_vars) = self.visit_stmt(cont);
+
+                let stmt = Info(info.clone(), cont);
+
+                let stmt = self.arena.alloc(stmt);
+
+                (stmt, live_vars)
+            }
+
             Invoke {
                 symbol,
                 call,
@@ -820,13 +837,13 @@ impl<'a> Context<'a> {
                 let case_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
 
                 let branches = Vec::from_iter_in(
-                    branches.iter().map(|(label, branch)| {
+                    branches.iter().map(|(label, info, branch)| {
                         // TODO should we use ctor info like Lean?
                         let ctx = self.clone();
                         let (b, alt_live_vars) = ctx.visit_stmt(branch);
                         let b = ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b);
 
-                        (*label, b.clone())
+                        (*label, info.clone(), b.clone())
                     }),
                     self.arena,
                 )
@@ -835,8 +852,12 @@ impl<'a> Context<'a> {
                 let default_branch = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(default_branch);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                    let (b, alt_live_vars) = ctx.visit_stmt(default_branch.1);
+
+                    (
+                        default_branch.0.clone(),
+                        ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b),
+                    )
                 };
 
                 let switch = self.arena.alloc(Switch {
@@ -850,7 +871,7 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
-            RuntimeError(_) | Inc(_, _, _) | Dec(_, _) => (stmt, MutSet::default()),
+            RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
 }
@@ -901,10 +922,13 @@ pub fn collect_stmt(
             vars
         }
 
-        Inc(symbol, _, cont) | Dec(symbol, cont) => {
-            vars.insert(*symbol);
+        Refcounting(modify, cont) => {
+            let symbol = modify.get_symbol();
+            vars.insert(symbol);
             collect_stmt(cont, jp_live_vars, vars)
         }
+
+        Info(_, cont) => collect_stmt(cont, jp_live_vars, vars),
 
         Jump(id, arguments) => {
             vars.extend(arguments.iter().copied());
@@ -943,11 +967,11 @@ pub fn collect_stmt(
         } => {
             vars.insert(*cond_symbol);
 
-            for (_, branch) in branches.iter() {
+            for (_, _info, branch) in branches.iter() {
                 vars.extend(collect_stmt(branch, jp_live_vars, vars.clone()));
             }
 
-            vars.extend(collect_stmt(default_branch, jp_live_vars, vars.clone()));
+            vars.extend(collect_stmt(default_branch.1, jp_live_vars, vars.clone()));
 
             vars
         }
