@@ -5,6 +5,7 @@ app "nqueens"
 
 main : Task.Task {} []
 main =
+    # Task.after Task.getInt \n ->
     queens 6
         |> Str.fromInt
         |> Task.putLine

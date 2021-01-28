@@ -24,6 +24,24 @@ mod cli_run {
         expected_ending: &str,
         use_valgrind: bool,
     ) {
+        check_output_with_stdin(
+            file,
+            "",
+            executable_filename,
+            flags,
+            expected_ending,
+            use_valgrind,
+        )
+    }
+
+    fn check_output_with_stdin(
+        file: &Path,
+        stdin_str: &str,
+        executable_filename: &str,
+        flags: &[&str],
+        expected_ending: &str,
+        use_valgrind: bool,
+    ) {
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
         if !compile_out.stderr.is_empty() {
             panic!(compile_out.stderr);
@@ -31,8 +49,10 @@ mod cli_run {
         assert!(compile_out.status.success());
 
         let out = if use_valgrind {
-            let (valgrind_out, raw_xml) =
-                run_with_valgrind(&[file.with_file_name(executable_filename).to_str().unwrap()]);
+            let (valgrind_out, raw_xml) = run_with_valgrind(
+                stdin_str,
+                &[file.with_file_name(executable_filename).to_str().unwrap()],
+            );
 
             if valgrind_out.status.success() {
                 let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
@@ -55,6 +75,7 @@ mod cli_run {
         } else {
             run_cmd(
                 file.with_file_name(executable_filename).to_str().unwrap(),
+                stdin_str,
                 &[],
             )
         };
@@ -174,8 +195,9 @@ mod cli_run {
     #[test]
     #[serial(nqueens)]
     fn run_nqueens_not_optimized() {
-        check_output(
+        check_output_with_stdin(
             &example_file("benchmarks", "NQueens.roc"),
+            "",
             "nqueens",
             &[],
             "4\n",
