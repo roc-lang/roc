@@ -1,12 +1,9 @@
-use crate::ir::{BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, Stmt, Wrapped};
-use crate::layout::{
-    Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout, WrappedVariant,
-    TAG_SIZE,
-};
+use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt, Wrapped};
+use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use linked_hash_map::LinkedHashMap;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 // This file is heavily inspired by the Perceus paper
@@ -177,7 +174,7 @@ impl<'a, 'i> Env<'a, 'i> {
 }
 
 fn layout_for_constructor<'a>(
-    arena: &'a Bump,
+    _arena: &'a Bump,
     layout: &Layout<'a>,
     constructor: u64,
 ) -> ConstructorLayout<&'a [Layout<'a>]> {
@@ -266,6 +263,22 @@ fn work_for_constructor<'a>(
     }
 }
 
+fn can_push_inc_through(stmt: &Stmt) -> bool {
+    use Stmt::*;
+
+    match stmt {
+        Let(_, expr, _, _) => {
+            // we can always delay an increment/decrement until after a field access
+            matches!(expr, Expr::AccessAtIndex { .. })
+        }
+
+        Refcounting(ModifyRc::Inc(_, _), _) => true,
+        Refcounting(ModifyRc::Dec(_), _) => true,
+
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 enum ConstructorLayout<T> {
     IsNull,
@@ -276,33 +289,13 @@ enum ConstructorLayout<T> {
 pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
     use Stmt::*;
 
-    let can_push_inc_through = match stmt {
-        Let(symbol, expr, _, _) => {
-            // make sure there is no shadowing
-            debug_assert!(!env.deferred.inc_dec_map.contains_key(symbol));
-
-            match expr {
-                Expr::AccessAtIndex { .. } => {
-                    // !env.inc_dec_map.contains_key(structure),
-                    true
-                }
-                _ => false,
-            }
-        }
-
-        Refcounting(ModifyRc::Inc(_, _), _) => true,
-        Refcounting(ModifyRc::Dec(_), _) => true,
-
-        _ => false,
-    };
-
     let mut deferred_default = Deferred {
         inc_dec_map: Default::default(),
         assignments: Vec::new_in(env.arena),
         decrefs: Vec::new_in(env.arena),
     };
 
-    let mut deferred = if can_push_inc_through {
+    let deferred = if can_push_inc_through(stmt) {
         deferred_default
     } else {
         std::mem::swap(&mut deferred_default, &mut env.deferred);
@@ -488,7 +481,9 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                 result = env.arena.alloc(stmt);
             }
             Ordering::Less => {
+                // the RC insertion should not double decrement in a block
                 debug_assert_eq!(amount, -1);
+
                 // insert missing decrements
                 let stmt = Refcounting(ModifyRc::Dec(symbol), result);
                 result = env.arena.alloc(stmt);
@@ -497,7 +492,6 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
     }
 
     for (symbol, expr, layout) in deferred.assignments {
-        //
         let stmt = Stmt::Let(symbol, expr, layout, result);
         result = env.arena.alloc(stmt);
     }
