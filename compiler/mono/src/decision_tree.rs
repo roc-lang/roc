@@ -1359,7 +1359,7 @@ fn compile_test<'a>(
 ) -> Stmt<'a> {
     compile_test_help(
         env,
-        ChainBranchInfo::NeitherKnown,
+        ConstructorKnown::Neither,
         ret_layout,
         stores,
         lhs,
@@ -1369,9 +1369,10 @@ fn compile_test<'a>(
     )
 }
 
+#[warn(clippy::too_many_arguments)]
 fn compile_test_help<'a>(
     env: &mut Env<'a, '_>,
-    branch_info: ChainBranchInfo<'a>,
+    branch_info: ConstructorKnown<'a>,
     ret_layout: Layout<'a>,
     stores: bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
     lhs: Symbol,
@@ -1384,9 +1385,9 @@ fn compile_test_help<'a>(
     let arena = env.arena;
 
     let (pass_info, fail_info) = {
-        use ChainBranchInfo::*;
+        use ConstructorKnown::*;
         match branch_info {
-            BothKnown {
+            Both {
                 scrutinee,
                 layout,
                 pass,
@@ -1406,7 +1407,7 @@ fn compile_test_help<'a>(
                 (pass_info, fail_info)
             }
 
-            OnlyPassKnown {
+            OnlyPass {
                 scrutinee,
                 layout,
                 tag_id,
@@ -1420,7 +1421,7 @@ fn compile_test_help<'a>(
                 (pass_info, BranchInfo::None)
             }
 
-            NeitherKnown => (BranchInfo::None, BranchInfo::None),
+            Neither => (BranchInfo::None, BranchInfo::None),
         }
     };
 
@@ -1477,22 +1478,22 @@ fn compile_tests<'a>(
     cond
 }
 
-enum ChainBranchInfo<'a> {
-    BothKnown {
+enum ConstructorKnown<'a> {
+    Both {
         scrutinee: Symbol,
         layout: Layout<'a>,
         pass: u8,
         fail: u8,
     },
-    OnlyPassKnown {
+    OnlyPass {
         scrutinee: Symbol,
         layout: Layout<'a>,
         tag_id: u8,
     },
-    NeitherKnown,
+    Neither,
 }
 
-impl<'a> ChainBranchInfo<'a> {
+impl<'a> ConstructorKnown<'a> {
     fn from_test_chain(
         cond_symbol: Symbol,
         cond_layout: &Layout<'a>,
@@ -1503,23 +1504,23 @@ impl<'a> ChainBranchInfo<'a> {
                 (Path::Empty, Test::IsCtor { tag_id, union, .. }) => {
                     if union.alternatives.len() == 2 {
                         // excluded middle: we also know the tag_id in the fail branch
-                        ChainBranchInfo::BothKnown {
+                        ConstructorKnown::Both {
                             layout: cond_layout.clone(),
                             scrutinee: cond_symbol,
                             pass: *tag_id,
                             fail: (*tag_id == 0) as u8,
                         }
                     } else {
-                        ChainBranchInfo::OnlyPassKnown {
+                        ConstructorKnown::OnlyPass {
                             layout: cond_layout.clone(),
                             scrutinee: cond_symbol,
                             tag_id: *tag_id,
                         }
                     }
                 }
-                _ => ChainBranchInfo::NeitherKnown,
+                _ => ConstructorKnown::Neither,
             },
-            _ => ChainBranchInfo::NeitherKnown,
+            _ => ConstructorKnown::Neither,
         }
     }
 }
@@ -1582,7 +1583,7 @@ fn decide_to_branching<'a>(
             );
 
             let chain_branch_info =
-                ChainBranchInfo::from_test_chain(cond_symbol, &cond_layout, &test_chain);
+                ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
 
             let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
 

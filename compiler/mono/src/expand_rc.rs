@@ -236,8 +236,8 @@ fn work_for_constructor<'a>(
     let field_aliases = env.alias_map.get(symbol);
 
     match layout_for_constructor(env.arena, full_layout, constructor) {
-        Unknown => return Unknown,
-        IsNull => return IsNull,
+        Unknown => Unknown,
+        IsNull => IsNull,
         HasFields(cons_layout) => {
             // for each field, if it has refcounted content, check if it has an alias
             for (i, field_layout) in cons_layout.iter().enumerate() {
@@ -325,15 +325,16 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
 
                 env.layout_map.insert(symbol, layout.clone());
 
-                match expr {
-                    Expr::AccessAtIndex {
-                        structure, index, ..
-                    } => {
-                        let entry = env.alias_map.entry(*structure).or_insert(MutMap::default());
+                if let Expr::AccessAtIndex {
+                    structure, index, ..
+                } = expr
+                {
+                    let entry = env
+                        .alias_map
+                        .entry(*structure)
+                        .or_insert_with(MutMap::default);
 
-                        entry.insert(*index, symbol);
-                    }
-                    _ => {}
+                    entry.insert(*index, symbol);
                 }
 
                 let cont = expand_and_cancel(env, cont);
