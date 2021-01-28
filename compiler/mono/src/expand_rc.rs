@@ -166,6 +166,14 @@ impl<'a, 'i> Env<'a, 'i> {
 
         Symbol::new(self.home, ident_id)
     }
+
+    fn manual_unique_symbol(home: ModuleId, ident_ids: &mut IdentIds) -> Symbol {
+        let ident_id = ident_ids.gen_unique();
+
+        home.register_debug_idents(&ident_ids);
+
+        Symbol::new(home, ident_id)
+    }
 }
 
 fn layout_for_constructor<'a>(
@@ -193,6 +201,68 @@ fn layout_for_constructor<'a>(
             }
         }
         _ => unreachable!(),
+    }
+}
+
+fn work_for_constructor<'a>(
+    env: &mut Env<'a, '_>,
+    symbol: &Symbol,
+) -> ConstructorLayout<Vec<'a, Symbol>> {
+    use ConstructorLayout::*;
+
+    let mut result = Vec::new_in(env.arena);
+
+    let constructor = match env.constructor_map.get(symbol) {
+        None => return ConstructorLayout::Unknown,
+        Some(v) => *v,
+    };
+    let full_layout = match env.layout_map.get(symbol) {
+        None => return ConstructorLayout::Unknown,
+        Some(v) => v,
+    };
+
+    let field_aliases = env.alias_map.get(symbol);
+
+    match layout_for_constructor(env.arena, full_layout, constructor) {
+        Unknown => return Unknown,
+        IsNull => return IsNull,
+        HasFields(cons_layout) => {
+            // for each field, if it has refcounted content, check if it has an alias
+            for (i, field_layout) in cons_layout.iter().enumerate() {
+                if field_layout.contains_refcounted() {
+                    match field_aliases.and_then(|map| map.get(&(i as u64))) {
+                        Some(alias_symbol) => {
+                            // the field was bound in a pattern match
+                            result.push(*alias_symbol);
+                        }
+                        None => {
+                            // the field was not bound in a pattern match
+                            // we have to extract it now
+
+                            let expr = Expr::AccessAtIndex {
+                                index: i as u64,
+                                field_layouts: cons_layout,
+                                structure: *symbol,
+                                wrapped: Wrapped::MultiTagUnion,
+                            };
+
+                            // create a fresh symbol for this field
+                            let alias_symbol = Env::manual_unique_symbol(env.home, env.ident_ids);
+
+                            let layout = if let Layout::RecursivePointer = field_layout {
+                                full_layout.clone()
+                            } else {
+                                field_layout.clone()
+                            };
+
+                            env.deferred.assignments.push((alias_symbol, expr, layout));
+                            result.push(alias_symbol);
+                        }
+                    }
+                }
+            }
+            ConstructorLayout::HasFields(result)
+        }
     }
 }
 
@@ -302,81 +372,33 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
 
                 &*env.arena.alloc(stmt)
             }
-            Refcounting(ModifyRc::DecRef(_symbol), _cont) => todo!(),
+            Refcounting(ModifyRc::DecRef(_symbol), _cont) => unreachable!("not introduced yet"),
 
             Refcounting(ModifyRc::Dec(symbol), cont) => {
                 use ConstructorLayout::*;
 
-                let mut result = Vec::new_in(env.arena);
-                // going for the specific case of linked list length for now
-                let opt_dec_symbols: ConstructorLayout<Vec<'a, Symbol>> = (|| {
-                    let alias_symbol = env.unique_symbol();
-                    let constructor = match env.constructor_map.get(symbol) {
-                        None => return ConstructorLayout::Unknown,
-                        Some(v) => v,
-                    };
-                    let full_layout = match env.layout_map.get(symbol) {
-                        None => return ConstructorLayout::Unknown,
-                        Some(v) => v,
-                    };
-
-                    let field_aliases = env.alias_map.get(symbol);
-
-                    match layout_for_constructor(env.arena, full_layout, *constructor) {
-                        Unknown => return Unknown,
-                        IsNull => return IsNull,
-                        HasFields(cons_layout) => {
-                            // for each field, if it has refcounted content, check if it has an alias
-                            for (i, field_layout) in cons_layout.iter().enumerate() {
-                                if field_layout.contains_refcounted() {
-                                    match field_aliases.and_then(|map| map.get(&(i as u64))) {
-                                        None => {
-                                            //    return ConstructorLayout::Unknown
-                                            let expr = Expr::AccessAtIndex {
-                                                index: i as u64,
-                                                field_layouts: cons_layout,
-                                                structure: *symbol,
-                                                wrapped: Wrapped::MultiTagUnion,
-                                            };
-
-                                            env.deferred.assignments.push((
-                                                alias_symbol,
-                                                expr,
-                                                if let Layout::RecursivePointer = field_layout {
-                                                    full_layout.clone()
-                                                } else {
-                                                    field_layout.clone()
-                                                },
-                                            ));
-                                            result.push(alias_symbol);
-                                        }
-                                        Some(alias_symbol) => {
-                                            result.push(*alias_symbol);
-                                        }
-                                    }
-                                }
-                            }
-                            ConstructorLayout::HasFields(result)
-                        }
-                    }
-                })();
-                dbg!(&opt_dec_symbols);
-
-                match &opt_dec_symbols {
+                match work_for_constructor(env, symbol) {
                     HasFields(dec_symbols) => {
+                        // we can inline the decrement
+
+                        // decref the current cell
                         env.deferred.decrefs.push(*symbol);
+
+                        // and record decrements for all the fields
                         for dec_symbol in dec_symbols {
-                            //let stmt = Refcounting(ModifyRc::Dec(dec_symbol), cont);
-                            //cont = env.arena.alloc(stmt);
-                            let count = env.deferred.inc_dec_map.entry(*dec_symbol).or_insert(0);
+                            let count = env.deferred.inc_dec_map.entry(dec_symbol).or_insert(0);
                             *count -= 1;
                         }
                     }
                     Unknown => {
+                        // we can't inline the decrement; just record it
                         let count = env.deferred.inc_dec_map.entry(*symbol).or_insert(0);
                         *count -= 1;
                     }
-                    IsNull => {}
+                    IsNull => {
+                        // we decrement a value represented as `NULL` at runtime;
+                        // we can drop this decrement completely
+                    }
                 }
 
                 expand_and_cancel(env, cont)
@@ -394,11 +416,6 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                     .insert(info.scrutinee, info.tag_id as u64);
 
                 env.layout_map.insert(info.scrutinee, info.layout.clone());
-
-                println!(
-                    "---> set {:?} tag_id {:?} and layout",
-                    info.scrutinee, info.tag_id
-                );
 
                 let cont = expand_and_cancel(env, cont);
 
