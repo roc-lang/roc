@@ -7,6 +7,7 @@ use crate::mvc::update::{
 };
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 use winit::event::VirtualKeyCode::*;
+use crate::error::EdError::{ClipboardWriteFailed, ClipboardReadFailed};
 
 pub fn handle_keydown(
     elem_state: ElementState,
@@ -78,12 +79,13 @@ fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
             let selected_str_opt = mvc::ed_model::get_selected_str(ed_model)?;
 
             if let Some(selected_str) = selected_str_opt {
-                if let Ok(ref mut clipboard) = app_model.clipboard_res {
+                if let Some(ref mut clipboard) = app_model.clipboard_opt {
                     clipboard.set_content(selected_str.to_owned())?;
-                    return Ok(())
-                } else if let Err(ref mut e) = app_model.clipboard_res {
-                    return Err(e)
-                }
+                } else {
+                    return Err(ClipboardWriteFailed {
+                        err_msg: "Clipboard was never initialized succesfully.".to_owned()
+                    })
+                }                
             }
         }
     }
@@ -95,41 +97,49 @@ fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
 
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            let clipboard_content = app_model.clipboard_res?.get_content()?;
-            if !clipboard_content.is_empty() {
+            if let Some(ref mut clipboard) = app_model.clipboard_opt {
+                let clipboard_content = clipboard.get_content()?;
 
-                let mut rsplit_iter = clipboard_content.rsplit('\n');
-                // safe unwrap because we checked if empty
-                let last_line_nr_chars = rsplit_iter.next().unwrap().len();
-                let clipboard_nr_lines = rsplit_iter.count();
+                if !clipboard_content.is_empty() {
 
-                let old_caret_pos = ed_model.caret_pos;
+                    let mut rsplit_iter = clipboard_content.rsplit('\n');
+                    // safe unwrap because we checked if empty
+                    let last_line_nr_chars = rsplit_iter.next().unwrap().len();
+                    let clipboard_nr_lines = rsplit_iter.count();
 
-                if let Some(selection) = ed_model.selection_opt {
-                    let start_caret_pos = selection.start_pos;
-                    ed_model.text_buf.del_selection(selection)?;
-                    ed_model.selection_opt = None;
+                    let old_caret_pos = ed_model.caret_pos;
 
-                    ed_model.text_buf.insert_str(
-                        start_caret_pos,
-                        &clipboard_content
-                    )?;
+                    if let Some(selection) = ed_model.selection_opt {
+                        let start_caret_pos = selection.start_pos;
+                        ed_model.text_buf.del_selection(selection)?;
+                        ed_model.selection_opt = None;
 
-                    ed_model.caret_pos = Position {
-                        line: start_caret_pos.line + clipboard_nr_lines,
-                        column: start_caret_pos.column + last_line_nr_chars
-                    }
-                } else {
-                    ed_model.text_buf.insert_str(
-                        old_caret_pos,
-                        &clipboard_content
-                    )?;
+                        ed_model.text_buf.insert_str(
+                            start_caret_pos,
+                            &clipboard_content
+                        )?;
 
-                    ed_model.caret_pos = Position {
-                        line: old_caret_pos.line + clipboard_nr_lines,
-                        column: old_caret_pos.column + last_line_nr_chars
+                        ed_model.caret_pos = Position {
+                            line: start_caret_pos.line + clipboard_nr_lines,
+                            column: start_caret_pos.column + last_line_nr_chars
+                        }
+                    } else {
+                        ed_model.text_buf.insert_str(
+                            old_caret_pos,
+                            &clipboard_content
+                        )?;
+
+                        ed_model.caret_pos = Position {
+                            line: old_caret_pos.line + clipboard_nr_lines,
+                            column: old_caret_pos.column + last_line_nr_chars
+                        }
                     }
                 }
+
+            } else {
+                return Err(ClipboardReadFailed {
+                    err_msg: "Clipboard was never initialized succesfully.".to_owned()
+                })
             }
         }
     }

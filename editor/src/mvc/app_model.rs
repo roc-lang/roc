@@ -3,21 +3,30 @@ use crate::error::{EdResult, print_err};
 use crate::error::EdError::{ClipboardReadFailed, ClipboardWriteFailed, ClipboardInitFailed};
 use clipboard::{ClipboardContext, ClipboardProvider};
 use std::fmt;
-use snafu::ResultExt;
 
 #[derive(Debug)]
 pub struct AppModel {
     pub ed_model_opt: Option<EdModel>,
-    pub clipboard_res: EdResult<Clipboard>,
+    pub clipboard_opt: Option<Clipboard>,
 }
 
 impl AppModel {
     pub fn init(ed_model_opt: Option<EdModel>) -> AppModel {
         let clipboard_res = Clipboard::init();
 
+        let clipboard_opt =
+            match clipboard_res {
+                Ok(clipboard) => Some(clipboard),
+                Err(e) => {
+                    print_err(&e);
+                    None
+                }
+
+            };
+
         AppModel {
             ed_model_opt,
-            clipboard_res
+            clipboard_opt
         }
     }
 }
@@ -56,7 +65,7 @@ impl Clipboard {
     }
 
     pub fn set_content(&mut self, copy_str: String) -> EdResult<()> {
-        let content_set_res = self.context.get_contents();
+        let content_set_res = self.context.set_contents(copy_str);
 
         match content_set_res {
             Ok(_) => Ok(()),

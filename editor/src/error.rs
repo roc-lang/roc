@@ -41,10 +41,10 @@ pub enum EdError {
     #[snafu(display("TextBufReadFailed: the file {} could be opened but we encountered the following error while trying to read it: {}.", path_str, err_msg))]
     TextBufReadFailed { path_str: String, err_msg: String },
 
-    #[snafu(display("ClipboardReadFailed: could not get clipboard contents: {}.", err_msg))]
+    #[snafu(display("ClipboardReadFailed: could not get clipboard contents: {}", err_msg))]
     ClipboardReadFailed { err_msg: String },
 
-    #[snafu(display("ClipboardWriteFailed: could not set clipboard contents: {}.", err_msg))]
+    #[snafu(display("ClipboardWriteFailed: could not set clipboard contents: {}", err_msg))]
     ClipboardWriteFailed { err_msg: String },
 
     #[snafu(display("ClipboardInitFailed: could not initialize ClipboardContext: {}.", err_msg))]

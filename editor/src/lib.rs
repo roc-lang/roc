@@ -225,12 +225,16 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 if let Some(virtual_keycode) = input.virtual_keycode {
                     if let Some(ref mut ed_model) = app_model.ed_model_opt {
                         if ed_model.has_focus {
-                            keyboard_input::handle_keydown(
+                            let keydown_res = keyboard_input::handle_keydown(
                                 input.state,
                                 virtual_keycode,
                                 keyboard_modifiers,
                                 &mut app_model,
                             );
+
+                            if let Err(e) = keydown_res {
+                                print_err(&e)
+                            }
                         }
                     }
                 }
