@@ -125,6 +125,7 @@ pub struct Env<'a, 'i> {
     pub deferred: Deferred<'a>,
 }
 
+#[derive(Debug)]
 pub struct Deferred<'a> {
     pub inc_dec_map: LinkedHashMap<Symbol, i64>,
     pub assignments: Vec<'a, (Symbol, Expr<'a>, Layout<'a>)>,
@@ -284,7 +285,7 @@ fn can_push_inc_through(stmt: &Stmt) -> bool {
     match stmt {
         Let(_, expr, _, _) => {
             // we can always delay an increment/decrement until after a field access
-            matches!(expr, Expr::AccessAtIndex { .. })
+            matches!(expr, Expr::AccessAtIndex { .. } | Expr::Literal(_))
         }
 
         Refcounting(ModifyRc::Inc(_, _), _) => true,
@@ -325,6 +326,8 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
 
                 env.layout_map.insert(symbol, layout.clone());
 
+                let new_cont;
+
                 if let Expr::AccessAtIndex {
                     structure, index, ..
                 } = expr
@@ -335,10 +338,18 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                         .or_insert_with(MutMap::default);
 
                     entry.insert(*index, symbol);
+
+                    new_cont = expand_and_cancel(env, cont);
+
+                    // make sure to remove the alias, so other branches don't use it by accident
+                    env.alias_map
+                        .get_mut(structure)
+                        .and_then(|map| map.remove(index));
+                } else {
+                    new_cont = expand_and_cancel(env, cont);
                 }
 
-                let cont = expand_and_cancel(env, cont);
-                let stmt = Let(symbol, expr.clone(), layout.clone(), cont);
+                let stmt = Let(symbol, expr.clone(), layout.clone(), new_cont);
 
                 &*env.arena.alloc(stmt)
             }
