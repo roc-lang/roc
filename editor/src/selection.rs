@@ -126,7 +126,7 @@ pub fn create_selection_rects<'a>(
 pub mod test_selection {
     use crate::error::{EdResult, OutOfBounds};
     use crate::mvc::ed_model::{Position, RawSelection};
-    use crate::mvc::update::{
+    use crate::mvc::ed_update::{
         move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
     };
     use crate::text_buffer::TextBuffer;

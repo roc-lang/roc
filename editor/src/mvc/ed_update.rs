@@ -5,6 +5,8 @@ use crate::error::EdResult;
 use crate::text_buffer::TextBuffer;
 use crate::util::is_newline;
 use std::cmp::{max, min};
+use winit::event::{ModifiersState, VirtualKeyCode};
+use winit::event::VirtualKeyCode::*;
 
 pub type MoveCaretFun =
     fn(Position, Option<RawSelection>, bool, &TextBuffer) -> (Position, Option<RawSelection>);
@@ -299,6 +301,17 @@ pub fn move_caret_down(
     (new_caret_pos, new_selection_opt)
 }
 
+fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) {
+    let (new_caret_pos, new_selection_opt) = move_caret_fun(
+        ed_model.caret_pos,
+        ed_model.selection_opt,
+        modifiers.shift(),
+        &ed_model.text_buf,
+    );
+    ed_model.caret_pos = new_caret_pos;
+    ed_model.selection_opt = new_selection_opt;
+}
+
 fn del_selection(selection: RawSelection, ed_model: &mut EdModel) -> EdResult<()> {
     ed_model.text_buf.del_selection(selection)?;
     ed_model.caret_pos = selection.start_pos;
@@ -340,7 +353,7 @@ pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResu
 
                 ed_model.selection_opt = None;
             }
-            '\u{0}'..='\u{32}' | '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
+            '\u{3}' | '\u{16}' | '\u{30}' | '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
                 // chars that can be ignored
             }
             _ => {
@@ -371,11 +384,25 @@ pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResu
     Ok(())
 }
 
+pub fn handle_key_down(
+    modifiers: &ModifiersState,
+    virtual_keycode: VirtualKeyCode,
+    ed_model: &mut EdModel
+) {
+    match virtual_keycode {
+        Left => handle_arrow(move_caret_left, modifiers, ed_model),
+        Up => handle_arrow(move_caret_up, modifiers, ed_model),
+        Right => handle_arrow(move_caret_right, modifiers, ed_model),
+        Down => handle_arrow(move_caret_down, modifiers, ed_model),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod test_update {
     use crate::mvc::app_model::AppModel;
     use crate::mvc::ed_model::{EdModel, Position, RawSelection};
-    use crate::mvc::update::handle_new_char;
+    use crate::mvc::ed_update::handle_new_char;
     use crate::selection::test_selection::{
         all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, text_buffer_from_dsl_str,
     };

@@ -4,6 +4,7 @@ use crate::error::EdError::{ClipboardReadFailed, ClipboardWriteFailed, Clipboard
 use clipboard::{ClipboardContext, ClipboardProvider};
 use std::fmt;
 
+
 #[derive(Debug)]
 pub struct AppModel {
     pub ed_model_opt: Option<EdModel>,
