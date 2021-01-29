@@ -240,7 +240,21 @@ fn work_for_constructor<'a>(
         Unknown => Unknown,
         IsNull => IsNull,
         HasFields(cons_layout) => {
+            // figure out if there is at least one aliased refcounted field. Only then
+            // does it make sense to inline the decrement
+            let at_least_one_aliased = (|| {
+                for (i, field_layout) in cons_layout.iter().enumerate() {
+                    if field_layout.contains_refcounted() {
+                        if field_aliases.and_then(|map| map.get(&(i as u64))).is_some() {
+                            return true;
+                        }
+                    }
+                }
+                false
+            })();
+
             // for each field, if it has refcounted content, check if it has an alias
+            // if so, use the alias, otherwise load the field.
             for (i, field_layout) in cons_layout.iter().enumerate() {
                 if field_layout.contains_refcounted() {
                     match field_aliases.and_then(|map| map.get(&(i as u64))) {
@@ -248,9 +262,10 @@ fn work_for_constructor<'a>(
                             // the field was bound in a pattern match
                             result.push(*alias_symbol);
                         }
-                        None => {
+                        None if at_least_one_aliased => {
                             // the field was not bound in a pattern match
-                            // we have to extract it now
+                            // we have to extract it now, but we only extract it
+                            // if at least one field is aliased.
 
                             let expr = Expr::AccessAtIndex {
                                 index: i as u64,
@@ -270,6 +285,11 @@ fn work_for_constructor<'a>(
 
                             env.deferred.assignments.push((alias_symbol, expr, layout));
                             result.push(alias_symbol);
+                        }
+                        None => {
+                            // if all refcounted fields were unaliased, generate a normal decrement
+                            // of the whole structure (less code generated this way)
+                            return ConstructorLayout::Unknown;
                         }
                     }
                 }
@@ -321,16 +341,37 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
 
     let mut result = {
         match stmt {
-            Let(symbol, expr, layout, cont) => {
-                let symbol = *symbol;
-
+            Let(mut symbol, expr, layout, cont) => {
                 env.layout_map.insert(symbol, layout.clone());
+
+                let mut expr = expr;
+                let mut layout = layout;
+                let mut cont = cont;
+
+                let mut literal_stack = Vec::new_in(env.arena);
+
+                loop {
+                    if let Expr::Literal(_) = &expr {
+                        if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
+                            literal_stack.push((symbol, expr.clone(), layout.clone()));
+
+                            symbol = *symbol1;
+                            expr = expr1;
+                            layout = layout1;
+                            cont = cont1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
 
                 let new_cont;
 
                 if let Expr::AccessAtIndex {
                     structure, index, ..
-                } = expr
+                } = &expr
                 {
                     let entry = env
                         .alias_map
@@ -350,8 +391,13 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                 }
 
                 let stmt = Let(symbol, expr.clone(), layout.clone(), new_cont);
+                let mut stmt = &*env.arena.alloc(stmt);
 
-                &*env.arena.alloc(stmt)
+                for (symbol, expr, layout) in literal_stack.into_iter().rev() {
+                    stmt = env.arena.alloc(Stmt::Let(symbol, expr, layout, stmt));
+                }
+
+                stmt
             }
 
             Switch {
