@@ -25,7 +25,7 @@ use crate::graphics::style::CODE_FONT_SIZE;
 use crate::graphics::style::CODE_TXT_XY;
 use crate::mvc::app_model::AppModel;
 use crate::mvc::ed_model::EdModel;
-use crate::mvc::{ed_model, ed_view, ed_update};
+use crate::mvc::{ed_model, ed_view, app_update};
 use crate::resources::strings::NOTHING_OPENED;
 use crate::vec_result::get_res;
 use bumpalo::Bump;
@@ -213,7 +213,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                if let Err(e) = ed_update::handle_new_char(&mut app_model, &ch) {
+                if let Err(e) = app_update::handle_new_char(&ch, &mut app_model) {
                     print_err(&e)
                 }
             }

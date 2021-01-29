@@ -319,65 +319,63 @@ fn del_selection(selection: RawSelection, ed_model: &mut EdModel) -> EdResult<()
     Ok(())
 }
 
-pub fn handle_new_char(app_model: &mut AppModel, received_char: &char) -> EdResult<()> {
-    if let Some(ref mut ed_model) = app_model.ed_model_opt {
-        let old_caret_pos = ed_model.caret_pos;
+pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<()> {
+    let old_caret_pos = ed_model.caret_pos;
 
-        match received_char {
-            '\u{8}' | '\u{7f}' => {
-                // On Linux, '\u{8}' is backspace,
-                // on macOS '\u{7f}'.
-                if let Some(selection) = ed_model.selection_opt {
-                    del_selection(selection, ed_model)?;
-                } else {
-                    ed_model.caret_pos =
-                        move_caret_left(old_caret_pos, None, false, &ed_model.text_buf).0;
+    match received_char {
+        '\u{8}' | '\u{7f}' => {
+            // On Linux, '\u{8}' is backspace,
+            // on macOS '\u{7f}'.
+            if let Some(selection) = ed_model.selection_opt {
+                del_selection(selection, ed_model)?;
+            } else {
+                ed_model.caret_pos =
+                    move_caret_left(old_caret_pos, None, false, &ed_model.text_buf).0;
 
-                    ed_model.text_buf.pop_char(old_caret_pos);
-                }
-
-                ed_model.selection_opt = None;
+                ed_model.text_buf.pop_char(old_caret_pos);
             }
-            ch if is_newline(ch) => {
-                if let Some(selection) = ed_model.selection_opt {
-                    del_selection(selection, ed_model)?;
-                    ed_model.text_buf.insert_char(ed_model.caret_pos, &'\n')?;
-                } else {
-                    ed_model.text_buf.insert_char(old_caret_pos, &'\n')?;
 
-                    ed_model.caret_pos = Position {
-                        line: old_caret_pos.line + 1,
-                        column: 0,
-                    };
-                }
+            ed_model.selection_opt = None;
+        }
+        ch if is_newline(ch) => {
+            if let Some(selection) = ed_model.selection_opt {
+                del_selection(selection, ed_model)?;
+                ed_model.text_buf.insert_char(ed_model.caret_pos, &'\n')?;
+            } else {
+                ed_model.text_buf.insert_char(old_caret_pos, &'\n')?;
 
-                ed_model.selection_opt = None;
+                ed_model.caret_pos = Position {
+                    line: old_caret_pos.line + 1,
+                    column: 0,
+                };
             }
-            '\u{3}' | '\u{16}' | '\u{30}' | '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
-                // chars that can be ignored
+
+            ed_model.selection_opt = None;
+        }
+        '\u{3}' | '\u{16}' | '\u{30}' | '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
+            // chars that can be ignored
+        }
+        _ => {
+            if let Some(selection) = ed_model.selection_opt {
+                del_selection(selection, ed_model)?;
+                ed_model
+                    .text_buf
+                    .insert_char(ed_model.caret_pos, received_char)?;
+
+                ed_model.caret_pos =
+                    move_caret_right(ed_model.caret_pos, None, false, &ed_model.text_buf).0;
+            } else {
+                ed_model
+                    .text_buf
+                    .insert_char(old_caret_pos, received_char)?;
+
+                ed_model.caret_pos = Position {
+                    line: old_caret_pos.line,
+                    column: old_caret_pos.column + 1,
+                };
             }
-            _ => {
-                if let Some(selection) = ed_model.selection_opt {
-                    del_selection(selection, ed_model)?;
-                    ed_model
-                        .text_buf
-                        .insert_char(ed_model.caret_pos, received_char)?;
 
-                    ed_model.caret_pos =
-                        move_caret_right(ed_model.caret_pos, None, false, &ed_model.text_buf).0;
-                } else {
-                    ed_model
-                        .text_buf
-                        .insert_char(old_caret_pos, received_char)?;
-
-                    ed_model.caret_pos = Position {
-                        line: old_caret_pos.line,
-                        column: old_caret_pos.column + 1,
-                    };
-                }
-
-                ed_model.selection_opt = None;
-            }
+            ed_model.selection_opt = None;
         }
     }
 
@@ -399,16 +397,16 @@ pub fn handle_key_down(
 }
 
 #[cfg(test)]
-mod test_update {
-    use crate::mvc::app_model::AppModel;
-    use crate::mvc::ed_model::{EdModel, Position, RawSelection};
+pub mod test_ed_update {
+    use crate::mvc::app_update::test_app_update::{mock_app_model};
+    use crate::mvc::ed_model::{Position, RawSelection};
     use crate::mvc::ed_update::handle_new_char;
     use crate::selection::test_selection::{
         all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, text_buffer_from_dsl_str,
     };
     use crate::text_buffer::TextBuffer;
 
-    fn gen_caret_text_buf(
+    pub fn gen_caret_text_buf(
         lines: &[&str],
     ) -> Result<(Position, Option<RawSelection>, TextBuffer), String> {
         let lines_string_slice: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
@@ -416,24 +414,6 @@ mod test_update {
         let text_buf = text_buffer_from_dsl_str(&lines_string_slice);
 
         Ok((caret_pos, selection_opt, text_buf))
-    }
-
-    fn mock_app_model(
-        text_buf: TextBuffer,
-        caret_pos: Position,
-        selection_opt: Option<RawSelection>,
-    ) -> AppModel {
-        AppModel::init(
-            Some(
-                EdModel {
-                    text_buf,
-                    caret_pos,
-                    selection_opt,
-                    glyph_dim_rect_opt: None,
-                    has_focus: true,
-                }
-            )
-        )
     }
 
     fn assert_insert(
@@ -444,8 +424,9 @@ mod test_update {
         let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
 
         let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt);
+        let mut ed_model = app_model.get_ed_model_mut()?;
 
-        if let Err(e) = handle_new_char(&mut app_model, &new_char) {
+        if let Err(e) = handle_new_char(&new_char, ed_model) {
             return Err(e.to_string());
         }
 

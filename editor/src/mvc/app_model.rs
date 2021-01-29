@@ -1,6 +1,6 @@
 use super::ed_model::EdModel;
 use crate::error::{EdResult, print_err};
-use crate::error::EdError::{ClipboardReadFailed, ClipboardWriteFailed, ClipboardInitFailed};
+use crate::error::EdError::{ClipboardReadFailed, ClipboardWriteFailed, ClipboardInitFailed, EdModelIsNone};
 use clipboard::{ClipboardContext, ClipboardProvider};
 use std::fmt;
 
@@ -29,6 +29,22 @@ impl AppModel {
             ed_model_opt,
             clipboard_opt
         }
+    }
+
+    pub fn get_ed_model(&self) -> EdResult<&EdModel> {
+        if let Some(ref ed_model) = self.ed_model_opt {
+            Ok(ed_model)
+        } else {
+            Err(EdModelIsNone {})
+        }   
+    }
+
+    pub fn get_ed_model_mut(&mut self) -> EdResult<& mut EdModel> {
+        if let Some(ref mut ed_model) = self.ed_model_opt {
+            Ok(ed_model)
+        } else {
+            Err(EdModelIsNone {})
+        }   
     }
 }
 
