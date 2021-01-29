@@ -244,10 +244,10 @@ fn work_for_constructor<'a>(
             // does it make sense to inline the decrement
             let at_least_one_aliased = (|| {
                 for (i, field_layout) in cons_layout.iter().enumerate() {
-                    if field_layout.contains_refcounted() {
-                        if field_aliases.and_then(|map| map.get(&(i as u64))).is_some() {
-                            return true;
-                        }
+                    if field_layout.contains_refcounted()
+                        && field_aliases.and_then(|map| map.get(&(i as u64))).is_some()
+                    {
+                        return true;
                     }
                 }
                 false
@@ -348,20 +348,17 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                 let mut layout = layout;
                 let mut cont = cont;
 
+                // prevent long chains of `Let`s from blowing the stack
                 let mut literal_stack = Vec::new_in(env.arena);
 
-                loop {
-                    if let Expr::Literal(_) = &expr {
-                        if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
-                            literal_stack.push((symbol, expr.clone(), layout.clone()));
+                while !matches!(&expr, Expr::AccessAtIndex { .. } ) {
+                    if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
+                        literal_stack.push((symbol, expr.clone(), layout.clone()));
 
-                            symbol = *symbol1;
-                            expr = expr1;
-                            layout = layout1;
-                            cont = cont1;
-                        } else {
-                            break;
-                        }
+                        symbol = *symbol1;
+                        expr = expr1;
+                        layout = layout1;
+                        cont = cont1;
                     } else {
                         break;
                     }
