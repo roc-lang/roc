@@ -1,7 +1,7 @@
 use super::ed_model::EdModel;
 use crate::error::EdError::{ClipboardInitFailed, ClipboardReadFailed, ClipboardWriteFailed};
 use crate::error::{print_err, EdResult};
-use clipboard::{ClipboardContext, ClipboardProvider};
+use copypasta::{ClipboardContext, ClipboardProvider};
 use std::fmt;
 
 #[derive(Debug)]
@@ -37,7 +37,7 @@ pub struct Clipboard {
 
 impl Clipboard {
     pub fn init() -> EdResult<Clipboard> {
-        let context_res = ClipboardProvider::new();
+        let context_res = ClipboardContext::new();
 
         match context_res {
             Ok(context) => Ok(Clipboard { context }),
