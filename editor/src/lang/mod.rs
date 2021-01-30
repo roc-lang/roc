@@ -1,9 +1,9 @@
 pub mod ast;
 mod def;
-mod expr;
+pub mod expr;
 mod module;
 mod pattern;
-mod pool;
+pub mod pool;
 pub mod roc_file;
-mod scope;
+pub mod scope;
 mod types;
