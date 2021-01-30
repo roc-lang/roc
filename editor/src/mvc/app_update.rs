@@ -172,6 +172,7 @@ pub mod test_app_update {
     }
 
     #[test]
+    #[ignore] // ignored because of clipboard problems on ci
     fn copy_paste() -> Result<(), String> {
         // can only init clipboard once
         let mut clipboard_opt = AppModel::init_clipboard_opt();
