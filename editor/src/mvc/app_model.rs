@@ -1,9 +1,8 @@
 use super::ed_model::EdModel;
-use crate::error::{EdResult, print_err};
-use crate::error::EdError::{ClipboardReadFailed, ClipboardWriteFailed, ClipboardInitFailed, EdModelIsNone};
+use crate::error::EdError::{ClipboardInitFailed, ClipboardReadFailed, ClipboardWriteFailed};
+use crate::error::{print_err, EdResult};
 use clipboard::{ClipboardContext, ClipboardProvider};
 use std::fmt;
-
 
 #[derive(Debug)]
 pub struct AppModel {
@@ -13,59 +12,38 @@ pub struct AppModel {
 
 impl AppModel {
     pub fn init(ed_model_opt: Option<EdModel>) -> AppModel {
-        let clipboard_res = Clipboard::init();
-
-        let clipboard_opt =
-            match clipboard_res {
-                Ok(clipboard) => Some(clipboard),
-                Err(e) => {
-                    print_err(&e);
-                    None
-                }
-
-            };
-
         AppModel {
             ed_model_opt,
-            clipboard_opt
+            clipboard_opt: AppModel::init_clipboard_opt(),
         }
     }
 
-    pub fn get_ed_model(&self) -> EdResult<&EdModel> {
-        if let Some(ref ed_model) = self.ed_model_opt {
-            Ok(ed_model)
-        } else {
-            Err(EdModelIsNone {})
-        }   
-    }
+    pub fn init_clipboard_opt() -> Option<Clipboard> {
+        let clipboard_res = Clipboard::init();
 
-    pub fn get_ed_model_mut(&mut self) -> EdResult<& mut EdModel> {
-        if let Some(ref mut ed_model) = self.ed_model_opt {
-            Ok(ed_model)
-        } else {
-            Err(EdModelIsNone {})
-        }   
+        match clipboard_res {
+            Ok(clipboard) => Some(clipboard),
+            Err(e) => {
+                print_err(&e);
+                None
+            }
+        }
     }
 }
 
 pub struct Clipboard {
-    context: ClipboardContext
+    context: ClipboardContext,
 }
 
 impl Clipboard {
-
     pub fn init() -> EdResult<Clipboard> {
         let context_res = ClipboardProvider::new();
 
         match context_res {
-            Ok(context) => Ok(
-                Clipboard {
-                    context
-                }
-            ),
+            Ok(context) => Ok(Clipboard { context }),
             Err(e) => Err(ClipboardInitFailed {
-                err_msg: e.to_string()
-            })
+                err_msg: e.to_string(),
+            }),
         }
     }
 
@@ -76,8 +54,8 @@ impl Clipboard {
         match content_res {
             Ok(content_str) => Ok(content_str),
             Err(e) => Err(ClipboardReadFailed {
-                err_msg: e.to_string()
-            })
+                err_msg: e.to_string(),
+            }),
         }
     }
 
@@ -87,16 +65,37 @@ impl Clipboard {
         match content_set_res {
             Ok(_) => Ok(()),
             Err(e) => Err(ClipboardWriteFailed {
-                err_msg: e.to_string()
-            })
+                err_msg: e.to_string(),
+            }),
         }
+    }
+}
+
+pub fn set_clipboard_txt(clipboard_opt: &mut Option<Clipboard>, txt: &str) -> EdResult<()> {
+    if let Some(ref mut clipboard) = clipboard_opt {
+        clipboard.set_content(txt.to_owned())?;
+    } else {
+        return Err(ClipboardWriteFailed {
+            err_msg: "Clipboard was never initialized succesfully.".to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+pub fn get_clipboard_txt(clipboard_opt: &mut Option<Clipboard>) -> EdResult<String> {
+    if let Some(ref mut clipboard) = clipboard_opt {
+        clipboard.get_content()
+    } else {
+        Err(ClipboardReadFailed {
+            err_msg: "Clipboard was never initialized succesfully.".to_owned(),
+        })
     }
 }
 
 impl fmt::Debug for Clipboard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // showing the clipboard would require a mut ref which is not possible
-        f.debug_struct("Clipboard (can't show)")
-         .finish()
+        f.debug_struct("Clipboard (can't show)").finish()
     }
 }

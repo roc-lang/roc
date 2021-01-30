@@ -6,7 +6,6 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::path::Path;
 
-
 #[derive(Debug)]
 pub struct EdModel {
     pub text_buf: TextBuffer,
@@ -30,13 +29,9 @@ pub fn get_selected_str(ed_model: &EdModel) -> EdResult<Option<&str>> {
     if let Some(curr_selection) = ed_model.selection_opt {
         let selected_str = ed_model.text_buf.get_selection(curr_selection)?;
 
-        Ok(
-            Some(selected_str)
-        )
+        Ok(Some(selected_str))
     } else {
-        Ok(
-            None
-        )
+        Ok(None)
     }
 }
 

@@ -1,8 +1,8 @@
 use crate::error::EdResult;
 use crate::mvc::app_model::AppModel;
-use crate::mvc::app_update::{pass_keydown_to_focused, handle_copy, handle_paste};
-use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
+use crate::mvc::app_update::{handle_copy, handle_paste, pass_keydown_to_focused};
 use winit::event::VirtualKeyCode::*;
+use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
 pub fn handle_keydown(
     elem_state: ElementState,
@@ -10,9 +10,8 @@ pub fn handle_keydown(
     modifiers: ModifiersState,
     app_model: &mut AppModel,
 ) -> EdResult<()> {
-
     if let ElementState::Released = elem_state {
-        return Ok(())
+        return Ok(());
     }
 
     match virtual_keycode {
@@ -28,17 +27,23 @@ pub fn handle_keydown(
             todo!("cut");
         }
 
-        C => if modifiers.ctrl() {
-            handle_copy(app_model)?
-        },
-        V => if modifiers.ctrl() {
-            handle_paste(app_model)?
-        },
-        X => if modifiers.ctrl() {
-            //handle_cut(app_model)?
-            todo!("cut");
-        },
-        _ => ()
+        C => {
+            if modifiers.ctrl() {
+                handle_copy(app_model)?
+            }
+        }
+        V => {
+            if modifiers.ctrl() {
+                handle_paste(app_model)?
+            }
+        }
+        X => {
+            if modifiers.ctrl() {
+                //handle_cut(app_model)?
+                todo!("cut");
+            }
+        }
+        _ => (),
     }
 
     Ok(())

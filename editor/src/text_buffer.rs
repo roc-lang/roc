@@ -25,7 +25,7 @@ impl TextBuffer {
         self.insert_str(caret_pos, &new_char.to_string())
     }
 
-    pub fn  insert_str(&mut self, caret_pos: Position, new_str: &str) -> EdResult<()> {
+    pub fn insert_str(&mut self, caret_pos: Position, new_str: &str) -> EdResult<()> {
         let char_indx = self.pos_to_char_indx(caret_pos);
 
         self.check_bounds(char_indx)?;
@@ -101,10 +101,7 @@ impl TextBuffer {
     }
 
     pub fn line_len(&self, line_nr: usize) -> Option<usize> {
-        self.line(line_nr)
-            .map(
-                |line| line.len()
-            )
+        self.line(line_nr).map(|line| line.len())
     }
 
     pub fn line_len_res(&self, line_nr: usize) -> EdResult<usize> {

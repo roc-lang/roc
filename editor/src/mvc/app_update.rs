@@ -1,10 +1,9 @@
+use super::app_model;
 use super::app_model::AppModel;
+use super::ed_model::Position;
 use super::ed_update;
-use super::ed_model::{Position};
 use crate::error::EdResult;
-use crate::error::EdError::{ClipboardWriteFailed, ClipboardReadFailed};
 use winit::event::{ModifiersState, VirtualKeyCode};
-
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
@@ -12,13 +11,7 @@ pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
             let selected_str_opt = super::ed_model::get_selected_str(ed_model)?;
 
             if let Some(selected_str) = selected_str_opt {
-                if let Some(ref mut clipboard) = app_model.clipboard_opt {
-                    clipboard.set_content(selected_str.to_owned())?;
-                } else {
-                    return Err(ClipboardWriteFailed {
-                        err_msg: "Clipboard was never initialized succesfully.".to_owned()
-                    })
-                }                
+                app_model::set_clipboard_txt(&mut app_model.clipboard_opt, selected_str)?;
             }
         }
     }
@@ -27,52 +20,55 @@ pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
 }
 
 pub fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
-
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            if let Some(ref mut clipboard) = app_model.clipboard_opt {
-                let clipboard_content = clipboard.get_content()?;
+            let clipboard_content = app_model::get_clipboard_txt(&mut app_model.clipboard_opt)?;
 
-                if !clipboard_content.is_empty() {
+            if !clipboard_content.is_empty() {
+                let mut rsplit_iter = clipboard_content.rsplit('\n');
+                // safe unwrap because we checked if empty
+                let last_line_nr_chars = rsplit_iter.next().unwrap().len();
+                let clipboard_nr_lines = rsplit_iter.count();
 
-                    let mut rsplit_iter = clipboard_content.rsplit('\n');
-                    // safe unwrap because we checked if empty
-                    let last_line_nr_chars = rsplit_iter.next().unwrap().len();
-                    let clipboard_nr_lines = rsplit_iter.count();
+                let old_caret_pos = ed_model.caret_pos;
 
-                    let old_caret_pos = ed_model.caret_pos;
+                if let Some(selection) = ed_model.selection_opt {
+                    let start_caret_pos = selection.start_pos;
+                    ed_model.text_buf.del_selection(selection)?;
+                    ed_model.selection_opt = None;
 
-                    if let Some(selection) = ed_model.selection_opt {
-                        let start_caret_pos = selection.start_pos;
-                        ed_model.text_buf.del_selection(selection)?;
-                        ed_model.selection_opt = None;
+                    ed_model
+                        .text_buf
+                        .insert_str(start_caret_pos, &clipboard_content)?;
 
-                        ed_model.text_buf.insert_str(
-                            start_caret_pos,
-                            &clipboard_content
-                        )?;
-
+                    if clipboard_nr_lines > 0 {
                         ed_model.caret_pos = Position {
                             line: start_caret_pos.line + clipboard_nr_lines,
-                            column: start_caret_pos.column + last_line_nr_chars
+                            column: last_line_nr_chars,
                         }
                     } else {
-                        ed_model.text_buf.insert_str(
-                            old_caret_pos,
-                            &clipboard_content
-                        )?;
+                        ed_model.caret_pos = Position {
+                            line: start_caret_pos.line,
+                            column: start_caret_pos.column + last_line_nr_chars,
+                        }
+                    }
+                } else {
+                    ed_model
+                        .text_buf
+                        .insert_str(old_caret_pos, &clipboard_content)?;
 
+                    if clipboard_nr_lines > 0 {
                         ed_model.caret_pos = Position {
                             line: old_caret_pos.line + clipboard_nr_lines,
-                            column: old_caret_pos.column + last_line_nr_chars
+                            column: last_line_nr_chars,
+                        }
+                    } else {
+                        ed_model.caret_pos = Position {
+                            line: old_caret_pos.line,
+                            column: old_caret_pos.column + last_line_nr_chars,
                         }
                     }
                 }
-
-            } else {
-                return Err(ClipboardReadFailed {
-                    err_msg: "Clipboard was never initialized succesfully.".to_owned()
-                })
             }
         }
     }
@@ -92,7 +88,7 @@ pub fn pass_keydown_to_focused(
     }
 }
 
-pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()>  {
+pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
             ed_update::handle_new_char(received_char, ed_model)?;
@@ -104,108 +100,107 @@ pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResu
 
 #[cfg(test)]
 pub mod test_app_update {
+    use crate::mvc::app_model;
     use crate::mvc::app_model::{AppModel, Clipboard};
     use crate::mvc::app_update::{handle_copy, handle_paste};
-    use crate::mvc::ed_update::test_ed_update::{gen_caret_text_buf};
     use crate::mvc::ed_model::{EdModel, Position, RawSelection};
-    use crate::selection::test_selection::{convert_selection_to_dsl, all_lines_vec};
+    use crate::mvc::ed_update::test_ed_update::gen_caret_text_buf;
+    use crate::selection::test_selection::{all_lines_vec, convert_selection_to_dsl};
     use crate::text_buffer::TextBuffer;
-    use crate::error::EdResult;
-    use crate::error::EdError::ClipboardInitFailed;
 
     pub fn mock_app_model(
         text_buf: TextBuffer,
         caret_pos: Position,
         selection_opt: Option<RawSelection>,
+        clipboard_opt: Option<Clipboard>,
     ) -> AppModel {
-        AppModel::init(
-            Some(
-                EdModel {
-                    text_buf,
-                    caret_pos,
-                    selection_opt,
-                    glyph_dim_rect_opt: None,
-                    has_focus: true,
-                }
-            )
-        )
-    }
-
-    fn get_clipboard(app_model: &mut AppModel) -> EdResult<&mut Clipboard> {
-        if let Some(ref mut clipboard) = app_model.clipboard_opt {
-            Ok(clipboard)
-        } else {
-            Err(ClipboardInitFailed {
-                err_msg: "Clipboard was never initialized succesfully.".to_owned()
-            })
-        }   
+        AppModel {
+            ed_model_opt: Some(EdModel {
+                text_buf,
+                caret_pos,
+                selection_opt,
+                glyph_dim_rect_opt: None,
+                has_focus: true,
+            }),
+            clipboard_opt,
+        }
     }
 
     fn assert_copy(
         pre_lines_str: &[&str],
         expected_clipboard_content: &str,
-    ) -> Result<(), String> {
+        clipboard_opt: Option<Clipboard>,
+    ) -> Result<Option<Clipboard>, String> {
         let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
 
-        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt);
+        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, clipboard_opt);
 
         handle_copy(&mut app_model)?;
 
-        let clipboard = get_clipboard(&mut app_model)?;
+        let clipboard_content = app_model::get_clipboard_txt(&mut app_model.clipboard_opt)?;
 
-        assert_eq!(
-            clipboard.get_content()?,
-            expected_clipboard_content
-        );
+        assert_eq!(clipboard_content, expected_clipboard_content);
 
-        Ok(())
+        Ok(app_model.clipboard_opt)
     }
 
     fn assert_paste(
         pre_lines_str: &[&str],
         clipboard_content: &str,
         expected_post_lines_str: &[&str],
-    ) -> Result<(), String> {
+        clipboard_opt: Option<Clipboard>,
+    ) -> Result<Option<Clipboard>, String> {
         let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
 
-        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt);
-        let clipboard = get_clipboard(&mut app_model)?;
-        clipboard.set_content(clipboard_content.to_owned())?;
+        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, clipboard_opt);
+
+        app_model::set_clipboard_txt(&mut app_model.clipboard_opt, clipboard_content)?;
 
         handle_paste(&mut app_model)?;
 
-        let ed_model = app_model.get_ed_model()?;
+        let ed_model = app_model.ed_model_opt.unwrap();
         let mut text_buf_lines = all_lines_vec(&ed_model.text_buf);
         let post_lines_str = convert_selection_to_dsl(
             ed_model.selection_opt,
             ed_model.caret_pos,
-            &mut text_buf_lines
+            &mut text_buf_lines,
         )?;
 
-        assert_eq!(
-            post_lines_str,
-            expected_post_lines_str
-        );
+        assert_eq!(post_lines_str, expected_post_lines_str);
 
-        Ok(())
+        Ok(app_model.clipboard_opt)
     }
 
     #[test]
-    fn copy() -> Result<(), String> {
-        assert_copy(&["[a]|"], "a")?;
-        assert_copy(&["|[b]"], "b")?;
-        assert_copy(&["a[ ]|"], " ")?;
-        assert_copy(&["[ ]|b"], " ")?;
-        assert_copy(&["a\n", "[b\n", "]|"], "b\n")?;
-        assert_copy(&["[a\n", " b\n", "]|"], "a\n b\n")?;
-        assert_copy(&["abc\n", "d[ef\n", "ghi]|\n", "jkl"], "ef\nghi")?;
+    fn copy_paste() -> Result<(), String> {
+        // can only init clipboard once
+        let mut clipboard_opt = AppModel::init_clipboard_opt();
 
-        Ok(())
-    }
-
-    #[test]
-    fn paste() -> Result<(), String> {
-        assert_paste(&["|"], "", &["|"])?;
+        clipboard_opt = assert_copy(&["[a]|"], "a", clipboard_opt)?;
+        clipboard_opt = assert_copy(&["|[b]"], "b", clipboard_opt)?;
+        clipboard_opt = assert_copy(&["a[ ]|"], " ", clipboard_opt)?;
+        clipboard_opt = assert_copy(&["[ ]|b"], " ", clipboard_opt)?;
+        clipboard_opt = assert_copy(&["a\n", "[b\n", "]|"], "b\n", clipboard_opt)?;
+        clipboard_opt = assert_copy(&["[a\n", " b\n", "]|"], "a\n b\n", clipboard_opt)?;
+        clipboard_opt = assert_copy(
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            "ef\nghi",
+            clipboard_opt,
+        )?;
+        clipboard_opt = assert_paste(&["|"], "", &["|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["|"], "a", &["a|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["a|"], "b", &["ab|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["|a"], "b", &["b|a"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["[a]|"], "c", &["c|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["[ab]|"], "d", &["d|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["a[b]|c"], "e", &["ae|c"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["a\n", "[b\n", "]|"], "f", &["a\n", "f|"], clipboard_opt)?;
+        assert_paste(
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            "ef\nghi",
+            &["abc\n", "def\n", "ghi|\n", "jkl"],
+            clipboard_opt,
+        )?;
 
         Ok(())
     }

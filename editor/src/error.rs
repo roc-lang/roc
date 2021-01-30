@@ -15,11 +15,11 @@ pub enum EdError {
     #[snafu(display("ClipboardWriteFailed: could not set clipboard contents: {}", err_msg))]
     ClipboardWriteFailed { err_msg: String },
 
-    #[snafu(display("ClipboardInitFailed: could not initialize ClipboardContext: {}.", err_msg))]
+    #[snafu(display(
+        "ClipboardInitFailed: could not initialize ClipboardContext: {}.",
+        err_msg
+    ))]
     ClipboardInitFailed { err_msg: String },
-
-    #[snafu(display("EdModelIsNone: editor model EdModel was never succesfully initiliazed."))]
-    EdModelIsNone { },
 
     #[snafu(display(
         "FileOpenFailed: failed to open file with path {} with the following error: {}.",
@@ -33,7 +33,7 @@ pub enum EdError {
         err_msg: String,
         backtrace: Backtrace,
     },
-    
+
     #[snafu(display("MissingGlyphDims: glyph_dim_rect_opt was None for model. It needs to be set using the example_code_glyph_rect function."))]
     MissingGlyphDims { backtrace: Backtrace },
 

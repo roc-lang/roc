@@ -1,12 +1,11 @@
-use super::app_model::AppModel;
 use super::ed_model::EdModel;
 use super::ed_model::{Position, RawSelection};
 use crate::error::EdResult;
 use crate::text_buffer::TextBuffer;
 use crate::util::is_newline;
 use std::cmp::{max, min};
-use winit::event::{ModifiersState, VirtualKeyCode};
 use winit::event::VirtualKeyCode::*;
+use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub type MoveCaretFun =
     fn(Position, Option<RawSelection>, bool, &TextBuffer) -> (Position, Option<RawSelection>);
@@ -352,7 +351,12 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
             ed_model.selection_opt = None;
         }
-        '\u{3}' | '\u{16}' | '\u{30}' | '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}' => {
+        '\u{3}'
+        | '\u{16}'
+        | '\u{30}'
+        | '\u{e000}'..='\u{f8ff}'
+        | '\u{f0000}'..='\u{ffffd}'
+        | '\u{100000}'..='\u{10fffd}' => {
             // chars that can be ignored
         }
         _ => {
@@ -385,7 +389,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 pub fn handle_key_down(
     modifiers: &ModifiersState,
     virtual_keycode: VirtualKeyCode,
-    ed_model: &mut EdModel
+    ed_model: &mut EdModel,
 ) {
     match virtual_keycode {
         Left => handle_arrow(move_caret_left, modifiers, ed_model),
@@ -398,7 +402,7 @@ pub fn handle_key_down(
 
 #[cfg(test)]
 pub mod test_ed_update {
-    use crate::mvc::app_update::test_app_update::{mock_app_model};
+    use crate::mvc::app_update::test_app_update::mock_app_model;
     use crate::mvc::ed_model::{Position, RawSelection};
     use crate::mvc::ed_update::handle_new_char;
     use crate::selection::test_selection::{
@@ -423,25 +427,21 @@ pub mod test_ed_update {
     ) -> Result<(), String> {
         let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
 
-        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt);
-        let mut ed_model = app_model.get_ed_model_mut()?;
+        let app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, None);
+        let mut ed_model = app_model.ed_model_opt.unwrap();
 
-        if let Err(e) = handle_new_char(&new_char, ed_model) {
+        if let Err(e) = handle_new_char(&new_char, &mut ed_model) {
             return Err(e.to_string());
         }
 
-        if let Some(ed_model) = app_model.ed_model_opt {
-            let mut actual_lines = all_lines_vec(&ed_model.text_buf);
-            let dsl_slice = convert_selection_to_dsl(
-                ed_model.selection_opt,
-                ed_model.caret_pos,
-                &mut actual_lines,
-            )
-            .unwrap();
-            assert_eq!(dsl_slice, expected_post_lines_str);
-        } else {
-            panic!("Mock AppModel did not have an EdModel.");
-        }
+        let mut actual_lines = all_lines_vec(&ed_model.text_buf);
+        let dsl_slice = convert_selection_to_dsl(
+            ed_model.selection_opt,
+            ed_model.caret_pos,
+            &mut actual_lines,
+        )
+        .unwrap();
+        assert_eq!(dsl_slice, expected_post_lines_str);
 
         Ok(())
     }
