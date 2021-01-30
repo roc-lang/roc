@@ -849,11 +849,12 @@ define_builtins! {
         2 STR_IS_EMPTY: "isEmpty"
         3 STR_APPEND: "append"
         4 STR_CONCAT: "concat"
-        5 STR_SPLIT: "split"
-        6 STR_COUNT_GRAPHEMES: "countGraphemes"
-        7 STR_STARTS_WITH: "startsWith"
-        8 STR_ENDS_WITH: "endsWith"
-        9 STR_FROM_INT: "fromInt"
+        5 STR_JOIN_WITH: "joinWith"
+        6 STR_SPLIT: "split"
+        7 STR_COUNT_GRAPHEMES: "countGraphemes"
+        8 STR_STARTS_WITH: "startsWith"
+        9 STR_ENDS_WITH: "endsWith"
+        10 STR_FROM_INT: "fromInt"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

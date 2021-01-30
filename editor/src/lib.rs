@@ -26,12 +26,17 @@ use crate::graphics::style::CODE_TXT_XY;
 use crate::mvc::app_model::AppModel;
 use crate::mvc::ed_model::EdModel;
 use crate::mvc::{ed_model, ed_view, update};
-use crate::resources::strings::NOTHING_OPENED;
+// use crate::resources::strings::NOTHING_OPENED;
 use crate::vec_result::get_res;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use ed_model::Position;
+use lang::{ast::Expr2, pool::Pool, scope::Scope};
 use pipelines::RectResources;
+use roc_collections::all::MutMap;
+use roc_module::symbol::{IdentIds, ModuleIds};
+use roc_region::all::Region;
+use roc_types::subs::VarStore;
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -265,7 +270,35 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &mut glyph_brush,
                     );
                 } else {
-                    queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
+                    // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
+
+                    let mut pool = Pool::with_capacity(12);
+                    let mut var_store = VarStore::default();
+                    let dep_idents = MutMap::default();
+                    let mut module_ids = ModuleIds::default();
+                    let exposed_ident_ids = IdentIds::default();
+
+                    let home = module_ids.get_or_insert(&"Home".into());
+
+                    let mut env = crate::lang::expr::Env::new(
+                        home,
+                        &arena,
+                        &mut pool,
+                        &mut var_store,
+                        dep_idents,
+                        &module_ids,
+                        exposed_ident_ids,
+                    );
+
+                    let mut scope = Scope::new(home, env.pool, env.var_store);
+
+                    let region = Region::new(0, 0, 0, 0);
+
+                    let (ast, _) =
+                        crate::lang::expr::str_to_expr2(&arena, "1", &mut env, &mut scope, region)
+                            .unwrap();
+
+                    render_node(&size, &ast, CODE_TXT_XY.into(), &mut glyph_brush);
                 }
 
                 match draw_all_rects(
@@ -364,6 +397,39 @@ fn begin_render_pass<'a>(
     })
 }
 
+fn render_node(
+    size: &PhysicalSize<u32>,
+    ast: &Expr2,
+    position: Vector2<f32>,
+    glyph_brush: &mut GlyphBrush<()>,
+) {
+    use Expr2::*;
+
+    let area_bounds = (size.width as f32, size.height as f32).into();
+
+    match ast {
+        SmallInt {
+            number,
+            ..
+            // text,
+            // style, pretending always decimal for now
+            // var,
+        } => {
+            let code_text = Text {
+                position,
+                area_bounds,
+                color: CODE_COLOR.into(),
+                text: format!("{:?}", number),
+                size: CODE_FONT_SIZE,
+                ..Default::default()
+            };
+
+            queue_code_text_draw(&code_text, glyph_brush);
+        }
+        rest => panic!("implement {:?} render", rest)
+    };
+}
+
 // returns bounding boxes for every glyph
 fn queue_editor_text(
     size: &PhysicalSize<u32>,
@@ -397,7 +463,7 @@ fn queue_editor_text(
     queue_code_text_draw(&code_text, glyph_brush);
 }
 
-fn queue_no_file_text(
+fn _queue_no_file_text(
     size: &PhysicalSize<u32>,
     text: &str,
     text_coords: Vector2<f32>,

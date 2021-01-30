@@ -32,6 +32,7 @@ fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
     TextBuffer {
         text_rope: Rope::from_str(lines_str),
         path_str: "".to_owned(),
+        mem_arena: Bump::new(),
     }
 }
 
@@ -45,6 +46,17 @@ pub fn char_insert_bench(c: &mut Criterion) {
     c.bench_function("single char insert, small buffer", |b| {
         b.iter(|| handle_new_char(&mut app_model, &'a'))
     });
+}
+
+fn bench_resource_path(nr_lines: usize) -> String {
+    let resource_path_res = std::env::var("BENCH_RESOURCE_PATH");
+    let resource_path_str = if let Ok(resource_path) = resource_path_res {
+        resource_path
+    } else {
+        "benches/resources/".to_owned()
+    };
+
+    format!("{}{}_lines.roc", resource_path_str, nr_lines)
 }
 
 pub fn char_pop_bench(c: &mut Criterion) {
@@ -111,7 +123,12 @@ fn get_line_helper(nr_lines: usize, c: &mut Criterion) {
 
     c.bench_function(
         &format!("get random line from {:?}-line textbuffer", nr_lines),
-        |b| b.iter(|| text_buf.line(rand_gen.gen_range(0..nr_lines)).unwrap()),
+        |b| {
+            b.iter(|| {
+                let rand_indx = rand_gen.gen_range(0..nr_lines);
+                text_buf.line(rand_indx).unwrap()
+            })
+        },
     );
 }
 
@@ -180,7 +197,7 @@ fn gen_rand_selection(rand_gen: &mut StdRng, text_buf: &TextBuffer) -> RawSelect
 }
 
 fn buf_from_dummy_file(nr_lines: usize) -> TextBuffer {
-    let path_str = format!("benches/resources/{}_lines.roc", nr_lines);
+    let path_str = bench_resource_path(nr_lines);
 
     text_buffer::from_path(Path::new(&path_str)).expect("Failed to read file at given path.")
 }
