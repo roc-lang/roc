@@ -25,7 +25,7 @@ use crate::graphics::style::CODE_FONT_SIZE;
 use crate::graphics::style::CODE_TXT_XY;
 use crate::mvc::app_model::AppModel;
 use crate::mvc::ed_model::EdModel;
-use crate::mvc::{ed_model, ed_view, app_update};
+use crate::mvc::{app_update, ed_model, ed_view};
 //use crate::resources::strings::NOTHING_OPENED;
 use crate::vec_result::get_res;
 use bumpalo::Bump;
