@@ -1936,6 +1936,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn rosetree_basic() {
         assert_non_opt_evals_to!(
             indoc!(

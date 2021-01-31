@@ -157,6 +157,36 @@ impl<'a> Proc<'a> {
             crate::inc_dec::visit_proc(arena, borrow_params, proc);
         }
     }
+
+    pub fn optimize_refcount_operations<'i>(
+        arena: &'a Bump,
+        home: ModuleId,
+        ident_ids: &'i mut IdentIds,
+        procs: &mut MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    ) {
+        use crate::expand_rc;
+
+        let deferred = expand_rc::Deferred {
+            inc_dec_map: Default::default(),
+            assignments: Vec::new_in(arena),
+            decrefs: Vec::new_in(arena),
+        };
+
+        let mut env = expand_rc::Env {
+            home,
+            arena,
+            ident_ids,
+            layout_map: Default::default(),
+            alias_map: Default::default(),
+            constructor_map: Default::default(),
+            deferred,
+        };
+
+        for (_, proc) in procs.iter_mut() {
+            let b = expand_rc::expand_and_cancel(&mut env, arena.alloc(proc.body.clone()));
+            proc.body = b.clone();
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -729,8 +759,8 @@ pub fn cond<'a>(
     fail: Stmt<'a>,
     ret_layout: Layout<'a>,
 ) -> Stmt<'a> {
-    let branches = env.arena.alloc([(1u64, pass)]);
-    let default_branch = env.arena.alloc(fail);
+    let branches = env.arena.alloc([(1u64, BranchInfo::None, pass)]);
+    let default_branch = (BranchInfo::None, &*env.arena.alloc(fail));
 
     Stmt::Switch {
         cond_symbol,
@@ -758,16 +788,15 @@ pub enum Stmt<'a> {
         cond_layout: Layout<'a>,
         /// The u64 in the tuple will be compared directly to the condition Expr.
         /// If they are equal, this branch will be taken.
-        branches: &'a [(u64, Stmt<'a>)],
+        branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
         /// If no other branches pass, this default branch will be taken.
-        default_branch: &'a Stmt<'a>,
+        default_branch: (BranchInfo<'a>, &'a Stmt<'a>),
         /// Each branch must return a value of this type.
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
     Rethrow,
-    Inc(Symbol, u64, &'a Stmt<'a>),
-    Dec(Symbol, &'a Stmt<'a>),
+    Refcounting(ModifyRc, &'a Stmt<'a>),
     Join {
         id: JoinPointId,
         parameters: &'a [Param<'a>],
@@ -778,6 +807,91 @@ pub enum Stmt<'a> {
     },
     Jump(JoinPointId, &'a [Symbol]),
     RuntimeError(&'a str),
+}
+
+/// in the block below, symbol `scrutinee` is assumed be be of shape `tag_id`
+#[derive(Clone, Debug, PartialEq)]
+pub enum BranchInfo<'a> {
+    None,
+    Constructor {
+        scrutinee: Symbol,
+        layout: Layout<'a>,
+        tag_id: u8,
+    },
+}
+
+impl<'a> BranchInfo<'a> {
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use BranchInfo::*;
+
+        match self {
+            Constructor {
+                tag_id,
+                scrutinee,
+                layout: _,
+            } if PRETTY_PRINT_IR_SYMBOLS => alloc
+                .hardline()
+                .append("    BranchInfo: { scrutinee: ")
+                .append(symbol_to_doc(alloc, *scrutinee))
+                .append(", tag_id: ")
+                .append(format!("{}", tag_id))
+                .append("} "),
+            _ => alloc.text(""),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ModifyRc {
+    Inc(Symbol, u64),
+    Dec(Symbol),
+    DecRef(Symbol),
+}
+
+impl ModifyRc {
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use ModifyRc::*;
+
+        match self {
+            Inc(symbol, 1) => alloc
+                .text("inc ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";"),
+            Inc(symbol, n) => alloc
+                .text("inc ")
+                .append(alloc.text(format!("{}", n)))
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";"),
+            Dec(symbol) => alloc
+                .text("dec ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";"),
+            DecRef(symbol) => alloc
+                .text("decref ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";"),
+        }
+    }
+
+    pub fn get_symbol(&self) -> Symbol {
+        use ModifyRc::*;
+
+        match self {
+            Inc(symbol, _) => *symbol,
+            Dec(symbol) => *symbol,
+            DecRef(symbol) => *symbol,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1133,10 +1247,15 @@ impl<'a> Stmt<'a> {
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol))
                 //.append(" : ")
-                //.append(alloc.text(format!("{:?}", layout)))
+                //.append(alloc.text(format!("{:?}", _layout)))
                 .append(" = ")
                 .append(expr.to_doc(alloc))
                 .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
+
+            Refcounting(modify, cont) => modify
+                .to_doc(alloc)
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
@@ -1186,16 +1305,18 @@ impl<'a> Stmt<'a> {
                 ..
             } => {
                 match branches {
-                    [(1, pass)] => {
-                        let fail = default_branch;
+                    [(1, info, pass)] => {
+                        let fail = default_branch.1;
                         alloc
                             .text("if ")
                             .append(symbol_to_doc(alloc, *cond_symbol))
                             .append(" then")
+                            .append(info.to_doc(alloc))
                             .append(alloc.hardline())
                             .append(pass.to_doc(alloc).indent(4))
                             .append(alloc.hardline())
                             .append(alloc.text("else"))
+                            .append(default_branch.0.to_doc(alloc))
                             .append(alloc.hardline())
                             .append(fail.to_doc(alloc).indent(4))
                     }
@@ -1204,12 +1325,12 @@ impl<'a> Stmt<'a> {
                         let default_doc = alloc
                             .text("default:")
                             .append(alloc.hardline())
-                            .append(default_branch.to_doc(alloc).indent(4))
+                            .append(default_branch.1.to_doc(alloc).indent(4))
                             .indent(4);
 
                         let branches_docs = branches
                             .iter()
-                            .map(|(tag, expr)| {
+                            .map(|(tag, _info, expr)| {
                                 alloc
                                     .text(format!("case {}:", tag))
                                     .append(alloc.hardline())
@@ -1267,25 +1388,6 @@ impl<'a> Stmt<'a> {
                     .append(alloc.intersperse(it, alloc.space()))
                     .append(";")
             }
-            Inc(symbol, 1, cont) => alloc
-                .text("inc ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(";")
-                .append(alloc.hardline())
-                .append(cont.to_doc(alloc)),
-            Inc(symbol, n, cont) => alloc
-                .text("inc ")
-                .append(alloc.text(format!("{}", n)))
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(";")
-                .append(alloc.hardline())
-                .append(cont.to_doc(alloc)),
-            Dec(symbol, cont) => alloc
-                .text("dec ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(";")
-                .append(alloc.hardline())
-                .append(cont.to_doc(alloc)),
         }
     }
 
@@ -4657,17 +4759,17 @@ fn substitute_in_stmt_help<'a>(
             default_branch,
             ret_layout,
         } => {
-            let opt_default = substitute_in_stmt_help(arena, default_branch, subs);
+            let opt_default = substitute_in_stmt_help(arena, default_branch.1, subs);
 
             let mut did_change = false;
 
             let opt_branches = Vec::from_iter_in(
-                branches.iter().map(|(label, branch)| {
+                branches.iter().map(|(label, info, branch)| {
                     match substitute_in_stmt_help(arena, branch, subs) {
                         None => None,
                         Some(branch) => {
                             did_change = true;
-                            Some((*label, branch.clone()))
+                            Some((*label, info.clone(), branch.clone()))
                         }
                     }
                 }),
@@ -4675,7 +4777,10 @@ fn substitute_in_stmt_help<'a>(
             );
 
             if opt_default.is_some() || did_change {
-                let default_branch = opt_default.unwrap_or(default_branch);
+                let default_branch = (
+                    default_branch.0.clone(),
+                    opt_default.unwrap_or(default_branch.1),
+                );
 
                 let branches = if did_change {
                     let new = Vec::from_iter_in(
@@ -4708,14 +4813,13 @@ fn substitute_in_stmt_help<'a>(
             Some(s) => Some(arena.alloc(Ret(s))),
             None => None,
         },
-        Inc(symbol, inc, cont) => match substitute_in_stmt_help(arena, cont, subs) {
-            Some(cont) => Some(arena.alloc(Inc(*symbol, *inc, cont))),
-            None => None,
-        },
-        Dec(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
-            Some(cont) => Some(arena.alloc(Dec(*symbol, cont))),
-            None => None,
-        },
+        Refcounting(modify, cont) => {
+            // TODO should we substitute in the ModifyRc?
+            match substitute_in_stmt_help(arena, cont, subs) {
+                Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
+                None => None,
+            }
+        }
 
         Jump(id, args) => {
             let mut did_change = false;

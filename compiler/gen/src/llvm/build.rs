@@ -43,7 +43,7 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{CallType, JoinPointId, Wrapped};
+use roc_mono::ir::{BranchInfo, CallType, JoinPointId, ModifyRc, Wrapped};
 use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode, UnionLayout};
 use target_lexicon::CallingConvention;
 
@@ -2056,7 +2056,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 cond_layout: cond_layout.clone(),
                 cond_symbol: *cond_symbol,
                 branches,
-                default_branch,
+                default_branch: default_branch.1,
                 ret_type,
             };
 
@@ -2129,24 +2129,65 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // This doesn't currently do anything
             context.i64_type().const_zero().into()
         }
-        Inc(symbol, inc_amount, cont) => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
-            let layout = layout.clone();
 
-            if layout.contains_refcounted() {
-                increment_refcount_layout(env, parent, layout_ids, *inc_amount, value, &layout);
-            }
-
+        /*
+        Inc(symbol1, 1, Dec(symbol2, cont)) if symbol1 == symbol2 => {
+            dbg!(symbol1);
             build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
-        Dec(symbol, cont) => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
+        */
+        Refcounting(modify, cont) => {
+            use ModifyRc::*;
 
-            if layout.contains_refcounted() {
-                decrement_refcount_layout(env, parent, layout_ids, value, layout);
+            match modify {
+                Inc(symbol, inc_amount) => {
+                    match cont {
+                        Refcounting(ModifyRc::Dec(symbol1), contcont)
+                            if *inc_amount == 1 && symbol == symbol1 =>
+                        {
+                            // the inc and dec cancel out
+                            build_exp_stmt(env, layout_ids, scope, parent, contcont)
+                        }
+                        _ => {
+                            let (value, layout) = load_symbol_and_layout(scope, symbol);
+                            let layout = layout.clone();
+
+                            if layout.contains_refcounted() {
+                                increment_refcount_layout(
+                                    env,
+                                    parent,
+                                    layout_ids,
+                                    *inc_amount,
+                                    value,
+                                    &layout,
+                                );
+                            }
+
+                            build_exp_stmt(env, layout_ids, scope, parent, cont)
+                        }
+                    }
+                }
+                Dec(symbol) => {
+                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+                    if layout.contains_refcounted() {
+                        decrement_refcount_layout(env, parent, layout_ids, value, layout);
+                    }
+
+                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                }
+                DecRef(symbol) => {
+                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+                    if layout.is_refcounted() {
+                        let value_ptr = value.into_pointer_value();
+                        let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                        refcount_ptr.decrement(env, layout);
+                    }
+
+                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                }
             }
-
-            build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
 
         RuntimeError(error_msg) => {
@@ -2315,7 +2356,7 @@ fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
 struct SwitchArgsIr<'a, 'ctx> {
     pub cond_symbol: Symbol,
     pub cond_layout: Layout<'a>,
-    pub branches: &'a [(u64, roc_mono::ir::Stmt<'a>)],
+    pub branches: &'a [(u64, BranchInfo<'a>, roc_mono::ir::Stmt<'a>)],
     pub default_branch: &'a roc_mono::ir::Stmt<'a>,
     pub ret_type: BasicTypeEnum<'ctx>,
 }
@@ -2444,7 +2485,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
     if let Layout::Builtin(Builtin::Int1) = cond_layout {
         match (branches, default_branch) {
-            ([(0, false_branch)], true_branch) | ([(1, true_branch)], false_branch) => {
+            ([(0, _, false_branch)], true_branch) | ([(1, _, true_branch)], false_branch) => {
                 let then_block = context.append_basic_block(parent, "then_block");
                 let else_block = context.append_basic_block(parent, "else_block");
 
@@ -2482,7 +2523,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         let default_block = context.append_basic_block(parent, "default");
         let mut cases = Vec::with_capacity_in(branches.len(), arena);
 
-        for (int, _) in branches.iter() {
+        for (int, _, _) in branches.iter() {
             // Switch constants must all be same type as switch value!
             // e.g. this is incorrect, and will trigger a LLVM warning:
             //
@@ -2512,7 +2553,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
         builder.build_switch(cond, default_block, &cases);
 
-        for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
+        for ((_, _, branch_expr), (_, block)) in branches.iter().zip(cases) {
             builder.position_at_end(block);
 
             let branch_val = build_exp_stmt(env, layout_ids, scope, parent, branch_expr);

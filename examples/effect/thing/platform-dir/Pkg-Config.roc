@@ -4,7 +4,7 @@ platform folkertdev/foo
     packages {}
     imports [Task]
     provides [ mainForHost ]
-    effects Effect
+    effects fx.Effect
         {
             putChar : I64 -> Effect {},
             putLine : Str -> Effect {},

@@ -1,48 +1,52 @@
-use crate::mvc::ed_model::EdModel;
-use crate::mvc::update::{
-    move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
-};
+use crate::error::EdResult;
+use crate::mvc::app_model::AppModel;
+use crate::mvc::app_update::{handle_copy, handle_paste, pass_keydown_to_focused};
+use winit::event::VirtualKeyCode::*;
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
 pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
     modifiers: ModifiersState,
-    ed_model: &mut EdModel,
-) {
-    use winit::event::VirtualKeyCode::*;
-
+    app_model: &mut AppModel,
+) -> EdResult<()> {
     if let ElementState::Released = elem_state {
-        return;
+        return Ok(());
     }
 
     match virtual_keycode {
-        Left => handle_arrow(move_caret_left, &modifiers, ed_model),
-        Up => handle_arrow(move_caret_up, &modifiers, ed_model),
-        Right => handle_arrow(move_caret_right, &modifiers, ed_model),
-        Down => handle_arrow(move_caret_down, &modifiers, ed_model),
-        Copy => {
-            todo!("copy");
-        }
-        Paste => {
-            todo!("paste");
-        }
+        Left => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model),
+        Up => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model),
+        Right => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model),
+        Down => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model),
+
+        Copy => handle_copy(app_model)?,
+        Paste => handle_paste(app_model)?,
         Cut => {
+            //handle_cut(app_model)?
             todo!("cut");
         }
-        _ => {}
-    }
-}
 
-fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) {
-    let (new_caret_pos, new_selection_opt) = move_caret_fun(
-        ed_model.caret_pos,
-        ed_model.selection_opt,
-        modifiers.shift(),
-        &ed_model.text_buf,
-    );
-    ed_model.caret_pos = new_caret_pos;
-    ed_model.selection_opt = new_selection_opt;
+        C => {
+            if modifiers.ctrl() {
+                handle_copy(app_model)?
+            }
+        }
+        V => {
+            if modifiers.ctrl() {
+                handle_paste(app_model)?
+            }
+        }
+        X => {
+            if modifiers.ctrl() {
+                //handle_cut(app_model)?
+                todo!("cut");
+            }
+        }
+        _ => (),
+    }
+
+    Ok(())
 }
 
 // pub fn handle_text_input(

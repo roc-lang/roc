@@ -4,7 +4,7 @@ platform examples/quicksort
     packages {}
     imports []
     provides [ mainForHost ]
-    effects Effect {}
+    effects fx.Effect {}
 
 mainForHost : List I64 -> List I64 
 mainForHost = \list -> quicksort list

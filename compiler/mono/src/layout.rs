@@ -647,8 +647,9 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => true,
                 }
             }
+            RecursivePointer => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
-            FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
+            FunctionPointer(_, _) | Pointer(_) => false,
         }
     }
 }

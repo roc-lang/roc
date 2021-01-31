@@ -395,21 +395,19 @@ where
                 ..
             } => {
                 self.set_last_seen(*cond_symbol, stmt);
-                for (_, branch) in *branches {
+                for (_, _, branch) in *branches {
                     self.scan_ast(branch);
                 }
-                self.scan_ast(default_branch);
+                self.scan_ast(default_branch.1);
             }
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
             Stmt::Rethrow => {}
-            Stmt::Inc(sym, _inc, following) => {
-                self.set_last_seen(*sym, stmt);
-                self.scan_ast(following);
-            }
-            Stmt::Dec(sym, following) => {
-                self.set_last_seen(*sym, stmt);
+            Stmt::Refcounting(modify, following) => {
+                let sym = modify.get_symbol();
+
+                self.set_last_seen(sym, stmt);
                 self.scan_ast(following);
             }
             Stmt::Join {
