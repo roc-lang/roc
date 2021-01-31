@@ -112,7 +112,6 @@ impl<'a> Dependencies<'a> {
     pub fn add_module(
         &mut self,
         module_id: ModuleId,
-        opt_effect_module: Option<ModuleId>,
         dependencies: &MutSet<PackageQualified<'a, ModuleId>>,
         goal_phase: Phase,
     ) -> MutSet<(ModuleId, Phase)> {
@@ -209,12 +208,19 @@ impl<'a> Dependencies<'a> {
 
     /// Propagate a notification, return (module, phase) pairs that can make progress
     pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
-        self.status
-            .insert(Job::Step(module_id, phase), Status::Done);
+        self.notify_help(Job::Step(module_id, phase))
+    }
+
+    /// Propagate a notification, return (module, phase) pairs that can make progress
+    pub fn notify_package(&mut self, shorthand: &'a str) -> MutSet<(ModuleId, Phase)> {
+        self.notify_help(Job::ResolveShorthand(shorthand))
+    }
+
+    fn notify_help(&mut self, key: Job<'a>) -> MutSet<(ModuleId, Phase)> {
+        self.status.insert(key.clone(), Status::Done);
 
         let mut output = MutSet::default();
 
-        let key = Job::Step(module_id, phase);
         if let Some(to_notify) = self.notifies.get(&key) {
             for notify_key in to_notify {
                 let mut is_empty = false;
@@ -627,8 +633,8 @@ enum HeaderFor<'a> {
         to_platform: To<'a>,
     },
     PkgConfig {
-        effect_shorthand: &'a str,
-        effects: roc_parse::header::Effects<'a>,
+        /// usually `base`
+        config_shorthand: &'a str,
     },
     Interface,
 }
@@ -767,7 +773,6 @@ struct State<'a> {
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: Option<To<'a>>,
-    pub opt_effect_module: Option<ModuleId>,
 
     pub headers_parsed: MutSet<ModuleId>,
 
@@ -1357,7 +1362,6 @@ where
                 stdlib,
                 output_path: None,
                 platform_path: None,
-                opt_effect_module: None,
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
@@ -1501,6 +1505,8 @@ fn update<'a>(
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
 
+            let mut work = MutSet::default();
+
             {
                 let mut shorthands = (*state.arc_shorthands).lock();
 
@@ -1509,15 +1515,10 @@ fn update<'a>(
                 }
 
                 if let PkgConfig {
-                    effect_shorthand,
-                    ref effects,
-                    ..
+                    config_shorthand, ..
                 } = header_extra
                 {
-                    shorthands.insert(
-                        effect_shorthand,
-                        PackageOrPath::PlatformEffectModule(effects.clone()),
-                    );
+                    work.extend(state.dependencies.notify_package(config_shorthand));
                 }
             }
 
@@ -1557,12 +1558,11 @@ fn update<'a>(
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
 
-            let work = state.dependencies.add_module(
+            work.extend(state.dependencies.add_module(
                 header.module_id,
-                state.opt_effect_module,
                 &header.package_qualified_imported_modules,
                 state.goal_phase,
-            );
+            ));
 
             state.module_cache.headers.insert(header.module_id, header);
 
@@ -1585,7 +1585,7 @@ fn update<'a>(
             //
             // e.g. for `app "blah"` we should generate an output file named "blah"
             match &parsed.module_name {
-                ModuleNameEnum::PkgConfig(_) => {}
+                ModuleNameEnum::PkgConfig => {}
                 ModuleNameEnum::App(output_str) => match output_str {
                     StrLiteral::PlainLine(path) => {
                         state.output_path = Some(path);
@@ -1646,11 +1646,9 @@ fn update<'a>(
             constrained_module,
             canonicalization_problems,
             module_docs,
-            type_shortname: _,
+            type_shortname,
         } => {
             let module_id = constrained_module.module.module_id;
-
-            state.opt_effect_module = Some(module_id);
 
             log!("made effect module for {:?}", module_id);
             state
@@ -1678,6 +1676,8 @@ fn update<'a>(
                 &MutSet::default(),
                 state.goal_phase,
             );
+
+            work.extend(state.dependencies.notify_package(type_shortname));
 
             work.extend(state.dependencies.notify(module_id, Phase::LoadHeader));
 
@@ -2120,7 +2120,7 @@ fn load_pkg_config<'a>(
 
                     let effects_module_msg = fabricate_effects_module(
                         arena,
-                        shorthand,
+                        header.effects.type_shortname, //shorthand,
                         module_ids,
                         ident_ids_by_module,
                         mode,
@@ -2179,25 +2179,6 @@ fn load_module<'a>(
                     unreachable!("invalid structure for path")
                 }
                 Some(PackageOrPath::Package(_name, _version)) => todo!("packages"),
-                Some(PackageOrPath::PlatformEffectModule(effects)) => {
-                    let module_start_time = SystemTime::now();
-                    let mut effect_module_timing = ModuleTiming::new(module_start_time);
-
-                    effect_module_timing.read_roc_file = Duration::default();
-                    effect_module_timing.parse_header = Duration::default();
-
-                    let result = fabricate_effects_module(
-                        arena,
-                        shorthand,
-                        module_ids,
-                        ident_ids_by_module,
-                        mode,
-                        effects,
-                        effect_module_timing,
-                    );
-
-                    return result;
-                }
                 None => unreachable!("there is no shorthand named {:?}", shorthand),
             }
 
@@ -2373,9 +2354,6 @@ fn parse_header<'a>(
                     }
                 }
                 To::NewPackage(package_or_path) => match package_or_path {
-                    PackageOrPath::PlatformEffectModule { .. } => {
-                        panic!("cannot provide to the platform effect module")
-                    }
                     PackageOrPath::Package(_, _) => panic!("TODO implement packages"),
                     PackageOrPath::Path(StrLiteral::PlainLine(_package)) => {
                         Ok((module_id, app_module_header_msg))
@@ -2469,7 +2447,7 @@ enum ModuleNameEnum<'a> {
     /// A filename
     App(StrLiteral<'a>),
     Interface(roc_parse::header::ModuleName<'a>),
-    PkgConfig(&'a str),
+    PkgConfig,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2489,7 +2467,7 @@ fn send_header<'a>(
     use ModuleNameEnum::*;
 
     let declared_name: ModuleName = match &loc_name.value {
-        PkgConfig(_) => unreachable!(),
+        PkgConfig => unreachable!(),
         App(_) => ModuleName::APP.into(),
         Interface(module_name) => {
             // TODO check to see if module_name is consistent with filename.
@@ -2854,12 +2832,10 @@ fn send_header_two<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-    let module_name = ModuleNameEnum::PkgConfig(shorthand);
+    let module_name = ModuleNameEnum::PkgConfig;
 
-    let effect_shorthand = effects.type_shortname;
     let extra = HeaderFor::PkgConfig {
-        effect_shorthand,
-        effects,
+        config_shorthand: shorthand,
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
@@ -3345,7 +3321,7 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match module_name {
-        ModuleNameEnum::PkgConfig(_) => None,
+        ModuleNameEnum::PkgConfig => None,
         ModuleNameEnum::App(_) => None,
         ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
             name.as_str().into(),

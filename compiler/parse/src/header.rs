@@ -35,7 +35,6 @@ pub enum VersionComparison {
 pub enum PackageOrPath<'a> {
     Package(PackageName<'a>, Version<'a>),
     Path(StrLiteral<'a>),
-    PlatformEffectModule(Effects<'a>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
