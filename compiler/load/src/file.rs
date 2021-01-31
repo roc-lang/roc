@@ -118,8 +118,18 @@ impl<'a> Dependencies<'a> {
     ) -> MutSet<(ModuleId, Phase)> {
         use Phase::*;
 
+        let mut output = MutSet::default();
+
         for dep in dependencies.iter() {
+            let has_package_dependency = self.add_package_dependency(dep, Phase::LoadHeader);
+
             let dep = *dep.as_inner();
+
+            if !has_package_dependency {
+                // loading can start immediately on this dependency
+                output.insert((dep, Phase::LoadHeader));
+            }
+
             // to parse and generate constraints, the headers of all dependencies must be loaded!
             // otherwise, we don't know whether an imported symbol is actually exposed
             self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
@@ -150,18 +160,6 @@ impl<'a> Dependencies<'a> {
         }
 
         self.add_to_status(module_id, goal_phase);
-
-        let mut output = MutSet::default();
-
-        // all the dependencies can be loaded
-        for dep in dependencies.iter() {
-            let dep = *dep.as_inner();
-            // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
-
-            if Some(dep) != opt_effect_module {
-                output.insert((dep, LoadHeader));
-            }
-        }
 
         output
     }
@@ -238,6 +236,48 @@ impl<'a> Dependencies<'a> {
         self.notifies.remove(&key);
 
         output
+    }
+
+    fn add_package_dependency(
+        &mut self,
+        module: &PackageQualified<'a, ModuleId>,
+        next_phase: Phase,
+    ) -> bool {
+        match module {
+            PackageQualified::Unqualified(_) => {
+                // no dependency, we can just start loading the file
+                false
+            }
+            PackageQualified::Qualified(shorthand, module_id) => {
+                let job = Job::ResolveShorthand(shorthand);
+                let next_step = Job::Step(*module_id, next_phase);
+                match self.status.get(&job) {
+                    None | Some(Status::NotStarted) | Some(Status::Pending) => {
+                        // this shorthand is not resolved, add a dependency
+                        {
+                            let entry = self
+                                .waiting_for
+                                .entry(next_step.clone())
+                                .or_insert_with(Default::default);
+
+                            entry.insert(job.clone());
+                        }
+
+                        {
+                            let entry = self.notifies.entry(job).or_insert_with(Default::default);
+
+                            entry.insert(next_step);
+                        }
+
+                        true
+                    }
+                    Some(Status::Done) => {
+                        // shorthand is resolved; no dependency
+                        false
+                    }
+                }
+            }
+        }
     }
 
     /// A waits for B, and B will notify A when it completes the phase
