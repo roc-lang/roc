@@ -96,7 +96,7 @@ mod cli_run {
             "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
-            true,
+            false,
         );
     }
 
@@ -108,7 +108,7 @@ mod cli_run {
             "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
-            true,
+            false,
         );
     }
 
@@ -272,7 +272,7 @@ mod cli_run {
             "multi-dep-str",
             &[],
             "I am Dep2.str2\n",
-            true,
+            false,
         );
     }
 
@@ -284,7 +284,7 @@ mod cli_run {
             "multi-dep-str",
             &["--optimize"],
             "I am Dep2.str2\n",
-            true,
+            false,
         );
     }
 
@@ -296,7 +296,7 @@ mod cli_run {
             "multi-dep-thunk",
             &[],
             "I am Dep2.value2\n",
-            true,
+            false,
         );
     }
 
@@ -308,7 +308,7 @@ mod cli_run {
             "multi-dep-thunk",
             &["--optimize"],
             "I am Dep2.value2\n",
-            true,
+            false,
         );
     }
 }
