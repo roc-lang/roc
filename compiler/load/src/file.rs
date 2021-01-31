@@ -94,19 +94,19 @@ enum Status {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum Job {
+enum Job<'a> {
     Step(ModuleId, Phase),
-    // ResolveShorthand(&'a str),
+    ResolveShorthand(&'a str),
 }
 
 #[derive(Default, Debug)]
-struct Dependencies {
-    waiting_for: MutMap<Job, MutSet<Job>>,
-    notifies: MutMap<Job, MutSet<Job>>,
-    status: MutMap<Job, Status>,
+struct Dependencies<'a> {
+    waiting_for: MutMap<Job<'a>, MutSet<Job<'a>>>,
+    notifies: MutMap<Job<'a>, MutSet<Job<'a>>>,
+    status: MutMap<Job<'a>, Status>,
 }
 
-impl Dependencies {
+impl<'a> Dependencies<'a> {
     /// Add all the dependencies for a module, return (module, phase) pairs that can make progress
     pub fn add_module(
         &mut self,
@@ -728,7 +728,7 @@ struct State<'a> {
     pub headers_parsed: MutSet<ModuleId>,
 
     pub module_cache: ModuleCache<'a>,
-    pub dependencies: Dependencies,
+    pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
