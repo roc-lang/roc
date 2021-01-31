@@ -2158,4 +2158,61 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn switch_fuse_rc_non_exhaustive() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Foo : [ A I64 Foo, B I64 Foo, C I64 Foo, Empty ]
+
+                sum : Foo, I64 -> I64
+                sum = \foo, accum ->
+                    when foo is
+                        A x resta -> sum resta (x + accum)
+                        B x restb -> sum restb (x + accum)
+                        # Empty -> accum
+                        # C x restc -> sum restc (x + accum)
+                        _ -> accum
+
+                main : I64
+                main =
+                    A 1 (B 2 (C 3 Empty))
+                        |> sum 0
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn switch_fuse_rc_exhaustive() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Foo : [ A I64 Foo, B I64 Foo, C I64 Foo, Empty ]
+
+                sum : Foo, I64 -> I64
+                sum = \foo, accum ->
+                    when foo is
+                        A x resta -> sum resta (x + accum)
+                        B x restb -> sum restb (x + accum)
+                        C x restc -> sum restc (x + accum)
+                        Empty -> accum
+
+                main : I64
+                main =
+                    A 1 (B 2 (C 3 Empty))
+                        |> sum 0
+                "#
+            ),
+            6,
+            i64
+        );
+    }
 }
