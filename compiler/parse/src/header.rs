@@ -149,8 +149,8 @@ pub struct Effects<'a> {
     pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
     pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
     pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
-    pub type_shortname: &'a str,
-    pub type_name: &'a str,
+    pub effect_shortname: &'a str,
+    pub effect_type_name: &'a str,
     pub entries: &'a [Loc<TypedIdent<'a>>],
 }
 

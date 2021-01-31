@@ -2514,8 +2514,9 @@ mod test_parse {
         };
         let arena = Bump::new();
         let effects = Effects {
-            type_name: "Blah",
-            entries: Vec::new_in(&arena),
+            effect_type_name: "Blah",
+            effect_shortname: "fx",
+            entries: &[],
             spaces_before_effects_keyword: &[],
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
@@ -2541,7 +2542,7 @@ mod test_parse {
             after_provides: &[],
         };
 
-        let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects Blah {}";
+        let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects fx.Blah {}";
         let actual = platform_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
             .map(|tuple| tuple.0);
@@ -2571,8 +2572,9 @@ mod test_parse {
         let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
         let provides = bumpalo::vec![in &arena; provide_entry];
         let effects = Effects {
-            type_name: "Effect",
-            entries: Vec::new_in(&arena),
+            effect_type_name: "Effect",
+            effect_shortname: "fx",
+            entries: &[],
             spaces_before_effects_keyword: newlines,
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
@@ -2606,7 +2608,7 @@ mod test_parse {
                     packages { foo: "./foo" }
                     imports []
                     provides [ mainForHost ]
-                    effects Effect {}
+                    effects fx.Effect {}
             "#
         );
         let actual = platform_header()

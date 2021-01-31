@@ -2120,11 +2120,11 @@ fn load_pkg_config<'a>(
 
                     let effects_module_msg = fabricate_effects_module(
                         arena,
-                        header.effects.type_shortname, //shorthand,
+                        header.effects.effect_shortname,
                         module_ids,
                         ident_ids_by_module,
                         mode,
-                        &header.effects,
+                        header,
                         effect_module_timing,
                     )
                     .map(|x| x.1)?;
@@ -2373,7 +2373,7 @@ fn parse_header<'a>(
             module_ids,
             ident_ids_by_module,
             mode,
-            &header.effects,
+            header,
             module_timing,
         ),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
@@ -3020,18 +3020,18 @@ fn fabricate_effects_module<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
-    // header: PlatformHeader<'a>,
-    effects: &roc_parse::header::Effects<'a>,
+    header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
-    // let num_exposes = header.provides.len() + 1;
-    let num_exposes = 0;
+    let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
+
+    let effects = header.effects;
 
     let module_id: ModuleId;
 
     let effect_entries = unpack_exposes_entries(arena, &effects.entries);
-    let name = effects.type_name;
+    let name = effects.effect_type_name;
     let declared_name: ModuleName = name.into();
 
     let hardcoded_effect_symbols = {
@@ -3044,7 +3044,6 @@ fn fabricate_effects_module<'a>(
         functions
     };
 
-    /*
     {
         let mut module_ids = (*module_ids).lock();
 
@@ -3054,7 +3053,6 @@ fn fabricate_effects_module<'a>(
             }
         }
     }
-    */
 
     let exposed_ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
@@ -3255,7 +3253,7 @@ fn fabricate_effects_module<'a>(
     Ok((
         module_id,
         Msg::MadeEffectModule {
-            type_shortname: effects.type_shortname,
+            type_shortname: effects.effect_shortname,
             constrained_module,
             canonicalization_problems: module_output.problems,
             module_docs,
