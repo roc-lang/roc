@@ -856,14 +856,14 @@ mod test_mono {
                     joinpoint Test.8 Test.3:
                         ret Test.3;
                     in
-                    let Test.12 = 1i64;
-                    let Test.13 = Index 0 Test.2;
-                    let Test.17 = lowlevel Eq Test.12 Test.13;
+                    let Test.15 = 1i64;
+                    let Test.16 = Index 0 Test.2;
+                    let Test.17 = lowlevel Eq Test.15 Test.16;
                     if Test.17 then
-                        let Test.14 = Index 1 Test.2;
-                        let Test.15 = 3i64;
-                        let Test.16 = lowlevel Eq Test.15 Test.14;
-                        if Test.16 then
+                        let Test.12 = Index 1 Test.2;
+                        let Test.13 = 3i64;
+                        let Test.14 = lowlevel Eq Test.13 Test.12;
+                        if Test.14 then
                             let Test.9 = 1i64;
                             jump Test.8 Test.9;
                         else
@@ -1933,28 +1933,24 @@ mod test_mono {
                     let Test.16 = S Test.19 Test.18;
                     let Test.14 = S Test.17 Test.16;
                     let Test.2 = S Test.15 Test.14;
-                    let Test.7 = 0i64;
-                    let Test.8 = Index 0 Test.2;
-                    let Test.13 = lowlevel Eq Test.7 Test.8;
+                    let Test.11 = 0i64;
+                    let Test.12 = Index 0 Test.2;
+                    let Test.13 = lowlevel Eq Test.11 Test.12;
                     if Test.13 then
-                        let Test.9 = Index 1 Test.2;
-                        inc Test.9;
-                        let Test.10 = 0i64;
-                        let Test.11 = Index 0 Test.9;
-                        dec Test.9;
-                        let Test.12 = lowlevel Eq Test.10 Test.11;
-                        if Test.12 then
+                        let Test.7 = Index 1 Test.2;
+                        let Test.8 = 0i64;
+                        let Test.9 = Index 0 Test.7;
+                        let Test.10 = lowlevel Eq Test.8 Test.9;
+                        if Test.10 then
                             let Test.4 = Index 1 Test.2;
-                            inc Test.4;
-                            dec Test.2;
                             let Test.3 = 1i64;
+                            decref Test.2;
                             ret Test.3;
                         else
-                            dec Test.2;
                             let Test.5 = 0i64;
+                            dec Test.2;
                             ret Test.5;
                     else
-                        dec Test.2;
                         let Test.6 = 0i64;
                         ret Test.6;
                 "#

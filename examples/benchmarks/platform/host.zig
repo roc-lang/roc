@@ -4,6 +4,7 @@ const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
+const maxInt = std.math.maxInt;
 
 const mem = std.mem;
 const Allocator = mem.Allocator;
@@ -95,4 +96,40 @@ pub export fn roc_fx_putLine(rocPath: str.RocStr) i64 {
     stdout.print("\n", .{}) catch unreachable;
 
     return 0;
+}
+
+const GetInt = extern struct {
+    value: i64,
+    error_code: u8,
+    is_error: bool,
+};
+
+pub export fn roc_fx_getInt() GetInt {
+    if (roc_fx_getInt_help()) |value| {
+        const get_int = GetInt{ .is_error = false, .value = value, .error_code = 0 };
+        return get_int;
+    } else |err| switch (err) {
+        error.InvalidCharacter => {
+            return GetInt{ .is_error = true, .value = 0, .error_code = 0 };
+        },
+        else => {
+            return GetInt{ .is_error = true, .value = 0, .error_code = 1 };
+        },
+    }
+
+    return 0;
+}
+
+fn roc_fx_getInt_help() !i64 {
+    const stdin = std.io.getStdIn().inStream();
+    var buf: [40]u8 = undefined;
+
+    const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+
+    return std.fmt.parseInt(i64, line, 10);
+}
+
+fn readLine() []u8 {
+    const stdin = std.io.getStdIn().reader();
+    return (stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch unreachable) orelse "";
 }
