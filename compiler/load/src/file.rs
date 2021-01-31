@@ -96,15 +96,14 @@ enum Status {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Job {
     Step(ModuleId, Phase),
-    // TODO use &'a str
-    ResolveShorthand(String),
+    // ResolveShorthand(&'a str),
 }
 
 #[derive(Default, Debug)]
 struct Dependencies {
-    waiting_for: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
-    notifies: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
-    status: MutMap<(ModuleId, Phase), Status>,
+    waiting_for: MutMap<Job, MutSet<Job>>,
+    notifies: MutMap<Job, MutSet<Job>>,
+    status: MutMap<Job, Status>,
 }
 
 impl Dependencies {
@@ -201,7 +200,7 @@ impl Dependencies {
                 break;
             }
 
-            if let Vacant(entry) = self.status.entry((module_id, *phase)) {
+            if let Vacant(entry) = self.status.entry(Job::Step(module_id, *phase)) {
                 entry.insert(Status::NotStarted);
             }
         }
@@ -209,11 +208,12 @@ impl Dependencies {
 
     /// Propagate a notification, return (module, phase) pairs that can make progress
     pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
-        self.status.insert((module_id, phase), Status::Done);
+        self.status
+            .insert(Job::Step(module_id, phase), Status::Done);
 
         let mut output = MutSet::default();
 
-        let key = (module_id, phase);
+        let key = Job::Step(module_id, phase);
         if let Some(to_notify) = self.notifies.get(&key) {
             for notify_key in to_notify {
                 let mut is_empty = false;
@@ -224,7 +224,10 @@ impl Dependencies {
 
                 if is_empty {
                     self.waiting_for.remove(notify_key);
-                    output.insert(*notify_key);
+
+                    if let Job::Step(module, phase) = *notify_key {
+                        output.insert((module, phase));
+                    }
                 }
             }
         }
@@ -242,12 +245,12 @@ impl Dependencies {
     /// phase_a of module a is waiting for phase_b of module_b
     fn add_dependency_help(&mut self, a: ModuleId, b: ModuleId, phase_a: Phase, phase_b: Phase) {
         // no need to wait if the dependency is already done!
-        if let Some(Status::Done) = self.status.get(&(b, phase_b)) {
+        if let Some(Status::Done) = self.status.get(&Job::Step(b, phase_b)) {
             return;
         }
 
-        let key = (a, phase_a);
-        let value = (b, phase_b);
+        let key = Job::Step(a, phase_a);
+        let value = Job::Step(b, phase_b);
         match self.waiting_for.get_mut(&key) {
             Some(existing) => {
                 existing.insert(value);
@@ -259,8 +262,8 @@ impl Dependencies {
             }
         }
 
-        let key = (b, phase_b);
-        let value = (a, phase_a);
+        let key = Job::Step(b, phase_b);
+        let value = Job::Step(a, phase_a);
         match self.notifies.get_mut(&key) {
             Some(existing) => {
                 existing.insert(value);
@@ -317,7 +320,11 @@ struct ModuleCache<'a> {
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
-    match state.dependencies.status.get_mut(&(module_id, phase)) {
+    match state
+        .dependencies
+        .status
+        .get_mut(&Job::Step(module_id, phase))
+    {
         Some(current @ Status::NotStarted) => {
             // start this phase!
             *current = Status::Pending;
@@ -342,7 +349,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 state
                     .dependencies
                     .status
-                    .insert((module_id, Phase::LoadHeader), Status::Pending);
+                    .insert(Job::Step(module_id, Phase::LoadHeader), Status::Pending);
             }
             _ => unreachable!(
                 "Pair {:?} is not in dependencies.status, that should never happen!",
