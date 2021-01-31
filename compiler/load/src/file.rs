@@ -93,6 +93,13 @@ enum Status {
     Done,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Job {
+    Step(ModuleId, Phase),
+    // TODO use &'a str
+    ResolveShorthand(String),
+}
+
 #[derive(Default, Debug)]
 struct Dependencies {
     waiting_for: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
@@ -565,8 +572,13 @@ struct ModuleHeader<'a> {
 
 #[derive(Debug)]
 enum HeaderFor<'a> {
-    App { to_platform: To<'a> },
-    PkgConfig,
+    App {
+        to_platform: To<'a>,
+    },
+    PkgConfig {
+        effect_shorthand: &'a str,
+        effects: roc_parse::header::Effects<'a>,
+    },
     Interface,
 }
 
@@ -1433,6 +1445,8 @@ fn update<'a>(
             Ok(state)
         }
         Header(header, header_extra) => {
+            use HeaderFor::*;
+
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
 
@@ -1442,16 +1456,27 @@ fn update<'a>(
                 for (shorthand, package_or_path) in header.packages.iter() {
                     shorthands.insert(shorthand, package_or_path.clone());
                 }
+
+                if let PkgConfig {
+                    effect_shorthand,
+                    ref effects,
+                    ..
+                } = header_extra
+                {
+                    shorthands.insert(
+                        effect_shorthand,
+                        PackageOrPath::PlatformEffectModule(effects.clone()),
+                    );
+                }
             }
 
-            use HeaderFor::*;
             match header_extra {
                 App { to_platform } => {
                     debug_assert_eq!(state.platform_path, None);
 
                     state.platform_path = Some(to_platform.clone());
                 }
-                PkgConfig => {
+                PkgConfig { .. } => {
                     debug_assert_eq!(state.platform_id, None);
 
                     state.platform_id = Some(header.module_id);
@@ -2048,7 +2073,7 @@ fn load_pkg_config<'a>(
                         module_ids,
                         ident_ids_by_module,
                         mode,
-                        header,
+                        &header.effects,
                         effect_module_timing,
                     )
                     .map(|x| x.1)?;
@@ -2103,6 +2128,25 @@ fn load_module<'a>(
                     unreachable!("invalid structure for path")
                 }
                 Some(PackageOrPath::Package(_name, _version)) => todo!("packages"),
+                Some(PackageOrPath::PlatformEffectModule(effects)) => {
+                    let module_start_time = SystemTime::now();
+                    let mut effect_module_timing = ModuleTiming::new(module_start_time);
+
+                    effect_module_timing.read_roc_file = Duration::default();
+                    effect_module_timing.parse_header = Duration::default();
+
+                    let result = fabricate_effects_module(
+                        arena,
+                        shorthand,
+                        module_ids,
+                        ident_ids_by_module,
+                        mode,
+                        effects,
+                        effect_module_timing,
+                    );
+
+                    return result;
+                }
                 None => unreachable!("there is no shorthand named {:?}", shorthand),
             }
 
@@ -2278,6 +2322,9 @@ fn parse_header<'a>(
                     }
                 }
                 To::NewPackage(package_or_path) => match package_or_path {
+                    PackageOrPath::PlatformEffectModule { .. } => {
+                        panic!("cannot provide to the platform effect module")
+                    }
                     PackageOrPath::Package(_, _) => panic!("TODO implement packages"),
                     PackageOrPath::Path(StrLiteral::PlainLine(_package)) => {
                         Ok((module_id, app_module_header_msg))
@@ -2297,7 +2344,7 @@ fn parse_header<'a>(
             module_ids,
             ident_ids_by_module,
             mode,
-            header,
+            &header.effects,
             module_timing,
         ),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
@@ -2576,6 +2623,7 @@ fn send_header_two<'a>(
     provides: &'a [Located<ExposesEntry<'a, &'a str>>],
     requires: &'a [Located<TypedIdent<'a>>],
     imports: &'a [Located<ImportsEntry<'a>>],
+    effects: roc_parse::header::Effects<'a>,
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -2742,7 +2790,11 @@ fn send_header_two<'a>(
     // to decrement its "pending" count.
     let module_name = ModuleNameEnum::PkgConfig(shorthand);
 
-    let extra = HeaderFor::PkgConfig;
+    let effect_shorthand = effects.type_shortname;
+    let extra = HeaderFor::PkgConfig {
+        effect_shorthand,
+        effects,
+    };
     (
         home,
         Msg::Header(
@@ -2897,6 +2949,7 @@ fn fabricate_pkg_config_module<'a>(
         provides,
         header.requires.clone().into_bump_slice(),
         header.imports.clone().into_bump_slice(),
+        header.effects.clone(),
         parse_state,
         module_ids,
         ident_ids_by_module,
@@ -2911,15 +2964,16 @@ fn fabricate_effects_module<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
-    header: PlatformHeader<'a>,
+    // header: PlatformHeader<'a>,
+    effects: &roc_parse::header::Effects<'a>,
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
-    let num_exposes = header.provides.len() + 1;
+    // let num_exposes = header.provides.len() + 1;
+    let num_exposes = 0;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     let module_id: ModuleId;
 
-    let PlatformHeader { effects, .. } = header;
     let effect_entries = unpack_exposes_entries(arena, &effects.entries);
     let name = effects.type_name;
     let declared_name: ModuleName = name.into();
@@ -2934,6 +2988,7 @@ fn fabricate_effects_module<'a>(
         functions
     };
 
+    /*
     {
         let mut module_ids = (*module_ids).lock();
 
@@ -2943,6 +2998,7 @@ fn fabricate_effects_module<'a>(
             }
         }
     }
+    */
 
     let exposed_ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
