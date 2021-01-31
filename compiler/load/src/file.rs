@@ -15,7 +15,8 @@ use roc_constrain::module::{
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, Lowercase, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
-    IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, Symbol,
+    IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
+    Symbol,
 };
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
@@ -112,12 +113,13 @@ impl<'a> Dependencies<'a> {
         &mut self,
         module_id: ModuleId,
         opt_effect_module: Option<ModuleId>,
-        dependencies: &MutMap<ModuleId, Region>,
+        dependencies: &MutSet<PackageQualified<'a, ModuleId>>,
         goal_phase: Phase,
     ) -> MutSet<(ModuleId, Phase)> {
         use Phase::*;
 
-        for dep in dependencies.keys().copied() {
+        for dep in dependencies.iter() {
+            let dep = *dep.as_inner();
             // to parse and generate constraints, the headers of all dependencies must be loaded!
             // otherwise, we don't know whether an imported symbol is actually exposed
             self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
@@ -152,11 +154,12 @@ impl<'a> Dependencies<'a> {
         let mut output = MutSet::default();
 
         // all the dependencies can be loaded
-        for dep in dependencies.keys() {
+        for dep in dependencies.iter() {
+            let dep = *dep.as_inner();
             // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
 
-            if Some(*dep) != opt_effect_module {
-                output.insert((*dep, LoadHeader));
+            if Some(dep) != opt_effect_module {
+                output.insert((dep, LoadHeader));
             }
         }
 
@@ -571,6 +574,7 @@ struct ModuleHeader<'a> {
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     packages: MutMap<&'a str, PackageOrPath<'a>>,
     imported_modules: MutMap<ModuleId, Region>,
+    package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: &'a [u8],
@@ -1516,7 +1520,7 @@ fn update<'a>(
             let work = state.dependencies.add_module(
                 header.module_id,
                 state.opt_effect_module,
-                &header.imported_modules,
+                &header.package_qualified_imported_modules,
                 state.goal_phase,
             );
 
@@ -2598,6 +2602,20 @@ fn send_header<'a>(
         None => HeaderFor::Interface,
     };
 
+    let mut package_qualified_imported_modules = MutSet::default();
+    for (pq_module_name, module_id) in &deps_by_name {
+        match pq_module_name {
+            PackageQualified::Unqualified(_) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(*module_id));
+            }
+            PackageQualified::Qualified(shorthand, _) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Qualified(shorthand, *module_id));
+            }
+        }
+    }
+
     (
         home,
         Msg::Header(
@@ -2608,6 +2626,7 @@ fn send_header<'a>(
                 module_name: loc_name.value,
                 packages: package_entries,
                 imported_modules,
+                package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
                 src: parse_state.bytes,
@@ -2802,6 +2821,21 @@ fn send_header_two<'a>(
         effect_shorthand,
         effects,
     };
+
+    let mut package_qualified_imported_modules = MutSet::default();
+    for (pq_module_name, module_id) in &deps_by_name {
+        match pq_module_name {
+            PackageQualified::Unqualified(_) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(*module_id));
+            }
+            PackageQualified::Qualified(shorthand, _) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Qualified(shorthand, *module_id));
+            }
+        }
+    }
+
     (
         home,
         Msg::Header(
@@ -2812,6 +2846,7 @@ fn send_header_two<'a>(
                 module_name,
                 packages: package_entries,
                 imported_modules,
+                package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
                 src: parse_state.bytes,
