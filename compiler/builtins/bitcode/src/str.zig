@@ -40,8 +40,6 @@ pub const RocStr = extern struct {
     // This clones the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn init(allocator: *Allocator, bytes_ptr: [*]const u8, length: usize) RocStr {
-        const roc_str_size = @sizeOf(RocStr);
-
         var result = RocStr.allocate(allocator, InPlace.Clone, length);
         @memcpy(result.asU8ptr(), bytes_ptr, length);
 
