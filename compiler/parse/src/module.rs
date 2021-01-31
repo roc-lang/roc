@@ -490,6 +490,11 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
         let (spaces_before_effects_keyword, state) =
             skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
         let (spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
+
+        // e.g. `fx.`
+        let (type_shortname, state) =
+            skip_second!(lowercase_ident(), ascii_char(b'.')).parse(arena, state)?;
+
         let ((type_name, spaces_after_type_name), state) =
             and!(uppercase_ident(), space1(0)).parse(arena, state)?;
         let (entries, state) = collection!(
@@ -506,6 +511,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
                 spaces_before_effects_keyword,
                 spaces_after_effects_keyword,
                 spaces_after_type_name,
+                type_shortname,
                 type_name,
                 entries,
             },

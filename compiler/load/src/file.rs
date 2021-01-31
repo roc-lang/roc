@@ -648,6 +648,7 @@ enum Msg<'a> {
         module_docs: Option<ModuleDocumentation>,
     },
     MadeEffectModule {
+        type_shortname: &'a str,
         constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
@@ -1569,6 +1570,7 @@ fn update<'a>(
             constrained_module,
             canonicalization_problems,
             module_docs,
+            type_shortname: _,
         } => {
             let module_id = constrained_module.module.module_id;
 
@@ -3141,6 +3143,7 @@ fn fabricate_effects_module<'a>(
     Ok((
         module_id,
         Msg::MadeEffectModule {
+            type_shortname: effects.type_shortname,
             constrained_module,
             canonicalization_problems: module_output.problems,
             module_docs,
