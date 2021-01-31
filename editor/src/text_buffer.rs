@@ -22,18 +22,15 @@ pub struct TextBuffer {
 
 impl TextBuffer {
     pub fn insert_char(&mut self, caret_pos: Position, new_char: &char) -> EdResult<()> {
+        self.insert_str(caret_pos, &new_char.to_string())
+    }
+
+    pub fn insert_str(&mut self, caret_pos: Position, new_str: &str) -> EdResult<()> {
         let char_indx = self.pos_to_char_indx(caret_pos);
 
-        ensure!(
-            char_indx <= self.text_rope.len_chars(),
-            OutOfBounds {
-                index: char_indx,
-                collection_name: "Rope",
-                len: self.text_rope.len_chars()
-            }
-        );
+        self.check_bounds(char_indx)?;
 
-        self.text_rope.insert(char_indx, &new_char.to_string());
+        self.text_rope.insert(char_indx, new_str);
 
         Ok(())
     }
@@ -49,23 +46,47 @@ impl TextBuffer {
     pub fn del_selection(&mut self, raw_sel: RawSelection) -> EdResult<()> {
         let (start_char_indx, end_char_indx) = self.sel_to_tup(raw_sel)?;
 
-        ensure!(
-            end_char_indx <= self.text_rope.len_chars(),
-            OutOfBounds {
-                index: end_char_indx,
-                collection_name: "Rope",
-                len: self.text_rope.len_chars()
-            }
-        );
+        self.check_bounds(end_char_indx)?;
 
         self.text_rope.remove(start_char_indx..end_char_indx);
 
         Ok(())
     }
 
+    pub fn get_selection(&self, raw_sel: RawSelection) -> EdResult<&str> {
+        let (start_char_indx, end_char_indx) = self.sel_to_tup(raw_sel)?;
+
+        self.check_bounds(end_char_indx)?;
+
+        let rope_slice = self.text_rope.slice(start_char_indx..end_char_indx);
+
+        if let Some(line_str_ref) = rope_slice.as_str() {
+            Ok(line_str_ref)
+        } else {
+            // happens very rarely
+            let line_str = rope_slice.chunks().collect::<String>();
+            let arena_str_ref = self.mem_arena.alloc(line_str);
+            Ok(arena_str_ref)
+        }
+    }
+
+    fn check_bounds(&self, char_indx: usize) -> EdResult<()> {
+        ensure!(
+            char_indx <= self.text_rope.len_chars(),
+            OutOfBounds {
+                index: char_indx,
+                collection_name: "Rope",
+                len: self.text_rope.len_chars()
+            }
+        );
+
+        Ok(())
+    }
+
     pub fn line(&self, line_nr: usize) -> Option<&str> {
-        if line_nr < self.text_rope.len_lines() {
+        if line_nr < self.nr_of_lines() {
             let rope_slice = self.text_rope.line(line_nr);
+
             if let Some(line_str_ref) = rope_slice.as_str() {
                 Some(line_str_ref)
             } else {
@@ -80,11 +101,7 @@ impl TextBuffer {
     }
 
     pub fn line_len(&self, line_nr: usize) -> Option<usize> {
-        if line_nr < self.text_rope.len_lines() {
-            Some(self.text_rope.line(line_nr).len_chars())
-        } else {
-            None
-        }
+        self.line(line_nr).map(|line| line.len())
     }
 
     pub fn line_len_res(&self, line_nr: usize) -> EdResult<usize> {
@@ -125,7 +142,6 @@ impl TextBuffer {
 }
 
 pub fn from_path(path: &Path) -> EdResult<TextBuffer> {
-    // TODO benchmark different file reading methods, see #886
     let text_rope = rope_from_path(path)?;
     let path_str = path_to_string(path);
     let mem_arena = Bump::new();

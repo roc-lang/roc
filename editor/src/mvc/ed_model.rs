@@ -25,6 +25,16 @@ pub fn init_model(file_path: &Path) -> EdResult<EdModel> {
     })
 }
 
+pub fn get_selected_str(ed_model: &EdModel) -> EdResult<Option<&str>> {
+    if let Some(curr_selection) = ed_model.selection_opt {
+        let selected_str = ed_model.text_buf.get_selection(curr_selection)?;
+
+        Ok(Some(selected_str))
+    } else {
+        Ok(None)
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct Position {
     pub line: usize,
