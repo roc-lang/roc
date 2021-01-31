@@ -317,18 +317,20 @@ impl fmt::Debug for ModuleId {
 /// 4. throw away short names. stash the module id in the can env under the resolved module name
 /// 5. test:
 
-/// Package-qualified module name
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PQModuleName<'a> {
-    Unqualified(InlinableString),
-    Qualified(&'a str, InlinableString),
+pub enum PackageQualified<'a, T> {
+    Unqualified(T),
+    Qualified(&'a str, T),
 }
 
-impl<'a> PQModuleName<'a> {
-    pub fn to_module_name(&self) -> &InlinableString {
+/// Package-qualified module name
+pub type PQModuleName<'a> = PackageQualified<'a, InlinableString>;
+
+impl<'a, T> PackageQualified<'a, T> {
+    pub fn as_inner(&self) -> &T {
         match self {
-            PQModuleName::Unqualified(name) => name,
-            PQModuleName::Qualified(_, name) => name,
+            PackageQualified::Unqualified(name) => name,
+            PackageQualified::Qualified(_, name) => name,
         }
     }
 }
@@ -364,13 +366,13 @@ impl<'a> PackageModuleIds<'a> {
         let by_name: MutMap<InlinableString, ModuleId> = self
             .by_name
             .into_iter()
-            .map(|(pqname, module_id)| (pqname.to_module_name().clone(), module_id))
+            .map(|(pqname, module_id)| (pqname.as_inner().clone(), module_id))
             .collect();
 
         let by_id: Vec<InlinableString> = self
             .by_id
             .into_iter()
-            .map(|pqname| pqname.to_module_name().clone())
+            .map(|pqname| pqname.as_inner().clone())
             .collect();
 
         ModuleIds { by_name, by_id }

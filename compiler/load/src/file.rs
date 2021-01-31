@@ -15,7 +15,8 @@ use roc_constrain::module::{
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, Lowercase, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
-    IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, Symbol,
+    IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
+    Symbol,
 };
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
@@ -93,25 +94,41 @@ enum Status {
     Done,
 }
 
-#[derive(Default, Debug)]
-struct Dependencies {
-    waiting_for: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
-    notifies: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
-    status: MutMap<(ModuleId, Phase), Status>,
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Job<'a> {
+    Step(ModuleId, Phase),
+    ResolveShorthand(&'a str),
 }
 
-impl Dependencies {
+#[derive(Default, Debug)]
+struct Dependencies<'a> {
+    waiting_for: MutMap<Job<'a>, MutSet<Job<'a>>>,
+    notifies: MutMap<Job<'a>, MutSet<Job<'a>>>,
+    status: MutMap<Job<'a>, Status>,
+}
+
+impl<'a> Dependencies<'a> {
     /// Add all the dependencies for a module, return (module, phase) pairs that can make progress
     pub fn add_module(
         &mut self,
         module_id: ModuleId,
-        opt_effect_module: Option<ModuleId>,
-        dependencies: &MutMap<ModuleId, Region>,
+        dependencies: &MutSet<PackageQualified<'a, ModuleId>>,
         goal_phase: Phase,
     ) -> MutSet<(ModuleId, Phase)> {
         use Phase::*;
 
-        for dep in dependencies.keys().copied() {
+        let mut output = MutSet::default();
+
+        for dep in dependencies.iter() {
+            let has_package_dependency = self.add_package_dependency(dep, Phase::LoadHeader);
+
+            let dep = *dep.as_inner();
+
+            if !has_package_dependency {
+                // loading can start immediately on this dependency
+                output.insert((dep, Phase::LoadHeader));
+            }
+
             // to parse and generate constraints, the headers of all dependencies must be loaded!
             // otherwise, we don't know whether an imported symbol is actually exposed
             self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
@@ -142,17 +159,6 @@ impl Dependencies {
         }
 
         self.add_to_status(module_id, goal_phase);
-
-        let mut output = MutSet::default();
-
-        // all the dependencies can be loaded
-        for dep in dependencies.keys() {
-            // TODO figure out how to "load" (because it doesn't exist on the file system) the Effect module
-
-            if Some(*dep) != opt_effect_module {
-                output.insert((*dep, LoadHeader));
-            }
-        }
 
         output
     }
@@ -194,7 +200,7 @@ impl Dependencies {
                 break;
             }
 
-            if let Vacant(entry) = self.status.entry((module_id, *phase)) {
+            if let Vacant(entry) = self.status.entry(Job::Step(module_id, *phase)) {
                 entry.insert(Status::NotStarted);
             }
         }
@@ -202,11 +208,19 @@ impl Dependencies {
 
     /// Propagate a notification, return (module, phase) pairs that can make progress
     pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
-        self.status.insert((module_id, phase), Status::Done);
+        self.notify_help(Job::Step(module_id, phase))
+    }
+
+    /// Propagate a notification, return (module, phase) pairs that can make progress
+    pub fn notify_package(&mut self, shorthand: &'a str) -> MutSet<(ModuleId, Phase)> {
+        self.notify_help(Job::ResolveShorthand(shorthand))
+    }
+
+    fn notify_help(&mut self, key: Job<'a>) -> MutSet<(ModuleId, Phase)> {
+        self.status.insert(key.clone(), Status::Done);
 
         let mut output = MutSet::default();
 
-        let key = (module_id, phase);
         if let Some(to_notify) = self.notifies.get(&key) {
             for notify_key in to_notify {
                 let mut is_empty = false;
@@ -217,7 +231,10 @@ impl Dependencies {
 
                 if is_empty {
                     self.waiting_for.remove(notify_key);
-                    output.insert(*notify_key);
+
+                    if let Job::Step(module, phase) = *notify_key {
+                        output.insert((module, phase));
+                    }
                 }
             }
         }
@@ -225,6 +242,48 @@ impl Dependencies {
         self.notifies.remove(&key);
 
         output
+    }
+
+    fn add_package_dependency(
+        &mut self,
+        module: &PackageQualified<'a, ModuleId>,
+        next_phase: Phase,
+    ) -> bool {
+        match module {
+            PackageQualified::Unqualified(_) => {
+                // no dependency, we can just start loading the file
+                false
+            }
+            PackageQualified::Qualified(shorthand, module_id) => {
+                let job = Job::ResolveShorthand(shorthand);
+                let next_step = Job::Step(*module_id, next_phase);
+                match self.status.get(&job) {
+                    None | Some(Status::NotStarted) | Some(Status::Pending) => {
+                        // this shorthand is not resolved, add a dependency
+                        {
+                            let entry = self
+                                .waiting_for
+                                .entry(next_step.clone())
+                                .or_insert_with(Default::default);
+
+                            entry.insert(job.clone());
+                        }
+
+                        {
+                            let entry = self.notifies.entry(job).or_insert_with(Default::default);
+
+                            entry.insert(next_step);
+                        }
+
+                        true
+                    }
+                    Some(Status::Done) => {
+                        // shorthand is resolved; no dependency
+                        false
+                    }
+                }
+            }
+        }
     }
 
     /// A waits for B, and B will notify A when it completes the phase
@@ -235,12 +294,12 @@ impl Dependencies {
     /// phase_a of module a is waiting for phase_b of module_b
     fn add_dependency_help(&mut self, a: ModuleId, b: ModuleId, phase_a: Phase, phase_b: Phase) {
         // no need to wait if the dependency is already done!
-        if let Some(Status::Done) = self.status.get(&(b, phase_b)) {
+        if let Some(Status::Done) = self.status.get(&Job::Step(b, phase_b)) {
             return;
         }
 
-        let key = (a, phase_a);
-        let value = (b, phase_b);
+        let key = Job::Step(a, phase_a);
+        let value = Job::Step(b, phase_b);
         match self.waiting_for.get_mut(&key) {
             Some(existing) => {
                 existing.insert(value);
@@ -252,8 +311,8 @@ impl Dependencies {
             }
         }
 
-        let key = (b, phase_b);
-        let value = (a, phase_a);
+        let key = Job::Step(b, phase_b);
+        let value = Job::Step(a, phase_a);
         match self.notifies.get_mut(&key) {
             Some(existing) => {
                 existing.insert(value);
@@ -310,7 +369,11 @@ struct ModuleCache<'a> {
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
-    match state.dependencies.status.get_mut(&(module_id, phase)) {
+    match state
+        .dependencies
+        .status
+        .get_mut(&Job::Step(module_id, phase))
+    {
         Some(current @ Status::NotStarted) => {
             // start this phase!
             *current = Status::Pending;
@@ -335,7 +398,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 state
                     .dependencies
                     .status
-                    .insert((module_id, Phase::LoadHeader), Status::Pending);
+                    .insert(Job::Step(module_id, Phase::LoadHeader), Status::Pending);
             }
             _ => unreachable!(
                 "Pair {:?} is not in dependencies.status, that should never happen!",
@@ -557,6 +620,7 @@ struct ModuleHeader<'a> {
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     packages: MutMap<&'a str, PackageOrPath<'a>>,
     imported_modules: MutMap<ModuleId, Region>,
+    package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: &'a [u8],
@@ -565,8 +629,13 @@ struct ModuleHeader<'a> {
 
 #[derive(Debug)]
 enum HeaderFor<'a> {
-    App { to_platform: To<'a> },
-    PkgConfig,
+    App {
+        to_platform: To<'a>,
+    },
+    PkgConfig {
+        /// usually `base`
+        config_shorthand: &'a str,
+    },
     Interface,
 }
 
@@ -648,6 +717,7 @@ enum Msg<'a> {
         module_docs: Option<ModuleDocumentation>,
     },
     MadeEffectModule {
+        type_shortname: &'a str,
         constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
@@ -703,12 +773,11 @@ struct State<'a> {
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: Option<To<'a>>,
-    pub opt_effect_module: Option<ModuleId>,
 
     pub headers_parsed: MutSet<ModuleId>,
 
     pub module_cache: ModuleCache<'a>,
-    pub dependencies: Dependencies,
+    pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
@@ -1293,7 +1362,6 @@ where
                 stdlib,
                 output_path: None,
                 platform_path: None,
-                opt_effect_module: None,
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
@@ -1432,8 +1500,12 @@ fn update<'a>(
             Ok(state)
         }
         Header(header, header_extra) => {
+            use HeaderFor::*;
+
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
+
+            let mut work = MutSet::default();
 
             {
                 let mut shorthands = (*state.arc_shorthands).lock();
@@ -1441,16 +1513,22 @@ fn update<'a>(
                 for (shorthand, package_or_path) in header.packages.iter() {
                     shorthands.insert(shorthand, package_or_path.clone());
                 }
+
+                if let PkgConfig {
+                    config_shorthand, ..
+                } = header_extra
+                {
+                    work.extend(state.dependencies.notify_package(config_shorthand));
+                }
             }
 
-            use HeaderFor::*;
             match header_extra {
                 App { to_platform } => {
                     debug_assert_eq!(state.platform_path, None);
 
                     state.platform_path = Some(to_platform.clone());
                 }
-                PkgConfig => {
+                PkgConfig { .. } => {
                     debug_assert_eq!(state.platform_id, None);
 
                     state.platform_id = Some(header.module_id);
@@ -1480,12 +1558,11 @@ fn update<'a>(
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
 
-            let work = state.dependencies.add_module(
+            work.extend(state.dependencies.add_module(
                 header.module_id,
-                state.opt_effect_module,
-                &header.imported_modules,
+                &header.package_qualified_imported_modules,
                 state.goal_phase,
-            );
+            ));
 
             state.module_cache.headers.insert(header.module_id, header);
 
@@ -1508,7 +1585,7 @@ fn update<'a>(
             //
             // e.g. for `app "blah"` we should generate an output file named "blah"
             match &parsed.module_name {
-                ModuleNameEnum::PkgConfig(_) => {}
+                ModuleNameEnum::PkgConfig => {}
                 ModuleNameEnum::App(output_str) => match output_str {
                     StrLiteral::PlainLine(path) => {
                         state.output_path = Some(path);
@@ -1569,10 +1646,9 @@ fn update<'a>(
             constrained_module,
             canonicalization_problems,
             module_docs,
+            type_shortname,
         } => {
             let module_id = constrained_module.module.module_id;
-
-            state.opt_effect_module = Some(module_id);
 
             log!("made effect module for {:?}", module_id);
             state
@@ -1600,6 +1676,8 @@ fn update<'a>(
                 &MutSet::default(),
                 state.goal_phase,
             );
+
+            work.extend(state.dependencies.notify_package(type_shortname));
 
             work.extend(state.dependencies.notify(module_id, Phase::LoadHeader));
 
@@ -2042,7 +2120,7 @@ fn load_pkg_config<'a>(
 
                     let effects_module_msg = fabricate_effects_module(
                         arena,
-                        shorthand,
+                        header.effects.effect_shortname,
                         module_ids,
                         ident_ids_by_module,
                         mode,
@@ -2369,7 +2447,7 @@ enum ModuleNameEnum<'a> {
     /// A filename
     App(StrLiteral<'a>),
     Interface(roc_parse::header::ModuleName<'a>),
-    PkgConfig(&'a str),
+    PkgConfig,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2389,7 +2467,7 @@ fn send_header<'a>(
     use ModuleNameEnum::*;
 
     let declared_name: ModuleName = match &loc_name.value {
-        PkgConfig(_) => unreachable!(),
+        PkgConfig => unreachable!(),
         App(_) => ModuleName::APP.into(),
         Interface(module_name) => {
             // TODO check to see if module_name is consistent with filename.
@@ -2542,6 +2620,20 @@ fn send_header<'a>(
         None => HeaderFor::Interface,
     };
 
+    let mut package_qualified_imported_modules = MutSet::default();
+    for (pq_module_name, module_id) in &deps_by_name {
+        match pq_module_name {
+            PackageQualified::Unqualified(_) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(*module_id));
+            }
+            PackageQualified::Qualified(shorthand, _) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Qualified(shorthand, *module_id));
+            }
+        }
+    }
+
     (
         home,
         Msg::Header(
@@ -2552,6 +2644,7 @@ fn send_header<'a>(
                 module_name: loc_name.value,
                 packages: package_entries,
                 imported_modules,
+                package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
                 src: parse_state.bytes,
@@ -2738,9 +2831,26 @@ fn send_header_two<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-    let module_name = ModuleNameEnum::PkgConfig(shorthand);
+    let module_name = ModuleNameEnum::PkgConfig;
 
-    let extra = HeaderFor::PkgConfig;
+    let extra = HeaderFor::PkgConfig {
+        config_shorthand: shorthand,
+    };
+
+    let mut package_qualified_imported_modules = MutSet::default();
+    for (pq_module_name, module_id) in &deps_by_name {
+        match pq_module_name {
+            PackageQualified::Unqualified(_) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(*module_id));
+            }
+            PackageQualified::Qualified(shorthand, _) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Qualified(shorthand, *module_id));
+            }
+        }
+    }
+
     (
         home,
         Msg::Header(
@@ -2751,6 +2861,7 @@ fn send_header_two<'a>(
                 module_name,
                 packages: package_entries,
                 imported_modules,
+                package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
                 src: parse_state.bytes,
@@ -2915,11 +3026,12 @@ fn fabricate_effects_module<'a>(
     let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
+    let effects = header.effects;
+
     let module_id: ModuleId;
 
-    let PlatformHeader { effects, .. } = header;
     let effect_entries = unpack_exposes_entries(arena, &effects.entries);
-    let name = effects.type_name;
+    let name = effects.effect_type_name;
     let declared_name: ModuleName = name.into();
 
     let hardcoded_effect_symbols = {
@@ -3141,6 +3253,7 @@ fn fabricate_effects_module<'a>(
     Ok((
         module_id,
         Msg::MadeEffectModule {
+            type_shortname: effects.effect_shortname,
             constrained_module,
             canonicalization_problems: module_output.problems,
             module_docs,
@@ -3204,7 +3317,7 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match module_name {
-        ModuleNameEnum::PkgConfig(_) => None,
+        ModuleNameEnum::PkgConfig => None,
         ModuleNameEnum::App(_) => None,
         ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
             name.as_str().into(),
