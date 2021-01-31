@@ -25,8 +25,8 @@ use crate::graphics::style::CODE_FONT_SIZE;
 use crate::graphics::style::CODE_TXT_XY;
 use crate::mvc::app_model::AppModel;
 use crate::mvc::ed_model::EdModel;
-use crate::mvc::{ed_model, ed_view, update};
-// use crate::resources::strings::NOTHING_OPENED;
+use crate::mvc::{app_update, ed_model, ed_view};
+//use crate::resources::strings::NOTHING_OPENED;
 use crate::vec_result::get_res;
 use bumpalo::Bump;
 use cgmath::Vector2;
@@ -162,7 +162,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         None
     };
 
-    let mut app_model = AppModel { ed_model_opt };
+    let mut app_model = AppModel::init(ed_model_opt);
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
@@ -218,7 +218,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                if let Err(e) = update::handle_new_char(&mut app_model, &ch) {
+                if let Err(e) = app_update::handle_new_char(&ch, &mut app_model) {
                     print_err(&e)
                 }
             }
@@ -230,12 +230,16 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 if let Some(virtual_keycode) = input.virtual_keycode {
                     if let Some(ref mut ed_model) = app_model.ed_model_opt {
                         if ed_model.has_focus {
-                            keyboard_input::handle_keydown(
+                            let keydown_res = keyboard_input::handle_keydown(
                                 input.state,
                                 virtual_keycode,
                                 keyboard_modifiers,
-                                ed_model,
+                                &mut app_model,
                             );
+
+                            if let Err(e) = keydown_res {
+                                print_err(&e)
+                            }
                         }
                     }
                 }

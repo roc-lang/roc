@@ -69,7 +69,7 @@ colored = "2"
 pest = "2.1"
 pest_derive = "2.1"
 ropey = "1.2.0"
-
+copypasta = "0.7.1"
 
 [dependencies.bytemuck]
 version = "1.4"

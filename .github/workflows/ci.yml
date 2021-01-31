@@ -9,6 +9,7 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   SCCACHE_S3_USE_SSL: ${{ secrets.SCCACHE_S3_USE_SSL }}
   SCCACHE_REGION: ${{ secrets.SCCACHE_REGION }}
+  RUST_BACKTRACE: 1
 
 jobs:
   test:

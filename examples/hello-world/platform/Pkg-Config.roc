@@ -4,7 +4,7 @@ platform examples/hello-world
     packages {}
     imports []
     provides [ mainForHost ]
-    effects Effect {}
+    effects fx.Effect {}
 
 mainForHost : Str
 mainForHost = main

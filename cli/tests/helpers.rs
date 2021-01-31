@@ -61,15 +61,29 @@ pub fn run_roc(args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
-pub fn run_cmd(cmd_name: &str, args: &[&str]) -> Out {
+pub fn run_cmd(cmd_name: &str, stdin_str: &str, args: &[&str]) -> Out {
     let mut cmd = Command::new(cmd_name);
 
     for arg in args {
         cmd.arg(arg);
     }
 
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        stdin
+            .write_all(stdin_str.as_bytes())
+            .expect("Failed to write to stdin");
+    }
+
+    let output = child
+        .wait_with_output()
         .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
 
     Out {
@@ -80,7 +94,7 @@ pub fn run_cmd(cmd_name: &str, args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
-pub fn run_with_valgrind(args: &[&str]) -> (Out, String) {
+pub fn run_with_valgrind(stdin_str: &str, args: &[&str]) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
     let named_tempfile =
@@ -114,8 +128,23 @@ pub fn run_with_valgrind(args: &[&str]) -> (Out, String) {
         cmd.arg(arg);
     }
 
-    let output = cmd
-        .output()
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .expect("failed to execute compiled `valgrind` binary in CLI test");
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        stdin
+            .write_all(stdin_str.as_bytes())
+            .expect("Failed to write to stdin");
+    }
+
+    let output = child
+        .wait_with_output()
         .expect("failed to execute compiled `valgrind` binary in CLI test");
 
     let mut file = named_tempfile.into_file();
