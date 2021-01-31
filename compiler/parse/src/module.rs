@@ -513,7 +513,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
                 spaces_after_type_name,
                 type_shortname,
                 type_name,
-                entries,
+                entries: entries.into_bump_slice(),
             },
             state,
         ))

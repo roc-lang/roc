@@ -35,6 +35,7 @@ pub enum VersionComparison {
 pub enum PackageOrPath<'a> {
     Package(PackageName<'a>, Version<'a>),
     Path(StrLiteral<'a>),
+    PlatformEffectModule(Effects<'a>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -151,7 +152,7 @@ pub struct Effects<'a> {
     pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
     pub type_shortname: &'a str,
     pub type_name: &'a str,
-    pub entries: Vec<'a, Loc<TypedIdent<'a>>>,
+    pub entries: &'a [Loc<TypedIdent<'a>>],
 }
 
 #[derive(Clone, Debug, PartialEq)]
