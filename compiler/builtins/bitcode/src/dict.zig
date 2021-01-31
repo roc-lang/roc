@@ -110,7 +110,7 @@ pub fn dictEmpty(allocator: *Allocator, key_size: usize, value_size: usize) call
 
 // Dict.len
 pub fn dictLen(dict: RocDict) callconv(.C) usize {
-    return dict.dict_len;
+    return dict.dict_entries_len;
 }
 
 test "RocDict.init() contains nothing" {
