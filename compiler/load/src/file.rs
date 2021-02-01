@@ -3385,9 +3385,23 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new(&header.src, Attempting::Module);
-    let (parsed_defs, _) = module_defs()
-        .parse(&arena, parse_state)
-        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
+    let parsed_defs = match module_defs().parse(&arena, parse_state) {
+        Ok((success, _state)) => success,
+        Err((fail, state)) => {
+            use roc_parse::parser::FailReason;
+            match fail.reason {
+                FailReason::BadUtf8 => panic!(
+                    r"TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function."
+                ),
+                _ => panic!(
+                    "Parser Error\nmodule: {:?}\nattempting: {:?}\n(line, col): {:?}\n",
+                    header.module_id,
+                    fail.attempting,
+                    (state.line, state.column)
+                ),
+            }
+        }
+    };
 
     let parsed_defs = parsed_defs.into_bump_slice();
 

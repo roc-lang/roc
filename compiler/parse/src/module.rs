@@ -8,8 +8,8 @@ use crate::header::{
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::{
-    self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
-    unexpected_eof, Either, ParseResult, Parser, State,
+    self, ascii_char, ascii_string, end_of_file, loc, optional, peek_utf8_char, peek_utf8_char_at,
+    unexpected, unexpected_eof, Either, ParseResult, Parser, State,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -290,7 +290,11 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
-    zero_or_more!(space0_around(loc(def(0)), 0))
+    // this parses just the defs
+    let defs = zero_or_more!(space0_around(loc(def(0)), 0));
+
+    // but when parsing a file, we really want to reach the end of the file
+    skip_second!(defs, end_of_file())
 }
 
 struct ProvidesTo<'a> {

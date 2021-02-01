@@ -75,6 +75,11 @@ impl<'a> State<'a> {
         self.original_len - self.bytes.len()
     }
 
+    /// Returns whether the parser has reached the end of the input
+    pub fn has_reached_end(&self) -> bool {
+        self.bytes.len() == 0
+    }
+
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// Advances the input by 1, to consume the newline character.
     pub fn newline(&self) -> Result<Self, (Fail, Self)> {
@@ -1276,5 +1281,20 @@ pub fn parse_utf8(bytes: &[u8]) -> Result<&str, FailReason> {
     match from_utf8(bytes) {
         Ok(string) => Ok(string),
         Err(_) => Err(FailReason::BadUtf8),
+    }
+}
+
+pub fn end_of_file<'a>() -> impl Parser<'a, ()> {
+    |_arena: &'a Bump, state: State<'a>| {
+        if state.has_reached_end() {
+            Ok(((), state))
+        } else {
+            let fail = Fail {
+                attempting: state.attempting,
+                reason: FailReason::ConditionFailed,
+            };
+
+            Err((fail, state))
+        }
     }
 }
