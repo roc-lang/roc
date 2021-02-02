@@ -2762,6 +2762,7 @@ mod test_parse {
             Located::new(2, 2, 0, 10, def2),
             Located::new(3, 3, 0, 13, def3),
         ];
+
         let src = indoc!(
             r#"
                 foo = 1
@@ -2770,6 +2771,7 @@ mod test_parse {
                 baz = "stuff"
             "#
         );
+
         let actual = module_defs()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
             .map(|tuple| tuple.1);

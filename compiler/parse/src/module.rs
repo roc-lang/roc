@@ -99,12 +99,12 @@ pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseRes
 
                     state = state.advance_without_indenting(bytes_parsed)?;
                 } else {
-                    let progress = Progress::from_bool(!part_buf.is_empty());
+                    let progress = Progress::progress_when(!part_buf.is_empty());
                     return Ok((progress, part_buf.into_bump_str(), state));
                 }
             }
             Err(reason) => {
-                let progress = Progress::from_bool(!part_buf.is_empty());
+                let progress = Progress::progress_when(!part_buf.is_empty());
                 return state.fail(progress, reason);
             }
         }
@@ -299,7 +299,7 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
     move |a: &'a Bump, s: State<'a>| {
         // this parses just the defs
-        let defs = zero_or_more!(space0_around(loc(def(0)), 0));
+        let defs = zero_or_more!(space0_around(loc(debug!(def(0))), 0));
 
         // let result = skip_second!(defs, end_of_file()).parse(a, s);
         let result = defs.parse(a, s);

@@ -53,12 +53,12 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
     map_with_arena!(
         and!(
             one_of!(
-                // loc_wildcard(),
-                // loc_parenthetical_type(min_indent),
-                // loc!(record_type(min_indent)),
-                // loc!(tag_union!(min_indent)),
-                |a, s| dbg!(loc!(applied_type(min_indent)).parse(a, s)),
-                |a, s| dbg!(loc!(parse_type_variable).parse(a, s))
+                loc_wildcard(),
+                loc_parenthetical_type(min_indent),
+                loc!(record_type(min_indent)),
+                loc!(tag_union!(min_indent)),
+                loc!(applied_type(min_indent)),
+                loc!(parse_type_variable)
             ),
             |a, s| {
                 dbg!("term state", &s);
@@ -220,6 +220,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 }
 
 fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    dbg!("parsing type ig");
     use crate::blankspace::space0;
     move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;
@@ -293,7 +294,7 @@ fn parse_concrete_type<'a>(
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut parts: Vec<&'a str> = Vec::new_in(arena);
 
-    let start_bytes_remaining = state.bytes.len();
+    let start_bytes_len = state.bytes.len();
 
     // Qualified types must start with a capitalized letter.
     match peek_utf8_char(&state) {
@@ -353,9 +354,9 @@ fn parse_concrete_type<'a>(
                 state = state.advance_without_indenting(bytes_parsed)?;
             }
             Err(reason) => {
-                let made_progress = state.bytes.len() != start_bytes_remaining;
+                let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
 
-                return state.fail(Progress::from_bool(made_progress), reason);
+                return state.fail(progress, reason);
             }
         }
     }
@@ -383,8 +384,8 @@ fn parse_concrete_type<'a>(
         &[],
     );
 
-    let made_progress = state.bytes.len() != start_bytes_remaining;
-    Ok((Progress::from_bool(made_progress), answer, state))
+    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+    Ok((progress, answer, state))
 }
 
 fn parse_type_variable<'a>(
@@ -393,7 +394,7 @@ fn parse_type_variable<'a>(
 ) -> ParseResult<'a, TypeAnnotation<'a>> {
     let mut buf = String::new_in(arena);
 
-    let start_bytes_remaining = state.bytes.len();
+    let start_bytes_len = state.bytes.len();
 
     match peek_utf8_char(&state) {
         Ok((first_letter, bytes_parsed)) => {
@@ -407,8 +408,8 @@ fn parse_type_variable<'a>(
             state = state.advance_without_indenting(bytes_parsed)?;
         }
         Err(reason) => {
-            let made_progress = state.bytes.len() != start_bytes_remaining;
-            return state.fail(Progress::from_bool(made_progress), reason);
+            let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+            return state.fail(progress, reason);
         }
     }
 
@@ -429,16 +430,16 @@ fn parse_type_variable<'a>(
                 state = state.advance_without_indenting(bytes_parsed)?;
             }
             Err(reason) => {
-                let made_progress = state.bytes.len() != start_bytes_remaining;
-                return state.fail(Progress::from_bool(made_progress), reason);
+                let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+                return state.fail(progress, reason);
             }
         }
     }
 
     let answer = TypeAnnotation::BoundVariable(buf.into_bump_str());
 
-    let made_progress = state.bytes.len() != start_bytes_remaining;
-    Ok((Progress::from_bool(made_progress), answer, state))
+    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+    Ok((progress, answer, state))
 }
 
 fn malformed<'a>(

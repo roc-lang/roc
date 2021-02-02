@@ -121,7 +121,7 @@ pub fn parse_ident<'a>(
                         }
                     }
                     Err(reason) => {
-                        let progress = Progress::from_bool(state.bytes.len() == start_bytes_len);
+                        let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
                         return state.fail(progress, reason);
                     }
                 }
@@ -130,7 +130,7 @@ pub fn parse_ident<'a>(
             }
         }
         Err(reason) => {
-            let progress = Progress::from_bool(state.bytes.len() == start_bytes_len);
+            let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
             return state.fail(progress, reason);
         }
     }
@@ -195,7 +195,7 @@ pub fn parse_ident<'a>(
                 state = state.advance_without_indenting(bytes_parsed)?;
             }
             Err(reason) => {
-                let progress = Progress::from_bool(state.bytes.len() == start_bytes_len);
+                let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
                 return state.fail(progress, reason);
             }
         }
@@ -267,7 +267,7 @@ pub fn parse_ident<'a>(
         }
     };
 
-    let progress = Progress::from_bool(state.bytes.len() != start_bytes_len);
+    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
     debug_assert_eq!(progress, Progress::MadeProgress,);
     Ok((Progress::MadeProgress, (answer, None), state))
 }

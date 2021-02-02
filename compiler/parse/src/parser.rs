@@ -239,10 +239,10 @@ impl Progress {
         Self::from_consumed(before - after)
     }
     pub fn from_consumed(chars_consumed: usize) -> Self {
-        Self::from_bool(chars_consumed != 0)
+        Self::progress_when(chars_consumed != 0)
     }
 
-    pub fn from_bool(made_progress: bool) -> Self {
+    pub fn progress_when(made_progress: bool) -> Self {
         if made_progress {
             Progress::MadeProgress
         } else {

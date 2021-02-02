@@ -280,7 +280,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
 
                 Err(FailReason::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
-                    let progress = Progress::from_bool(spaces_seen != 0);
+                    let progress = Progress::progress_when(spaces_seen != 0);
                     return state.fail(progress, FailReason::BadUtf8);
                 }
                 Err(_) => {
