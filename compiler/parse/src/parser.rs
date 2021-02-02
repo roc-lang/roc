@@ -925,12 +925,11 @@ where
 
         match parser.parse(arena, state) {
             Ok((progress, out1, state)) => Ok((progress, Some(out1), state)),
-            Err((MadeProgress, fail, state)) => {
+            Err((_, _, _)) => {
                 // NOTE this will backtrack
-                // Ok((NoProgress, None, original_state))
-                Err((MadeProgress, fail, state))
+                // TODO can we get rid of some of the potential backtracking?
+                Ok((NoProgress, None, original_state))
             }
-            Err((NoProgress, _, _)) => Ok((NoProgress, None, original_state)),
         }
     }
 }
@@ -1293,6 +1292,13 @@ macro_rules! one_or_more {
                 }
             }
         }
+    };
+}
+
+#[macro_export]
+macro_rules! debug {
+    ($parser:expr) => {
+        move |arena, state: $crate::parser::State<'a>| dbg!($parser.parse(arena, state))
     };
 }
 
