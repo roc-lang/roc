@@ -1,5 +1,6 @@
 use crate::ast::{Attempting, EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
+use crate::parser::Progress::*;
 use crate::parser::{
     allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof, Fail,
     FailReason, ParseResult, Parser, State,
@@ -67,7 +68,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             segments.push($transform(string));
                         }
                         Err(reason) => {
-                            return state.fail(reason);
+                            return state.fail(MadeProgress, reason);
                         }
                     }
                 }
@@ -101,7 +102,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             }
                             _ => {
                                 // Advance 1 for the close quote
-                                return Ok((PlainLine(""), state.advance_without_indenting(1)?));
+                                return Ok((
+                                    MadeProgress,
+                                    PlainLine(""),
+                                    state.advance_without_indenting(1)?,
+                                ));
                             }
                         }
                     } else {
@@ -123,7 +128,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                         };
 
                         // Advance the state 1 to account for the closing `"`
-                        return Ok((expr, state.advance_without_indenting(1)?));
+                        return Ok((MadeProgress, expr, state.advance_without_indenting(1)?));
                     };
                 }
                 b'\n' => {
@@ -161,7 +166,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             // Parse an arbitrary expression, then give a
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
-                            let (loc_expr, new_state) =
+                            let (_progress, loc_expr, new_state) =
                                 skip_second!(loc(allocated(expr::expr(0))), ascii_char(b')'))
                                     .parse(arena, state)?;
 
@@ -185,7 +190,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             // Parse the hex digits, surrounded by parens, then
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
-                            let (loc_digits, new_state) = between!(
+                            let (_progress, loc_digits, new_state) = between!(
                                 ascii_char(b'('),
                                 loc(ascii_hex_digits()),
                                 ascii_char(b')')
@@ -283,6 +288,7 @@ where
 
                             // Ok((StrLiteral::Block(lines.into_bump_slice()), state))
                             Err((
+                                MadeProgress,
                                 Fail {
                                     attempting: state.attempting,
                                     reason: FailReason::NotYetImplemented(format!(
@@ -293,7 +299,7 @@ where
                                 state,
                             ))
                         }
-                        Err(reason) => state.fail(reason),
+                        Err(reason) => state.fail(MadeProgress, reason),
                     };
                 }
                 quotes_seen += 1;
@@ -310,7 +316,7 @@ where
                         line_start = parsed_chars;
                     }
                     Err(reason) => {
-                        return state.fail(reason);
+                        return state.fail(MadeProgress, reason);
                     }
                 }
             }

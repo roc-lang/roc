@@ -2,7 +2,7 @@ use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0;
 use crate::ident::lowercase_ident;
 use crate::module::package_name;
-use crate::parser::{ascii_char, optional, Either, Parser};
+use crate::parser::{ascii_char, fail_when_progress, optional, Either, Parser, Progress::*, State};
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use inlinable_string::InlinableString;
@@ -245,12 +245,13 @@ pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>> {
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
         // (Indirect dependencies don't have a shorthand.)
-        let (opt_shorthand, state) = optional(and!(
+        let (_, opt_shorthand, state) = optional(and!(
             skip_second!(lowercase_ident(), ascii_char(b':')),
             space0(1)
         ))
         .parse(arena, state)?;
-        let (package_or_path, state) = loc!(package_or_path()).parse(arena, state)?;
+        let (_, package_or_path, state) = loc!(package_or_path()).parse(arena, state)?;
+
         let entry = match opt_shorthand {
             Some((shorthand, spaces_after_shorthand)) => PackageEntry::Entry {
                 shorthand,
@@ -264,7 +265,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>> {
             },
         };
 
-        Ok((entry, state))
+        Ok((MadeProgress, entry, state))
     }
 }
 

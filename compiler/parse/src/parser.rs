@@ -6,6 +6,7 @@ use roc_region::all::{Located, Region};
 use std::fmt;
 use std::str::from_utf8;
 use std::{char, u16};
+use Progress::*;
 
 /// A position in a source file.
 #[derive(Clone, PartialEq, Eq)]
@@ -82,7 +83,7 @@ impl<'a> State<'a> {
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// Advances the input by 1, to consume the newline character.
-    pub fn newline(&self) -> Result<Self, (Fail, Self)> {
+    pub fn newline(&self) -> Result<Self, (Progress, Fail, Self)> {
         match self.line.checked_add(1) {
             Some(line) => Ok(State {
                 bytes: &self.bytes[1..],
@@ -94,6 +95,7 @@ impl<'a> State<'a> {
                 original_len: self.original_len,
             }),
             None => Err((
+                Progress::NoProgress,
                 Fail {
                     reason: FailReason::TooManyLines,
                     attempting: self.attempting,
@@ -107,7 +109,10 @@ impl<'a> State<'a> {
     /// This assumes we are *not* advancing with spaces, or at least that
     /// any spaces on the line were preceded by non-spaces - which would mean
     /// they weren't eligible to indent anyway.
-    pub fn advance_without_indenting(self, quantity: usize) -> Result<Self, (Fail, Self)> {
+    pub fn advance_without_indenting(
+        self,
+        quantity: usize,
+    ) -> Result<Self, (Progress, Fail, Self)> {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
@@ -126,7 +131,7 @@ impl<'a> State<'a> {
     }
     /// Advance the parser while also indenting as appropriate.
     /// This assumes we are only advancing with spaces, since they can indent.
-    pub fn advance_spaces(&self, spaces: usize) -> Result<Self, (Fail, Self)> {
+    pub fn advance_spaces(&self, spaces: usize) -> Result<Self, (Progress, Fail, Self)> {
         match (self.column as usize).checked_add(spaces) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 // Spaces don't affect is_indenting; if we were previously indneting,
@@ -179,8 +184,13 @@ impl<'a> State<'a> {
     }
 
     /// Return a failing ParseResult for the given FailReason
-    pub fn fail<T>(self, reason: FailReason) -> Result<(T, Self), (Fail, Self)> {
+    pub fn fail<T>(
+        self,
+        progress: Progress,
+        reason: FailReason,
+    ) -> Result<(Progress, T, Self), (Progress, Fail, Self)> {
         Err((
+            progress,
             Fail {
                 reason,
                 attempting: self.attempting,
@@ -215,7 +225,39 @@ fn state_size() {
     assert!(std::mem::size_of::<State>() <= std::mem::size_of::<usize>() * 8);
 }
 
-pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)>;
+pub type ParseResult<'a, Output> =
+    Result<(Progress, Output, State<'a>), (Progress, Fail, State<'a>)>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    MadeProgress,
+    NoProgress,
+}
+
+impl Progress {
+    pub fn from_lengths(before: usize, after: usize) -> Self {
+        Self::from_consumed(before - after)
+    }
+    pub fn from_consumed(chars_consumed: usize) -> Self {
+        Self::from_bool(chars_consumed != 0)
+    }
+
+    pub fn from_bool(made_progress: bool) -> Self {
+        if made_progress {
+            Progress::MadeProgress
+        } else {
+            Progress::NoProgress
+        }
+    }
+
+    pub fn or(&self, other: Self) -> Self {
+        if (*self == MadeProgress) || (other == MadeProgress) {
+            MadeProgress
+        } else {
+            NoProgress
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
@@ -241,6 +283,7 @@ pub struct Fail {
 pub fn fail<'a, T>() -> impl Parser<'a, T> {
     move |_arena, state: State<'a>| {
         Err((
+            NoProgress,
             Fail {
                 attempting: state.attempting,
                 reason: FailReason::ConditionFailed,
@@ -269,9 +312,9 @@ where
     Val: 'a,
 {
     move |arena, state: State<'a>| {
-        let (answer, state) = parser.parse(arena, state)?;
+        let (progress, answer, state) = parser.parse(arena, state)?;
 
-        Ok((&*arena.alloc(answer), state))
+        Ok((progress, &*arena.alloc(answer), state))
     }
 }
 
@@ -283,20 +326,23 @@ where
     move |arena, state: State<'a>| {
         let original_state = state.clone();
 
-        parser.parse(arena, state).and_then(|(answer, state)| {
-            let after_parse = state.clone();
+        parser
+            .parse(arena, state)
+            .and_then(|(progress, answer, state)| {
+                let after_parse = state.clone();
 
-            match by.parse(arena, state) {
-                Ok((_, state)) => Err((
-                    Fail {
-                        attempting: state.attempting,
-                        reason: FailReason::ConditionFailed,
-                    },
-                    original_state,
-                )),
-                Err(_) => Ok((answer, after_parse)),
-            }
-        })
+                match by.parse(arena, state) {
+                    Ok((fail_progress, _, state)) => Err((
+                        fail_progress,
+                        Fail {
+                            attempting: state.attempting,
+                            reason: FailReason::ConditionFailed,
+                        },
+                        original_state,
+                    )),
+                    Err(_) => Ok((progress, answer, after_parse)),
+                }
+            })
     }
 }
 
@@ -308,14 +354,15 @@ where
         let original_state = state.clone();
 
         match parser.parse(arena, state) {
-            Ok((_, _)) => Err((
+            Ok((progress, _, _)) => Err((
+                progress,
                 Fail {
                     reason: FailReason::ConditionFailed,
                     attempting: original_state.attempting,
                 },
                 original_state,
             )),
-            Err((_, _)) => Ok(((), original_state)),
+            Err((_, _, _)) => Ok((NoProgress, (), original_state)),
         }
     }
 }
@@ -337,12 +384,14 @@ pub fn and_then<'a, P1, P2, F, Before, After>(parser: P1, transform: F) -> impl 
 where
     P1: Parser<'a, Before>,
     P2: Parser<'a, After>,
-    F: Fn(Before) -> P2,
+    F: Fn(Progress, Before) -> P2,
 {
     move |arena, state| {
         parser
             .parse(arena, state)
-            .and_then(|(output, next_state)| transform(output).parse(arena, next_state))
+            .and_then(|(progress, output, next_state)| {
+                transform(progress, output).parse(arena, next_state)
+            })
     }
 }
 
@@ -353,12 +402,14 @@ pub fn and_then_with_indent_level<'a, P1, P2, F, Before, After>(
 where
     P1: Parser<'a, Before>,
     P2: Parser<'a, After>,
-    F: Fn(Before, u16) -> P2,
+    F: Fn(Progress, Before, u16) -> P2,
 {
     move |arena, state| {
-        parser.parse(arena, state).and_then(|(output, next_state)| {
-            transform(output, next_state.indent_col).parse(arena, next_state)
-        })
+        parser
+            .parse(arena, state)
+            .and_then(|(progress, output, next_state)| {
+                transform(progress, output, next_state.indent_col).parse(arena, next_state)
+            })
     }
 }
 
@@ -366,12 +417,14 @@ pub fn then<'a, P1, F, Before, After>(parser: P1, transform: F) -> impl Parser<'
 where
     P1: Parser<'a, Before>,
     After: 'a,
-    F: Fn(&'a Bump, State<'a>, Before) -> ParseResult<'a, After>,
+    F: Fn(&'a Bump, State<'a>, Progress, Before) -> ParseResult<'a, After>,
 {
     move |arena, state| {
         parser
             .parse(arena, state)
-            .and_then(|(output, next_state)| transform(arena, next_state, output))
+            .and_then(|(progress, output, next_state)| {
+                transform(arena, next_state, progress, output)
+            })
     }
 }
 
@@ -379,7 +432,7 @@ pub fn unexpected_eof(
     chars_consumed: usize,
     attempting: Attempting,
     state: State<'_>,
-) -> (Fail, State<'_>) {
+) -> (Progress, Fail, State<'_>) {
     checked_unexpected(chars_consumed, state, |region| Fail {
         reason: FailReason::Eof(region),
         attempting,
@@ -390,7 +443,7 @@ pub fn unexpected(
     chars_consumed: usize,
     state: State<'_>,
     attempting: Attempting,
-) -> (Fail, State<'_>) {
+) -> (Progress, Fail, State<'_>) {
     checked_unexpected(chars_consumed, state, |region| Fail {
         reason: FailReason::Unexpected(region),
         attempting,
@@ -405,7 +458,7 @@ fn checked_unexpected<F>(
     chars_consumed: usize,
     state: State<'_>,
     problem_from_region: F,
-) -> (Fail, State<'_>)
+) -> (Progress, Fail, State<'_>)
 where
     F: FnOnce(Region) -> Fail,
 {
@@ -423,13 +476,16 @@ where
                 end_line: state.line,
             };
 
-            (problem_from_region(region), state)
+            (Progress::NoProgress, problem_from_region(region), state)
         }
-        _ => line_too_long(state.attempting, state),
+        _ => {
+            let (_progress, fail, state) = line_too_long(state.attempting, state);
+            (Progress::NoProgress, fail, state)
+        }
     }
 }
 
-fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) {
+fn line_too_long(attempting: Attempting, state: State<'_>) -> (Progress, Fail, State<'_>) {
     let reason = FailReason::LineTooLong(state.line);
     let fail = Fail { reason, attempting };
     // Set column to MAX and advance the parser to end of input.
@@ -450,7 +506,9 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
         original_len: state.original_len,
     };
 
-    (fail, state)
+    // TODO do we make progress in this case?
+    // isn't this error fatal?
+    (Progress::NoProgress, fail, state)
 }
 
 /// A single ASCII char that isn't a newline.
@@ -460,7 +518,11 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
     debug_assert_ne!(expected, b'\n');
 
     move |_arena, state: State<'a>| match state.bytes.first() {
-        Some(&actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
+        Some(&actual) if expected == actual => Ok((
+            Progress::MadeProgress,
+            (),
+            state.advance_without_indenting(1)?,
+        )),
         Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
@@ -471,7 +533,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
 /// incrementing the line number.
 pub fn newline_char<'a>() -> impl Parser<'a, ()> {
     move |_arena, state: State<'a>| match state.bytes.first() {
-        Some(b'\n') => Ok(((), state.newline()?)),
+        Some(b'\n') => Ok((Progress::MadeProgress, (), state.newline()?)),
         Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
@@ -492,7 +554,7 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str> {
             } else {
                 let state = state.advance_without_indenting(buf.len())?;
 
-                return Ok((buf.into_bump_str(), state));
+                return Ok((Progress::MadeProgress, buf.into_bump_str(), state));
             }
         }
 
@@ -532,6 +594,30 @@ pub fn peek_utf8_char_at(state: &State, offset: usize) -> Result<(char, usize), 
     }
 }
 
+pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, ()> {
+    move |arena, state: State<'a>| {
+        let initial_state = state.clone();
+        // first parse the keyword characters
+        let (_, _, after_keyword_state) = ascii_string(keyword).parse(arena, state)?;
+
+        // then we must have at least one space character
+        // TODO this is potentially wasteful if there are a lot of spaces
+        match crate::blankspace::space1(min_indent).parse(arena, after_keyword_state.clone()) {
+            Err((_, fail, _)) => {
+                // this is not a keyword, maybe it's `whence` or `iffy`
+                // anyway, make no progress and return the initial state
+                // so we can try something else
+                Err((NoProgress, fail, initial_state))
+            }
+            Ok((_, _, _)) => {
+                // give back the state after parsing the keyword, but before the whitespace
+                // that way we can attach the whitespace to whatever follows
+                Ok((MadeProgress, (), after_keyword_state))
+            }
+        }
+    }
+}
+
 /// A hardcoded string with no newlines, consisting only of ASCII characters
 pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     // Verify that this really is exclusively ASCII characters.
@@ -548,9 +634,14 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
         match state.bytes.get(0..len) {
             Some(next_str) => {
                 if next_str == keyword.as_bytes() {
-                    Ok(((), state.advance_without_indenting(len)?))
+                    Ok((
+                        Progress::MadeProgress,
+                        (),
+                        state.advance_without_indenting(len)?,
+                    ))
                 } else {
-                    Err(unexpected(len, state, Attempting::Keyword))
+                    let (_, fail, state) = unexpected(len, state, Attempting::Keyword);
+                    Err((NoProgress, fail, state))
                 }
             }
             _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
@@ -569,7 +660,10 @@ where
         let original_attempting = state.attempting;
 
         match parser.parse(arena, state) {
-            Ok((first_output, next_state)) => {
+            Ok((progress, first_output, next_state)) => {
+                // in practice, we want elements to make progress
+                debug_assert_eq!(progress, MadeProgress);
+
                 let mut state = next_state;
                 let mut buf = Vec::with_capacity_in(1, arena);
 
@@ -577,17 +671,21 @@ where
 
                 loop {
                     match delimiter.parse(arena, state) {
-                        Ok(((), next_state)) => {
+                        Ok((delim_progress, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
                             match parser.parse(arena, next_state) {
-                                Ok((next_output, next_state)) => {
+                                Ok((element_progress, next_output, next_state)) => {
+                                    // in practice, we want elements to make progress
+                                    debug_assert_eq!(element_progress, MadeProgress);
+
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((fail, state)) => {
+                                Err((element_progress, fail, state)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that's a fatal error.
                                     return Err((
+                                        progress,
                                         Fail {
                                             attempting: original_attempting,
                                             ..fail
@@ -597,11 +695,35 @@ where
                                 }
                             }
                         }
-                        Err((_, old_state)) => return Ok((buf, old_state)),
+                        Err((delim_progress, fail, old_state)) => match delim_progress {
+                            MadeProgress => {
+                                return Err((
+                                    MadeProgress,
+                                    Fail {
+                                        attempting: original_attempting,
+                                        ..fail
+                                    },
+                                    old_state,
+                                ))
+                            }
+                            NoProgress => return Ok((NoProgress, buf, old_state)),
+                        },
                     }
                 }
             }
-            Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
+            Err((element_progress, fail, new_state)) => match element_progress {
+                MadeProgress => {
+                    return Err((
+                        MadeProgress,
+                        Fail {
+                            attempting: original_attempting,
+                            ..fail
+                        },
+                        new_state,
+                    ))
+                }
+                NoProgress => return Ok((NoProgress, Vec::new_in(arena), new_state)),
+            },
         }
     }
 }
@@ -614,8 +736,14 @@ where
     P: Parser<'a, Val>,
 {
     move |arena, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        dbg!(state.bytes);
+
         match parser.parse(arena, state) {
-            Ok((first_output, next_state)) => {
+            Ok((progress, first_output, next_state)) => {
+                // in practice, we want elements to make progress
+                debug_assert_eq!(progress, MadeProgress);
                 let mut state = next_state;
                 let mut buf = Vec::with_capacity_in(1, arena);
 
@@ -623,25 +751,52 @@ where
 
                 loop {
                     match delimiter.parse(arena, state) {
-                        Ok(((), next_state)) => {
+                        Ok((delim_progress, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
                             match parser.parse(arena, next_state) {
-                                Ok((next_output, next_state)) => {
+                                Ok((element_progress, next_output, next_state)) => {
+                                    // in practice, we want elements to make progress
+                                    debug_assert_eq!(element_progress, MadeProgress);
+
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((_, old_state)) => {
+                                Err((element_progress, fail, old_state)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that means we saw a trailing comma
-                                    return Ok((buf, old_state));
+                                    return Ok((MadeProgress, buf, old_state));
                                 }
                             }
                         }
-                        Err((_, old_state)) => return Ok((buf, old_state)),
+                        Err((delim_progress, fail, old_state)) => match delim_progress {
+                            MadeProgress => {
+                                return Err((
+                                    MadeProgress,
+                                    Fail {
+                                        attempting: original_attempting,
+                                        ..fail
+                                    },
+                                    old_state,
+                                ))
+                            }
+                            NoProgress => return Ok((NoProgress, buf, old_state)),
+                        },
                     }
                 }
             }
-            Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
+            Err((element_progress, fail, new_state)) => match dbg!(element_progress) {
+                MadeProgress => {
+                    return Err((
+                        MadeProgress,
+                        Fail {
+                            attempting: original_attempting,
+                            ..fail
+                        },
+                        new_state,
+                    ))
+                }
+                NoProgress => return Ok((NoProgress, Vec::new_in(arena), new_state)),
+            },
         }
     }
 }
@@ -657,7 +812,8 @@ where
         let original_attempting = state.attempting;
 
         match parser.parse(arena, state) {
-            Ok((first_output, next_state)) => {
+            Ok((progress, first_output, next_state)) => {
+                debug_assert_eq!(progress, MadeProgress);
                 let mut state = next_state;
                 let mut buf = Vec::with_capacity_in(1, arena);
 
@@ -665,17 +821,18 @@ where
 
                 loop {
                     match delimiter.parse(arena, state) {
-                        Ok(((), next_state)) => {
+                        Ok((delim_progress, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
                             match parser.parse(arena, next_state) {
-                                Ok((next_output, next_state)) => {
+                                Ok((element_progress, next_output, next_state)) => {
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((fail, state)) => {
+                                Err((element_progress, fail, state)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that's a fatal error.
                                     return Err((
+                                        element_progress,
                                         Fail {
                                             attempting: original_attempting,
                                             ..fail
@@ -685,11 +842,14 @@ where
                                 }
                             }
                         }
-                        Err((_, old_state)) => return Ok((buf, old_state)),
+                        Err((delim_progress, fail, old_state)) => {
+                            return fail_when_progress(delim_progress, fail, buf, old_state)
+                        }
                     }
                 }
             }
-            Err((fail, new_state)) => Err((
+            Err((fail_progress, fail, new_state)) => Err((
+                fail_progress,
                 Fail {
                     attempting: original_attempting,
                     ..fail
@@ -700,25 +860,35 @@ where
     }
 }
 
+pub fn fail_when_progress<'a, T>(
+    progress: Progress,
+    fail: Fail,
+    value: T,
+    state: State<'a>,
+) -> ParseResult<'a, T> {
+    match progress {
+        MadeProgress => Err((MadeProgress, fail, state)),
+        NoProgress => Ok((NoProgress, value, state)),
+    }
+}
+
 pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
 where
     P: Parser<'a, A>,
     F: Fn(&A) -> bool,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        if let Ok((output, next_state)) = parser.parse(arena, state.clone()) {
-            if predicate(&output) {
-                return Ok((output, next_state));
-            }
+    move |arena: &'a Bump, state: State<'a>| match parser.parse(arena, state.clone()) {
+        Ok((progress, output, next_state)) if predicate(&output) => {
+            Ok((progress, output, next_state))
         }
-
-        Err((
+        Ok((progress, _, _)) | Err((progress, _, _)) => Err((
+            progress,
             Fail {
                 reason: FailReason::ConditionFailed,
                 attempting: state.attempting,
             },
             state,
-        ))
+        )),
     }
 }
 
@@ -732,8 +902,13 @@ where
         let original_state = state.clone();
 
         match parser.parse(arena, state) {
-            Ok((out1, state)) => Ok((Some(out1), state)),
-            Err(_) => Ok((None, original_state)),
+            Ok((progress, out1, state)) => Ok((progress, Some(out1), state)),
+            Err((MadeProgress, fail, state)) => {
+                // NOTE this will backtrack
+                // Ok((NoProgress, None, original_state))
+                Err((MadeProgress, fail, state))
+            }
+            Err((NoProgress, _, _)) => Ok((NoProgress, None, original_state)),
         }
     }
 }
@@ -753,7 +928,7 @@ macro_rules! loc {
             let start_line = state.line;
 
             match $parser.parse(arena, state) {
-                Ok((value, state)) => {
+                Ok((progress, value, state)) => {
                     let end_col = state.column;
                     let end_line = state.line;
                     let region = Region {
@@ -763,9 +938,9 @@ macro_rules! loc {
                         end_line,
                     };
 
-                    Ok((Located { region, value }, state))
+                    Ok((progress, Located { region, value }, state))
                 }
-                Err((fail, state)) => Err((fail, state)),
+                Err(err) => Err(err),
             }
         }
     };
@@ -782,9 +957,10 @@ macro_rules! skip_first {
             let original_state = state.clone();
 
             match $p1.parse(arena, state) {
-                Ok((_, state)) => match $p2.parse(arena, state) {
-                    Ok((out2, state)) => Ok((out2, state)),
-                    Err((fail, _)) => Err((
+                Ok((p1, _, state)) => match $p2.parse(arena, state) {
+                    Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+                    Err((p2, fail, _)) => Err((
+                        p1.or(p2),
                         Fail {
                             attempting: original_attempting,
                             ..fail
@@ -792,7 +968,8 @@ macro_rules! skip_first {
                         original_state,
                     )),
                 },
-                Err((fail, _)) => Err((
+                Err((progress, fail, _)) => Err((
+                    progress,
                     Fail {
                         attempting: original_attempting,
                         ..fail
@@ -816,9 +993,10 @@ macro_rules! skip_second {
             let original_state = state.clone();
 
             match $p1.parse(arena, state) {
-                Ok((out1, state)) => match $p2.parse(arena, state) {
-                    Ok((_, state)) => Ok((out1, state)),
-                    Err((fail, _)) => Err((
+                Ok((p1, out1, state)) => match $p2.parse(arena, state) {
+                    Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
+                    Err((p2, fail, _)) => Err((
+                        p1.or(p2),
                         Fail {
                             attempting: original_attempting,
                             ..fail
@@ -826,7 +1004,8 @@ macro_rules! skip_second {
                         original_state,
                     )),
                 },
-                Err((fail, _)) => Err((
+                Err((progress, fail, _)) => Err((
+                    progress,
                     Fail {
                         attempting: original_attempting,
                         ..fail
@@ -919,9 +1098,10 @@ macro_rules! and {
             let original_state = state.clone();
 
             match $p1.parse(arena, state) {
-                Ok((out1, state)) => match $p2.parse(arena, state) {
-                    Ok((out2, state)) => Ok(((out1, out2), state)),
-                    Err((fail, _)) => Err((
+                Ok((p1, out1, state)) => match $p2.parse(arena, state) {
+                    Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                    Err((p2, fail, _)) => Err((
+                        p1.or(p2),
                         Fail {
                             attempting: original_state.attempting,
                             ..fail
@@ -929,7 +1109,8 @@ macro_rules! and {
                         original_state,
                     )),
                 },
-                Err((fail, state)) => Err((
+                Err((progress, fail, state)) => Err((
+                    progress,
                     Fail {
                         attempting: original_state.attempting,
                         ..fail
@@ -949,7 +1130,8 @@ macro_rules! one_of {
 
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((_, state)) => $p2.parse(
+                Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
+                Err((NoProgress, _, state)) => $p2.parse(
                     arena,
                     State {
                         // Try again, using the original `attempting` value.
@@ -973,7 +1155,7 @@ macro_rules! map {
         move |arena, state| {
             $parser
                 .parse(arena, state)
-                .map(|(output, next_state)| ($transform(output), next_state))
+                .map(|(progress, output, next_state)| (progress, $transform(output), next_state))
         }
     };
 }
@@ -984,7 +1166,9 @@ macro_rules! map_with_arena {
         move |arena, state| {
             $parser
                 .parse(arena, state)
-                .map(|(output, next_state)| ($transform(arena, output), next_state))
+                .map(|(progress, output, next_state)| {
+                    (progress, $transform(arena, output), next_state)
+                })
         }
     };
 }
@@ -992,11 +1176,13 @@ macro_rules! map_with_arena {
 #[macro_export]
 macro_rules! zero_or_more {
     ($parser:expr) => {
-        move |arena, state| {
+        move |arena, state: State<'a>| {
             use bumpalo::collections::Vec;
 
+            let start_bytes_len = state.bytes.len();
+
             match $parser.parse(arena, state) {
-                Ok((first_output, next_state)) => {
+                Ok((_, first_output, next_state)) => {
                     let mut state = next_state;
                     let mut buf = Vec::with_capacity_in(1, arena);
 
@@ -1004,15 +1190,22 @@ macro_rules! zero_or_more {
 
                     loop {
                         match $parser.parse(arena, state) {
-                            Ok((next_output, next_state)) => {
+                            Ok((_, next_output, next_state)) => {
                                 state = next_state;
                                 buf.push(next_output);
                             }
-                            Err((_, old_state)) => return Ok((buf, old_state)),
+                            Err((_, fail, old_state)) => {
+                                let progress =
+                                    Progress::from_lengths(start_bytes_len, old_state.bytes.len());
+                                return fail_when_progress(progress, fail, buf, old_state);
+                            }
                         }
                     }
                 }
-                Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
+                Err((_, fail, new_state)) => {
+                    let progress = Progress::from_lengths(start_bytes_len, new_state.bytes.len());
+                    fail_when_progress(progress, fail, Vec::new_in(arena), new_state)
+                }
             }
         }
     };
@@ -1021,11 +1214,13 @@ macro_rules! zero_or_more {
 #[macro_export]
 macro_rules! one_or_more {
     ($parser:expr) => {
-        move |arena, state| {
+        move |arena, state: State<'a>| {
             use bumpalo::collections::Vec;
 
+            dbg!(state.bytes);
+
             match $parser.parse(arena, state) {
-                Ok((first_output, next_state)) => {
+                Ok((_, first_output, next_state)) => {
                     let mut state = next_state;
                     let mut buf = Vec::with_capacity_in(1, arena);
 
@@ -1033,19 +1228,25 @@ macro_rules! one_or_more {
 
                     loop {
                         match $parser.parse(arena, state) {
-                            Ok((next_output, next_state)) => {
+                            Ok((_, next_output, next_state)) => {
                                 state = next_state;
                                 buf.push(next_output);
                             }
-                            Err((_, old_state)) => return Ok((buf, old_state)),
+                            Err((progress, fail, old_state)) => {
+                                return fail_when_progress(progress, fail, buf, old_state)
+                            }
                         }
                     }
                 }
-                Err((_, new_state)) => Err($crate::parser::unexpected_eof(
-                    0,
-                    new_state.attempting,
-                    new_state,
-                )),
+                Err((progress, _, new_state)) => {
+                    dbg!(new_state.bytes);
+                    debug_assert_eq!(progress, NoProgress);
+                    Err($crate::parser::unexpected_eof(
+                        0,
+                        new_state.attempting,
+                        new_state,
+                    ))
+                }
             }
         }
     };
@@ -1067,10 +1268,11 @@ macro_rules! attempt {
                         ..state
                     },
                 )
-                .map(|(answer, state)| {
+                .map(|(progress, answer, state)| {
                     // If the parser suceeded, go back to what we were originally attempting.
                     // (If it failed, that's exactly where we care what we were attempting!)
                     (
+                        progress,
                         answer,
                         State {
                             attempting: original_attempting,
@@ -1091,10 +1293,15 @@ macro_rules! either {
             let original_attempting = state.attempting;
 
             match $p1.parse(arena, state) {
-                Ok((output, state)) => Ok(($crate::parser::Either::First(output), state)),
-                Err((_, state)) => match $p2.parse(arena, state) {
-                    Ok((output, state)) => Ok(($crate::parser::Either::Second(output), state)),
-                    Err((fail, state)) => Err((
+                Ok((progress, output, state)) => {
+                    Ok((progress, $crate::parser::Either::First(output), state))
+                }
+                Err((NoProgress, _, state)) => match $p2.parse(arena, state) {
+                    Ok((progress, output, state)) => {
+                        Ok((progress, $crate::parser::Either::Second(output), state))
+                    }
+                    Err((progress, fail, state)) => Err((
+                        progress,
                         Fail {
                             attempting: original_attempting,
                             ..fail
@@ -1102,6 +1309,14 @@ macro_rules! either {
                         state,
                     )),
                 },
+                Err((MadeProgress, fail, state)) => Err((
+                    MadeProgress,
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
             }
         }
     };
@@ -1129,13 +1344,14 @@ macro_rules! record_field {
             use $crate::parser::Either::*;
 
             // You must have a field name, e.g. "email"
-            let (loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
+            let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
+            debug_assert_eq!(progress, MadeProgress);
 
-            let (spaces, state) = space0($min_indent).parse(arena, state)?;
+            let (_, spaces, state) = space0($min_indent).parse(arena, state)?;
 
             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
             // (This is true in both literals and types.)
-            let (opt_loc_val, state) = $crate::parser::optional(either!(
+            let (_, opt_loc_val, state) = $crate::parser::optional(either!(
                 skip_first!(ascii_char(b':'), space0_before($val_parser, $min_indent)),
                 skip_first!(ascii_char(b'?'), space0_before($val_parser, $min_indent))
             ))
@@ -1157,7 +1373,7 @@ macro_rules! record_field {
                 }
             };
 
-            Ok((answer, state))
+            Ok((MadeProgress, answer, state))
         }
     };
 }
@@ -1287,14 +1503,28 @@ pub fn parse_utf8(bytes: &[u8]) -> Result<&str, FailReason> {
 pub fn end_of_file<'a>() -> impl Parser<'a, ()> {
     |_arena: &'a Bump, state: State<'a>| {
         if state.has_reached_end() {
-            Ok(((), state))
+            Ok((NoProgress, (), state))
         } else {
             let fail = Fail {
                 attempting: state.attempting,
                 reason: FailReason::ConditionFailed,
             };
 
-            Err((fail, state))
+            Err((NoProgress, fail, state))
+        }
+    }
+}
+
+pub fn backtrackable<'a, P, Val>(parser: P) -> impl Parser<'a, Val>
+where
+    P: Parser<'a, Val>,
+{
+    move |arena: &'a Bump, state: State<'a>| {
+        let old_state = state.clone();
+
+        match parser.parse(arena, state) {
+            Ok((_, a, s1)) => Ok((NoProgress, a, s1)),
+            Err((_, f, _)) => Err((NoProgress, f, old_state)),
         }
     }
 }

@@ -1,5 +1,6 @@
 use crate::ast::Attempting;
 use crate::keyword;
+use crate::parser::Progress::{self, *};
 use crate::parser::{peek_utf8_char, unexpected, Fail, FailReason, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -78,6 +79,8 @@ pub fn parse_ident<'a>(
     let is_accessor_fn;
     let mut is_private_tag = false;
 
+    let start_bytes_len = state.bytes.len();
+
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
     match peek_utf8_char(&state) {
@@ -117,13 +120,19 @@ pub fn parse_ident<'a>(
                             ));
                         }
                     }
-                    Err(reason) => return state.fail(reason),
+                    Err(reason) => {
+                        let progress = Progress::from_bool(state.bytes.len() == start_bytes_len);
+                        return state.fail(progress, reason);
+                    }
                 }
             } else {
                 return Err(unexpected(0, state, Attempting::Identifier));
             }
         }
-        Err(reason) => return state.fail(reason),
+        Err(reason) => {
+            let progress = Progress::from_bool(state.bytes.len() == start_bytes_len);
+            return state.fail(progress, reason);
+        }
     }
 
     while !state.bytes.is_empty() {
@@ -185,7 +194,10 @@ pub fn parse_ident<'a>(
 
                 state = state.advance_without_indenting(bytes_parsed)?;
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => {
+                let progress = Progress::from_bool(state.bytes.len() == start_bytes_len);
+                return state.fail(progress, reason);
+            }
         }
     }
 
@@ -255,7 +267,9 @@ pub fn parse_ident<'a>(
         }
     };
 
-    Ok(((answer, None), state))
+    let progress = Progress::from_bool(state.bytes.len() != start_bytes_len);
+    debug_assert_eq!(progress, Progress::MadeProgress,);
+    Ok((Progress::MadeProgress, (answer, None), state))
 }
 
 fn malformed<'a>(
@@ -295,11 +309,12 @@ fn malformed<'a>(
 
                 state = state.advance_without_indenting(bytes_parsed)?;
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => return state.fail(MadeProgress, reason),
         }
     }
 
     Ok((
+        MadeProgress,
         (Ident::Malformed(full_string.into_bump_str()), next_char),
         state,
     ))
@@ -308,9 +323,9 @@ fn malformed<'a>(
 pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         // Discard next_char; we don't need it.
-        let ((string, _), state) = parse_ident(arena, state)?;
+        let (progress, (string, _), state) = parse_ident(arena, state)?;
 
-        Ok((string, state))
+        Ok((progress, string, state))
     }
 }
 
@@ -328,7 +343,7 @@ where
 
                 (first_letter, bytes_parsed)
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => return state.fail(NoProgress, reason),
         };
 
         let mut buf = String::with_capacity_in(1, arena);
@@ -354,11 +369,11 @@ where
                         break;
                     }
                 }
-                Err(reason) => return state.fail(reason),
+                Err(reason) => return state.fail(MadeProgress, reason),
             };
         }
 
-        Ok((buf.into_bump_str(), state))
+        Ok((MadeProgress, buf.into_bump_str(), state))
     }
 }
 
@@ -368,8 +383,11 @@ where
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
     move |arena, state| {
-        let (ident, state) =
+        let (progress, ident, state) =
             global_tag_or_ident(|first_char| first_char.is_lowercase()).parse(arena, state)?;
+
+        // to parse a valid ident, progress must be made
+        debug_assert_eq!(progress, MadeProgress);
 
         if (ident == keyword::IF)
             || (ident == keyword::THEN)
@@ -381,6 +399,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
             // TODO Calculate the correct region based on state
             let region = Region::zero();
             Err((
+                MadeProgress,
                 Fail {
                     reason: FailReason::ReservedKeyword(region),
                     attempting: Attempting::Identifier,
@@ -388,7 +407,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
                 state,
             ))
         } else {
-            Ok((ident, state))
+            Ok((MadeProgress, ident, state))
         }
     }
 }

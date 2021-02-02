@@ -40,19 +40,19 @@ impl<'a> File<'a> {
         let parsed_module = roc_parse::module::header().parse(&arena, module_parse_state);
 
         match parsed_module {
-            Ok((module, state)) => {
+            Ok((_, module, state)) => {
                 let parsed_defs = module_defs().parse(&arena, state);
 
                 match parsed_defs {
-                    Ok((defs, _)) => Ok(File {
+                    Ok((_, defs, _)) => Ok(File {
                         path,
                         module_header: module,
                         content: defs,
                     }),
-                    Err((error, _)) => Err(ReadError::ParseDefs(error)),
+                    Err((_, error, _)) => Err(ReadError::ParseDefs(error)),
                 }
             }
-            Err((error, _)) => Err(ReadError::ParseHeader(error)),
+            Err((_, error, _)) => Err(ReadError::ParseHeader(error)),
         }
     }
 

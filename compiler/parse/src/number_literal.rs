@@ -1,5 +1,5 @@
 use crate::ast::{Attempting, Base, Expr};
-use crate::parser::{parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, State};
+use crate::parser::{parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, Progress, State};
 use std::char;
 use std::str::from_utf8_unchecked;
 
@@ -126,12 +126,14 @@ where
     // we'll succeed with an appropriate Expr which records that.
     match typ {
         Num => Ok((
+            Progress::from_consumed(bytes_parsed),
             // SAFETY: it's safe to use from_utf8_unchecked here, because we've
             // already validated that this range contains only ASCII digits
             Expr::Num(unsafe { from_utf8_unchecked(&state.bytes[0..bytes_parsed]) }),
             state.advance_without_indenting(bytes_parsed)?,
         )),
         Float => Ok((
+            Progress::from_consumed(bytes_parsed),
             // SAFETY: it's safe to use from_utf8_unchecked here, because we've
             // already validated that this range contains only ASCII digits
             Expr::Float(unsafe { from_utf8_unchecked(&state.bytes[0..bytes_parsed]) }),
@@ -168,6 +170,7 @@ fn from_base(
 
     match parse_utf8(bytes) {
         Ok(string) => Ok((
+            Progress::from_consumed(bytes_parsed),
             Expr::NonBase10Int {
                 is_negative,
                 string,
@@ -175,6 +178,6 @@ fn from_base(
             },
             state.advance_without_indenting(bytes_parsed)?,
         )),
-        Err(reason) => state.fail(reason),
+        Err(reason) => state.fail(Progress::from_consumed(bytes_parsed), reason),
     }
 }

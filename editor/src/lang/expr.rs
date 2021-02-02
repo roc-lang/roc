@@ -238,9 +238,9 @@ pub fn str_to_expr2<'a>(
     let parse_res = parser.parse(&arena, state);
 
     parse_res
-        .map(|(loc_expr, _)| arena.alloc(loc_expr.value))
+        .map(|(_, loc_expr, _)| arena.alloc(loc_expr.value))
         .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
-        .map_err(|(fail, _)| fail)
+        .map_err(|(_, fail, _)| fail)
 }
 
 pub fn to_expr2<'a>(

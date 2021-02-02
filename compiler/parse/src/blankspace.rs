@@ -1,8 +1,10 @@
 use crate::ast::CommentOrNewline::{self, *};
 use crate::ast::{Attempting, Spaceable};
 use crate::parser::{
-    self, and, ascii_char, ascii_string, optional, parse_utf8, peek_utf8_char, then, unexpected,
-    unexpected_eof, FailReason, Parser, State,
+    self, and, ascii_char, ascii_string, backtrackable, optional, parse_utf8, peek_utf8_char, then,
+    unexpected, unexpected_eof, FailReason, Parser,
+    Progress::{self, *},
+    State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -130,7 +132,7 @@ where
     P: 'a,
 {
     parser::map_with_arena(
-        and!(space1(min_indent), parser),
+        and!(backtrackable(space1(min_indent)), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
                 loc_expr
@@ -193,7 +195,12 @@ where
 
 /// Zero or more (spaces/comments/newlines).
 pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
-    spaces(false, min_indent)
+    move |a, s| {
+        dbg!(&s, min_indent);
+
+        dbg!(spaces(false, min_indent).parse(a, s))
+    }
+    // spaces(false, min_indent)
 }
 
 /// One or more (spaces/comments/newlines).
@@ -202,7 +209,12 @@ pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]
     // exactly one space followed by char that isn't [' ', '\n', or '#'], and
     // if so, return empty slice. The case where there's exactly 1 space should
     // be by far the most common.
-    spaces(true, min_indent)
+    move |a, s| {
+        dbg!(&s, min_indent);
+
+        dbg!(spaces(true, min_indent).parse(a, s))
+    }
+    // spaces(true, min_indent)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -215,7 +227,7 @@ enum LineState {
 pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
     then(
         and!(ascii_char(b'#'), optional(ascii_string("# "))),
-        |_arena: &'a Bump, state: State<'a>, (_, opt_doc)| {
+        |_arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
             if opt_doc != None {
                 return Err(unexpected(3, state, Attempting::LineComment));
             }
@@ -232,8 +244,8 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
             let comment = &state.bytes[..length];
             let state = state.advance_without_indenting(length + 1)?;
             match parse_utf8(comment) {
-                Ok(comment_str) => Ok((comment_str, state)),
-                Err(reason) => state.fail(reason),
+                Ok(comment_str) => Ok((MadeProgress, comment_str, state)),
+                Err(reason) => state.fail(MadeProgress, reason),
             }
         },
     )
@@ -243,7 +255,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
 pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
     move |_arena: &'a Bump, state: State<'a>| {
         if spaces_expected == 0 {
-            return Ok(((), state));
+            return Ok((NoProgress, (), state));
         }
 
         let mut state = state;
@@ -255,7 +267,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
                     spaces_seen += 1;
                     state = state.advance_spaces(1)?;
                     if spaces_seen == spaces_expected {
-                        return Ok(((), state));
+                        return Ok((MadeProgress, (), state));
                     }
                 }
                 Ok(_) => {
@@ -268,7 +280,8 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
 
                 Err(FailReason::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
-                    return state.fail(FailReason::BadUtf8);
+                    let progress = Progress::from_bool(spaces_seen != 0);
+                    return state.fail(progress, FailReason::BadUtf8);
                 }
                 Err(_) => {
                     if spaces_seen == 0 {
@@ -310,6 +323,8 @@ fn spaces<'a>(
         let mut state = state;
         let mut any_newlines = false;
 
+        let start_bytes_len = state.bytes.len();
+
         while !state.bytes.is_empty() {
             match peek_utf8_char(&state) {
                 Ok((ch, utf8_len)) => {
@@ -328,7 +343,15 @@ fn spaces<'a>(
                                     state = state.advance_spaces(1)?;
                                 }
                                 '\n' => {
-                                    // No need to check indentation because we're about to reset it anyway.
+                                    // must check indent to not make undesired progress
+                                    let progress =
+                                        Progress::from_lengths(start_bytes_len, state.bytes.len());
+
+                                    state =
+                                        state.check_indent(min_indent).map_err(|(fail, _)| {
+                                            (progress, fail, original_state.clone())
+                                        })?;
+
                                     state = state.newline()?;
 
                                     // Newlines only get added to the list when they're outside comments.
@@ -339,9 +362,13 @@ fn spaces<'a>(
                                 '#' => {
                                     // Check indentation to make sure we were indented enough
                                     // before this comment began.
+                                    let progress =
+                                        Progress::from_lengths(start_bytes_len, state.bytes.len());
                                     state = state
                                         .check_indent(min_indent)
-                                        .map_err(|(fail, _)| (fail, original_state.clone()))?
+                                        .map_err(|(fail, _)| {
+                                            (progress, fail, original_state.clone())
+                                        })?
                                         .advance_without_indenting(1)?;
 
                                     // We're now parsing a line comment!
@@ -360,13 +387,17 @@ fn spaces<'a>(
                                         // It's actively important for correctness that we skip
                                         // this check if there are no newlines, because otherwise
                                         // we would have false positives for single-line defs.)
+                                        let progress = Progress::from_lengths(
+                                            start_bytes_len,
+                                            state.bytes.len(),
+                                        );
                                         if any_newlines {
-                                            state = state
-                                                .check_indent(min_indent)
-                                                .map_err(|(fail, _)| (fail, original_state))?;
+                                            state = state.check_indent(min_indent).map_err(
+                                                |(fail, _)| (progress, fail, original_state),
+                                            )?;
                                         }
 
-                                        Ok((space_list.into_bump_slice(), state))
+                                        Ok((progress, space_list.into_bump_slice(), state))
                                     };
                                 }
                             }
@@ -459,7 +490,8 @@ fn spaces<'a>(
                 }
                 Err(FailReason::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
-                    return state.fail(FailReason::BadUtf8);
+                    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+                    return state.fail(progress, FailReason::BadUtf8);
                 }
                 Err(_) => {
                     if require_at_least_one && bytes_parsed == 0 {
@@ -474,16 +506,18 @@ fn spaces<'a>(
                         // It's actively important for correctness that we skip
                         // this check if there are no newlines, because otherwise
                         // we would have false positives for single-line defs.)
+                        let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
                         if any_newlines {
                             return Ok((
+                                progress,
                                 space_slice,
                                 state
                                     .check_indent(min_indent)
-                                    .map_err(|(fail, _)| (fail, original_state))?,
+                                    .map_err(|(fail, _)| (progress, fail, original_state))?,
                             ));
                         }
 
-                        return Ok((space_slice, state));
+                        return Ok((progress, space_slice, state));
                     }
                 }
             };
@@ -500,13 +534,14 @@ fn spaces<'a>(
             // It's actively important for correctness that we skip
             // this check if there are no newlines, because otherwise
             // we would have false positives for single-line defs.)
+            let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
             if any_newlines {
                 state = state
                     .check_indent(min_indent)
-                    .map_err(|(fail, _)| (fail, original_state))?;
+                    .map_err(|(fail, _)| (progress, fail, original_state))?;
             }
 
-            Ok((space_list.into_bump_slice(), state))
+            Ok((progress, space_list.into_bump_slice(), state))
         }
     }
 }

@@ -1574,6 +1574,16 @@ mod test_parse {
             reset_indentation.into_bump_slice(),
         );
 
+        //        assert_parses_to(
+        //            indoc!(
+        //                r#"# leading comment
+        //                x=5
+        //
+        //                42
+        //                "#
+        //            ),
+        //            expected,
+        //        );
         assert_parses_to(
             indoc!(
                 r#"# leading comment
@@ -2411,7 +2421,7 @@ mod test_parse {
         );
         let actual = app_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2449,7 +2459,7 @@ mod test_parse {
         );
         let actual = app_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2501,7 +2511,7 @@ mod test_parse {
         );
         let actual = app_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2545,7 +2555,7 @@ mod test_parse {
         let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects fx.Blah {}";
         let actual = platform_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2613,7 +2623,7 @@ mod test_parse {
         );
         let actual = platform_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2642,7 +2652,7 @@ mod test_parse {
         );
         let actual = interface_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2671,7 +2681,7 @@ mod test_parse {
         );
         let actual = interface_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2698,7 +2708,7 @@ mod test_parse {
         );
         let actual = module_defs()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
         // and then again for the lookup.
@@ -2755,7 +2765,7 @@ mod test_parse {
         );
         let actual = module_defs()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
-            .map(|tuple| tuple.0);
+            .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
     }

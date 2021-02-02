@@ -2091,19 +2091,19 @@ fn load_pkg_config<'a>(
             effect_module_timing.parse_header = parse_header_duration;
 
             match parsed {
-                Ok((ast::Module::Interface { header }, _parse_state)) => {
+                Ok((_, ast::Module::Interface { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got Interface with header\n{:?}",
                         header
                     )))
                 }
-                Ok((ast::Module::App { header }, _parse_state)) => {
+                Ok((_, ast::Module::App { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got App with header\n{:?}",
                         header
                     )))
                 }
-                Ok((ast::Module::Platform { header }, parser_state)) => {
+                Ok((_, ast::Module::Platform { header }, parser_state)) => {
                     // make a Pkg-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
@@ -2131,7 +2131,7 @@ fn load_pkg_config<'a>(
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
-                Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+                Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
             }
         }
 
@@ -2253,7 +2253,7 @@ fn parse_header<'a>(
     module_timing.parse_header = parse_header_duration;
 
     match parsed {
-        Ok((ast::Module::Interface { header }, parse_state)) => Ok(send_header(
+        Ok((_, ast::Module::Interface { header }, parse_state)) => Ok(send_header(
             Located {
                 region: header.name.region,
                 value: ModuleNameEnum::Interface(header.name.value),
@@ -2269,7 +2269,7 @@ fn parse_header<'a>(
             ident_ids_by_module,
             module_timing,
         )),
-        Ok((ast::Module::App { header }, parse_state)) => {
+        Ok((_, ast::Module::App { header }, parse_state)) => {
             let mut pkg_config_dir = filename.clone();
             pkg_config_dir.pop();
 
@@ -2367,7 +2367,7 @@ fn parse_header<'a>(
                 },
             }
         }
-        Ok((ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+        Ok((_, ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
             arena,
             &"",
             module_ids,
@@ -2376,7 +2376,7 @@ fn parse_header<'a>(
             header,
             module_timing,
         ),
-        Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+        Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }
 
@@ -3382,12 +3382,13 @@ fn canonicalize_and_constrain<'a>(
 }
 
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
+    println!("-------- parsing {:?}", header.module_id);
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new(&header.src, Attempting::Module);
     let parsed_defs = match module_defs().parse(&arena, parse_state) {
-        Ok((success, _state)) => success,
-        Err((fail, state)) => {
+        Ok((_, success, _state)) => success,
+        Err((_, fail, state)) => {
             use roc_parse::parser::FailReason;
             match fail.reason {
                 FailReason::BadUtf8 => panic!(
