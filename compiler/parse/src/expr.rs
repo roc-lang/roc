@@ -184,7 +184,8 @@ pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         ),
         map_with_arena!(
             and!(
-                loc!(ascii_char(b'-')),
+                // must backtrack to distinguish `x - 1` from `-1`
+                loc!(backtrackable(ascii_char(b'-'))),
                 loc!(move |arena, state| parse_expr(min_indent, arena, state))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
