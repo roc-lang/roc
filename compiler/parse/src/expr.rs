@@ -174,8 +174,9 @@ fn loc_parse_expr_body_without_operators<'a>(
 pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     one_of!(
         map_with_arena!(
+            // must backtrack to distinguish `!x` from `!= y`
             and!(
-                loc!(ascii_char(b'!')),
+                loc!(backtrackable(ascii_char(b'!'))),
                 loc!(move |arena, state| parse_expr(min_indent, arena, state))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
@@ -208,9 +209,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
             optional(and!(
                 // and!(space0(min_indent), loc!(binop())),
                 move |arena, state| {
-                    dbg!("... -----> starting here");
                     let (_, spaces, state) = space0(min_indent).parse(arena, state)?;
-                    dbg!("got here");
                     let (_, op, state) = loc!(binop()).parse(arena, state)?;
 
                     Ok((MadeProgress, (spaces, op), state))
@@ -225,7 +224,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
                 )
             ))
         ),
-        |arena, (loc_expr1, opt_operator)| match dbg!(opt_operator) {
+        |arena, (loc_expr1, opt_operator)| match opt_operator {
             Some(((spaces_before_op, loc_op), loc_expr2)) => {
                 let loc_expr1 = if spaces_before_op.is_empty() {
                     loc_expr1
@@ -583,10 +582,16 @@ fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>> {
 type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
 
 fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
-    dbg!("we get here?");
     let indented_more = min_indent + 1;
     let result = and!(
-        pattern(min_indent),
+        // this backtrackable is required for the case
+        //
+        // i = 64
+        //
+        // i
+        //
+        // so the final i is not considered the start of a def
+        backtrackable(pattern(min_indent)),
         skip_first!(
             equals_for_def(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
@@ -1570,14 +1575,11 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
     then(
         // Spaces, then '-', then *not* more spaces.
         not_followed_by(
-            and!(
-                backtrackable(space1(min_indent)),
-                either!(
-                    // Try to parse a number literal *before* trying to parse unary negate,
-                    // because otherwise (foo -1) will parse as (foo (Num.neg 1))
-                    loc!(number_literal()),
-                    loc!(ascii_char(b'-'))
-                )
+            either!(
+                // Try to parse a number literal *before* trying to parse unary negate,
+                // because otherwise (foo -1) will parse as (foo (Num.neg 1))
+                loc!(number_literal()),
+                loc!(ascii_char(b'-'))
             ),
             one_of!(
                 ascii_char(b' '),
@@ -1586,7 +1588,7 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
                 ascii_char(b'>')
             ),
         ),
-        move |arena, state, progress, (spaces, num_or_minus_char)| {
+        move |arena, state, progress, num_or_minus_char| {
             debug_assert_eq!(progress, MadeProgress);
 
             match num_or_minus_char {
@@ -1616,12 +1618,7 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
                         value,
                     };
 
-                    // spaces can be empy if it's all space characters (no newlines or comments).
-                    let value = if spaces.is_empty() {
-                        loc_expr.value
-                    } else {
-                        Expr::SpaceBefore(arena.alloc(loc_expr.value), spaces)
-                    };
+                    let value = loc_expr.value;
 
                     Ok((
                         MadeProgress,
@@ -1638,13 +1635,27 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
 }
 
 fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
-    move |a, s| {
-        dbg!((one_or_more!(one_of!(
-            unary_negate_function_arg(min_indent),
-            space1_before(loc_function_arg(min_indent), min_indent)
-        )))
-        .parse(a, s))
-    }
+    one_or_more!(move |arena: &'a Bump, s| {
+        map!(
+            and!(
+                backtrackable(space1(min_indent)),
+                one_of!(
+                    unary_negate_function_arg(min_indent),
+                    loc_function_arg(min_indent)
+                )
+            ),
+            |(spaces, loc_expr): (&'a [_], Located<Expr<'a>>)| {
+                if spaces.is_empty() {
+                    loc_expr
+                } else {
+                    arena
+                        .alloc(loc_expr.value)
+                        .with_spaces_before(spaces, loc_expr.region)
+                }
+            }
+        )
+        .parse(arena, s)
+    })
 }
 
 /// When we parse an ident like `foo ` it could be any of these:
@@ -1673,8 +1684,6 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         ),
         move |arena, state, progress, (loc_ident, opt_extras)| {
             debug_assert_eq!(progress, MadeProgress);
-
-            dbg!("parsed the ident", &opt_extras);
 
             // This appears to be a var, keyword, or function application.
             match opt_extras {

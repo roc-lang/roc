@@ -3396,9 +3396,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
                 ),
                 _ => panic!(
                     "Parser Error\nmodule: {:?}\nattempting: {:?}\n(line, col): {:?}\n",
-                    header.module_id,
-                    fail.attempting,
-                    (state.line, state.column)
+                    header.module_id, fail.attempting, &state
                 ),
             }
         }

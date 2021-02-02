@@ -792,7 +792,7 @@ where
                     }
                 }
             }
-            Err((element_progress, fail, new_state)) => match dbg!(element_progress) {
+            Err((element_progress, fail, new_state)) => match element_progress {
                 MadeProgress => {
                     return Err((
                         MadeProgress,
@@ -1058,16 +1058,12 @@ macro_rules! collection {
                 // We could change the AST to add extra storage specifically to
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
-                {
-                    dbg!("we are here? ");
-                    |a, s| dbg!(zero_or_more!($crate::parser::ascii_char(b' ')).parse(a, s))
-                },
+                zero_or_more!($crate::parser::ascii_char(b' ')),
                 skip_second!(
-                    move |a, s| dbg!($crate::parser::sep_by0(
+                    $crate::parser::sep_by0(
                         $delimiter,
                         $crate::blankspace::space0_around($elem, $min_indent)
-                    )
-                    .parse(a, s)),
+                    ),
                     $closing_brace
                 )
             )
@@ -1260,8 +1256,6 @@ macro_rules! one_or_more {
         move |arena, state: State<'a>| {
             use bumpalo::collections::Vec;
 
-            dbg!(state.bytes);
-
             match $parser.parse(arena, state) {
                 Ok((_, first_output, next_state)) => {
                     let mut state = next_state;
@@ -1282,8 +1276,7 @@ macro_rules! one_or_more {
                     }
                 }
                 Err((progress, _, new_state)) => {
-                    dbg!(new_state.bytes);
-                    debug_assert_eq!(progress, NoProgress);
+                    debug_assert_eq!(progress, NoProgress, "{:?}", &new_state);
                     Err($crate::parser::unexpected_eof(
                         0,
                         new_state.attempting,

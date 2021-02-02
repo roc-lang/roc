@@ -298,7 +298,7 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
     move |a: &'a Bump, s: State<'a>| {
         // this parses just the defs
-        let defs = zero_or_more!(space0_around(loc(debug!(def(0))), 0));
+        let defs = zero_or_more!(space0_around(loc(def(0)), 0));
 
         // let result = skip_second!(defs, end_of_file()).parse(a, s);
         let result = defs.parse(a, s);
@@ -322,8 +322,8 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
     map!(
         and!(
             and!(
-                skip_second!(debug!(backtrackable(space1(1))), ascii_string("provides")),
-                debug!(space1(1))
+                skip_second!(backtrackable(space1(1)), ascii_string("provides")),
+                space1(1)
             ),
             and!(
                 collection!(

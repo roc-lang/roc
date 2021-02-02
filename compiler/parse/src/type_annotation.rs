@@ -61,14 +61,13 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
                 loc!(parse_type_variable)
             ),
             |a, s| {
-                dbg!("term state", &s);
                 optional(
                     // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
                     and!(
                         space1(min_indent),
                         skip_first!(
                             crate::parser::keyword(keyword::AS, min_indent),
-                            |a, s| dbg!(space1_before(term(min_indent), min_indent).parse(a, s))
+                            space1_before(term(min_indent), min_indent)
                         )
                     ),
                 )
@@ -125,7 +124,7 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
 }
 
 fn loc_applied_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>> {
-    zero_or_more!(move |arena, state| dbg!(loc_applied_arg(min_indent).parse(arena, state)))
+    zero_or_more!(loc_applied_arg(min_indent))
 }
 
 #[inline(always)]
@@ -220,7 +219,6 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 }
 
 fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    dbg!("parsing type ig");
     use crate::blankspace::space0;
     move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;

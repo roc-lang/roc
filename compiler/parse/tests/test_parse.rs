@@ -1803,7 +1803,7 @@ mod test_parse {
             indoc!(
                 r#"
                 foo : Foo.Bar.Baz x y as Blah a b
-        
+
                 42
                 "#
             ),
@@ -1839,7 +1839,7 @@ mod test_parse {
             indoc!(
                 r#"
                 Blah a b : Foo.Bar.Baz x y
- 
+
                 42
                 "#
             ),
@@ -2771,6 +2771,52 @@ mod test_parse {
             .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn module_def_newline() {
+        use roc_parse::ast::Def::*;
+
+        let arena = Bump::new();
+
+        let src = indoc!(
+            r#"
+                main =
+                    i = 64
+
+                    i
+            "#
+        );
+
+        let actual = module_defs()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.1);
+
+        assert!(actual.is_ok());
+    }
+
+    #[test]
+    fn nested_def_annotation() {
+        use roc_parse::ast::Def::*;
+
+        let arena = Bump::new();
+
+        let src = indoc!(
+            r#"
+            main =
+                wrappedNotEq : a, a -> Bool
+                wrappedNotEq = \num1, num2 ->
+                    num1 != num2
+
+                wrappedNotEq 2 3
+            "#
+        );
+
+        let actual = module_defs()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.1);
+
+        assert!(actual.is_ok());
     }
 
     #[test]
