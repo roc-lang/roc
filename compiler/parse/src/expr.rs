@@ -511,10 +511,11 @@ fn equals_for_def<'a>() -> impl Parser<'a, ()> {
 /// * A type annotation
 /// * A type annotation followed on the next line by a pattern, an `=`, and an expression
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
+    // we should fix this backtracking!
     attempt(
         Attempting::Def,
         map_with_arena!(
-            either!(annotated_body(min_indent), body(min_indent)),
+            either!(backtrackable(annotated_body(min_indent)), body(min_indent)),
             to_def
         ),
     )
@@ -716,6 +717,12 @@ fn annotation_or_alias<'a>(
     }
 }
 
+fn parse_defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>> {
+    let parse_def = move |a, s| space1_before(loc!(def(min_indent)), min_indent).parse(a, s);
+
+    zero_or_more!(allocated(parse_def))
+}
+
 fn parse_def_expr<'a>(
     min_indent: u16,
     def_start_col: u16,
@@ -748,7 +755,6 @@ fn parse_def_expr<'a>(
         // Indented more beyond the original indent of the entire def-expr.
         let indented_more = def_start_col + 1;
 
-        dbg!("now we get here");
         then(
             attempt!(
                 Attempting::Def,
@@ -762,10 +768,7 @@ fn parse_def_expr<'a>(
                     loc!(move |arena, state| parse_expr(indented_more, arena, state)),
                     and!(
                         // Optionally parse additional defs.
-                        zero_or_more!(allocated(space1_before(
-                            loc!(def(def_start_col)),
-                            def_start_col,
-                        ))),
+                        parse_defs(def_start_col),
                         // Parse the final expression that will be returned.
                         // It should be indented the same amount as the original.
                         space1_before(
@@ -865,10 +868,8 @@ fn parse_def_signature<'a>(
                     // leading to an AnnotatedBody in this case
                     |_progress, type_ann, indent_level| map(
                         optional(and!(
-                            backtrackable(
-                                |a, s| dbg!(spaces_then_comment_or_newline().parse(a, s))
-                            ),
-                            |a, s| dbg!(body_at_indent(indent_level).parse(a, s))
+                            backtrackable(spaces_then_comment_or_newline()),
+                            body_at_indent(indent_level)
                         )),
                         move |opt_body| (type_ann.clone(), opt_body)
                     )
@@ -1585,7 +1586,6 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
             ),
         ),
         move |arena, state, progress, (spaces, num_or_minus_char)| {
-            dbg!("parsed an arg?");
             debug_assert_eq!(progress, MadeProgress);
 
             match num_or_minus_char {
