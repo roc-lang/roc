@@ -2501,21 +2501,15 @@ mod test_parse {
             after_to: &[],
         };
 
-        //        let src = indoc!(
-        //            r#"
-        //                app "quicksort"
-        //                    packages { base: "./platform" }
-        //                    imports [ foo.Bar.Baz ]
-        //                    provides [ quicksort ] to base
-        //            "#
-        //        );
-
         let src = indoc!(
             r#"
-                app "quicksort" 
+                app "quicksort"
+                    packages { base: "./platform" }
+                    imports [ foo.Bar.Baz ]
                     provides [ quicksort ] to base
             "#
         );
+
         let actual = app_header()
             .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
             .map(|tuple| tuple.1);

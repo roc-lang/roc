@@ -4,8 +4,8 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, backtrackable, fail_when_progress, not, optional,
-    peek_utf8_char, unexpected, Either, Fail, FailReason, ParseResult, Parser,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either, Fail,
+    FailReason, ParseResult, Parser,
     Progress::{self, *},
     State,
 };

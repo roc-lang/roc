@@ -9,9 +9,8 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, ascii_char, ascii_string, backtrackable, end_of_file, fail_when_progress, loc, optional,
-    peek_utf8_char, peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser,
-    State,
+    self, ascii_char, ascii_string, backtrackable, loc, optional, peek_utf8_char,
+    peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -323,8 +322,8 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
     map!(
         and!(
             and!(
-                skip_second!(backtrackable(space1(1)), ascii_string("provides")),
-                space1(1)
+                skip_second!(debug!(backtrackable(space1(1))), ascii_string("provides")),
+                debug!(space1(1))
             ),
             and!(
                 collection!(

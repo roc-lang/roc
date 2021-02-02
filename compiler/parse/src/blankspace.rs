@@ -343,14 +343,8 @@ fn spaces<'a>(
                                     state = state.advance_spaces(1)?;
                                 }
                                 '\n' => {
-                                    // must check indent to not make undesired progress
-                                    let progress =
-                                        Progress::from_lengths(start_bytes_len, state.bytes.len());
-
-                                    state =
-                                        state.check_indent(min_indent).map_err(|(fail, _)| {
-                                            (progress, fail, original_state.clone())
-                                        })?;
+                                    // don't need to check the indent here since we'll reset it
+                                    // anyway
 
                                     state = state.newline()?;
 
