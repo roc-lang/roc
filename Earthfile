@@ -53,4 +53,10 @@ all:
     BUILD +install-valgrind
     BUILD +install-clippy
     BUILD +install-fmt
-    SAVE IMAGE roc-deps:latest
+
+test-rust:
+    FROM +all
+    COPY --dir cli compiler docs editor roc_std vendor Cargo.toml Cargo.lock ./
+    RUN zig version
+    RUN cargo test --release
+    

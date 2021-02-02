@@ -7,9 +7,7 @@ env:
 
 jobs:
   prep-dependency-container:
-    name: update earthly container if changed
-    strategy:
-      max-parallel: 1
+    name: install + test inside earthly
     runs-on: self-hosted
     timeout-minutes: 60
     env:
@@ -20,39 +18,5 @@ jobs:
       - name: Earthly version
         run: earthly --version
 
-      - name: build container roc-deps:latest
+      - name: build container roc-deps-tests:latest
         run: earthly +all
-
-  test:
-    name: fmt, clippy, test --release
-    strategy:
-      max-parallel: 1
-    runs-on: self-hosted
-    container: roc-deps:latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Log CPU model
-        run: sudo cat /proc/cpuinfo | grep name | uniq
-
-      # - name: Run Zig tests
-      #   run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
-
-      # - name: Enable LLD
-      #   run: sudo ./ci/enable-lld.sh
-
-      - name: rustfmt version
-        run: cargo fmt --version
-
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
-
-      - name: clippy version
-        run: cargo clippy -V
-
-      - name: cargo clippy
-        run: cargo clippy -- -D warnings
-
-      - name: cargo test
-        run: cargo test --release
