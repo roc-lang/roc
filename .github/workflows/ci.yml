@@ -6,11 +6,10 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  strategy:
-    max-parallel: 1
-
   prep-dependency-container:
     name: update earthly container if changed
+    strategy:
+      max-parallel: 1
     runs-on: self-hosted
     timeout-minutes: 60
     env:
@@ -26,6 +25,8 @@ jobs:
 
   test:
     name: fmt, clippy, test --release
+    strategy:
+      max-parallel: 1
     runs-on: self-hosted
     container: roc-deps:latest
     timeout-minutes: 60
