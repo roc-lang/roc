@@ -16,11 +16,11 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Earthly version
-      run: earthly --version
+        run: earthly --version
 
       - name: build container roc-deps:latest
-      run: earthly +all
-      
+        run: earthly +all
+
   test:
     name: fmt, clippy, test --release
     runs-on: self-hosted
