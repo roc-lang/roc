@@ -596,10 +596,13 @@ fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
             equals_for_def(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
             // The expr itself must be indented more than the pattern and '='
-            space0_before(
-                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
-                min_indent,
-            )
+            move |a, s| {
+                space0_before(
+                    loc!(move |arena, state| { parse_expr(indented_more, arena, state) }),
+                    min_indent,
+                )
+                .parse(a, s)
+            }
         )
     );
     result
@@ -1540,7 +1543,8 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 ),
                 skip_first!(
                     parser::keyword(keyword::ELSE, min_indent),
-                    space1_around(
+                    // NOTE changed this from space1_around to space1_before
+                    space1_before(
                         loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                         min_indent,
                     )

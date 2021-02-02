@@ -3382,7 +3382,6 @@ fn canonicalize_and_constrain<'a>(
 }
 
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
-    println!("-------- parsing {:?}", header.module_id);
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new(&header.src, Attempting::Module);

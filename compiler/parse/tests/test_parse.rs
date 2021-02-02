@@ -2820,6 +2820,31 @@ mod test_parse {
     }
 
     #[test]
+    fn outdenting_newline_after_else() {
+        use roc_parse::ast::Def::*;
+
+        let arena = Bump::new();
+
+        // highlights a problem with the else branch demanding a newline after its expression
+        let src = indoc!(
+            r#"
+            main =
+                v = \y -> if x then y else z
+
+                1
+            "#
+        );
+
+        let actual = module_defs()
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
+            .map(|tuple| tuple.1);
+
+        dbg!(&actual);
+
+        assert!(actual.is_ok());
+    }
+
+    #[test]
     fn newline_after_equals() {
         // Regression test for https://github.com/rtfeldman/roc/issues/51
         let arena = Bump::new();

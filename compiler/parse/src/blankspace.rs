@@ -387,7 +387,9 @@ fn spaces<'a>(
                                         );
                                         if any_newlines {
                                             state = state.check_indent(min_indent).map_err(
-                                                |(fail, _)| (progress, fail, original_state),
+                                                |(fail, _)| {
+                                                    (progress, fail, original_state.clone())
+                                                },
                                             )?;
                                         }
 
