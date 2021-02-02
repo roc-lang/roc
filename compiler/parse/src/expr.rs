@@ -1082,7 +1082,10 @@ fn loc_parse_tag_pattern_arg<'a>(
 fn loc_parenthetical_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
     between!(
         ascii_char(b'('),
-        move |arena, state| loc_pattern(min_indent).parse(arena, state),
+        space0_around(
+            move |arena, state| loc_pattern(min_indent).parse(arena, state),
+            min_indent,
+        ),
         ascii_char(b')')
     )
 }
