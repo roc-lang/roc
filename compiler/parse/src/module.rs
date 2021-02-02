@@ -9,8 +9,9 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, ascii_char, ascii_string, end_of_file, fail_when_progress, loc, optional, peek_utf8_char,
-    peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
+    self, ascii_char, ascii_string, backtrackable, end_of_file, fail_when_progress, loc, optional,
+    peek_utf8_char, peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser,
+    State,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -321,7 +322,10 @@ struct ProvidesTo<'a> {
 fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
     map!(
         and!(
-            and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
+            and!(
+                skip_second!(backtrackable(space1(1)), ascii_string("provides")),
+                space1(1)
+            ),
             and!(
                 collection!(
                     ascii_char(b'['),
@@ -448,6 +452,7 @@ fn exposes_modules<'a>() -> impl Parser<
     )
 }
 
+#[derive(Debug)]
 struct Packages<'a> {
     entries: Vec<'a, Located<PackageEntry<'a>>>,
 
@@ -459,7 +464,10 @@ struct Packages<'a> {
 fn packages<'a>() -> impl Parser<'a, Packages<'a>> {
     map!(
         and!(
-            and!(skip_second!(space1(1), ascii_string("packages")), space1(1)),
+            and!(
+                skip_second!(backtrackable(space1(1)), ascii_string("packages")),
+                space1(1)
+            ),
             collection!(
                 ascii_char(b'{'),
                 loc!(package_entry()),
@@ -487,7 +495,10 @@ fn imports<'a>() -> impl Parser<
     ),
 > {
     and!(
-        and!(skip_second!(space1(1), ascii_string("imports")), space1(1)),
+        and!(
+            skip_second!(backtrackable(space1(1)), ascii_string("imports")),
+            space1(1)
+        ),
         collection!(
             ascii_char(b'['),
             loc!(imports_entry()),

@@ -332,8 +332,8 @@ where
                 let after_parse = state.clone();
 
                 match by.parse(arena, state) {
-                    Ok((fail_progress, _, state)) => Err((
-                        fail_progress,
+                    Ok((_, _, state)) => Err((
+                        NoProgress,
                         Fail {
                             attempting: state.attempting,
                             reason: FailReason::ConditionFailed,

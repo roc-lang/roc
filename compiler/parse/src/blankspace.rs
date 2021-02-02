@@ -195,12 +195,12 @@ where
 
 /// Zero or more (spaces/comments/newlines).
 pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
-    move |a, s| {
-        dbg!(&s, min_indent);
-
-        dbg!(spaces(false, min_indent).parse(a, s))
-    }
-    // spaces(false, min_indent)
+    //    move |a, s| {
+    //        dbg!(&s, min_indent);
+    //
+    //        dbg!(spaces(false, min_indent).parse(a, s))
+    //    }
+    spaces(false, min_indent)
 }
 
 /// One or more (spaces/comments/newlines).
@@ -209,12 +209,12 @@ pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]
     // exactly one space followed by char that isn't [' ', '\n', or '#'], and
     // if so, return empty slice. The case where there's exactly 1 space should
     // be by far the most common.
-    move |a, s| {
-        dbg!(&s, min_indent);
-
-        dbg!(spaces(true, min_indent).parse(a, s))
-    }
-    // spaces(true, min_indent)
+    //    move |a, s| {
+    //        dbg!(&s, min_indent);
+    //
+    //        dbg!(spaces(true, min_indent).parse(a, s))
+    //    }
+    spaces(true, min_indent)
 }
 
 #[derive(Debug, Clone, Copy)]
