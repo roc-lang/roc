@@ -4,8 +4,8 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, fail_when_progress, not, optional, peek_utf8_char,
-    unexpected, Either, Fail, FailReason, ParseResult, Parser,
+    allocated, ascii_char, ascii_string, backtrackable, fail_when_progress, not, optional,
+    peek_utf8_char, unexpected, Either, Fail, FailReason, ParseResult, Parser,
     Progress::{self, *},
     State,
 };
@@ -53,23 +53,27 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
     map_with_arena!(
         and!(
             one_of!(
-                loc_wildcard(),
-                loc_parenthetical_type(min_indent),
-                loc!(record_type(min_indent)),
-                loc!(tag_union!(min_indent)),
-                loc!(applied_type(min_indent)),
-                loc!(parse_type_variable)
+                // loc_wildcard(),
+                // loc_parenthetical_type(min_indent),
+                // loc!(record_type(min_indent)),
+                // loc!(tag_union!(min_indent)),
+                |a, s| dbg!(loc!(applied_type(min_indent)).parse(a, s)),
+                |a, s| dbg!(loc!(parse_type_variable).parse(a, s))
             ),
-            optional(
-                // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
-                and!(
-                    space1(min_indent),
-                    skip_first!(
-                        ascii_string(keyword::AS),
-                        space1_before(term(min_indent), min_indent)
-                    )
+            |a, s| {
+                dbg!("term state", &s);
+                optional(
+                    // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
+                    and!(
+                        space1(min_indent),
+                        skip_first!(
+                            crate::parser::keyword(keyword::AS, min_indent),
+                            |a, s| dbg!(space1_before(term(min_indent), min_indent).parse(a, s))
+                        )
+                    ),
                 )
-            )
+                .parse(a, s)
+            }
         ),
         |arena: &'a Bump,
          (loc_ann, opt_as): (
@@ -98,19 +102,30 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     })
 }
 
-pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     skip_first!(
         // Once we hit an "as", stop parsing args
-        not(ascii_string(keyword::AS)),
-        one_of!(
-            loc_wildcard(),
-            loc_parenthetical_type(min_indent),
-            loc!(record_type(min_indent)),
-            loc!(tag_union!(min_indent)),
-            loc!(parse_concrete_type),
-            loc!(parse_type_variable)
+        // and roll back parsing of preceding spaces
+        not(and!(
+            space1(min_indent),
+            crate::parser::keyword(keyword::AS, min_indent)
+        )),
+        space1_before(
+            one_of!(
+                loc_wildcard(),
+                loc_parenthetical_type(min_indent),
+                loc!(record_type(min_indent)),
+                loc!(tag_union!(min_indent)),
+                loc!(parse_concrete_type),
+                loc!(parse_type_variable)
+            ),
+            min_indent
         )
     )
+}
+
+fn loc_applied_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>> {
+    zero_or_more!(move |arena, state| dbg!(loc_applied_arg(min_indent).parse(arena, state)))
 }
 
 #[inline(always)]
@@ -133,10 +148,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
             either!(loc!(private_tag()), loc!(global_tag())),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `ok err` in `Result ok err`
-            zero_or_more!(space1_before(
-                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
-                min_indent,
-            ))
+            loc_applied_args(min_indent)
         ),
         |(either_name, args): (
             Either<Located<&'a str>, Located<&'a str>>,
@@ -188,10 +200,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
             parse_concrete_type,
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
-            zero_or_more!(space1_before(
-                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
-                min_indent,
-            ))
+            loc_applied_args(min_indent)
         ),
         |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Located<TypeAnnotation<'a>>>)| {
             match &ctor {

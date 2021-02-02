@@ -1803,7 +1803,7 @@ mod test_parse {
             indoc!(
                 r#"
                 foo : Foo.Bar.Baz x y as Blah a b
-
+        
                 42
                 "#
             ),
@@ -1839,7 +1839,7 @@ mod test_parse {
             indoc!(
                 r#"
                 Blah a b : Foo.Bar.Baz x y
-
+ 
                 42
                 "#
             ),
@@ -2501,11 +2501,18 @@ mod test_parse {
             after_to: &[],
         };
 
+        //        let src = indoc!(
+        //            r#"
+        //                app "quicksort"
+        //                    packages { base: "./platform" }
+        //                    imports [ foo.Bar.Baz ]
+        //                    provides [ quicksort ] to base
+        //            "#
+        //        );
+
         let src = indoc!(
             r#"
-                app "quicksort"
-                    packages { base: "./platform" }
-                    imports [ foo.Bar.Baz ]
+                app "quicksort" 
                     provides [ quicksort ] to base
             "#
         );

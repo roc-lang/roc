@@ -2,8 +2,8 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_around, space0_before, space1, space1_after,
-    space1_around, space1_before, spaces_exactly,
+    line_comment, space0, space0_after, space0_around, space0_before, space1, space1_around,
+    space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -863,10 +863,12 @@ fn parse_def_signature<'a>(
                     // The first annotation may be immediately (spaces_then_comment_or_newline())
                     // followed by a body at the exact same indent_level
                     // leading to an AnnotatedBody in this case
-                    |progress, type_ann, indent_level| map(
+                    |_progress, type_ann, indent_level| map(
                         optional(and!(
-                            spaces_then_comment_or_newline(),
-                            body_at_indent(indent_level)
+                            backtrackable(
+                                |a, s| dbg!(spaces_then_comment_or_newline().parse(a, s))
+                            ),
+                            |a, s| dbg!(body_at_indent(indent_level).parse(a, s))
                         )),
                         move |opt_body| (type_ann.clone(), opt_body)
                     )

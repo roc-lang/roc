@@ -354,8 +354,8 @@ where
         let original_state = state.clone();
 
         match parser.parse(arena, state) {
-            Ok((progress, _, _)) => Err((
-                progress,
+            Ok((_, _, _)) => Err((
+                NoProgress,
                 Fail {
                     reason: FailReason::ConditionFailed,
                     attempting: original_state.attempting,
@@ -659,10 +659,12 @@ where
     move |arena, state: State<'a>| {
         let original_attempting = state.attempting;
 
+        let start_bytes_len = state.bytes.len();
+
         match parser.parse(arena, state) {
-            Ok((progress, first_output, next_state)) => {
+            Ok((elem_progress, first_output, next_state)) => {
                 // in practice, we want elements to make progress
-                debug_assert_eq!(progress, MadeProgress);
+                debug_assert_eq!(elem_progress, MadeProgress);
 
                 let mut state = next_state;
                 let mut buf = Vec::with_capacity_in(1, arena);
@@ -671,7 +673,7 @@ where
 
                 loop {
                     match delimiter.parse(arena, state) {
-                        Ok((delim_progress, (), next_state)) => {
+                        Ok((_, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
                             match parser.parse(arena, next_state) {
                                 Ok((element_progress, next_output, next_state)) => {
@@ -681,9 +683,11 @@ where
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((element_progress, fail, state)) => {
+                                Err((_, fail, state)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that's a fatal error.
+                                    let progress =
+                                        Progress::from_lengths(start_bytes_len, state.bytes.len());
                                     return Err((
                                         progress,
                                         Fail {
@@ -738,7 +742,7 @@ where
     move |arena, state: State<'a>| {
         let original_attempting = state.attempting;
 
-        dbg!(state.bytes);
+        let start_bytes_len = state.bytes.len();
 
         match parser.parse(arena, state) {
             Ok((progress, first_output, next_state)) => {
@@ -751,7 +755,7 @@ where
 
                 loop {
                     match delimiter.parse(arena, state) {
-                        Ok((delim_progress, (), next_state)) => {
+                        Ok((_, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
                             match parser.parse(arena, next_state) {
                                 Ok((element_progress, next_output, next_state)) => {
@@ -761,10 +765,14 @@ where
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((element_progress, fail, old_state)) => {
+                                Err((_, _fail, old_state)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that means we saw a trailing comma
-                                    return Ok((MadeProgress, buf, old_state));
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        old_state.bytes.len(),
+                                    );
+                                    return Ok((progress, buf, old_state));
                                 }
                             }
                         }
@@ -811,6 +819,8 @@ where
     move |arena, state: State<'a>| {
         let original_attempting = state.attempting;
 
+        let start_bytes_len = state.bytes.len();
+
         match parser.parse(arena, state) {
             Ok((progress, first_output, next_state)) => {
                 debug_assert_eq!(progress, MadeProgress);
@@ -821,10 +831,10 @@ where
 
                 loop {
                     match delimiter.parse(arena, state) {
-                        Ok((delim_progress, (), next_state)) => {
+                        Ok((_, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
                             match parser.parse(arena, next_state) {
-                                Ok((element_progress, next_output, next_state)) => {
+                                Ok((_, next_output, next_state)) => {
                                     state = next_state;
                                     buf.push(next_output);
                                 }
@@ -843,7 +853,19 @@ where
                             }
                         }
                         Err((delim_progress, fail, old_state)) => {
-                            return fail_when_progress(delim_progress, fail, buf, old_state)
+                            match delim_progress {
+                                MadeProgress => {
+                                    // fail if the delimiter made progress
+                                    return Err((MadeProgress, fail, old_state));
+                                }
+                                NoProgress => {
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        old_state.bytes.len(),
+                                    );
+                                    return Ok((progress, buf, old_state));
+                                }
+                            }
                         }
                     }
                 }
@@ -1037,12 +1059,16 @@ macro_rules! collection {
                 // We could change the AST to add extra storage specifically to
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::ascii_char(b' ')),
+                {
+                    dbg!("we are here? ");
+                    |a, s| dbg!(zero_or_more!($crate::parser::ascii_char(b' ')).parse(a, s))
+                },
                 skip_second!(
-                    $crate::parser::sep_by0(
+                    move |a, s| dbg!($crate::parser::sep_by0(
                         $delimiter,
                         $crate::blankspace::space0_around($elem, $min_indent)
-                    ),
+                    )
+                    .parse(a, s)),
                     $closing_brace
                 )
             )
@@ -1194,17 +1220,35 @@ macro_rules! zero_or_more {
                                 state = next_state;
                                 buf.push(next_output);
                             }
-                            Err((_, fail, old_state)) => {
-                                let progress =
-                                    Progress::from_lengths(start_bytes_len, old_state.bytes.len());
-                                return fail_when_progress(progress, fail, buf, old_state);
+                            Err((fail_progress, fail, old_state)) => {
+                                match fail_progress {
+                                    MadeProgress => {
+                                        // made progress on an element and then failed; that's an error
+                                        return Err((MadeProgress, fail, old_state));
+                                    }
+                                    NoProgress => {
+                                        // the next element failed with no progress
+                                        // report whether we made progress before
+                                        let progress = Progress::from_lengths(start_bytes_len, old_state.bytes.len());
+                                        return Ok((progress, buf, old_state));
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                Err((_, fail, new_state)) => {
-                    let progress = Progress::from_lengths(start_bytes_len, new_state.bytes.len());
-                    fail_when_progress(progress, fail, Vec::new_in(arena), new_state)
+                Err((fail_progress, fail, new_state)) => {
+                    match fail_progress {
+                        MadeProgress => {
+                            // made progress on an element and then failed; that's an error
+                            Err((MadeProgress, fail, new_state))
+                        }
+                        NoProgress => {
+                            // the first element failed (with no progress), but that's OK
+                            // because we only need to parse 0 elements
+                            Ok((NoProgress, Vec::new_in(arena), new_state))
+                        }
+                    }
                 }
             }
         }
