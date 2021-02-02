@@ -22,6 +22,14 @@ pub const RocDict = extern struct {
     dict_slot_len: usize,
     dict_entries_len: usize,
 
+    pub fn empty() RocDict {
+        return RocDict{
+            .dict_entries_len = 0,
+            .dict_slot_len = 0,
+            .dict_bytes = null,
+        };
+    }
+
     pub fn init(allocator: *Allocator, bytes_ptr: [*]const u8, number_of_slots: usize, number_of_entries: usize, key_size: usize, value_size: usize) RocDict {
         var result = RocDict.allocate(
             allocator,
@@ -37,10 +45,20 @@ pub const RocDict = extern struct {
         return result;
     }
 
-    pub fn deinit(self: RocDict, allocator: *Allocator) void {
-        const dict_bytes_ptr: [*]u8 = self.dict_bytes orelse unreachable;
-        const dict_bytes: []u8 = dict_bytes_ptr[0..self.dict_slot_len];
-        allocator.free(dict_bytes);
+    pub fn deinit(
+        self: RocDict, 
+        allocator: *Allocator,        
+        key_size: usize,
+        value_size: usize
+    ) void {
+        if (!self.isEmpty()) {
+            const slot_size = slotSize(key_size, value_size);
+
+            const dict_bytes_ptr: [*]u8 = self.dict_bytes orelse unreachable;
+
+            const dict_bytes: []u8 = dict_bytes_ptr[0..(self.dict_slot_len)];
+            allocator.free(dict_bytes);
+        }
     }
 
     pub fn allocate(
@@ -51,7 +69,7 @@ pub const RocDict = extern struct {
         key_size: usize,
         value_size: usize,
     ) RocDict {
-        const slot_size = @sizeOf(Slot) + key_size + value_size;
+        const slot_size = slotSize(key_size, value_size);
 
         const length = @sizeOf(usize) + (number_of_slots * slot_size);
 
@@ -100,12 +118,15 @@ pub const RocDict = extern struct {
 
         return new_dict;
     }
-    // pub fn insert(self: RocDict, key_size: usize, key_ptr: *const c_void, value_ptr: *const c_void)
 };
 
 // Dict.empty
-pub fn dictEmpty(allocator: *Allocator, key_size: usize, value_size: usize) callconv(.C) RocDict {
-    return RocDict.init(allocator, "", 0, 0, key_size, value_size);
+pub fn dictEmpty() callconv(.C) RocDict {
+    return RocDict.empty();
+}
+
+pub fn slotSize(key_size: usize, value_size: usize) usize {
+    return @sizeOf(Slot) + key_size + value_size;
 }
 
 // Dict.len
@@ -117,9 +138,7 @@ test "RocDict.init() contains nothing" {
     const key_size = @sizeOf(usize);
     const value_size = @sizeOf(usize);
 
-    const dict = dictEmpty(testing.allocator, key_size, value_size);
+    const dict = dictEmpty();
 
     expectEqual(false, dict.contains(4, @ptrCast(*const c_void, &""), 9));
-
-    dict.deinit(testing.allocator);
 }
