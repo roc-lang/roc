@@ -1654,6 +1654,9 @@ fn decide_to_branching<'a>(
 
             let mut branches = bumpalo::collections::Vec::with_capacity_in(tests.len(), env.arena);
 
+            let mut tag_id_sum: i64 = (0..tests.len() as i64 + 1).sum();
+            let mut union_size: i64 = -1;
+
             for (test, decider) in tests {
                 let branch = decide_to_branching(
                     env,
@@ -1675,8 +1678,34 @@ fn decide_to_branching<'a>(
                     other => todo!("other {:?}", other),
                 };
 
-                branches.push((tag, BranchInfo::None, branch));
+                // branch info is only useful for refcounted values
+                let branch_info = if let Test::IsCtor { tag_id, union, .. } = test {
+                    tag_id_sum -= tag_id as i64;
+                    union_size = union.alternatives.len() as i64;
+
+                    BranchInfo::Constructor {
+                        scrutinee: inner_cond_symbol,
+                        layout: inner_cond_layout.clone(),
+                        tag_id,
+                    }
+                } else {
+                    tag_id_sum = -1;
+                    BranchInfo::None
+                };
+
+                branches.push((tag, branch_info, branch));
             }
+
+            // determine if the switch is exhaustive
+            let default_branch_info = if tag_id_sum > 0 && union_size > 0 {
+                BranchInfo::Constructor {
+                    scrutinee: inner_cond_symbol,
+                    layout: inner_cond_layout.clone(),
+                    tag_id: tag_id_sum as u8,
+                }
+            } else {
+                BranchInfo::None
+            };
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
@@ -1684,7 +1713,7 @@ fn decide_to_branching<'a>(
                 cond_layout: inner_cond_layout,
                 cond_symbol: inner_cond_symbol,
                 branches: branches.into_bump_slice(),
-                default_branch: (BranchInfo::None, env.arena.alloc(default_branch)),
+                default_branch: (default_branch_info, env.arena.alloc(default_branch)),
                 ret_layout,
             };
 
