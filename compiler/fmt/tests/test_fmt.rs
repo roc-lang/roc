@@ -25,8 +25,8 @@ mod test_fmt {
         let answer = parser.parse(&arena, state);
 
         answer
-            .map(|(loc_expr, _)| loc_expr.value)
-            .map_err(|(fail, _)| fail)
+            .map(|(_, loc_expr, _)| loc_expr.value)
+            .map_err(|(_, fail, _)| fail)
     }
 
     fn expr_formats_to(input: &str, expected: &str) {
@@ -56,13 +56,13 @@ mod test_fmt {
         let expected = expected.trim_end();
 
         match module::header().parse(&arena, State::new(src.as_bytes(), Attempting::Module)) {
-            Ok((actual, state)) => {
+            Ok((_, actual, state)) => {
                 let mut buf = String::new_in(&arena);
 
                 fmt_module(&mut buf, &actual);
 
                 match module_defs().parse(&arena, state) {
-                    Ok((loc_defs, _)) => {
+                    Ok((_, loc_defs, _)) => {
                         for loc_def in loc_defs {
                             fmt_def(&mut buf, arena.alloc(loc_def.value), 0);
                         }

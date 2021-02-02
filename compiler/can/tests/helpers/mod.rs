@@ -32,8 +32,8 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
     let answer = parser.parse(&arena, state);
 
     answer
-        .map(|(loc_expr, _)| loc_expr)
-        .map_err(|(fail, _)| fail)
+        .map(|(_, loc_expr, _)| loc_expr)
+        .map_err(|(_, fail, _)| fail)
 }
 
 #[allow(dead_code)]
