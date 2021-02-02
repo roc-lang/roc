@@ -3,18 +3,28 @@ on: [pull_request]
 name: CI
 
 env:
-  RUSTC_WRAPPER: /usr/local/bin/sccache
-  SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  SCCACHE_S3_USE_SSL: ${{ secrets.SCCACHE_S3_USE_SSL }}
-  SCCACHE_REGION: ${{ secrets.SCCACHE_REGION }}
   RUST_BACKTRACE: 1
 
 jobs:
+  prep-dependency-container:
+    name: update earthly container if changed
+    runs-on: self-hosted
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: 1
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Earthly version
+      run: earthly --version
+
+      - name: build container roc-deps:latest
+      run: earthly +all
+      
   test:
-    name: fmt, clippy, test, test --release
-    runs-on: ubuntu-latest
+    name: fmt, clippy, test --release
+    runs-on: self-hosted
+    container: roc-deps:latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v2
@@ -22,66 +32,23 @@ jobs:
       - name: Log CPU model
         run: sudo cat /proc/cpuinfo | grep name | uniq
 
-      - name: Install CI Libraries
-        run: sudo ./ci/install-ci-libraries.sh 10
+      # - name: Run Zig tests
+      #   run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
 
-      - name: scope sccache to CPU model
-        run: |
-          export SCCACHE_S3_KEY_PREFIX=`sudo cat /proc/cpuinfo | grep name | uniq | awk -F: {'print $2'} | awk -F@ {'print$1'} | xargs | sed -e 's/\s/_/g'`
-          echo "SCCACHE_S3_KEY_PREFIX=$SCCACHE_S3_KEY_PREFIX" >> $GITHUB_ENV
+      # - name: Enable LLD
+      #   run: sudo ./ci/enable-lld.sh
 
-      - name: print SCCACHE_S3_KEY_PREFIX
-        run: echo $SCCACHE_S3_KEY_PREFIX
+      - name: rustfmt version
+        run: cargo fmt --version
 
-      - name: sccache version
-        run: /usr/local/bin/sccache -V
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
 
-      - name: Run Zig tests
-        run: pushd compiler/builtins/bitcode; ./run-tests.sh; popd;
+      - name: clippy version
+        run: cargo clippy -V
 
-      - name: Enable LLD
-        run: sudo ./ci/enable-lld.sh
+      - name: cargo clippy
+        run: cargo clippy -- -D warnings
 
-      - uses: actions-rs/toolchain@v1
-        name: Install Rust Toolchain
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
-      - run: rustup component add rustfmt
-
-      - uses: actions-rs/cargo@v1
-        name: rustfmt version
-        with:
-          command: fmt
-          args: --version
-
-      - uses: actions-rs/cargo@v1
-        name: cargo fmt --check
-        with:
-          command: fmt
-          args: --all -- --check
-
-      - run: rustup component add clippy
-
-      - uses: actions-rs/cargo@v1
-        name: clippy version
-        with:
-          command: clippy
-          args: -V
-
-      - uses: actions-rs/cargo@v1
-        name: cargo clippy
-        with:
-          command: clippy
-          args: -- -D warnings
-
-      - uses: actions-rs/cargo@v1
-        name: cargo test --release
-        with:
-          command: test
-          args: --release
-
-      - name: sccache stats
-        run: /usr/local/bin/sccache --show-stats
+      - name: cargo test
+        run: cargo test --release
