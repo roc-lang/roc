@@ -6,6 +6,9 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  strategy:
+    max-parallel: 1
+
   prep-dependency-container:
     name: update earthly container if changed
     runs-on: self-hosted
