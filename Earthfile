@@ -14,23 +14,20 @@ install-other-libs:
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
     RUN apt -y install libc++-dev libc++abi-dev libunwind-dev pkg-config libx11-dev zlib1g-dev
 
-install-zig:
+install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
+    # zig
     RUN wget -c https://ziglang.org/download/0.7.1/zig-linux-x86_64-0.7.1.tar.xz --no-check-certificate
     RUN tar -xf zig-linux-x86_64-0.7.1.tar.xz
-    RUN ln -s /root/downloads/zig-linux-x86_64-0.7.1/zig /usr/bin/zig
-
-install-llvm:
-    FROM +install-other-libs
+    RUN ln -s /earthbuild/zig-linux-x86_64-0.7.1/zig /usr/bin/zig
+    # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
     RUN chmod +x llvm.sh
     RUN ./llvm.sh 10
     RUN ln -s /usr/bin/clang-10 /usr/bin/clang
     RUN ln -s /usr/bin/lld-10 /usr/bin/lld
-
-install-valgrind:
-    FROM +install-other-libs
+    # valgrind
     RUN apt -y install autotools-dev cmake automake 
     RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
     RUN tar -xf valgrind-3.16.1.tar.bz2
@@ -40,23 +37,13 @@ install-valgrind:
     RUN ./configure --disable-dependency-tracking
     RUN make -j`nproc`
     RUN make install
-
-install-clippy:
+    # clippy
     RUN rustup component add clippy
-
-install-fmt:
+    # rustfmt
     RUN rustup component add rustfmt
 
-all:
-    BUILD +install-zig
-    BUILD +install-llvm
-    BUILD +install-valgrind
-    BUILD +install-clippy
-    BUILD +install-fmt
-
 test-rust:
-    FROM +all
+    FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir cli compiler docs editor roc_std vendor Cargo.toml Cargo.lock ./
-    RUN zig version
     RUN cargo test --release
     
