@@ -1,12 +1,12 @@
 use const_format::concatcp;
 use gen::{gen_and_eval, ReplOutput};
 use roc_gen::llvm::build::OptLevel;
-use roc_parse::parser::{Bag, FailReason};
+use roc_parse::parser::Bag;
 use rustyline::error::ReadlineError;
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline::Editor;
 use rustyline_derive::{Completer, Helper, Highlighter, Hinter};
-use std::io::{self};
+use std::io;
 use target_lexicon::Triple;
 
 const BLUE: &str = "\u{001b}[36m";
