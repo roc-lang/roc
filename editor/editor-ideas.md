@@ -61,6 +61,8 @@ These are potentially inspirational resources for the editor's design.
     - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
 * When a function is called like `foo(false)`, the name of the boolean argument should be shown automatically; `foo(`*is_active:*`false)`. This should be done for booleans and numbers.
 * Suggest automatically creating a function if the compiler says it does not exist.
+* Integrated search:
+    * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
 
 
 ### Non-Code Related Inspiration
@@ -81,6 +83,7 @@ These are potentially inspirational resources for the editor's design.
     * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
     * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
     * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
+        * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
 * Voice input:
     * Good for accessibility.
     * https://www.youtube.com/watch?v=Ffa3cXM7bjc is interesting for inspiration.
