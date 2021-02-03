@@ -3002,6 +3002,23 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn pattern_with_space_in_parens() {
+        // https://github.com/rtfeldman/roc/issues/929
+        let arena = Bump::new();
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+                when Delmin (Del rx) 0 is
+                    Delmin (Del ry ) _ -> Node Black 0 False ry
+                "#
+            ),
+        );
+
+        assert!(actual.is_ok());
+    }
+
     // PARSE ERROR
 
     // TODO this should be parse error, but isn't!

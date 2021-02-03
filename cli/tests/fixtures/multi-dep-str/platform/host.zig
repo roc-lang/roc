@@ -1,5 +1,5 @@
 const std = @import("std");
-const str = @import("str.zig");
+const str = @import("str");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
