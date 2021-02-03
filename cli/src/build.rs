@@ -36,13 +36,14 @@ pub fn build_file(
 
     // Release builds use uniqueness optimizations
     let stdlib = match opt_level {
-        OptLevel::Normal => roc_builtins::std::standard_stdlib(),
-        OptLevel::Optimize => roc_builtins::std::standard_stdlib(),
+        OptLevel::Normal => arena.alloc(roc_builtins::std::standard_stdlib()),
+        OptLevel::Optimize => arena.alloc(roc_builtins::std::standard_stdlib()),
     };
+
     let loaded = roc_load::file::load_and_monomorphize(
         &arena,
         roc_file_path.clone(),
-        &stdlib,
+        stdlib,
         src_dir.as_path(),
         subs_by_module,
         ptr_bytes,

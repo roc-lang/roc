@@ -41,8 +41,9 @@ mod test_reporting {
         }
     }
 
-    fn infer_expr_help(
-        expr_src: &str,
+    fn infer_expr_help<'a>(
+        arena: &'a Bump,
+        expr_src: &'a str,
     ) -> Result<
         (
             Vec<solve::TypeError>,
@@ -51,7 +52,7 @@ mod test_reporting {
             ModuleId,
             Interns,
         ),
-        ParseErrOut,
+        ParseErrOut<'a>,
     > {
         let CanExprOut {
             loc_expr,
@@ -63,7 +64,7 @@ mod test_reporting {
             mut interns,
             problems: can_problems,
             ..
-        } = can_expr(expr_src)?;
+        } = can_expr(arena, expr_src)?;
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -108,7 +109,7 @@ mod test_reporting {
         Ok((unify_problems, can_problems, mono_problems, home, interns))
     }
 
-    fn list_reports<F>(src: &str, buf: &mut String, callback: F)
+    fn list_reports<F>(arena: &Bump, src: &str, buf: &mut String, callback: F)
     where
         F: FnOnce(RocDocBuilder<'_>, &mut String),
     {
@@ -118,7 +119,7 @@ mod test_reporting {
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
 
-        match infer_expr_help(src) {
+        match infer_expr_help(arena, src) {
             Err(parse_err) => {
                 let ParseErrOut {
                     fail,
@@ -169,6 +170,7 @@ mod test_reporting {
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
+        let arena = Bump::new();
 
         let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
             doc.1
@@ -176,13 +178,14 @@ mod test_reporting {
                 .expect("list_reports")
         };
 
-        list_reports(src, &mut buf, callback);
+        list_reports(&arena, src, &mut buf, callback);
 
         assert_eq!(buf, expected_rendering);
     }
 
     fn color_report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
+        let arena = Bump::new();
 
         let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
             doc.1
@@ -196,7 +199,7 @@ mod test_reporting {
                 .expect("list_reports")
         };
 
-        list_reports(src, &mut buf, callback);
+        list_reports(&arena, src, &mut buf, callback);
 
         let readable = human_readable(&buf);
 
@@ -551,8 +554,9 @@ mod test_reporting {
             "#
         );
 
+        let arena = Bump::new();
         let (_type_problems, _can_problems, _mono_problems, home, interns) =
-            infer_expr_help(src).expect("parse error");
+            infer_expr_help(&arena, src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -581,8 +585,9 @@ mod test_reporting {
             "#
         );
 
+        let arena = Bump::new();
         let (_type_problems, _can_problems, _mono_problems, home, mut interns) =
-            infer_expr_help(src).expect("parse error");
+            infer_expr_help(&arena, src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();

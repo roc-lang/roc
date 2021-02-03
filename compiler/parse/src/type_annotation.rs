@@ -4,10 +4,10 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either, Fail,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
     FailReason, ParseResult, Parser,
     Progress::{self, *},
-    State,
+    State, Bag,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -258,10 +258,10 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 // e.g. `Int,Int` without an arrow and return type
                 Err((
                         progress,
-                    Fail {
-                        attempting: state.attempting,
-                        reason: FailReason::NotYetImplemented("TODO: Decide the correct error to return for 'Invalid function signature'".to_string()),
-                    },
+                        Bag::from_state(arena, &state, 
+                        FailReason::NotYetImplemented("TODO: Decide the correct error to return for 'Invalid function signature'".to_string()),
+                        ),
+                    
                     state,
                 ))
             }
@@ -300,12 +300,12 @@ fn parse_concrete_type<'a>(
             if first_letter.is_alphabetic() && first_letter.is_uppercase() {
                 part_buf.push(first_letter);
             } else {
-                return Err(unexpected(0, state, Attempting::ConcreteType));
+                return Err(unexpected(arena,  0, Attempting::ConcreteType, state));
             }
 
-            state = state.advance_without_indenting(bytes_parsed)?;
+            state = state.advance_without_indenting(arena, bytes_parsed)?;
         }
-        Err(reason) => return state.fail(NoProgress, reason),
+        Err(reason) => return state.fail(arena, NoProgress,  reason),
     }
 
     let mut next_char = None;
@@ -349,12 +349,12 @@ fn parse_concrete_type<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
             }
             Err(reason) => {
                 let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
 
-                return state.fail(progress, reason);
+                return state.fail(arena, progress, reason);
             }
         }
     }
@@ -373,7 +373,7 @@ fn parse_concrete_type<'a>(
         // We had neither capitalized nor noncapitalized parts,
         // yet we made it this far. The only explanation is that this was
         // a stray '.' drifting through the cosmos.
-        return Err(unexpected(1, state, Attempting::Identifier));
+        return Err(unexpected(arena, 1,  Attempting::Identifier, state));
     }
 
     let answer = TypeAnnotation::Apply(
@@ -400,14 +400,14 @@ fn parse_type_variable<'a>(
             if first_letter.is_alphabetic() && first_letter.is_lowercase() {
                 buf.push(first_letter);
             } else {
-                return Err(unexpected(0, state, Attempting::TypeVariable));
+                return Err(unexpected(arena, 0, Attempting::TypeVariable, state));
             }
 
-            state = state.advance_without_indenting(bytes_parsed)?;
+            state = state.advance_without_indenting(arena, bytes_parsed)?;
         }
         Err(reason) => {
             let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-            return state.fail(progress, reason);
+            return state.fail(arena, progress, reason);
         }
     }
 
@@ -425,11 +425,11 @@ fn parse_type_variable<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
             }
             Err(reason) => {
                 let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-                return state.fail(progress, reason);
+                return state.fail(arena, progress, reason);
             }
         }
     }
@@ -469,9 +469,9 @@ fn malformed<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
             }
-            Err(reason) => return state.fail(MadeProgress, reason),
+            Err(reason) => return state.fail(arena, MadeProgress, reason),
         }
     }
 

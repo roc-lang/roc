@@ -107,15 +107,16 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
         }
     });
 
-    let binary_path = build::build_file(
+    let res_binary_path = build::build_file(
         target,
         src_dir,
         path,
         opt_level,
         emit_debug_info,
         LinkType::Executable,
-    )
-    .expect("TODO gracefully handle build_file failing");
+    );
+
+    let binary_path = res_binary_path.expect("TODO gracefully handle build_file failing");
 
     if run_after_build {
         // Run the compiled app

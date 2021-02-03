@@ -1,22 +1,23 @@
 use crate::ast::{Attempting, Base, Expr};
 use crate::parser::{parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, Progress, State};
+use bumpalo::Bump;
 use std::char;
 use std::str::from_utf8_unchecked;
 
 pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    move |_arena, state: State<'a>| {
+    move |arena, state: State<'a>| {
         let bytes = &mut state.bytes.iter();
 
         match bytes.next() {
             Some(&first_byte) => {
                 // Number literals must start with either an '-' or a digit.
                 if first_byte == b'-' || (first_byte as char).is_ascii_digit() {
-                    parse_number_literal(first_byte as char, bytes, state)
+                    parse_number_literal(first_byte as char, bytes, arena, state)
                 } else {
-                    Err(unexpected(1, state, Attempting::NumberLiteral))
+                    Err(unexpected(arena, 1, Attempting::NumberLiteral, state))
                 }
             }
-            None => Err(unexpected_eof(0, state.attempting, state)),
+            None => Err(unexpected_eof(arena, state, 0)),
         }
     }
 }
@@ -25,6 +26,7 @@ pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
 fn parse_number_literal<'a, I>(
     first_ch: char,
     bytes: &mut I,
+    arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>>
 where
@@ -42,9 +44,10 @@ where
     for &next_byte in bytes {
         let err_unexpected = || {
             Err(unexpected(
+                arena,
                 bytes_parsed,
-                state.clone(),
                 Attempting::NumberLiteral,
+                state.clone(),
             ))
         };
 
@@ -130,19 +133,19 @@ where
             // SAFETY: it's safe to use from_utf8_unchecked here, because we've
             // already validated that this range contains only ASCII digits
             Expr::Num(unsafe { from_utf8_unchecked(&state.bytes[0..bytes_parsed]) }),
-            state.advance_without_indenting(bytes_parsed)?,
+            state.advance_without_indenting(arena, bytes_parsed)?,
         )),
         Float => Ok((
             Progress::from_consumed(bytes_parsed),
             // SAFETY: it's safe to use from_utf8_unchecked here, because we've
             // already validated that this range contains only ASCII digits
             Expr::Float(unsafe { from_utf8_unchecked(&state.bytes[0..bytes_parsed]) }),
-            state.advance_without_indenting(bytes_parsed)?,
+            state.advance_without_indenting(arena, bytes_parsed)?,
         )),
         // For these we trim off the 0x/0o/0b part
-        Hex => from_base(Base::Hex, first_ch, bytes_parsed, state),
-        Octal => from_base(Base::Octal, first_ch, bytes_parsed, state),
-        Binary => from_base(Base::Binary, first_ch, bytes_parsed, state),
+        Hex => from_base(Base::Hex, first_ch, bytes_parsed, arena, state),
+        Octal => from_base(Base::Octal, first_ch, bytes_parsed, arena, state),
+        Binary => from_base(Base::Binary, first_ch, bytes_parsed, arena, state),
     }
 }
 
@@ -155,12 +158,13 @@ enum LiteralType {
     Binary,
 }
 
-fn from_base(
+fn from_base<'a>(
     base: Base,
     first_ch: char,
     bytes_parsed: usize,
-    state: State<'_>,
-) -> ParseResult<'_, Expr<'_>> {
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>> {
     let is_negative = first_ch == '-';
     let bytes = if is_negative {
         &state.bytes[3..bytes_parsed]
@@ -176,8 +180,8 @@ fn from_base(
                 string,
                 base,
             },
-            state.advance_without_indenting(bytes_parsed)?,
+            state.advance_without_indenting(arena, bytes_parsed)?,
         )),
-        Err(reason) => state.fail(Progress::from_consumed(bytes_parsed), reason),
+        Err(reason) => state.fail(arena, Progress::from_consumed(bytes_parsed), reason),
     }
 }

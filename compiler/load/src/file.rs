@@ -27,7 +27,7 @@ use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::module_defs;
-use roc_parse::parser::{self, Fail, Parser};
+use roc_parse::parser::{self, Bag, FailReason, ParseProblem, Parser};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
@@ -762,6 +762,8 @@ enum Msg<'a> {
         subs: Subs,
         exposed_to_host: MutMap<Symbol, Variable>,
     },
+
+    FailedToParse(ParseProblem),
 }
 
 #[derive(Debug)]
@@ -974,14 +976,14 @@ pub enum LoadingProblem {
         error: io::ErrorKind,
         msg: &'static str,
     },
-    ParsingFailed {
-        filename: PathBuf,
-        fail: Fail,
-    },
+    ParseProblem(ParseProblem),
     UnexpectedHeader(String),
+
     MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
+    /// a formatted report of parsing failure
+    ParsingFailedReport(String),
 }
 
 pub enum Phases {
@@ -1010,10 +1012,10 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-pub fn load_and_typecheck(
-    arena: &Bump,
+pub fn load_and_typecheck<'a>(
+    arena: &'a Bump,
     filename: PathBuf,
-    stdlib: &StdLib,
+    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     ptr_bytes: u32,
@@ -1310,7 +1312,7 @@ where
                 let injector = &injector;
 
                 // Record this thread's handle so the main thread can join it later.
-                thread_scope
+                let res_join_handle = thread_scope
                     .builder()
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
@@ -1322,7 +1324,7 @@ where
                                     // shut down the thread, so when the main thread
                                     // blocks on joining with all the worker threads,
                                     // it can finally exit too!
-                                    return;
+                                    return Ok(());
                                 }
                                 WorkerMsg::TaskAdded => {
                                     // Find a task - either from this thread's queue,
@@ -1335,14 +1337,26 @@ where
                                     // added. In that case, do nothing, and keep waiting
                                     // until we receive a Shutdown message.
                                     if let Some(task) = find_task(&worker, injector, stealers) {
-                                        run_task(
+                                        let result = run_task(
                                             task,
                                             worker_arena,
                                             src_dir,
                                             msg_tx.clone(),
                                             ptr_bytes,
-                                        )
-                                        .expect("Msg channel closed unexpectedly.");
+                                        );
+
+                                        match result {
+                                            Ok(()) => {}
+                                            Err(LoadingProblem::MsgChannelDied) => {
+                                                panic!("Msg channel closed unexpectedly.")
+                                            }
+                                            Err(LoadingProblem::ParsingFailed(problem)) => {
+                                                msg_tx.send(Msg::FailedToParse(problem));
+                                            }
+                                            Err(other) => {
+                                                return Err(other);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1351,8 +1365,11 @@ where
                         // Needed to prevent a borrow checker error about this closure
                         // outliving its enclosing function.
                         drop(worker_msg_rx);
-                    })
-                    .unwrap();
+
+                        Ok(())
+                    });
+
+                res_join_handle.unwrap();
             }
 
             let mut state = State {
@@ -1439,6 +1456,50 @@ where
                             subs,
                             exposed_to_host,
                         )));
+                    }
+                    Msg::FailedToParse(problem) => {
+                        // Shut down all the worker threads.
+                        for listener in worker_listeners {
+                            listener
+                                .send(WorkerMsg::Shutdown)
+                                .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                        }
+
+                        use roc_reporting::report::{
+                            parse_problem, RocDocAllocator, DEFAULT_PALETTE,
+                        };
+
+                        let module_id = problem.module_id;
+
+                        let (filename, src) = state.module_cache.sources.get(&module_id).unwrap();
+
+                        let src_lines: Vec<&str> = src.split('\n').collect();
+
+                        let palette = DEFAULT_PALETTE;
+
+                        let module_ids = Arc::try_unwrap(state.arc_modules)
+                            .unwrap_or_else(|_| {
+                                panic!("There were still outstanding Arc references to module_ids")
+                            })
+                            .into_inner()
+                            .into_module_ids();
+
+                        let interns = Interns {
+                            module_ids,
+                            all_ident_ids: state.constrained_ident_ids,
+                        };
+
+                        // Report parsing and canonicalization problems
+                        let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+                        let starting_line = 3;
+                        let report =
+                            parse_problem(&alloc, filename.clone(), starting_line, problem);
+                        let mut buf = String::new();
+
+                        report.render_color_terminal(&mut buf, &alloc, &palette);
+
+                        return Err(LoadingProblem::ParsingFailedReport(buf));
                     }
                     msg => {
                         // This is where most of the main thread's work gets done.
@@ -1942,6 +2003,9 @@ fn update<'a>(
         Msg::FinishedAllSpecialization { .. } => {
             unreachable!();
         }
+        Msg::FailedToParse(_) => {
+            unreachable!();
+        }
     }
 }
 
@@ -2076,7 +2140,7 @@ fn load_pkg_config<'a>(
     match file {
         Ok(bytes) => {
             let parse_start = SystemTime::now();
-            let parse_state = parser::State::new(arena.alloc(bytes), Attempting::Module);
+            let parse_state = parser::State::new_in(arena, arena.alloc(bytes), Attempting::Module);
             let parsed = roc_parse::module::header().parse(&arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2131,7 +2195,17 @@ fn load_pkg_config<'a>(
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
-                Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+                Err((_, fail, _)) => {
+                    let declared_name = "".into();
+
+                    let name = PQModuleName::Qualified(&shorthand, declared_name);
+                    let home = {
+                        let mut module_ids = (*module_ids).lock();
+                        module_ids.get_or_insert(&name)
+                    };
+
+                    Err(LoadingProblem::ParsingFailed(fail.to_parse_problem(home)))
+                }
             }
         }
 
@@ -2242,7 +2316,7 @@ fn parse_header<'a>(
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new(src_bytes, Attempting::Module);
+    let parse_state = parser::State::new_in(arena, src_bytes, Attempting::Module);
     let parsed = roc_parse::module::header().parse(&arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2376,7 +2450,9 @@ fn parse_header<'a>(
             header,
             module_timing,
         ),
-        Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+        Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
+            fail.to_parse_problem(filename),
+        )),
     }
 }
 
@@ -3384,20 +3460,13 @@ fn canonicalize_and_constrain<'a>(
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new(&header.src, Attempting::Module);
+    let parse_state = parser::State::new_in(arena, &header.src, Attempting::Module);
     let parsed_defs = match module_defs().parse(&arena, parse_state) {
         Ok((_, success, _state)) => success,
         Err((_, fail, state)) => {
-            use roc_parse::parser::FailReason;
-            match fail.reason {
-                FailReason::BadUtf8 => panic!(
-                    r"TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function."
-                ),
-                _ => panic!(
-                    "Parser Error\nmodule: {:?}\nattempting: {:?}\n(line, col): {:?}\n",
-                    header.module_id, fail.attempting, &state
-                ),
-            }
+            return Err(LoadingProblem::ParsingFailed(
+                fail.to_parse_problem(header.module_path.clone()),
+            ));
         }
     };
 

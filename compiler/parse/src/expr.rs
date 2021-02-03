@@ -10,8 +10,8 @@ use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
-    fail, fail_when_progress, map, newline_char, not, not_followed_by, optional, sep_by1, then,
-    unexpected, unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
+    fail, map, newline_char, not, not_followed_by, optional, sep_by1, then, unexpected,
+    unexpected_eof, Bag, Either, FailReason, ParseResult, Parser, State,
 };
 use crate::type_annotation;
 use bumpalo::collections::string::String;
@@ -100,7 +100,7 @@ macro_rules! loc_parenthetical_expr {
                     // Re-parse the Expr as a Pattern.
                     let pattern = match expr_to_pattern(arena, &loc_expr.value) {
                         Ok(valid) => valid,
-                        Err(fail) => return Err((progress, fail, state)),
+                        Err(fail) => return Err((progress, Bag::from_state(arena, &state, fail), state)),
                     };
 
                     // Make sure we don't discard the spaces - might be comments in there!
@@ -247,7 +247,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
-fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, Fail> {
+fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, FailReason> {
     match expr {
         Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
@@ -330,10 +330,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::Record {
             update: Some(_), ..
         }
-        | Expr::UnaryOp(_, _) => Err(Fail {
-            attempting: Attempting::Def,
-            reason: FailReason::InvalidPattern,
-        }),
+        | Expr::UnaryOp(_, _) => Err(FailReason::InvalidPattern),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
         Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
@@ -344,7 +341,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
 pub fn assigned_expr_field_to_pattern<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
-) -> Result<Pattern<'a>, Fail> {
+) -> Result<Pattern<'a>, FailReason> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
         AssignedField::RequiredValue(name, spaces, value) => {
@@ -394,7 +391,7 @@ pub fn assigned_pattern_field_to_pattern<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
     backup_region: Region,
-) -> Result<Located<Pattern<'a>>, Fail> {
+) -> Result<Located<Pattern<'a>>, FailReason> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
         AssignedField::RequiredValue(name, spaces, value) => {
@@ -744,20 +741,16 @@ fn parse_def_expr<'a>(
     if def_start_col < min_indent {
         Err((
             NoProgress,
-            Fail {
-                attempting: state.attempting,
-                reason: FailReason::OutdentedTooFar,
-            },
+            Bag::from_state(arena, &state, FailReason::OutdentedTooFar),
             state,
         ))
     // `<` because '=' should be same indent (or greater) as the entire def-expr
     } else if equals_sign_indent < def_start_col {
         Err((
                 NoProgress,
-            Fail {
-                attempting: state.attempting,
-                reason: FailReason::NotYetImplemented(format!("TODO the = in this declaration seems outdented. equals_sign_indent was {} and def_start_col was {}", equals_sign_indent, def_start_col)),
-            },
+            Bag::from_state(arena, &state, 
+                FailReason::NotYetImplemented(format!("TODO the = in this declaration seems outdented. equals_sign_indent was {} and def_start_col was {}", equals_sign_indent, def_start_col)),
+                ),
             state,
         ))
     } else {
@@ -839,22 +832,17 @@ fn parse_def_signature<'a>(
     if original_indent < min_indent {
         Err((
             NoProgress,
-            Fail {
-                attempting: state.attempting,
-                reason: FailReason::OutdentedTooFar,
-            },
+            Bag::from_state(arena, &state, FailReason::OutdentedTooFar),
             state,
         ))
     // `<` because ':' should be same indent or greater
     } else if colon_indent < original_indent {
         Err((
             NoProgress,
-            Fail {
-                attempting: state.attempting,
-                reason: FailReason::NotYetImplemented(
+            Bag::from_state(arena, &state ,FailReason::NotYetImplemented(
                     "TODO the : in this declaration seems outdented".to_string(),
-                ),
-            },
+                )
+            ),
             state,
         ))
     } else {
@@ -1234,7 +1222,7 @@ fn loc_ident_pattern<'a>(
     can_have_arguments: bool,
 ) -> impl Parser<'a, Located<Pattern<'a>>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let (_, loc_ident, state) = loc!(ident()).parse(arena, state)?;
+        let (_, loc_ident, state)  = loc!(ident()).parse(arena, state)?;
 
         match loc_ident.value {
             Ident::GlobalTag(tag) => {
@@ -1332,12 +1320,9 @@ fn loc_ident_pattern<'a>(
             Ident::Malformed(malformed) => {
                 debug_assert!(!malformed.is_empty());
 
-                let fail = Fail {
-                    attempting: state.attempting,
-                    reason: FailReason::InvalidPattern,
-                };
+                let bag = Bag::from_state(arena, &state, FailReason::InvalidPattern,);
 
-                Err((MadeProgress, fail, state))
+                Err((MadeProgress, bag, state))
             }
         }
     }
@@ -1367,12 +1352,11 @@ mod when {
                 if case_indent < min_indent {
                     return Err((
                         progress,
-                        Fail {
-                            attempting: state.attempting,
-                            reason: FailReason::NotYetImplemented(
+                        Bag::from_state(arena, &state, 
+                            FailReason::NotYetImplemented(
                                 "TODO case wasn't indented enough".to_string(),
                             ),
-                        },
+                        ),
                         state,
                     ));
                 }
@@ -1436,12 +1420,11 @@ mod when {
                             } else {
                                 Err((
                                         MadeProgress,
-                                    Fail {
-                                        attempting: state.attempting,
-                                        reason: FailReason::NotYetImplemented(
+                                        Bag::from_state( arena, &state, 
+                                        FailReason::NotYetImplemented(
                                             "TODO additional branch didn't have same indentation as first branch".to_string(),
                                         ),
-                                    },
+                                    ),
                                     state,
                                 ))
                             }
@@ -1694,10 +1677,9 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 (Some(loc_args), Some((_spaces_before_equals, Either::First(_equals_indent)))) => {
                     // We got args with an '=' after them, e.g. `foo a b = ...` This is a syntax error!
                     let region = Region::across_all(loc_args.iter().map(|v| &v.region));
-                    let fail = Fail {
-                        attempting: state.attempting,
-                        reason: FailReason::ArgumentsBeforeEquals(region),
-                    };
+                    let fail = Bag::from_state(arena, &state,  
+                        FailReason::ArgumentsBeforeEquals(region),
+                    );
                     Err((MadeProgress, fail, state))
                 }
                 (None, Some((spaces_before_equals, Either::First(equals_indent)))) => {
@@ -1772,13 +1754,8 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                                         Err(malformed) => {
                                             return Err((
                                                 MadeProgress,
-                                                Fail {
-                                                    attempting: state.attempting,
-                                                    reason: FailReason::NotYetImplemented(format!(
-                                                        "TODO early return malformed pattern {:?}",
-                                                        malformed
-                                                    )),
-                                                },
+                                                Bag::from_state(arena, &state,
+                                                    FailReason::NotYetImplemented(format!( "TODO early return malformed pattern {:?}", malformed)),),
                                                 state,
                                             ));
                                         }
@@ -1827,40 +1804,40 @@ pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
 
 /// Like equals_for_def(), except it produces the indent_col of the state rather than ()
 pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
-    move |_arena, state: State<'a>| {
+    move |arena, state: State<'a>| {
         match state.bytes.first() {
             Some(b'=') => {
                 match state.bytes.get(1) {
                     // The '=' must not be followed by another `=` or `>`
                     // (See equals_for_def() for explanation)
-                    Some(b'=') | Some(b'>') => Err(unexpected(0, state, Attempting::Def)),
+                    Some(b'=') | Some(b'>') => Err(unexpected(arena, 0, Attempting::Def, state)),
                     Some(_) => Ok((
                         MadeProgress,
                         state.indent_col,
-                        state.advance_without_indenting(1)?,
+                        state.advance_without_indenting(arena, 1)?,
                     )),
                     None => Err(unexpected_eof(
+                            arena, 
+                        state.advance_without_indenting(arena, 1)?, 
                         1,
-                        Attempting::Def,
-                        state.advance_without_indenting(1)?,
                     )),
                 }
             }
-            Some(_) => Err(unexpected(0, state, Attempting::Def)),
-            None => Err(unexpected_eof(0, Attempting::Def, state)),
+            Some(_) => Err(unexpected(arena, 0, Attempting::Def, state)),
+            None => Err(unexpected_eof(arena, state, 0 )),
         }
     }
 }
 
 pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
-    move |_arena, state: State<'a>| match state.bytes.first() {
+    move |arena, state: State<'a>| match state.bytes.first() {
         Some(&byte) if byte == b':' => Ok((
             MadeProgress,
             state.indent_col,
-            state.advance_without_indenting(1)?,
+            state.advance_without_indenting(arena, 1)?,
         )),
-        Some(_) => Err(unexpected(0, state, Attempting::Def)),
-        None => Err(unexpected_eof(0, Attempting::Def, state)),
+        Some(_) => Err(unexpected(arena, 0, Attempting::Def, state)),
+        None => Err(unexpected_eof(arena, state, 0)),
     }
 }
 
@@ -2007,7 +1984,7 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         match assigned_expr_field_to_pattern(arena, &loc_assigned_field.value) {
                             Ok(value) => loc_patterns.push(Located { region, value }),
                             // an Expr became a pattern that should not be.
-                            Err(e) => return Err((progress, e, state)),
+                        Err(fail) => return Err((progress, Bag::from_state(arena, &state, fail), state)),
                         }
                     }
 
@@ -2045,7 +2022,7 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         match assigned_expr_field_to_pattern(arena, &loc_assigned_field.value) {
                             Ok(value) => loc_patterns.push(Located { region, value }),
                             // an Expr became a pattern that should not be.
-                            Err(e) => return Err((progress, e, state)),
+                        Err(fail) => return Err((progress, Bag::from_state(arena, &state, fail), state)),
                         }
                     }
 

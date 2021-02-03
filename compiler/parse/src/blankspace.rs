@@ -227,9 +227,9 @@ enum LineState {
 pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
     then(
         and!(ascii_char(b'#'), optional(ascii_string("# "))),
-        |_arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
+        |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
             if opt_doc != None {
-                return Err(unexpected(3, state, Attempting::LineComment));
+                return Err(unexpected(arena, 3, Attempting::LineComment, state));
             }
             let mut length = 0;
 
@@ -242,10 +242,10 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
             }
 
             let comment = &state.bytes[..length];
-            let state = state.advance_without_indenting(length + 1)?;
+            let state = state.advance_without_indenting(arena, length + 1)?;
             match parse_utf8(comment) {
                 Ok(comment_str) => Ok((MadeProgress, comment_str, state)),
-                Err(reason) => state.fail(MadeProgress, reason),
+                Err(reason) => state.fail(arena, MadeProgress, reason),
             }
         },
     )
@@ -253,7 +253,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
 
 #[inline(always)]
 pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
-    move |_arena: &'a Bump, state: State<'a>| {
+    move |arena: &'a Bump, state: State<'a>| {
         if spaces_expected == 0 {
             return Ok((NoProgress, (), state));
         }
@@ -265,32 +265,34 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
             match peek_utf8_char(&state) {
                 Ok((' ', _)) => {
                     spaces_seen += 1;
-                    state = state.advance_spaces(1)?;
+                    state = state.advance_spaces(arena, 1)?;
                     if spaces_seen == spaces_expected {
                         return Ok((MadeProgress, (), state));
                     }
                 }
                 Ok(_) => {
                     return Err(unexpected(
+                        arena,
                         spaces_seen.into(),
+                        Attempting::TODO,
                         state.clone(),
-                        state.attempting,
                     ));
                 }
 
                 Err(FailReason::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
                     let progress = Progress::progress_when(spaces_seen != 0);
-                    return state.fail(progress, FailReason::BadUtf8);
+                    return state.fail(arena, progress, FailReason::BadUtf8);
                 }
                 Err(_) => {
                     if spaces_seen == 0 {
-                        return Err(unexpected_eof(0, state.attempting, state));
+                        return Err(unexpected_eof(arena, state, 0));
                     } else {
                         return Err(unexpected(
+                            arena,
                             spaces_seen.into(),
+                            Attempting::TODO,
                             state.clone(),
-                            state.attempting,
                         ));
                     }
                 }
@@ -298,12 +300,13 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
         }
 
         if spaces_seen == 0 {
-            Err(unexpected_eof(0, state.attempting, state))
+            Err(unexpected_eof(arena, state, 0))
         } else {
             Err(unexpected(
+                arena,
                 spaces_seen.into(),
-                state.clone(),
-                state.attempting,
+                Attempting::TODO,
+                state,
             ))
         }
     }
@@ -336,17 +339,17 @@ fn spaces<'a>(
                                 ' ' => {
                                     // Don't check indentation here; it might not be enough
                                     // indentation yet, but maybe it will be after more spaces happen!
-                                    state = state.advance_spaces(1)?;
+                                    state = state.advance_spaces(arena, 1)?;
                                 }
                                 '\r' => {
                                     // Ignore carriage returns.
-                                    state = state.advance_spaces(1)?;
+                                    state = state.advance_spaces(arena, 1)?;
                                 }
                                 '\n' => {
                                     // don't need to check the indent here since we'll reset it
                                     // anyway
 
-                                    state = state.newline()?;
+                                    state = state.newline(arena)?;
 
                                     // Newlines only get added to the list when they're outside comments.
                                     space_list.push(Newline);
@@ -359,11 +362,11 @@ fn spaces<'a>(
                                     let progress =
                                         Progress::from_lengths(start_bytes_len, state.bytes.len());
                                     state = state
-                                        .check_indent(min_indent)
+                                        .check_indent(arena, min_indent)
                                         .map_err(|(fail, _)| {
                                             (progress, fail, original_state.clone())
                                         })?
-                                        .advance_without_indenting(1)?;
+                                        .advance_without_indenting(arena, 1)?;
 
                                     // We're now parsing a line comment!
                                     line_state = LineState::Comment;
@@ -372,7 +375,7 @@ fn spaces<'a>(
                                     return if require_at_least_one && bytes_parsed <= 1 {
                                         // We've parsed 1 char and it was not a space,
                                         // but we require parsing at least one space!
-                                        Err(unexpected(0, state.clone(), state.attempting))
+                                        Err(unexpected(arena, 0, Attempting::TODO, state.clone()))
                                     } else {
                                         // First make sure we were indented enough!
                                         //
@@ -386,7 +389,7 @@ fn spaces<'a>(
                                             state.bytes.len(),
                                         );
                                         if any_newlines {
-                                            state = state.check_indent(min_indent).map_err(
+                                            state = state.check_indent(arena, min_indent).map_err(
                                                 |(fail, _)| {
                                                     (progress, fail, original_state.clone())
                                                 },
@@ -402,7 +405,7 @@ fn spaces<'a>(
                             match ch {
                                 ' ' => {
                                     // If we're in a line comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting(1)?;
+                                    state = state.advance_without_indenting(arena, 1)?;
 
                                     if comment_line_buf.len() == 1 {
                                         match comment_line_buf.chars().next() {
@@ -427,7 +430,7 @@ fn spaces<'a>(
                                     }
                                 }
                                 '\n' => {
-                                    state = state.newline()?;
+                                    state = state.newline(arena)?;
 
                                     match (comment_line_buf.len(), comment_line_buf.chars().next())
                                     {
@@ -452,7 +455,8 @@ fn spaces<'a>(
                                 }
                                 nonblank => {
                                     // Chars can have btye lengths of more than 1!
-                                    state = state.advance_without_indenting(nonblank.len_utf8())?;
+                                    state = state
+                                        .advance_without_indenting(arena, nonblank.len_utf8())?;
 
                                     comment_line_buf.push(nonblank);
                                 }
@@ -462,12 +466,12 @@ fn spaces<'a>(
                             match ch {
                                 ' ' => {
                                     // If we're in a doc comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting(1)?;
+                                    state = state.advance_without_indenting(arena, 1)?;
 
                                     comment_line_buf.push(ch);
                                 }
                                 '\n' => {
-                                    state = state.newline()?;
+                                    state = state.newline(arena)?;
 
                                     // This was a newline, so end this doc comment.
                                     space_list.push(DocComment(comment_line_buf.into_bump_str()));
@@ -476,7 +480,7 @@ fn spaces<'a>(
                                     line_state = LineState::Normal;
                                 }
                                 nonblank => {
-                                    state = state.advance_without_indenting(utf8_len)?;
+                                    state = state.advance_without_indenting(arena, utf8_len)?;
 
                                     comment_line_buf.push(nonblank);
                                 }
@@ -487,11 +491,11 @@ fn spaces<'a>(
                 Err(FailReason::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
                     let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-                    return state.fail(progress, FailReason::BadUtf8);
+                    return state.fail(arena, progress, FailReason::BadUtf8);
                 }
                 Err(_) => {
                     if require_at_least_one && bytes_parsed == 0 {
-                        return Err(unexpected_eof(0, state.attempting, state));
+                        return Err(unexpected_eof(arena, state, 0));
                     } else {
                         let space_slice = space_list.into_bump_slice();
 
@@ -508,7 +512,7 @@ fn spaces<'a>(
                                 progress,
                                 space_slice,
                                 state
-                                    .check_indent(min_indent)
+                                    .check_indent(arena, min_indent)
                                     .map_err(|(fail, _)| (progress, fail, original_state))?,
                             ));
                         }
@@ -521,7 +525,7 @@ fn spaces<'a>(
 
         // If we didn't parse anything, return unexpected EOF
         if require_at_least_one && original_state.bytes.len() == state.bytes.len() {
-            Err(unexpected_eof(0, state.attempting, state))
+            Err(unexpected_eof(arena, state, 0))
         } else {
             // First make sure we were indented enough!
             //
@@ -533,7 +537,7 @@ fn spaces<'a>(
             let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
             if any_newlines {
                 state = state
-                    .check_indent(min_indent)
+                    .check_indent(arena, min_indent)
                     .map_err(|(fail, _)| (progress, fail, original_state))?;
             }
 

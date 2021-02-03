@@ -19,15 +19,15 @@ pub struct File<'a> {
 }
 
 #[derive(Debug)]
-pub enum ReadError {
+pub enum ReadError<'a> {
     Read(std::io::Error),
-    ParseDefs(parser::Fail),
-    ParseHeader(parser::Fail),
+    ParseDefs(parser::Bag<'a>),
+    ParseHeader(parser::Bag<'a>),
     DoesntHaveRocExtension,
 }
 
 impl<'a> File<'a> {
-    pub fn read(path: &'a Path, arena: &'a Bump) -> Result<File<'a>, ReadError> {
+    pub fn read(path: &'a Path, arena: &'a Bump) -> Result<File<'a>, ReadError<'a>> {
         if path.extension() != Some(OsStr::new("roc")) {
             return Err(ReadError::DoesntHaveRocExtension);
         }
@@ -36,7 +36,7 @@ impl<'a> File<'a> {
 
         let allocation = arena.alloc(bytes);
 
-        let module_parse_state = parser::State::new(allocation, Attempting::Module);
+        let module_parse_state = parser::State::new_in(arena, allocation, Attempting::Module);
         let parsed_module = roc_parse::module::header().parse(&arena, module_parse_state);
 
         match parsed_module {

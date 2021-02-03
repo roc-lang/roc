@@ -9,7 +9,7 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, ascii_char, ascii_string, backtrackable, loc, optional, peek_utf8_char,
+    self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
     peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
 };
 use crate::string_literal;
@@ -96,7 +96,7 @@ pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseRes
                 if ch == '-' || ch.is_ascii_alphanumeric() {
                     part_buf.push(ch);
 
-                    state = state.advance_without_indenting(bytes_parsed)?;
+                    state = state.advance_without_indenting(arena, bytes_parsed)?;
                 } else {
                     let progress = Progress::progress_when(!part_buf.is_empty());
                     return Ok((progress, part_buf.into_bump_str(), state));
@@ -104,12 +104,12 @@ pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseRes
             }
             Err(reason) => {
                 let progress = Progress::progress_when(!part_buf.is_empty());
-                return state.fail(progress, reason);
+                return state.fail(arena, progress, reason);
             }
         }
     }
 
-    Err(unexpected_eof(0, state.attempting, state))
+    Err(unexpected_eof(arena, state, 0))
 }
 
 #[inline(always)]
@@ -118,14 +118,14 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
         match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !first_letter.is_uppercase() {
-                    return Err(unexpected(0, state, Attempting::Module));
+                    return Err(unexpected(arena, 0, Attempting::Module, state));
                 };
 
                 let mut buf = String::with_capacity_in(4, arena);
 
                 buf.push(first_letter);
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
 
                 while !state.bytes.is_empty() {
                     match peek_utf8_char(&state) {
@@ -136,7 +136,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                             // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
                             // * A '.' separating module parts
                             if ch.is_alphabetic() || ch.is_ascii_digit() {
-                                state = state.advance_without_indenting(bytes_parsed)?;
+                                state = state.advance_without_indenting(arena, bytes_parsed)?;
 
                                 buf.push(ch);
                             } else if ch == '.' {
@@ -148,6 +148,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                                             buf.push(next);
 
                                             state = state.advance_without_indenting(
+                                                arena,
                                                 bytes_parsed + next_bytes_parsed,
                                             )?;
                                         } else {
@@ -162,20 +163,20 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                                             ));
                                         }
                                     }
-                                    Err(reason) => return state.fail(MadeProgress, reason),
+                                    Err(reason) => return state.fail(arena, MadeProgress, reason),
                                 }
                             } else {
                                 // This is the end of the module name. We're done!
                                 break;
                             }
                         }
-                        Err(reason) => return state.fail(MadeProgress, reason),
+                        Err(reason) => return state.fail(arena, MadeProgress, reason),
                     }
                 }
 
                 Ok((MadeProgress, ModuleName::new(buf.into_bump_str()), state))
             }
-            Err(reason) => state.fail(MadeProgress, reason),
+            Err(reason) => state.fail(arena, MadeProgress, reason),
         }
     }
 }
@@ -300,8 +301,7 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
         // this parses just the defs
         let defs = zero_or_more!(space0_around(loc(def(0)), 0));
 
-        // let result = skip_second!(defs, end_of_file()).parse(a, s);
-        let result = defs.parse(a, s);
+        let result = skip_second!(defs, end_of_file()).parse(a, s);
 
         result
     }

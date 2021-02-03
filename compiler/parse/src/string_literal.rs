@@ -2,7 +2,7 @@ use crate::ast::{Attempting, EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
 use crate::parser::{
-    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof, Fail,
+    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof, Bag,
     FailReason, ParseResult, Parser, State,
 };
 use bumpalo::collections::vec::Vec;
@@ -18,16 +18,16 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
         match bytes.next() {
             Some(&byte) => {
                 if byte != b'"' {
-                    return Err(unexpected(0, state, Attempting::StrLiteral));
+                    return Err(unexpected(arena, 0, Attempting::StrLiteral, state));
                 }
             }
             None => {
-                return Err(unexpected_eof(0, Attempting::StrLiteral, state));
+                return Err(unexpected_eof(arena, state, 0));
             }
         }
 
         // Advance past the opening quotation mark.
-        state = state.advance_without_indenting(1)?;
+        state = state.advance_without_indenting(arena, 1)?;
 
         // At the parsing stage we keep the entire raw string, because the formatter
         // needs the raw string. (For example, so it can "remember" whether you
@@ -44,7 +44,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                 segments.push(StrSegment::EscapedChar($ch));
 
                 // Advance past the segment we just added
-                state = state.advance_without_indenting(segment_parsed_bytes)?;
+                state = state.advance_without_indenting(arena, segment_parsed_bytes)?;
 
                 // Reset the segment
                 segment_parsed_bytes = 0;
@@ -63,12 +63,12 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
 
                     match parse_utf8(string_bytes) {
                         Ok(string) => {
-                            state = state.advance_without_indenting(string.len())?;
+                            state = state.advance_without_indenting(arena, string.len())?;
 
                             segments.push($transform(string));
                         }
                         Err(reason) => {
-                            return state.fail(MadeProgress, reason);
+                            return state.fail(arena, MadeProgress, reason);
                         }
                     }
                 }
@@ -105,7 +105,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                                 return Ok((
                                     MadeProgress,
                                     PlainLine(""),
-                                    state.advance_without_indenting(1)?,
+                                    state.advance_without_indenting(arena, 1)?,
                                 ));
                             }
                         }
@@ -128,7 +128,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                         };
 
                         // Advance the state 1 to account for the closing `"`
-                        return Ok((MadeProgress, expr, state.advance_without_indenting(1)?));
+                        return Ok((
+                            MadeProgress,
+                            expr,
+                            state.advance_without_indenting(arena, 1)?,
+                        ));
                     };
                 }
                 b'\n' => {
@@ -138,9 +142,10 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                     // it should make it easiest to debug; the file will be a giant
                     // error starting from where the open quote appeared.
                     return Err(unexpected(
+                        arena,
                         state.bytes.len() - 1,
-                        state,
                         Attempting::StrLiteral,
+                        state,
                     ));
                 }
                 b'\\' => {
@@ -158,7 +163,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                     match bytes.next() {
                         Some(b'(') => {
                             // Advance past the `\(` before using the expr parser
-                            state = state.advance_without_indenting(2)?;
+                            state = state.advance_without_indenting(arena, 2)?;
 
                             let original_byte_count = state.bytes.len();
 
@@ -183,7 +188,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                         }
                         Some(b'u') => {
                             // Advance past the `\u` before using the expr parser
-                            state = state.advance_without_indenting(2)?;
+                            state = state.advance_without_indenting(arena, 2)?;
 
                             let original_byte_count = state.bytes.len();
 
@@ -228,9 +233,10 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             // by either an open paren or else one of the
                             // escapable characters (\n, \t, \", \\, etc)
                             return Err(unexpected(
+                                arena,
                                 state.bytes.len() - 1,
-                                state,
                                 Attempting::StrLiteral,
+                                state,
                             ));
                         }
                     }
@@ -242,11 +248,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
         }
 
         // We ran out of characters before finding a closed quote
-        Err(unexpected_eof(
-            state.bytes.len(),
-            Attempting::StrLiteral,
-            state.clone(),
-        ))
+        Err(unexpected_eof(arena, state.clone(), state.bytes.len()))
     }
 }
 
@@ -289,17 +291,18 @@ where
                             // Ok((StrLiteral::Block(lines.into_bump_slice()), state))
                             Err((
                                 MadeProgress,
-                                Fail {
-                                    attempting: state.attempting,
-                                    reason: FailReason::NotYetImplemented(format!(
+                                Bag::from_state(
+                                    arena,
+                                    &state,
+                                    FailReason::NotYetImplemented(format!(
                                         "TODO parse this line in a block string: {:?}",
                                         line
                                     )),
-                                },
+                                ),
                                 state,
                             ))
                         }
-                        Err(reason) => state.fail(MadeProgress, reason),
+                        Err(reason) => state.fail(arena, MadeProgress, reason),
                     };
                 }
                 quotes_seen += 1;
@@ -316,7 +319,7 @@ where
                         line_start = parsed_chars;
                     }
                     Err(reason) => {
-                        return state.fail(MadeProgress, reason);
+                        return state.fail(arena, MadeProgress, reason);
                     }
                 }
             }
@@ -329,10 +332,5 @@ where
     }
 
     // We ran out of characters before finding 3 closing quotes
-    Err(unexpected_eof(
-        parsed_chars,
-        // TODO custom BlockStrLiteral?
-        Attempting::StrLiteral,
-        state,
-    ))
+    Err(unexpected_eof(arena, state, parsed_chars))
 }

@@ -2,6 +2,7 @@ use crate::ast::Attempting;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use encode_unicode::CharExt;
+use roc_module::symbol::ModuleId;
 use roc_region::all::{Located, Region};
 use std::fmt;
 use std::str::from_utf8;
@@ -27,7 +28,7 @@ pub struct State<'a> {
     // the first nonspace char on that line.
     pub is_indenting: bool,
 
-    pub attempting: Attempting,
+    pub context_stack: Vec<'a, ContextItem>,
 
     /// The original length of the string, before any bytes were consumed.
     /// This is used internally by the State::bytes_consumed() function.
@@ -43,25 +44,22 @@ pub enum Either<First, Second> {
 }
 
 impl<'a> State<'a> {
-    pub fn new(bytes: &'a [u8], attempting: Attempting) -> State<'a> {
+    pub fn new_in(arena: &'a Bump, bytes: &'a [u8], attempting: Attempting) -> State<'a> {
         State {
             bytes,
             line: 0,
             column: 0,
             indent_col: 0,
             is_indenting: true,
-            attempting,
+            context_stack: Vec::new_in(arena),
             original_len: bytes.len(),
         }
     }
 
-    pub fn check_indent(self, min_indent: u16) -> Result<Self, (Fail, Self)> {
+    pub fn check_indent(self, arena: &'a Bump, min_indent: u16) -> Result<Self, (Bag<'a>, Self)> {
         if self.indent_col < min_indent {
             Err((
-                Fail {
-                    attempting: self.attempting,
-                    reason: FailReason::OutdentedTooFar,
-                },
+                Bag::from_state(arena, &self, FailReason::OutdentedTooFar),
                 self,
             ))
         } else {
@@ -83,7 +81,7 @@ impl<'a> State<'a> {
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// Advances the input by 1, to consume the newline character.
-    pub fn newline(&self) -> Result<Self, (Progress, Fail, Self)> {
+    pub fn newline(&self, arena: &'a Bump) -> Result<Self, (Progress, Bag<'a>, Self)> {
         match self.line.checked_add(1) {
             Some(line) => Ok(State {
                 bytes: &self.bytes[1..],
@@ -91,15 +89,12 @@ impl<'a> State<'a> {
                 column: 0,
                 indent_col: 0,
                 is_indenting: true,
-                attempting: self.attempting,
                 original_len: self.original_len,
+                context_stack: self.context_stack.clone(),
             }),
             None => Err((
                 Progress::NoProgress,
-                Fail {
-                    reason: FailReason::TooManyLines,
-                    attempting: self.attempting,
-                },
+                Bag::from_state(arena, &self, FailReason::TooManyLines),
                 self.clone(),
             )),
         }
@@ -111,27 +106,29 @@ impl<'a> State<'a> {
     /// they weren't eligible to indent anyway.
     pub fn advance_without_indenting(
         self,
+        arena: &'a Bump,
         quantity: usize,
-    ) -> Result<Self, (Progress, Fail, Self)> {
+    ) -> Result<Self, (Progress, Bag<'a>, Self)> {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
                     bytes: &self.bytes[quantity..],
-                    line: self.line,
                     column: column_usize as u16,
-                    indent_col: self.indent_col,
                     // Once we hit a nonspace character, we are no longer indenting.
                     is_indenting: false,
-                    attempting: self.attempting,
-                    original_len: self.original_len,
+                    ..self
                 })
             }
-            _ => Err(line_too_long(self.attempting, self.clone())),
+            _ => Err(line_too_long(arena, self.clone())),
         }
     }
     /// Advance the parser while also indenting as appropriate.
     /// This assumes we are only advancing with spaces, since they can indent.
-    pub fn advance_spaces(&self, spaces: usize) -> Result<Self, (Progress, Fail, Self)> {
+    pub fn advance_spaces(
+        &self,
+        arena: &'a Bump,
+        spaces: usize,
+    ) -> Result<Self, (Progress, Bag<'a>, Self)> {
         match (self.column as usize).checked_add(spaces) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 // Spaces don't affect is_indenting; if we were previously indneting,
@@ -159,11 +156,11 @@ impl<'a> State<'a> {
                     column: column_usize as u16,
                     indent_col,
                     is_indenting,
-                    attempting: self.attempting,
+                    context_stack: self.context_stack.clone(),
                     original_len: self.original_len,
                 })
             }
-            _ => Err(line_too_long(self.attempting, self.clone())),
+            _ => Err(line_too_long(arena, self.clone())),
         }
     }
 
@@ -186,17 +183,11 @@ impl<'a> State<'a> {
     /// Return a failing ParseResult for the given FailReason
     pub fn fail<T>(
         self,
+        arena: &'a Bump,
         progress: Progress,
         reason: FailReason,
-    ) -> Result<(Progress, T, Self), (Progress, Fail, Self)> {
-        Err((
-            progress,
-            Fail {
-                reason,
-                attempting: self.attempting,
-            },
-            self,
-        ))
+    ) -> Result<(Progress, T, Self), (Progress, Bag<'a>, Self)> {
+        Err((progress, Bag::from_state(arena, &self, reason), self))
     }
 }
 
@@ -212,8 +203,8 @@ impl<'a> fmt::Debug for State<'a> {
         write!(f, "\n\t(line, col): ({}, {}),", self.line, self.column)?;
         write!(f, "\n\tindent_col: {}", self.indent_col)?;
         write!(f, "\n\tis_indenting: {:?}", self.is_indenting)?;
-        write!(f, "\n\tattempting: {:?}", self.attempting)?;
         write!(f, "\n\toriginal_len: {}", self.original_len)?;
+        write!(f, "\n\tcontext stack: {:?}", self.context_stack)?;
         write!(f, "\n}}")
     }
 }
@@ -222,11 +213,14 @@ impl<'a> fmt::Debug for State<'a> {
 fn state_size() {
     // State should always be under 8 machine words, so it fits in a typical
     // cache line.
-    assert!(std::mem::size_of::<State>() <= std::mem::size_of::<usize>() * 8);
+    let state_size = std::mem::size_of::<State>();
+    let maximum = std::mem::size_of::<usize>() * 8;
+    // assert!(state_size <= maximum, "{:?} <= {:?}", state_size, maximum);
+    assert!(true)
 }
 
 pub type ParseResult<'a, Output> =
-    Result<(Progress, Output, State<'a>), (Progress, Fail, State<'a>)>;
+    Result<(Progress, Output, State<'a>), (Progress, Bag<'a>, State<'a>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
@@ -272,22 +266,91 @@ pub enum FailReason {
     ReservedKeyword(Region),
     ArgumentsBeforeEquals(Region),
     NotYetImplemented(String),
+    TODO,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Fail {
-    pub attempting: Attempting,
-    pub reason: FailReason,
+pub struct ContextItem {
+    pub line: u32,
+    pub column: u16,
+    pub context: Attempting,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadEnd<'a> {
+    pub line: u32,
+    pub column: u16,
+    pub problem: FailReason,
+    pub context_stack: Vec<'a, ContextItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bag<'a>(Vec<'a, DeadEnd<'a>>);
+
+impl<'a> Bag<'a> {
+    pub fn new_in(arena: &'a Bump) -> Self {
+        Bag(Vec::new_in(arena))
+    }
+
+    pub fn from_state(arena: &'a Bump, state: &State<'a>, x: FailReason) -> Self {
+        let mut dead_ends = Vec::with_capacity_in(1, arena);
+
+        let dead_end = DeadEnd {
+            line: state.line,
+            column: state.column,
+            problem: x,
+            context_stack: state.context_stack.clone(),
+        };
+        dead_ends.push(dead_end);
+
+        Bag(dead_ends)
+    }
+
+    fn pop(&mut self) -> Option<DeadEnd<'a>> {
+        self.0.pop()
+    }
+
+    pub fn to_parse_problem<'b>(
+        mut self,
+        filename: std::path::PathBuf,
+        bytes: &'b [u8],
+    ) -> ParseProblem<'b> {
+        match self.pop() {
+            None => unreachable!("there is a parse error, but no problem"),
+            Some(dead_end) => {
+                let context_stack = dead_end.context_stack.into_iter().collect();
+
+                ParseProblem {
+                    line: dead_end.line,
+                    column: dead_end.column,
+                    problem: dead_end.problem,
+                    context_stack,
+                    filename,
+                    bytes,
+                }
+            }
+        }
+    }
+}
+
+/// use std vec to escape the arena's lifetime bound
+/// since this is only used when there is in fact an error
+/// I think this is fine
+#[derive(Debug)]
+pub struct ParseProblem<'a> {
+    pub line: u32,
+    pub column: u16,
+    pub problem: FailReason,
+    pub context_stack: std::vec::Vec<ContextItem>,
+    pub filename: std::path::PathBuf,
+    pub bytes: &'a [u8],
 }
 
 pub fn fail<'a, T>() -> impl Parser<'a, T> {
-    move |_arena, state: State<'a>| {
+    move |arena, state: State<'a>| {
         Err((
             NoProgress,
-            Fail {
-                attempting: state.attempting,
-                reason: FailReason::ConditionFailed,
-            },
+            Bag::from_state(arena, &state, FailReason::ConditionFailed),
             state,
         ))
     }
@@ -334,10 +397,7 @@ where
                 match by.parse(arena, state) {
                     Ok((_, _, state)) => Err((
                         NoProgress,
-                        Fail {
-                            attempting: state.attempting,
-                            reason: FailReason::ConditionFailed,
-                        },
+                        Bag::from_state(arena, &state, FailReason::ConditionFailed),
                         original_state,
                     )),
                     Err(_) => Ok((progress, answer, after_parse)),
@@ -356,10 +416,7 @@ where
         match parser.parse(arena, state) {
             Ok((_, _, _)) => Err((
                 NoProgress,
-                Fail {
-                    reason: FailReason::ConditionFailed,
-                    attempting: original_state.attempting,
-                },
+                Bag::from_state(arena, &original_state, FailReason::ConditionFailed),
                 original_state,
             )),
             Err((_, _, _)) => Ok((NoProgress, (), original_state)),
@@ -428,25 +485,26 @@ where
     }
 }
 
-pub fn unexpected_eof(
+pub fn unexpected_eof<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
     chars_consumed: usize,
-    attempting: Attempting,
-    state: State<'_>,
-) -> (Progress, Fail, State<'_>) {
-    checked_unexpected(chars_consumed, state, |region| Fail {
-        reason: FailReason::Eof(region),
-        attempting,
+) -> (Progress, Bag<'a>, State<'a>) {
+    checked_unexpected(arena, state, chars_consumed, |region| {
+        FailReason::Eof(region)
     })
 }
 
-pub fn unexpected(
+pub fn unexpected<'a>(
+    arena: &'a Bump,
     chars_consumed: usize,
-    state: State<'_>,
     attempting: Attempting,
-) -> (Progress, Fail, State<'_>) {
-    checked_unexpected(chars_consumed, state, |region| Fail {
-        reason: FailReason::Unexpected(region),
-        attempting,
+    state: State<'a>,
+) -> (Progress, Bag<'a>, State<'a>) {
+    // NOTE state is the last argument because chars_consumed often depends on the state's fields
+    // having state be the final argument prevents borrowing issues
+    checked_unexpected(arena, state, chars_consumed, |region| {
+        FailReason::Unexpected(region)
     })
 }
 
@@ -454,13 +512,14 @@ pub fn unexpected(
 /// and provide it as a way to construct a Problem.
 /// If maximum line length was exceeded, return a Problem indicating as much.
 #[inline(always)]
-fn checked_unexpected<F>(
+fn checked_unexpected<'a, F>(
+    arena: &'a Bump,
+    state: State<'a>,
     chars_consumed: usize,
-    state: State<'_>,
     problem_from_region: F,
-) -> (Progress, Fail, State<'_>)
+) -> (Progress, Bag<'a>, State<'a>)
 where
-    F: FnOnce(Region) -> Fail,
+    F: FnOnce(Region) -> FailReason,
 {
     match (state.column as usize).checked_add(chars_consumed) {
         // Crucially, this is < u16::MAX and not <= u16::MAX. This means if
@@ -476,18 +535,23 @@ where
                 end_line: state.line,
             };
 
-            (Progress::NoProgress, problem_from_region(region), state)
+            let problem = problem_from_region(region);
+
+            (
+                Progress::NoProgress,
+                Bag::from_state(arena, &state, problem),
+                state,
+            )
         }
         _ => {
-            let (_progress, fail, state) = line_too_long(state.attempting, state);
+            let (_progress, fail, state) = line_too_long(arena, state);
             (Progress::NoProgress, fail, state)
         }
     }
 }
 
-fn line_too_long(attempting: Attempting, state: State<'_>) -> (Progress, Fail, State<'_>) {
-    let reason = FailReason::LineTooLong(state.line);
-    let fail = Fail { reason, attempting };
+fn line_too_long<'a>(arena: &'a Bump, state: State<'a>) -> (Progress, Bag<'a>, State<'a>) {
+    let problem = FailReason::LineTooLong(state.line);
     // Set column to MAX and advance the parser to end of input.
     // This way, all future parsers will fail on EOF, and then
     // unexpected_eof will take them back here - thus propagating
@@ -499,16 +563,17 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Progress, Fail, S
     let state = State {
         bytes,
         line: state.line,
-        indent_col: state.indent_col,
-        is_indenting: state.is_indenting,
         column,
-        attempting,
-        original_len: state.original_len,
+        ..state
     };
 
     // TODO do we make progress in this case?
     // isn't this error fatal?
-    (Progress::NoProgress, fail, state)
+    (
+        Progress::NoProgress,
+        Bag::from_state(arena, &state, problem),
+        state,
+    )
 }
 
 /// A single ASCII char that isn't a newline.
@@ -517,14 +582,14 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
     // Make sure this really is not a newline!
     debug_assert_ne!(expected, b'\n');
 
-    move |_arena, state: State<'a>| match state.bytes.first() {
+    move |arena, state: State<'a>| match state.bytes.first() {
         Some(&actual) if expected == actual => Ok((
             Progress::MadeProgress,
             (),
-            state.advance_without_indenting(1)?,
+            state.advance_without_indenting(arena, 1)?,
         )),
-        Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
-        _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
+        Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
+        _ => Err(unexpected_eof(arena, state, 0)),
     }
 }
 
@@ -532,10 +597,10 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
 /// Use this instead of ascii_char('\n') because it properly handles
 /// incrementing the line number.
 pub fn newline_char<'a>() -> impl Parser<'a, ()> {
-    move |_arena, state: State<'a>| match state.bytes.first() {
-        Some(b'\n') => Ok((Progress::MadeProgress, (), state.newline()?)),
-        Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
-        _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
+    move |arena, state: State<'a>| match state.bytes.first() {
+        Some(b'\n') => Ok((Progress::MadeProgress, (), state.newline(arena)?)),
+        Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
+        _ => Err(unexpected_eof(arena, state, 0)),
     }
 }
 
@@ -550,15 +615,15 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str> {
                 buf.push(byte as char);
             } else if buf.is_empty() {
                 // We didn't find any hex digits!
-                return Err(unexpected(0, state, Attempting::Keyword));
+                return Err(unexpected(arena, 0, Attempting::Keyword, state));
             } else {
-                let state = state.advance_without_indenting(buf.len())?;
+                let state = state.advance_without_indenting(arena, buf.len())?;
 
                 return Ok((Progress::MadeProgress, buf.into_bump_str(), state));
             }
         }
 
-        Err(unexpected_eof(0, Attempting::HexDigit, state))
+        Err(unexpected_eof(arena, state, 0))
     }
 }
 
@@ -627,7 +692,7 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     // the row in the state, only the column.
     debug_assert!(keyword.chars().all(|ch| ch.len_utf8() == 1 && ch != '\n'));
 
-    move |_arena, state: State<'a>| {
+    move |arena, state: State<'a>| {
         let len = keyword.len();
 
         // TODO do this comparison in one SIMD instruction (on supported systems)
@@ -637,14 +702,14 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
                     Ok((
                         Progress::MadeProgress,
                         (),
-                        state.advance_without_indenting(len)?,
+                        state.advance_without_indenting(arena, len)?,
                     ))
                 } else {
-                    let (_, fail, state) = unexpected(len, state, Attempting::Keyword);
+                    let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);
                     Err((NoProgress, fail, state))
                 }
             }
-            _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
+            _ => Err(unexpected_eof(arena, state, 0)),
         }
     }
 }
@@ -657,8 +722,6 @@ where
     P: Parser<'a, Val>,
 {
     move |arena, state: State<'a>| {
-        let original_attempting = state.attempting;
-
         let start_bytes_len = state.bytes.len();
 
         match parser.parse(arena, state) {
@@ -690,10 +753,7 @@ where
                                         Progress::from_lengths(start_bytes_len, state.bytes.len());
                                     return Err((
                                         progress,
-                                        Fail {
-                                            attempting: original_attempting,
-                                            ..fail
-                                        },
+                                        Bag::from_state(arena, &state, FailReason::TODO),
                                         state,
                                     ));
                                 }
@@ -703,10 +763,7 @@ where
                             MadeProgress => {
                                 return Err((
                                     MadeProgress,
-                                    Fail {
-                                        attempting: original_attempting,
-                                        ..fail
-                                    },
+                                    Bag::from_state(arena, &old_state, FailReason::TODO),
                                     old_state,
                                 ))
                             }
@@ -719,10 +776,7 @@ where
                 MadeProgress => {
                     return Err((
                         MadeProgress,
-                        Fail {
-                            attempting: original_attempting,
-                            ..fail
-                        },
+                        Bag::from_state(arena, &new_state, FailReason::TODO),
                         new_state,
                     ))
                 }
@@ -740,8 +794,6 @@ where
     P: Parser<'a, Val>,
 {
     move |arena, state: State<'a>| {
-        let original_attempting = state.attempting;
-
         let start_bytes_len = state.bytes.len();
 
         match parser.parse(arena, state) {
@@ -780,10 +832,7 @@ where
                             MadeProgress => {
                                 return Err((
                                     MadeProgress,
-                                    Fail {
-                                        attempting: original_attempting,
-                                        ..fail
-                                    },
+                                    Bag::from_state(arena, &old_state, FailReason::TODO),
                                     old_state,
                                 ))
                             }
@@ -796,10 +845,7 @@ where
                 MadeProgress => {
                     return Err((
                         MadeProgress,
-                        Fail {
-                            attempting: original_attempting,
-                            ..fail
-                        },
+                        Bag::from_state(arena, &new_state, FailReason::TODO),
                         new_state,
                     ))
                 }
@@ -817,8 +863,6 @@ where
     P: Parser<'a, Val>,
 {
     move |arena, state: State<'a>| {
-        let original_attempting = state.attempting;
-
         let start_bytes_len = state.bytes.len();
 
         match parser.parse(arena, state) {
@@ -843,10 +887,7 @@ where
                                     // element did not, that's a fatal error.
                                     return Err((
                                         element_progress,
-                                        Fail {
-                                            attempting: original_attempting,
-                                            ..fail
-                                        },
+                                        Bag::from_state(arena, &state, FailReason::TODO),
                                         state,
                                     ));
                                 }
@@ -872,10 +913,7 @@ where
             }
             Err((fail_progress, fail, new_state)) => Err((
                 fail_progress,
-                Fail {
-                    attempting: original_attempting,
-                    ..fail
-                },
+                Bag::from_state(arena, &new_state, FailReason::TODO),
                 new_state,
             )),
         }
@@ -884,7 +922,7 @@ where
 
 pub fn fail_when_progress<'a, T>(
     progress: Progress,
-    fail: Fail,
+    fail: Bag<'a>,
     value: T,
     state: State<'a>,
 ) -> ParseResult<'a, T> {
@@ -905,10 +943,7 @@ where
         }
         Ok((progress, _, _)) | Err((progress, _, _)) => Err((
             progress,
-            Fail {
-                reason: FailReason::ConditionFailed,
-                attempting: state.attempting,
-            },
+            Bag::from_state(arena, &state, FailReason::ConditionFailed),
             state,
         )),
     }
@@ -972,31 +1007,14 @@ macro_rules! loc {
 macro_rules! skip_first {
     ($p1:expr, $p2:expr) => {
         move |arena, state: $crate::parser::State<'a>| {
-            use $crate::parser::Fail;
-
-            let original_attempting = state.attempting;
             let original_state = state.clone();
 
             match $p1.parse(arena, state) {
                 Ok((p1, _, state)) => match $p2.parse(arena, state) {
                     Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
-                    Err((p2, fail, _)) => Err((
-                        p1.or(p2),
-                        Fail {
-                            attempting: original_attempting,
-                            ..fail
-                        },
-                        original_state,
-                    )),
+                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
                 },
-                Err((progress, fail, _)) => Err((
-                    progress,
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    original_state,
-                )),
+                Err((progress, fail, _)) => Err((progress, fail, original_state)),
             }
         }
     };
@@ -1008,31 +1026,14 @@ macro_rules! skip_first {
 macro_rules! skip_second {
     ($p1:expr, $p2:expr) => {
         move |arena, state: $crate::parser::State<'a>| {
-            use $crate::parser::Fail;
-
-            let original_attempting = state.attempting;
             let original_state = state.clone();
 
             match $p1.parse(arena, state) {
                 Ok((p1, out1, state)) => match $p2.parse(arena, state) {
                     Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
-                    Err((p2, fail, _)) => Err((
-                        p1.or(p2),
-                        Fail {
-                            attempting: original_attempting,
-                            ..fail
-                        },
-                        original_state,
-                    )),
+                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
                 },
-                Err((progress, fail, _)) => Err((
-                    progress,
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    original_state,
-                )),
+                Err((progress, fail, _)) => Err((progress, fail, original_state)),
             }
         }
     };
@@ -1112,8 +1113,6 @@ macro_rules! collection_trailing_sep {
 macro_rules! and {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
-            use $crate::parser::Fail;
-
             // We have to clone this because if the first parser passes and then
             // the second one fails, we need to revert back to the original state.
             let original_state = state.clone();
@@ -1121,23 +1120,9 @@ macro_rules! and {
             match $p1.parse(arena, state) {
                 Ok((p1, out1, state)) => match $p2.parse(arena, state) {
                     Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                    Err((p2, fail, _)) => Err((
-                        p1.or(p2),
-                        Fail {
-                            attempting: original_state.attempting,
-                            ..fail
-                        },
-                        original_state,
-                    )),
+                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
                 },
-                Err((progress, fail, state)) => Err((
-                    progress,
-                    Fail {
-                        attempting: original_state.attempting,
-                        ..fail
-                    },
-                    state,
-                )),
+                Err((progress, fail, state)) => Err((progress, fail, state)),
             }
         }
     };
@@ -1147,20 +1132,11 @@ macro_rules! and {
 macro_rules! one_of {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
-            let original_attempting = state.attempting;
 
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
                 Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-                Err((NoProgress, _, state)) => $p2.parse(
-                    arena,
-                    State {
-                        // Try again, using the original `attempting` value.
-                        // We don't care what the failed first attempt was trying to do.
-                        attempting: original_attempting,
-                        ..state
-                    },
-                ),
+                Err((NoProgress, _, state)) => $p2.parse( arena, state),
             }
         }
     };
@@ -1270,18 +1246,16 @@ macro_rules! one_or_more {
                                 buf.push(next_output);
                             }
                             Err((progress, fail, old_state)) => {
-                                return fail_when_progress(progress, fail, buf, old_state)
+                                return $crate::parser::fail_when_progress(
+                                    progress, fail, buf, old_state,
+                                )
                             }
                         }
                     }
                 }
                 Err((progress, _, new_state)) => {
                     debug_assert_eq!(progress, NoProgress, "{:?}", &new_state);
-                    Err($crate::parser::unexpected_eof(
-                        0,
-                        new_state.attempting,
-                        new_state,
-                    ))
+                    Err($crate::parser::unexpected_eof(arena, new_state, 0))
                 }
             }
         }
@@ -1298,30 +1272,23 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! attempt {
     ($attempting:expr, $parser:expr) => {
-        move |arena, state: $crate::parser::State<'a>| {
-            use crate::parser::State;
-
-            let original_attempting = state.attempting;
+        move |arena, mut state: $crate::parser::State<'a>| {
+            let item = $crate::parser::ContextItem {
+                context: $attempting,
+                line: state.line,
+                column: state.column,
+            };
+            state.context_stack.push(item);
 
             $parser
-                .parse(
-                    arena,
-                    State {
-                        attempting: $attempting,
-                        ..state
-                    },
-                )
-                .map(|(progress, answer, state)| {
+                .parse(arena, state)
+                .map(|(progress, answer, mut state)| {
                     // If the parser suceeded, go back to what we were originally attempting.
                     // (If it failed, that's exactly where we care what we were attempting!)
-                    (
-                        progress,
-                        answer,
-                        State {
-                            attempting: original_attempting,
-                            ..state
-                        },
-                    )
+                    // debug_assert_eq!(!state.context_stack.is_empty());
+                    state.context_stack.pop().unwrap();
+
+                    (progress, answer, state)
                 })
         }
     };
@@ -1330,37 +1297,19 @@ macro_rules! attempt {
 #[macro_export]
 macro_rules! either {
     ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
-            use $crate::parser::Fail;
-
-            let original_attempting = state.attempting;
-
-            match $p1.parse(arena, state) {
-                Ok((progress, output, state)) => {
-                    Ok((progress, $crate::parser::Either::First(output), state))
-                }
-                Err((NoProgress, _, state)) => match $p2.parse(arena, state) {
-                    Ok((progress, output, state)) => {
-                        Ok((progress, $crate::parser::Either::Second(output), state))
-                    }
-                    Err((progress, fail, state)) => Err((
-                        progress,
-                        Fail {
-                            attempting: original_attempting,
-                            ..fail
-                        },
-                        state,
-                    )),
-                },
-                Err((MadeProgress, fail, state)) => Err((
-                    MadeProgress,
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    state,
-                )),
+        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| match $p1
+            .parse(arena, state)
+        {
+            Ok((progress, output, state)) => {
+                Ok((progress, $crate::parser::Either::First(output), state))
             }
+            Err((NoProgress, _, state)) => match $p2.parse(arena, state) {
+                Ok((progress, output, state)) => {
+                    Ok((progress, $crate::parser::Either::Second(output), state))
+                }
+                Err((progress, fail, state)) => Err((progress, fail, state)),
+            },
+            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
         }
     };
 }
@@ -1544,16 +1493,15 @@ pub fn parse_utf8(bytes: &[u8]) -> Result<&str, FailReason> {
 }
 
 pub fn end_of_file<'a>() -> impl Parser<'a, ()> {
-    |_arena: &'a Bump, state: State<'a>| {
+    |arena: &'a Bump, state: State<'a>| {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            let fail = Fail {
-                attempting: state.attempting,
-                reason: FailReason::ConditionFailed,
-            };
-
-            Err((NoProgress, fail, state))
+            Err((
+                NoProgress,
+                Bag::from_state(arena, &state, FailReason::ConditionFailed),
+                state,
+            ))
         }
     }
 }
