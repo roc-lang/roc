@@ -43,13 +43,12 @@ mod test_parse {
         assert_eq!(Ok(expected_expr), actual);
     }
 
-    fn assert_parsing_fails<'a>(input: &'a str, reason: FailReason, attempting: Attempting) {
-        //        let arena = Bump::new();
-        //        let actual = parse_expr_with(&arena, input);
-        //        let expected_fail = Fail { reason, attempting };
-        //
-        //        assert_eq!(Err(expected_fail), actual);
-        assert!(true)
+    fn assert_parsing_fails<'a>(input: &'a str, _reason: FailReason, _attempting: Attempting) {
+        let arena = Bump::new();
+        let actual = parse_expr_with(&arena, input);
+        // let expected_fail = Fail { reason, attempting };
+
+        assert!(actual.is_err());
     }
 
     fn assert_segments<E: Fn(&Bump) -> Vec<'_, ast::StrSegment<'_>>>(input: &str, to_expected: E) {
