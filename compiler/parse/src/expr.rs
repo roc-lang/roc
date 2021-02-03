@@ -207,15 +207,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
             // parse the spaces and then attach them retroactively to the expression
             // preceding the operator (the one we parsed before considering operators).
             optional(and!(
-                // and!(space0(min_indent), loc!(binop())),
-                move |arena, state| {
-                    let (_, spaces, state) = space0(min_indent).parse(arena, state)?;
-                    let (_, op, state) = loc!(binop()).parse(arena, state)?;
-
-                    Ok((MadeProgress, (spaces, op), state))
-
-                    // and!(space0(min_indent), )).parse(arena, state)
-                },
+                and!(space0(min_indent), loc!(binop())),
                 // The spaces *after* the operator can be attached directly to
                 // the expression following the operator.
                 space0_before(
@@ -593,13 +585,10 @@ fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
             equals_for_def(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
             // The expr itself must be indented more than the pattern and '='
-            move |a, s| {
-                space0_before(
-                    loc!(move |arena, state| { parse_expr(indented_more, arena, state) }),
-                    min_indent,
-                )
-                .parse(a, s)
-            }
+            space0_before(
+                loc!(move |arena, state| { parse_expr(indented_more, arena, state) }),
+                min_indent,
+            )
         )
     )
 }

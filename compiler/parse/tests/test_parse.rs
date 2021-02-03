@@ -1574,16 +1574,6 @@ mod test_parse {
             reset_indentation.into_bump_slice(),
         );
 
-        //        assert_parses_to(
-        //            indoc!(
-        //                r#"# leading comment
-        //                x=5
-        //
-        //                42
-        //                "#
-        //            ),
-        //            expected,
-        //        );
         assert_parses_to(
             indoc!(
                 r#"# leading comment
