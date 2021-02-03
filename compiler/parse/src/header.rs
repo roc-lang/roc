@@ -2,7 +2,7 @@ use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0;
 use crate::ident::lowercase_ident;
 use crate::module::package_name;
-use crate::parser::{ascii_char, fail_when_progress, optional, Either, Parser, Progress::*, State};
+use crate::parser::{ascii_char,  optional, Either, Parser, Progress::*, State};
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use inlinable_string::InlinableString;

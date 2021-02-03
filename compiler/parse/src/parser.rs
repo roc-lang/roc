@@ -2,7 +2,6 @@ use crate::ast::Attempting;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use encode_unicode::CharExt;
-use roc_module::symbol::ModuleId;
 use roc_region::all::{Located, Region};
 use std::fmt;
 use std::str::from_utf8;
@@ -28,7 +27,7 @@ pub struct State<'a> {
     // the first nonspace char on that line.
     pub is_indenting: bool,
 
-    pub context_stack: Vec<'a, ContextItem>,
+    pub context_stack: &'a ContextStack<'a>,
 
     /// The original length of the string, before any bytes were consumed.
     /// This is used internally by the State::bytes_consumed() function.
@@ -44,14 +43,14 @@ pub enum Either<First, Second> {
 }
 
 impl<'a> State<'a> {
-    pub fn new_in(arena: &'a Bump, bytes: &'a [u8], attempting: Attempting) -> State<'a> {
+    pub fn new_in(arena: &'a Bump, bytes: &'a [u8], _attempting: Attempting) -> State<'a> {
         State {
             bytes,
             line: 0,
             column: 0,
             indent_col: 0,
             is_indenting: true,
-            context_stack: Vec::new_in(arena),
+            context_stack: arena.alloc(ContextStack::Nil),
             original_len: bytes.len(),
         }
     }
@@ -90,7 +89,7 @@ impl<'a> State<'a> {
                 indent_col: 0,
                 is_indenting: true,
                 original_len: self.original_len,
-                context_stack: self.context_stack.clone(),
+                context_stack: arena.alloc(self.context_stack.clone()),
             }),
             None => Err((
                 Progress::NoProgress,
@@ -156,7 +155,7 @@ impl<'a> State<'a> {
                     column: column_usize as u16,
                     indent_col,
                     is_indenting,
-                    context_stack: self.context_stack.clone(),
+                    context_stack: arena.alloc(self.context_stack.clone()),
                     original_len: self.original_len,
                 })
             }
@@ -215,8 +214,7 @@ fn state_size() {
     // cache line.
     let state_size = std::mem::size_of::<State>();
     let maximum = std::mem::size_of::<usize>() * 8;
-    // assert!(state_size <= maximum, "{:?} <= {:?}", state_size, maximum);
-    assert!(true)
+    assert!(state_size <= maximum, "{:?} <= {:?}", state_size, maximum);
 }
 
 pub type ParseResult<'a, Output> =
@@ -270,6 +268,36 @@ pub enum FailReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextStack<'a> {
+    Cons(ContextItem, &'a ContextStack<'a>),
+    Nil,
+}
+
+impl<'a> ContextStack<'a> {
+    fn to_vec(self) -> std::vec::Vec<ContextItem> {
+        let mut result = std::vec::Vec::new();
+        let mut next = &self;
+
+        while let ContextStack::Cons(item, rest) = next {
+            next = rest;
+
+            result.push(*item);
+        }
+
+        result.reverse();
+
+        result
+    }
+
+    pub fn uncons(&'a self) -> Option<(ContextItem, &'a Self)> {
+        match self {
+            ContextStack::Cons(item, rest) => Some((*item, rest)),
+            ContextStack::Nil => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextItem {
     pub line: u32,
     pub column: u16,
@@ -281,7 +309,7 @@ pub struct DeadEnd<'a> {
     pub line: u32,
     pub column: u16,
     pub problem: FailReason,
-    pub context_stack: Vec<'a, ContextItem>,
+    pub context_stack: ContextStack<'a>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,7 +346,7 @@ impl<'a> Bag<'a> {
         match self.pop() {
             None => unreachable!("there is a parse error, but no problem"),
             Some(dead_end) => {
-                let context_stack = dead_end.context_stack.into_iter().collect();
+                let context_stack = dead_end.context_stack.to_vec();
 
                 ParseProblem {
                     line: dead_end.line,
@@ -498,7 +526,7 @@ pub fn unexpected_eof<'a>(
 pub fn unexpected<'a>(
     arena: &'a Bump,
     chars_consumed: usize,
-    attempting: Attempting,
+    _attempting: Attempting,
     state: State<'a>,
 ) -> (Progress, Bag<'a>, State<'a>) {
     // NOTE state is the last argument because chars_consumed often depends on the state's fields
@@ -751,35 +779,20 @@ where
                                     // element did not, that's a fatal error.
                                     let progress =
                                         Progress::from_lengths(start_bytes_len, state.bytes.len());
-                                    return Err((
-                                        progress,
-                                        Bag::from_state(arena, &state, FailReason::TODO),
-                                        state,
-                                    ));
+
+                                    return Err((progress, fail, state));
                                 }
                             }
                         }
                         Err((delim_progress, fail, old_state)) => match delim_progress {
-                            MadeProgress => {
-                                return Err((
-                                    MadeProgress,
-                                    Bag::from_state(arena, &old_state, FailReason::TODO),
-                                    old_state,
-                                ))
-                            }
+                            MadeProgress => return Err((MadeProgress, fail, old_state)),
                             NoProgress => return Ok((NoProgress, buf, old_state)),
                         },
                     }
                 }
             }
             Err((element_progress, fail, new_state)) => match element_progress {
-                MadeProgress => {
-                    return Err((
-                        MadeProgress,
-                        Bag::from_state(arena, &new_state, FailReason::TODO),
-                        new_state,
-                    ))
-                }
+                MadeProgress => return Err((MadeProgress, fail, new_state)),
                 NoProgress => return Ok((NoProgress, Vec::new_in(arena), new_state)),
             },
         }
@@ -829,26 +842,14 @@ where
                             }
                         }
                         Err((delim_progress, fail, old_state)) => match delim_progress {
-                            MadeProgress => {
-                                return Err((
-                                    MadeProgress,
-                                    Bag::from_state(arena, &old_state, FailReason::TODO),
-                                    old_state,
-                                ))
-                            }
+                            MadeProgress => return Err((MadeProgress, fail, old_state)),
                             NoProgress => return Ok((NoProgress, buf, old_state)),
                         },
                     }
                 }
             }
             Err((element_progress, fail, new_state)) => match element_progress {
-                MadeProgress => {
-                    return Err((
-                        MadeProgress,
-                        Bag::from_state(arena, &new_state, FailReason::TODO),
-                        new_state,
-                    ))
-                }
+                MadeProgress => return Err((MadeProgress, fail, new_state)),
                 NoProgress => return Ok((NoProgress, Vec::new_in(arena), new_state)),
             },
         }
@@ -885,11 +886,7 @@ where
                                 Err((element_progress, fail, state)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that's a fatal error.
-                                    return Err((
-                                        element_progress,
-                                        Bag::from_state(arena, &state, FailReason::TODO),
-                                        state,
-                                    ));
+                                    return Err((element_progress, fail, state));
                                 }
                             }
                         }
@@ -911,11 +908,7 @@ where
                     }
                 }
             }
-            Err((fail_progress, fail, new_state)) => Err((
-                fail_progress,
-                Bag::from_state(arena, &new_state, FailReason::TODO),
-                new_state,
-            )),
+            Err((fail_progress, fail, new_state)) => Err((fail_progress, fail, new_state)),
         }
     }
 }
@@ -1272,13 +1265,17 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! attempt {
     ($attempting:expr, $parser:expr) => {
-        move |arena, mut state: $crate::parser::State<'a>| {
+        move |arena: &'a Bump, mut state: $crate::parser::State<'a>| {
             let item = $crate::parser::ContextItem {
                 context: $attempting,
                 line: state.line,
                 column: state.column,
             };
-            state.context_stack.push(item);
+
+            state.context_stack = arena.alloc($crate::parser::ContextStack::Cons(
+                item,
+                state.context_stack,
+            ));
 
             $parser
                 .parse(arena, state)
@@ -1286,7 +1283,12 @@ macro_rules! attempt {
                     // If the parser suceeded, go back to what we were originally attempting.
                     // (If it failed, that's exactly where we care what we were attempting!)
                     // debug_assert_eq!(!state.context_stack.is_empty());
-                    state.context_stack.pop().unwrap();
+                    match state.context_stack.uncons() {
+                        Some((_item, rest)) => {
+                            state.context_stack = rest;
+                        }
+                        None => unreachable!("context stack contains at least one element"),
+                    }
 
                     (progress, answer, state)
                 })

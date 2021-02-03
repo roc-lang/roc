@@ -129,7 +129,8 @@ mod test_reporting {
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let doc = parse_problem(&alloc, filename, fail);
+                let problem = fail.to_parse_problem(filename.clone(), src.as_bytes());
+                let doc = parse_problem(&alloc, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
@@ -3288,16 +3289,15 @@ mod test_reporting {
 
     #[test]
     fn float_out_of_range() {
+        // have to deal with some whitespace issues because of the format! macro
         report_problem_as(
-            &format!(
+            indoc!(
                 r#"
-                overflow = 1{:e}
-                underflow = -1{:e}
+                overflow = 11.7976931348623157e308
+                underflow = -11.7976931348623157e308
 
                 overflow + underflow
-                "#,
-                f64::MAX,
-                f64::MAX,
+                "#
             ),
             indoc!(
                 r#"
@@ -3305,11 +3305,11 @@ mod test_reporting {
 
                 This float literal is too big:
 
-                2│                  overflow = 11.7976931348623157e308
-                                               ^^^^^^^^^^^^^^^^^^^^^^^
+                1│  overflow = 11.7976931348623157e308
+                               ^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit floating points, allowing values
-                between-1.7976931348623157e308 and 1.7976931348623157e308
+                Roc uses signed 64-bit floating points, allowing values between
+                -1.7976931348623157e308 and 1.7976931348623157e308
 
                 Tip: Learn more about number literals at TODO
 
@@ -3317,11 +3317,11 @@ mod test_reporting {
 
                 This float literal is too small:
 
-                3│                  underflow = -11.7976931348623157e308
-                                                ^^^^^^^^^^^^^^^^^^^^^^^^
+                2│  underflow = -11.7976931348623157e308
+                                ^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit floating points, allowing values
-                between-1.7976931348623157e308 and 1.7976931348623157e308
+                Roc uses signed 64-bit floating points, allowing values between
+                -1.7976931348623157e308 and 1.7976931348623157e308
 
                 Tip: Learn more about number literals at TODO
                 "#

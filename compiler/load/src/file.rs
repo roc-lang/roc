@@ -27,7 +27,7 @@ use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::module_defs;
-use roc_parse::parser::{self, Bag, FailReason, ParseProblem, Parser};
+use roc_parse::parser::{self, ParseProblem, Parser};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
@@ -763,7 +763,7 @@ enum Msg<'a> {
         exposed_to_host: MutMap<Symbol, Variable>,
     },
 
-    FailedToParse(ParseProblem),
+    FailedToParse(ParseProblem<'a>),
 }
 
 #[derive(Debug)]
@@ -970,13 +970,13 @@ enum WorkerMsg {
 }
 
 #[derive(Debug)]
-pub enum LoadingProblem {
+pub enum LoadingProblem<'a> {
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
         msg: &'static str,
     },
-    ParseProblem(ParseProblem),
+    ParsingFailed(ParseProblem<'a>),
     UnexpectedHeader(String),
 
     MsgChannelDied,
@@ -1000,7 +1000,7 @@ fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
     listeners: &[Sender<WorkerMsg>],
     task: BuildTask<'a>,
-) -> Result<(), LoadingProblem> {
+) -> Result<(), LoadingProblem<'a>> {
     injector.push(task);
 
     for listener in listeners {
@@ -1019,7 +1019,7 @@ pub fn load_and_typecheck<'a>(
     src_dir: &Path,
     exposed_types: SubsByModule,
     ptr_bytes: u32,
-) -> Result<LoadedModule, LoadingProblem> {
+) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
@@ -1045,7 +1045,7 @@ pub fn load_and_monomorphize<'a>(
     src_dir: &Path,
     exposed_types: SubsByModule,
     ptr_bytes: u32,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
@@ -1072,7 +1072,7 @@ pub fn load_and_monomorphize_from_str<'a>(
     src_dir: &Path,
     exposed_types: SubsByModule,
     ptr_bytes: u32,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, src, stdlib.mode)?;
@@ -1103,7 +1103,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         mode: Mode,
-    ) -> Result<Self, LoadingProblem> {
+    ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -1136,7 +1136,7 @@ impl<'a> LoadStart<'a> {
         filename: PathBuf,
         src: &'a str,
         mode: Mode,
-    ) -> Result<Self, LoadingProblem> {
+    ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -1222,7 +1222,7 @@ fn load<'a>(
     exposed_types: SubsByModule,
     goal_phase: Phase,
     ptr_bytes: u32,
-) -> Result<LoadResult<'a>, LoadingProblem>
+) -> Result<LoadResult<'a>, LoadingProblem<'a>>
 where
 {
     let LoadStart {
@@ -1351,7 +1351,7 @@ where
                                                 panic!("Msg channel closed unexpectedly.")
                                             }
                                             Err(LoadingProblem::ParsingFailed(problem)) => {
-                                                msg_tx.send(Msg::FailedToParse(problem));
+                                                msg_tx.send(Msg::FailedToParse(problem)).unwrap();
                                             }
                                             Err(other) => {
                                                 return Err(other);
@@ -1469,20 +1469,21 @@ where
                             parse_problem, RocDocAllocator, DEFAULT_PALETTE,
                         };
 
-                        let module_id = problem.module_id;
-
-                        let (filename, src) = state.module_cache.sources.get(&module_id).unwrap();
-
+                        // TODO this is not in fact safe
+                        let src = unsafe { from_utf8_unchecked(problem.bytes) };
                         let src_lines: Vec<&str> = src.split('\n').collect();
 
                         let palette = DEFAULT_PALETTE;
 
-                        let module_ids = Arc::try_unwrap(state.arc_modules)
+                        let mut module_ids = Arc::try_unwrap(state.arc_modules)
                             .unwrap_or_else(|_| {
                                 panic!("There were still outstanding Arc references to module_ids")
                             })
                             .into_inner()
                             .into_module_ids();
+
+                        let module_id =
+                            module_ids.get_or_insert(&"find module name somehow?".into());
 
                         let interns = Interns {
                             module_ids,
@@ -1492,9 +1493,9 @@ where
                         // Report parsing and canonicalization problems
                         let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
 
-                        let starting_line = 3;
+                        let starting_line = 0;
                         let report =
-                            parse_problem(&alloc, filename.clone(), starting_line, problem);
+                            parse_problem(&alloc, problem.filename.clone(), starting_line, problem);
                         let mut buf = String::new();
 
                         report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -1529,7 +1530,7 @@ fn start_tasks<'a>(
     state: &mut State<'a>,
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
-) -> Result<(), LoadingProblem> {
+) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
         for task in start_phase(module_id, phase, state) {
             enqueue_task(&injector, worker_listeners, task)?
@@ -1546,7 +1547,7 @@ fn update<'a>(
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
     arena: &'a Bump,
-) -> Result<State<'a>, LoadingProblem> {
+) -> Result<State<'a>, LoadingProblem<'a>> {
     use self::Msg::*;
 
     match msg {
@@ -2128,7 +2129,7 @@ fn load_pkg_config<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
-) -> Result<Msg<'a>, LoadingProblem> {
+) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
 
     let filename = PathBuf::from(src_dir);
@@ -2138,9 +2139,10 @@ fn load_pkg_config<'a>(
     let file_io_duration = file_io_start.elapsed().unwrap();
 
     match file {
-        Ok(bytes) => {
+        Ok(bytes_vec) => {
             let parse_start = SystemTime::now();
-            let parse_state = parser::State::new_in(arena, arena.alloc(bytes), Attempting::Module);
+            let bytes = arena.alloc(bytes_vec);
+            let parse_state = parser::State::new_in(arena, bytes, Attempting::Module);
             let parsed = roc_parse::module::header().parse(&arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2195,17 +2197,9 @@ fn load_pkg_config<'a>(
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
-                Err((_, fail, _)) => {
-                    let declared_name = "".into();
-
-                    let name = PQModuleName::Qualified(&shorthand, declared_name);
-                    let home = {
-                        let mut module_ids = (*module_ids).lock();
-                        module_ids.get_or_insert(&name)
-                    };
-
-                    Err(LoadingProblem::ParsingFailed(fail.to_parse_problem(home)))
-                }
+                Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
+                    fail.to_parse_problem(filename, bytes),
+                )),
             }
         }
 
@@ -2226,7 +2220,7 @@ fn load_module<'a>(
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageOrPath<'a>>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
     let mut filename = PathBuf::new();
 
@@ -2314,7 +2308,7 @@ fn parse_header<'a>(
     mode: Mode,
     src_bytes: &'a [u8],
     start_time: SystemTime,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new_in(arena, src_bytes, Attempting::Module);
     let parsed = roc_parse::module::header().parse(&arena, parse_state);
@@ -2451,7 +2445,7 @@ fn parse_header<'a>(
             module_timing,
         ),
         Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
-            fail.to_parse_problem(filename),
+            fail.to_parse_problem(filename, src_bytes),
         )),
     }
 }
@@ -2465,7 +2459,7 @@ fn load_filename<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
     mode: Mode,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
     let file_io_duration = file_io_start.elapsed().unwrap();
@@ -2501,7 +2495,7 @@ fn load_from_str<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
     mode: Mode,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = SystemTime::now();
     let file_io_duration = file_io_start.elapsed().unwrap();
 
@@ -3069,7 +3063,7 @@ fn fabricate_pkg_config_module<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
         header.provides.clone().into_bump_slice();
 
@@ -3098,7 +3092,7 @@ fn fabricate_effects_module<'a>(
     mode: Mode,
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
@@ -3376,7 +3370,7 @@ fn canonicalize_and_constrain<'a>(
     aliases: MutMap<Symbol, Alias>,
     mode: Mode,
     parsed: ParsedModule<'a>,
-) -> Result<Msg<'a>, LoadingProblem> {
+) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let canonicalize_start = SystemTime::now();
 
     let ParsedModule {
@@ -3457,15 +3451,15 @@ fn canonicalize_and_constrain<'a>(
     }
 }
 
-fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
+fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new_in(arena, &header.src, Attempting::Module);
     let parsed_defs = match module_defs().parse(&arena, parse_state) {
         Ok((_, success, _state)) => success,
-        Err((_, fail, state)) => {
+        Err((_, fail, _)) => {
             return Err(LoadingProblem::ParsingFailed(
-                fail.to_parse_problem(header.module_path.clone()),
+                fail.to_parse_problem(header.module_path, header.src),
             ));
         }
     };
@@ -3848,7 +3842,7 @@ fn run_task<'a>(
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
     ptr_bytes: u32,
-) -> Result<(), LoadingProblem> {
+) -> Result<(), LoadingProblem<'a>> {
     use BuildTask::*;
 
     let msg = match task {
