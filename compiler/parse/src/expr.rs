@@ -580,7 +580,7 @@ type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
 
 fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
     let indented_more = min_indent + 1;
-    let result = and!(
+    and!(
         // this backtrackable is required for the case
         //
         // i = 64
@@ -601,8 +601,7 @@ fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
                 .parse(a, s)
             }
         )
-    );
-    result
+    )
 }
 
 fn body_at_indent<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>> {

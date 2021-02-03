@@ -297,14 +297,8 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
-    move |a: &'a Bump, s: State<'a>| {
-        // this parses just the defs
-        let defs = zero_or_more!(space0_around(loc(def(0)), 0));
-
-        let result = skip_second!(defs, end_of_file()).parse(a, s);
-
-        result
-    }
+    // force that we pare until the end of the input
+    skip_second!(zero_or_more!(space0_around(loc(def(0)), 0)), end_of_file())
 }
 
 struct ProvidesTo<'a> {

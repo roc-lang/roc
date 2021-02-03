@@ -2198,7 +2198,7 @@ fn load_pkg_config<'a>(
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
                 Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
-                    fail.to_parse_problem(filename, bytes),
+                    fail.into_parse_problem(filename, bytes),
                 )),
             }
         }
@@ -2445,7 +2445,7 @@ fn parse_header<'a>(
             module_timing,
         ),
         Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
-            fail.to_parse_problem(filename, src_bytes),
+            fail.into_parse_problem(filename, src_bytes),
         )),
     }
 }
@@ -3459,7 +3459,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         Ok((_, success, _state)) => success,
         Err((_, fail, _)) => {
             return Err(LoadingProblem::ParsingFailed(
-                fail.to_parse_problem(header.module_path, header.src),
+                fail.into_parse_problem(header.module_path, header.src),
             ));
         }
     };

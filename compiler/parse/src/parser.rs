@@ -75,7 +75,7 @@ impl<'a> State<'a> {
 
     /// Returns whether the parser has reached the end of the input
     pub fn has_reached_end(&self) -> bool {
-        self.bytes.len() == 0
+        self.bytes.is_empty()
     }
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
@@ -274,7 +274,7 @@ pub enum ContextStack<'a> {
 }
 
 impl<'a> ContextStack<'a> {
-    fn to_vec(self) -> std::vec::Vec<ContextItem> {
+    fn into_vec(self) -> std::vec::Vec<ContextItem> {
         let mut result = std::vec::Vec::new();
         let mut next = &self;
 
@@ -338,15 +338,15 @@ impl<'a> Bag<'a> {
         self.0.pop()
     }
 
-    pub fn to_parse_problem<'b>(
+    pub fn into_parse_problem(
         mut self,
         filename: std::path::PathBuf,
-        bytes: &'b [u8],
-    ) -> ParseProblem<'b> {
+        bytes: &[u8],
+    ) -> ParseProblem<'_> {
         match self.pop() {
             None => unreachable!("there is a parse error, but no problem"),
             Some(dead_end) => {
-                let context_stack = dead_end.context_stack.to_vec();
+                let context_stack = dead_end.context_stack.into_vec();
 
                 ParseProblem {
                     line: dead_end.line,
@@ -792,8 +792,8 @@ where
                 }
             }
             Err((element_progress, fail, new_state)) => match element_progress {
-                MadeProgress => return Err((MadeProgress, fail, new_state)),
-                NoProgress => return Ok((NoProgress, Vec::new_in(arena), new_state)),
+                MadeProgress => Err((MadeProgress, fail, new_state)),
+                NoProgress => Ok((NoProgress, Vec::new_in(arena), new_state)),
             },
         }
     }
@@ -849,8 +849,8 @@ where
                 }
             }
             Err((element_progress, fail, new_state)) => match element_progress {
-                MadeProgress => return Err((MadeProgress, fail, new_state)),
-                NoProgress => return Ok((NoProgress, Vec::new_in(arena), new_state)),
+                MadeProgress => Err((MadeProgress, fail, new_state)),
+                NoProgress => Ok((NoProgress, Vec::new_in(arena), new_state)),
             },
         }
     }

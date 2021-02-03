@@ -191,7 +191,7 @@ pub fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn report_parse_error<'a>(fail: Bag<'a>) {
+fn report_parse_error(fail: Bag<'_>) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 
