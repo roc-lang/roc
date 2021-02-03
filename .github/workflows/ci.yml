@@ -19,4 +19,4 @@ jobs:
         run: earthly --version
 
       - name: build container roc-deps-tests:latest
-        run: earthly +all
+        run: earthly +test-rust

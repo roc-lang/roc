@@ -4,6 +4,7 @@ WORKDIR /earthbuild
 # TODO cache cargo packages
 # TODO lld linker
 # TODO caching steps 
+# TODO zig tests
 
 prep-debian:
     RUN apt -y update
@@ -42,8 +43,12 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # rustfmt
     RUN rustup component add rustfmt
 
-test-rust:
+build-rust-tests:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli compiler docs editor roc_std vendor Cargo.toml Cargo.lock ./
+    COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
+    RUN cargo test --release --no-run
+
+test-rust:
+    FROM +build-rust-tests
     RUN cargo test --release
     
