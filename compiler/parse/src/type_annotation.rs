@@ -4,10 +4,10 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Bag, Either,
     FailReason, ParseResult, Parser,
     Progress::{self, *},
-    State, Bag,
+    State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -256,12 +256,12 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 Ok((progress, first, state))
             } else {
                 // e.g. `Int,Int` without an arrow and return type
+                let msg =
+                    "TODO: Decide the correct error to return for 'Invalid function signature'"
+                        .to_string();
                 Err((
-                        progress,
-                        Bag::from_state(arena, &state, 
-                        FailReason::NotYetImplemented("TODO: Decide the correct error to return for 'Invalid function signature'".to_string()),
-                        ),
-                    
+                    progress,
+                    Bag::from_state(arena, &state, FailReason::NotYetImplemented(msg)),
                     state,
                 ))
             }
@@ -300,12 +300,12 @@ fn parse_concrete_type<'a>(
             if first_letter.is_alphabetic() && first_letter.is_uppercase() {
                 part_buf.push(first_letter);
             } else {
-                return Err(unexpected(arena,  0, Attempting::ConcreteType, state));
+                return Err(unexpected(arena, 0, Attempting::ConcreteType, state));
             }
 
             state = state.advance_without_indenting(arena, bytes_parsed)?;
         }
-        Err(reason) => return state.fail(arena, NoProgress,  reason),
+        Err(reason) => return state.fail(arena, NoProgress, reason),
     }
 
     let mut next_char = None;
@@ -373,7 +373,7 @@ fn parse_concrete_type<'a>(
         // We had neither capitalized nor noncapitalized parts,
         // yet we made it this far. The only explanation is that this was
         // a stray '.' drifting through the cosmos.
-        return Err(unexpected(arena, 1,  Attempting::Identifier, state));
+        return Err(unexpected(arena, 1, Attempting::Identifier, state));
     }
 
     let answer = TypeAnnotation::Apply(
