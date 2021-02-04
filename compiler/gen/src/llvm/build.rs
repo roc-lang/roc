@@ -3996,7 +3996,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         Hash => {
-            let (value, layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let (value, layout) = load_symbol_and_layout(scope, &args[0]);
 
             hash(env, value, layout)
         }

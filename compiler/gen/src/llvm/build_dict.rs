@@ -1,4 +1,6 @@
-use crate::llvm::build::{call_bitcode_fn, load_symbol_and_layout, ptr_from_symbol, Env, Scope};
+use crate::llvm::build::{
+    call_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout, Env, Scope,
+};
 use crate::llvm::convert::collection;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, IntValue, StructValue};
@@ -14,7 +16,7 @@ pub fn dict_len<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
 
-    let (_, dict_layout) = load_symbol_and_layout(env, scope, &dict_symbol);
+    let (_, dict_layout) = load_symbol_and_layout(scope, &dict_symbol);
 
     match dict_layout {
         Layout::Builtin(Builtin::Dict(_, _)) => {
@@ -41,20 +43,11 @@ fn dict_symbol_to_i128<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
 ) -> IntValue<'ctx> {
-    let str_ptr = ptr_from_symbol(scope, symbol);
+    let dict = load_symbol(scope, &symbol);
 
-    let i128_ptr = env
-        .builder
-        .build_bitcast(
-            *str_ptr,
-            env.context.i128_type().ptr_type(AddressSpace::Generic),
-            "cast",
-        )
-        .into_pointer_value();
+    let i128_type = env.context.i128_type().into();
 
-    env.builder
-        .build_load(i128_ptr, "load_as_i128")
-        .into_int_value()
+    complex_bitcast(&env.builder, dict, i128_type, "dict_to_i128").into_int_value()
 }
 
 fn zig_dict_to_struct<'a, 'ctx, 'env>(

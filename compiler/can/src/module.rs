@@ -1,4 +1,3 @@
-use crate::builtins;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::env::Env;
 use crate::expr::{Expr, Output};
