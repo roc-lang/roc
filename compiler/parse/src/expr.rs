@@ -487,10 +487,25 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
 fn equals_for_def<'a>() -> impl Parser<'a, ()> {
-    not_followed_by(
-        ascii_char(b'='),
-        one_of!(ascii_char(b'='), ascii_char(b'>')),
-    )
+    |arena, state: State<'a>| match state.bytes.get(0) {
+        Some(b'=') => match state.bytes.get(1) {
+            Some(b'=') | Some(b'>') => Err((
+                NoProgress,
+                Bag::from_state(arena, &state, FailReason::ConditionFailed),
+                state,
+            )),
+            _ => {
+                let state = state.advance_without_indenting(arena, 1)?;
+
+                Ok((MadeProgress, (), state))
+            }
+        },
+        _ => Err((
+            NoProgress,
+            Bag::from_state(arena, &state, FailReason::ConditionFailed),
+            state,
+        )),
+    }
 }
 
 /// A definition, consisting of one of these:
@@ -515,7 +530,14 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     attempt(
         Attempting::Def,
         then(
-            backtrackable(and!(pattern(min_indent), def_colon_or_equals)),
+            // backtrackable because
+            //
+            // i = 0
+            // i
+            //
+            // on the last line, we parse a pattern `i`, but it's not actually a def, so need to
+            // backtrack
+            and!(backtrackable(pattern(min_indent)), def_colon_or_equals),
             move |arena, state, _progress, (loc_pattern, def_kind)| match def_kind {
                 DefKind::DefColon => {
                     // Spaces after the ':' (at a normal indentation level) and then the type.
