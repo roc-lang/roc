@@ -178,7 +178,7 @@ pub const Wyhash = struct {
     }
 };
 
-fn wyhash_hash(seed: u64, input:[]const u8) u64 {
+fn wyhash_hash(seed: u64, input: []const u8) u64 {
     return Wyhash.hash(seed, input);
 }
 

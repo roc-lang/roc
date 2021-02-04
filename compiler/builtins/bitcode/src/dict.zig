@@ -45,12 +45,7 @@ pub const RocDict = extern struct {
         return result;
     }
 
-    pub fn deinit(
-        self: RocDict, 
-        allocator: *Allocator,        
-        key_size: usize,
-        value_size: usize
-    ) void {
+    pub fn deinit(self: RocDict, allocator: *Allocator, key_size: usize, value_size: usize) void {
         if (!self.isEmpty()) {
             const slot_size = slotSize(key_size, value_size);
 
