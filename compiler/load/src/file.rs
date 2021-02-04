@@ -1072,6 +1072,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn load_and_monomorphize_from_str<'a, F>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -1226,6 +1227,7 @@ enum LoadResult<'a> {
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
+#[allow(clippy::too_many_arguments)]
 fn load<'a, F>(
     arena: &'a Bump,
     //filename: PathBuf,
@@ -3311,6 +3313,7 @@ fn unpack_exposes_entries<'a>(
     output
 }
 
+#[allow(clippy::too_many_arguments)]
 fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
