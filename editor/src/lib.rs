@@ -31,7 +31,7 @@ use crate::vec_result::get_res;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use ed_model::Position;
-use lang::{ast::Expr2, pool::Pool, scope::Scope};
+use lang::{pool::Pool, scope::Scope};
 use pipelines::RectResources;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleIds};
@@ -57,6 +57,7 @@ mod resources;
 mod selection;
 mod text_buffer;
 //pub mod text_buffer; // for benchmarking
+mod render;
 mod util;
 mod vec_result;
 
@@ -298,11 +299,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     let region = Region::new(0, 0, 0, 0);
 
-                    let (ast, _) =
-                        crate::lang::expr::str_to_expr2(&arena, "1", &mut env, &mut scope, region)
-                            .unwrap();
+                    let (expr2, _) = crate::lang::expr::str_to_expr2(
+                        &arena, "2.0", &mut env, &mut scope, region,
+                    )
+                    .unwrap();
 
-                    render_node(&size, &ast, CODE_TXT_XY.into(), &mut glyph_brush);
+                    render::render_expr2(&size, &expr2, CODE_TXT_XY.into(), &mut glyph_brush);
                 }
 
                 match draw_all_rects(
@@ -399,39 +401,6 @@ fn begin_render_pass<'a>(
         }],
         depth_stencil_attachment: None,
     })
-}
-
-fn render_node(
-    size: &PhysicalSize<u32>,
-    ast: &Expr2,
-    position: Vector2<f32>,
-    glyph_brush: &mut GlyphBrush<()>,
-) {
-    use Expr2::*;
-
-    let area_bounds = (size.width as f32, size.height as f32).into();
-
-    match ast {
-        SmallInt {
-            number,
-            ..
-            // text,
-            // style, pretending always decimal for now
-            // var,
-        } => {
-            let code_text = Text {
-                position,
-                area_bounds,
-                color: CODE_COLOR.into(),
-                text: format!("{:?}", number),
-                size: CODE_FONT_SIZE,
-                ..Default::default()
-            };
-
-            queue_code_text_draw(&code_text, glyph_brush);
-        }
-        rest => panic!("implement {:?} render", rest)
-    };
 }
 
 // returns bounding boxes for every glyph

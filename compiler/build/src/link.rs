@@ -39,6 +39,22 @@ pub fn link(
     }
 }
 
+fn find_zig_str_path() -> PathBuf {
+    let zig_str_path = PathBuf::from("compiler/builtins/bitcode/src/str.zig");
+
+    if std::path::Path::exists(&zig_str_path) {
+        return zig_str_path;
+    }
+
+    // when running the tests, we start in the /cli directory
+    let zig_str_path = PathBuf::from("../compiler/builtins/bitcode/src/str.zig");
+    if std::path::Path::exists(&zig_str_path) {
+        return zig_str_path;
+    }
+
+    panic!("cannot find `str.zig`")
+}
+
 pub fn rebuild_host(host_input_path: &Path) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
@@ -54,14 +70,27 @@ pub fn rebuild_host(host_input_path: &Path) {
     if zig_host_src.exists() {
         // Compile host.zig
         let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
+
+        let zig_str_path = find_zig_str_path();
+
+        debug_assert!(
+            std::path::Path::exists(&zig_str_path),
+            "Cannot find str.zig, looking at {:?}",
+            &zig_str_path
+        );
+
         let output = Command::new("zig")
             .env_clear()
             .env("PATH", &env_path)
             .env("HOME", &env_home)
             .args(&[
-                "build-lib",
+                "build-obj",
                 zig_host_src.to_str().unwrap(),
                 &emit_bin,
+                "--pkg-begin",
+                "str",
+                zig_str_path.to_str().unwrap(),
+                "--pkg-end",
                 // include the zig runtime
                 "-fcompiler-rt",
                 // include libc
