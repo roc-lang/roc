@@ -181,9 +181,12 @@ mod test_reporting {
 
         list_reports(&arena, src, &mut buf, callback);
 
-        if buf != expected_rendering {
-            for line in buf.split("\n") {
-                println!("                {}", line);
+        // convenient to copy-paste the generated message
+        if true {
+            if buf != expected_rendering {
+                for line in buf.split("\n") {
+                    println!("                {}", line);
+                }
             }
         }
 
