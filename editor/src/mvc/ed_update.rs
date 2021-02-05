@@ -351,12 +351,13 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
             ed_model.selection_opt = None;
         }
-        '\u{3}'
-        | '\u{16}'
-        | '\u{30}'
-        | '\u{e000}'..='\u{f8ff}'
-        | '\u{f0000}'..='\u{ffffd}'
-        | '\u{100000}'..='\u{10fffd}' => {
+        '\u{3}' // Ctrl + C
+        | '\u{16}' // Ctrl + V
+        | '\u{30}' // Ctrl + X
+        | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
+        | '\u{f0000}'..='\u{ffffd}' // ^
+        | '\u{100000}'..='\u{10fffd}' // ^
+        => {
             // chars that can be ignored
         }
         _ => {
