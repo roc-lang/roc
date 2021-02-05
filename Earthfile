@@ -2,9 +2,6 @@ FROM rust:1.49-slim-buster
 WORKDIR /earthbuild
 
 # TODO cache cargo packages
-# TODO lld linker
-# TODO caching steps 
-# TODO zig tests
 
 prep-debian:
     RUN apt -y update
@@ -32,23 +29,49 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN apt -y install autotools-dev cmake automake 
     RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
     RUN tar -xf valgrind-3.16.1.tar.bz2
-    RUN mv valgrind-3.16.1/* . # we can't cd so we have to move the files
-    RUN ls
-    RUN ./autogen.sh
-    RUN ./configure --disable-dependency-tracking
-    RUN make -j`nproc`
-    RUN make install
+    # need to cd every time, every command starts at WORKDIR
+    RUN cd valgrind-3.16.1; ./autogen.sh
+    RUN cd valgrind-3.16.1; ./configure --disable-dependency-tracking
+    RUN cd valgrind-3.16.1; make -j`nproc`
+    RUN cd valgrind-3.16.1; make install
     # clippy
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
 
+deps-image:
+    FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    SAVE IMAGE roc-deps:latest
+
 build-rust-tests:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    COPY --dir oldcache $CARGO_HOME/registry/cache
+    COPY --dir oldindex $CARGO_HOME/registry/index
+    COPY --dir oldbin $CARGO_HOME/bin
+    COPY --dir oldgitdb $CARGO_HOME/git/db 
     COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
     RUN cargo test --release --no-run
+    SAVE ARTIFACT $CARGO_HOME/registry/cache AS LOCAL oldcache
+    SAVE ARTIFACT $CARGO_HOME/registry/index AS LOCAL oldindex
+    SAVE ARTIFACT $CARGO_HOME/bin AS LOCAL oldbin
+    SAVE ARTIFACT $CARGO_HOME/git/db AS LOCAL oldgitdb
+
+test-zig:
+    FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    COPY --dir compiler/builtins/bitcode ./
+    RUN cd bitcode; ./run-tests.sh;
 
 test-rust:
     FROM +build-rust-tests
     RUN cargo test --release
+    RUN ls $CARGO_HOME
+
+test-all:
+    BUILD +test-zig
+    BUILD +test-rust
+
+cargo-home:
+    RUN ls $CARGO_HOME
+
+
     

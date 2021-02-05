@@ -7,7 +7,7 @@ env:
 
 jobs:
   prep-dependency-container:
-    name: install + test inside earthly
+    name: fmt, clippy, test --release
     runs-on: self-hosted
     timeout-minutes: 60
     env:
@@ -17,6 +17,9 @@ jobs:
 
       - name: Earthly version
         run: earthly --version
+
+      - name: Make empty cache folders if they do not exist
+        run: mkdir -p oldcache; mkdir -p oldindex; mkdir -p oldbin; mkdir -p oldgitdb;
 
       - name: build container roc-deps-tests:latest
         run: earthly +test-rust
