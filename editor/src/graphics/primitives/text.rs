@@ -11,23 +11,23 @@ use colors::{ColorTup, CODE_COLOR, WHITE};
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 
 #[derive(Debug)]
-pub struct Text {
+pub struct Text<'a> {
     pub position: Vector2<f32>,
     pub area_bounds: Vector2<f32>,
     pub color: Vector4<f32>,
-    pub text: String,
+    pub text: &'a str,
     pub size: f32,
     pub visible: bool,
     pub centered: bool,
 }
 
-impl Default for Text {
+impl<'a> Default for Text<'a> {
     fn default() -> Self {
         Self {
             position: (0.0, 0.0).into(),
             area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
             color: (1.0, 1.0, 1.0, 1.0).into(),
-            text: String::new(),
+            text: "",
             size: CODE_FONT_SIZE,
             visible: true,
             centered: false,
@@ -41,7 +41,7 @@ pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
         position: CODE_TXT_XY.into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
         color: CODE_COLOR.into(),
-        text: "a".to_owned(),
+        text: "a",
         size: CODE_FONT_SIZE,
         ..Default::default()
     };
@@ -67,10 +67,10 @@ fn layout_from_text(text: &Text) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBr
     })
 }
 
-fn section_from_text(
-    text: &Text,
+fn section_from_text<'a>(
+    text: &'a Text,
     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
-) -> wgpu_glyph::Section {
+) -> wgpu_glyph::Section<'a> {
     Section {
         screen_position: text.position.into(),
         bounds: text.area_bounds.into(),

@@ -423,16 +423,19 @@ fn queue_editor_text(
         position: code_coords,
         area_bounds,
         color: CODE_COLOR.into(),
-        text: editor_lines.to_owned(),
+        text: editor_lines,
         size: CODE_FONT_SIZE,
         ..Default::default()
     };
+
+    let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
+    let text = s.as_str();
 
     let caret_pos_label = Text {
         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
         area_bounds,
         color: TXT_COLOR.into(),
-        text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
+        text,
         size: 25.0,
         ..Default::default()
     };
@@ -454,7 +457,7 @@ fn _queue_no_file_text(
         position: text_coords,
         area_bounds,
         color: CODE_COLOR.into(),
-        text: text.to_owned(),
+        text,
         size: CODE_FONT_SIZE,
         ..Default::default()
     };
