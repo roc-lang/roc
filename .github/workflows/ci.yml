@@ -21,5 +21,5 @@ jobs:
       - name: Make empty cache folders if they do not exist
         run: mkdir -p oldcache; mkdir -p oldindex; mkdir -p oldbin; mkdir -p oldgitdb;
 
-      - name: build container roc-deps-tests:latest
-        run: earthly +test-rust
+      - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release 
+        run: earthly +test-all

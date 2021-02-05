@@ -1,7 +1,7 @@
 FROM rust:1.49-slim-buster
 WORKDIR /earthbuild
 
-# TODO cache cargo packages
+# TODO use lld linker
 
 prep-debian:
     RUN apt -y update
@@ -43,35 +43,49 @@ deps-image:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     SAVE IMAGE roc-deps:latest
 
-build-rust-tests:
+copy-dirs-and-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir oldcache $CARGO_HOME/registry/cache
     COPY --dir oldindex $CARGO_HOME/registry/index
     COPY --dir oldbin $CARGO_HOME/bin
     COPY --dir oldgitdb $CARGO_HOME/git/db 
     COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
-    RUN cargo test --release --no-run
-    SAVE ARTIFACT $CARGO_HOME/registry/cache AS LOCAL oldcache
-    SAVE ARTIFACT $CARGO_HOME/registry/index AS LOCAL oldindex
-    SAVE ARTIFACT $CARGO_HOME/bin AS LOCAL oldbin
-    SAVE ARTIFACT $CARGO_HOME/git/db AS LOCAL oldgitdb
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir compiler/builtins/bitcode ./
     RUN cd bitcode; ./run-tests.sh;
 
+build-rust:
+    FROM +copy-dirs-and-cache
+    RUN cargo build # for clippy
+    RUN cargo test --release --no-run
+
+check-clippy:
+    FROM +build-rust
+    RUN cargo clippy -- -D warnings
+
+check-rustfmt:
+    FROM +copy-dirs-and-cache
+    RUN cargo fmt --all -- --check
+
+save-cache:
+    FROM +build-rust
+    SAVE ARTIFACT $CARGO_HOME/registry/cache AS LOCAL oldcache
+    SAVE ARTIFACT $CARGO_HOME/registry/index AS LOCAL oldindex
+    SAVE ARTIFACT $CARGO_HOME/bin AS LOCAL oldbin
+    SAVE ARTIFACT $CARGO_HOME/git/db AS LOCAL oldgitdb
+
 test-rust:
-    FROM +build-rust-tests
+    FROM +build-rust
     RUN cargo test --release
-    RUN ls $CARGO_HOME
 
 test-all:
+    BUILD +check-clippy
+    BUILD +check-rustfmt
+    BUILD +save-cache
     BUILD +test-zig
     BUILD +test-rust
-
-cargo-home:
-    RUN ls $CARGO_HOME
 
 
     
