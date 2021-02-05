@@ -117,7 +117,29 @@ These are potentially inspirational resources for the editor's design.
 
 Thoughts and ideas possibly taken from above inspirations or separate.
 
-* ACCESSIBILITY!!!
+* ACCESSIBILITY === EMPATHY
+   * Visual Imapirments 
+      No Animation is most benign form of cognitive disabity but really important base line of people with tense nerve system.
+      Insensitivity to certain or all colors.
+      Need of highcontrast
+      Or Everything Magnified for me with no glasses. 
+      Or Total blindness where we need to trough sound to communicate to the user
+      Screen readers read trees of labeled elements. Each platform has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
+      But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
+      Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a accoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
+      
+      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engeneer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
+      
+   * Motor impariments
+      [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
+      Too much mouse waving and sitting for too long is bad for humans.
+      Keyboard is basic accessability tool but 
+      Keyboard is also optional, some people have too shaky hands even for keyboard. 
+      They rely on eye tracking to move mouse cursor arond.
+      If we employ _some_ voice recognition functions we could make same interface as we could do for consoles where 4+2 buttons and directional pad would suffice.
+      That is 10 phrases that need to be pulled trough as many possible translations so people don't have to pretend that they are from Maine or Texas so they get voice recognition to work. Believe me I was there with Apple's Siri :D That is why we have 10 phrases for movement and management and most basic syntax.
+      
+
 * Nice backtraces that highlight important information
 * Ability to show import connection within project visually
     * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
