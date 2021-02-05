@@ -107,6 +107,11 @@ These are potentially inspirational resources for the editor's design.
     * Do a normal run, and save the input and output of the selected function.
     * Generate a unit test with that input-output pair
 
+## Documentation
+
+* Ability to see module as it would be presented on a package website.
+    * Modern editors may guide developers to the source code too easily.
+    The API and documentation are meant to interface with humans.
 
 ## General Thoughts/Ideas
 
