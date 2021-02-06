@@ -18,8 +18,11 @@ jobs:
       - name: Earthly version
         run: earthly --version
 
-      - name: Make empty cache folders if they do not exist
-        run: mkdir -p oldcache; mkdir -p oldindex; mkdir -p oldbin; mkdir -p oldgitdb;
+      - name: Make empty cache folder if it does exist
+        run: mkdir -p sccache_dir;
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release 
         run: earthly +test-all
+
+      - name: show remaining disk space (max 144 GB)
+        run: df -h --total | grep "total\|Size"

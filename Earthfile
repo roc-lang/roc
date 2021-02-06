@@ -45,10 +45,9 @@ deps-image:
 
 copy-dirs-and-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir oldcache $CARGO_HOME/registry/cache
-    COPY --dir oldindex $CARGO_HOME/registry/index
-    COPY --dir oldbin $CARGO_HOME/bin
-    COPY --dir oldgitdb $CARGO_HOME/git/db 
+    # cache
+    COPY --dir sccache_dir ci/sccache ./ 
+    # roc dirs
     COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
 
 test-zig:
@@ -58,6 +57,8 @@ test-zig:
 
 build-rust:
     FROM +copy-dirs-and-cache
+    ARG RUSTC_WRAPPER=/earthbuild/sccache
+    ARG SCCACHE_DIR=/earthbuild/sccache_dir
     RUN cargo build # for clippy
     RUN cargo test --release --no-run
 
@@ -71,14 +72,14 @@ check-rustfmt:
 
 save-cache:
     FROM +build-rust
-    SAVE ARTIFACT $CARGO_HOME/registry/cache AS LOCAL oldcache
-    SAVE ARTIFACT $CARGO_HOME/registry/index AS LOCAL oldindex
-    SAVE ARTIFACT $CARGO_HOME/bin AS LOCAL oldbin
-    SAVE ARTIFACT $CARGO_HOME/git/db AS LOCAL oldgitdb
+    SAVE ARTIFACT sccache_dir AS LOCAL sccache_dir
 
 test-rust:
     FROM +build-rust
+    ARG RUSTC_WRAPPER=/earthbuild/sccache
+    ARG SCCACHE_DIR=/earthbuild/sccache_dir
     RUN cargo test --release
+    RUN ./sccache --show-stats
 
 test-all:
     BUILD +check-clippy
@@ -86,6 +87,4 @@ test-all:
     BUILD +save-cache
     BUILD +test-zig
     BUILD +test-rust
-
-
     

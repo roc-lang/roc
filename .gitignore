@@ -22,9 +22,6 @@ editor/benches/resources/25000000_lines.roc
 editor/benches/resources/50000_lines.roc
 editor/benches/resources/500_lines.roc
 
-#folders earthly generates to cache cargo packages
-oldbin/
-oldcache/
-oldgitdb/
-oldindex/
+# rust cache (sccache folder)
+sccache_dir
 
