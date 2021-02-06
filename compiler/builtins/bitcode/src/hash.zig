@@ -4,7 +4,22 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
+const str = @import("str.zig");
 const mem = std.mem;
+
+pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.C) u64 {
+    const stdout = std.io.getStdOut().writer();
+
+    if (bytes) |nonnull| {
+        return wyhash_hash(seed, nonnull[0..length]);
+    } else {
+        return 42;
+    }
+}
+
+pub fn wyhash_rocstr(seed: u64, input: str.RocStr) callconv(.C) u64 {
+    return wyhash_hash(seed, input.asSlice());
+}
 
 const primes = [_]u64{
     0xa0761d6478bd642f,

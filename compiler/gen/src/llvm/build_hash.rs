@@ -1,6 +1,10 @@
-use crate::llvm::build::{Env, ZIG_WYHASH_BYTES};
-use crate::llvm::build_list::store_list;
+use crate::llvm::build::call_bitcode_fn;
+use crate::llvm::build::Env;
+use crate::llvm::build_list::{load_list, store_list};
+use crate::llvm::build_str;
+use crate::llvm::convert::basic_type_from_layout;
 use inkwell::values::BasicValueEnum;
+use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout};
 
 pub fn hash<'a, 'ctx, 'env>(
@@ -28,14 +32,39 @@ pub fn hash<'a, 'ctx, 'env>(
             | Builtin::Float32
             | Builtin::Float128
             | Builtin::Float16
-            | Builtin::Usize
-            | Builtin::Str => {
-                let ptr = val.into_pointer_value();
-                let num_bytes = layout.stack_size(ptr_bytes) as u64;
+            | Builtin::Usize => {
+                let num_bytes = env
+                    .context
+                    .i64_type()
+                    .const_int(layout.stack_size(ptr_bytes) as u64, false);
 
-                let hash_bytes = store_list(env, ptr, ctx.i64_type().const_int(num_bytes, false));
+                let basic_type =
+                    basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
 
-                env.call_intrinsic(ZIG_WYHASH_BYTES, &[seed.into(), hash_bytes])
+                let alloc = env.builder.build_alloca(basic_type, "store");
+                env.builder.build_store(alloc, val);
+
+                let hash_bytes = env.builder.build_bitcast(
+                    alloc,
+                    env.context
+                        .i8_type()
+                        .ptr_type(inkwell::AddressSpace::Generic),
+                    "as_u8_ptr",
+                );
+
+                call_bitcode_fn(
+                    env,
+                    &[seed.into(), hash_bytes.into(), num_bytes.into()],
+                    &bitcode::DICT_HASH,
+                )
+            }
+            Builtin::Str => {
+                // let zig deal with big vs small string
+                call_bitcode_fn(
+                    env,
+                    &[seed.into(), build_str::str_to_i128(env, val).into()],
+                    &bitcode::DICT_HASH_STR,
+                )
             }
             Builtin::EmptyStr | Builtin::EmptyDict | Builtin::EmptyList | Builtin::EmptySet => {
                 todo!("These are all the same, so we should just hardcode some hash value")

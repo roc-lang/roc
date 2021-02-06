@@ -4,9 +4,13 @@ const testing = std.testing;
 
 // Dict Module
 const dict = @import("dict.zig");
+const hash = @import("hash.zig");
+
 comptime {
     exportDictFn(dict.dictLen, "len");
     exportDictFn(dict.dictEmpty, "empty");
+    exportDictFn(hash.wyhash, "hash");
+    exportDictFn(hash.wyhash_rocstr, "hash_str");
 }
 
 // Num Module

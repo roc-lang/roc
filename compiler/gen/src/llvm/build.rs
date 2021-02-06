@@ -282,12 +282,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>, ptr_size: u32
 
     add_intrinsic(
         module,
-        ZIG_WYHASH_BYTES,
-        i64_type.fn_type(&[i64_type.into(), byte_slice_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
         LLVM_MEMSET_I64,
         void_type.fn_type(
             &[
@@ -381,7 +375,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>, ptr_size: u32
     });
 }
 
-pub static ZIG_WYHASH_BYTES: &str = "wyhash_hash";
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
