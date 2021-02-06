@@ -1,5 +1,6 @@
 use crate::llvm::build::{
-    call_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout, Env, Scope,
+    call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout,
+    Env, Scope,
 };
 use crate::llvm::convert::collection;
 use inkwell::types::BasicTypeEnum;
@@ -33,9 +34,20 @@ pub fn dict_empty<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     _scope: &Scope<'a, 'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let result = call_bitcode_fn(env, &[], &bitcode::DICT_EMPTY);
+    // get the RocDict type defined by zig
+    let roc_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
 
-    zig_dict_to_struct(env, result.into_struct_value()).into()
+    // we must give a pointer for the bitcode function to write the result into
+    let result_alloc = env.builder.build_alloca(roc_dict_type, "dict_empty");
+
+    call_void_bitcode_fn(env, &[result_alloc.into()], &bitcode::DICT_EMPTY);
+
+    let result = env
+        .builder
+        .build_load(result_alloc, "load_result")
+        .into_struct_value();
+
+    zig_dict_to_struct(env, result).into()
 }
 
 fn dict_symbol_to_i128<'a, 'ctx, 'env>(
