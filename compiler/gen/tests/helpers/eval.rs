@@ -174,7 +174,7 @@ pub fn helper<'a>(
         ),
     };
 
-    let module = roc_gen::llvm::build::module_from_builtins(context, "app", ptr_bytes);
+    let module = roc_gen::llvm::build::module_from_builtins(context, "app");
 
     // strip Zig debug stuff
     module.strip_debug_info();

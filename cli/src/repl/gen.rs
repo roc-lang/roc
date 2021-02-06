@@ -117,9 +117,7 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
 
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
-        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(
-            &context, "", ptr_bytes,
-        ));
+        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
         let builder = context.create_builder();
 
         // mark our zig-defined builtins as internal

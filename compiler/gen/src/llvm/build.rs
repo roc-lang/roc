@@ -247,11 +247,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 }
 
-pub fn module_from_builtins<'ctx>(
-    ctx: &'ctx Context,
-    module_name: &str,
-    ptr_size: u32,
-) -> Module<'ctx> {
+pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
     let bitcode_bytes = bitcode::get_bytes();
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
@@ -260,12 +256,12 @@ pub fn module_from_builtins<'ctx>(
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
 
     // Add LLVM intrinsics.
-    add_intrinsics(ctx, &module, ptr_size);
+    add_intrinsics(ctx, &module);
 
     module
 }
 
-fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>, ptr_size: u32) {
+fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
@@ -276,9 +272,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>, ptr_size: u32
     let i32_type = ctx.i32_type();
     let i8_type = ctx.i8_type();
     let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
-
-    let byte_slice_type =
-        ctx.struct_type(&[i8_ptr_type.into(), ptr_int(ctx, ptr_size).into()], false);
 
     add_intrinsic(
         module,

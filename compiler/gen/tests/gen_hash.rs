@@ -22,7 +22,7 @@ mod gen_hash {
                     Dict.hashTestOnly 0 0
                 "#
             ),
-            1,
+            9718519427346233646,
             u64
         );
     }

@@ -1,6 +1,5 @@
 use crate::llvm::build::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build_list::{load_list, store_list};
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use inkwell::values::BasicValueEnum;
@@ -54,7 +53,7 @@ pub fn hash<'a, 'ctx, 'env>(
 
                 call_bitcode_fn(
                     env,
-                    &[seed.into(), hash_bytes.into(), num_bytes.into()],
+                    &[seed.into(), hash_bytes, num_bytes.into()],
                     &bitcode::DICT_HASH,
                 )
             }
