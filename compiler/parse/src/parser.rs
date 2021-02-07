@@ -258,7 +258,7 @@ impl Progress {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
@@ -278,7 +278,7 @@ pub enum SyntaxError<'a> {
 type Row = u32;
 type Col = u16;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type<'a> {
     TRecord(TRecord<'a>, Row, Col),
     ///
@@ -288,7 +288,7 @@ pub enum Type<'a> {
     TIndentStart(Row, Col),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TRecord<'a> {
     Open(Row, Col),
     End(Row, Col),

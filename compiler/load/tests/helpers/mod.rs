@@ -15,7 +15,7 @@ use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
-use roc_parse::parser::{loc, Bag, Parser, State};
+use roc_parse::parser::{loc, Bag, Parser, State, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
@@ -62,7 +62,10 @@ where
 }
 
 #[allow(dead_code)]
-pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Bag<'a>> {
+pub fn parse_with<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+) -> Result<ast::Expr<'a>, Bag<'a, SyntaxError<'a>>> {
     parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
 }
 
@@ -70,7 +73,7 @@ pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, 
 pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
-) -> Result<Located<ast::Expr<'a>>, Bag<'a>> {
+) -> Result<Located<ast::Expr<'a>>, Bag<'a, SyntaxError<'a>>> {
     let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
     let answer = parser.parse(&arena, state);
@@ -83,85 +86,6 @@ pub fn parse_loc_with<'a>(
 #[allow(dead_code)]
 pub fn can_expr(expr_str: &str) -> CanExprOut {
     can_expr_with(&Bump::new(), test_home(), expr_str)
-}
-
-#[allow(dead_code)]
-pub fn uniq_expr(
-    expr_str: &str,
-) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Constraint,
-    ModuleId,
-    Interns,
-) {
-    let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
-
-    uniq_expr_with(&Bump::new(), expr_str, declared_idents)
-}
-
-#[allow(dead_code)]
-pub fn uniq_expr_with(
-    arena: &Bump,
-    expr_str: &str,
-    declared_idents: &ImMap<Ident, (Symbol, Region)>,
-) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Constraint,
-    ModuleId,
-    Interns,
-) {
-    let home = test_home();
-    let CanExprOut {
-        loc_expr,
-        output,
-        problems,
-        var_store: mut old_var_store,
-        var,
-        interns,
-        ..
-    } = can_expr_with(arena, home, expr_str);
-
-    // double check
-    let mut var_store = VarStore::new(old_var_store.fresh());
-
-    let expected2 = Expected::NoExpectation(Type::Variable(var));
-    let constraint = roc_constrain::uniq::constrain_declaration(
-        home,
-        &mut var_store,
-        Region::zero(),
-        &loc_expr,
-        declared_idents,
-        expected2,
-    );
-
-    let stdlib = uniq_stdlib();
-
-    let types = stdlib.types;
-    let imports: Vec<_> = types
-        .into_iter()
-        .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(region, symbol),
-            solved_type,
-        })
-        .collect();
-
-    // load builtin values
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(imports, constraint, &mut var_store);
-
-    let subs2 = Subs::new(var_store.into());
-
-    (
-        loc_expr, output, problems, subs2, var, constraint, home, interns,
-    )
 }
 
 pub struct CanExprOut {

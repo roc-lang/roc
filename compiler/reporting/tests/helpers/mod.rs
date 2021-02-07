@@ -13,7 +13,7 @@ use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
-use roc_parse::parser::{loc, Bag, Parser, State};
+use roc_parse::parser::{loc, Bag, Parser, State, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Located;
 use roc_solve::solve;
@@ -101,7 +101,10 @@ pub struct CanExprOut {
 }
 
 #[allow(dead_code)]
-pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Bag<'a>> {
+pub fn parse_with<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+) -> Result<ast::Expr<'a>, Bag<'a, SyntaxError<'a>>> {
     parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
 }
 
@@ -109,7 +112,7 @@ pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, 
 pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
-) -> Result<Located<ast::Expr<'a>>, Bag<'a>> {
+) -> Result<Located<ast::Expr<'a>>, Bag<'a, SyntaxError<'a>>> {
     let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
     let answer = parser.parse(&arena, state);
@@ -121,7 +124,7 @@ pub fn parse_loc_with<'a>(
 
 #[derive(Debug)]
 pub struct ParseErrOut<'a> {
-    pub fail: Bag<'a>,
+    pub fail: Bag<'a, SyntaxError<'a>>,
     pub home: ModuleId,
     pub interns: Interns,
 }
