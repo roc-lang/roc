@@ -1,6 +1,6 @@
 use inlinable_string::InlinableString;
 use roc_collections::all::MutSet;
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::operator::BinOp;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
@@ -117,9 +117,13 @@ pub enum RuntimeError {
     UnsupportedPattern(Region),
     // Example: when 1 is 1.X -> 32
     MalformedPattern(MalformedPatternProblem, Region),
+
+    UnresolvedTypeVar,
+    ErroneousType,
+
     LookupNotInScope(Located<InlinableString>, MutSet<Box<str>>),
     ValueNotExposed {
-        module_name: InlinableString,
+        module_name: ModuleName,
         ident: InlinableString,
         region: Region,
     },
