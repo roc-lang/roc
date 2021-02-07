@@ -59,12 +59,9 @@ impl<'a> State<'a> {
         self,
         arena: &'a Bump,
         min_indent: u16,
-    ) -> Result<Self, (Bag<'a, SyntaxError<'a>>, Self)> {
+    ) -> Result<Self, (SyntaxError<'a>, Self)> {
         if self.indent_col < min_indent {
-            Err((
-                Bag::from_state(arena, &self, SyntaxError::OutdentedTooFar),
-                self,
-            ))
+            Err((SyntaxError::OutdentedTooFar, self))
         } else {
             Ok(self)
         }
@@ -84,10 +81,7 @@ impl<'a> State<'a> {
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// Advances the input by 1, to consume the newline character.
-    pub fn newline(
-        &self,
-        arena: &'a Bump,
-    ) -> Result<Self, (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
+    pub fn newline(&self, arena: &'a Bump) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
         match self.line.checked_add(1) {
             Some(line) => Ok(State {
                 bytes: &self.bytes[1..],
@@ -100,7 +94,7 @@ impl<'a> State<'a> {
             }),
             None => Err((
                 Progress::NoProgress,
-                Bag::from_state(arena, &self, SyntaxError::TooManyLines),
+                SyntaxError::TooManyLines,
                 self.clone(),
             )),
         }
@@ -114,7 +108,7 @@ impl<'a> State<'a> {
         self,
         arena: &'a Bump,
         quantity: usize,
-    ) -> Result<Self, (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
+    ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
@@ -134,7 +128,7 @@ impl<'a> State<'a> {
         &self,
         arena: &'a Bump,
         spaces: usize,
-    ) -> Result<Self, (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
+    ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
         match (self.column as usize).checked_add(spaces) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 // Spaces don't affect is_indenting; if we were previously indneting,
@@ -187,13 +181,13 @@ impl<'a> State<'a> {
     }
 
     /// Return a failing ParseResult for the given FailReason
-    pub fn fail<T>(
+    pub fn fail<T, X>(
         self,
         arena: &'a Bump,
         progress: Progress,
-        reason: SyntaxError<'a>,
-    ) -> Result<(Progress, T, Self), (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
-        Err((progress, Bag::from_state(arena, &self, reason), self))
+        reason: X,
+    ) -> Result<(Progress, T, Self), (Progress, X, Self)> {
+        Err((progress, reason, self))
     }
 }
 
@@ -225,7 +219,7 @@ fn state_size() {
 }
 
 pub type ParseResult<'a, Output, Error> =
-    Result<(Progress, Output, State<'a>), (Progress, Bag<'a, Error>, State<'a>)>;
+    Result<(Progress, Output, State<'a>), (Progress, Error, State<'a>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
@@ -273,6 +267,22 @@ pub enum SyntaxError<'a> {
     NotYetImplemented(String),
     TODO,
     Type(Type<'a>),
+}
+
+impl<'a> SyntaxError<'a> {
+    pub fn into_parse_problem(
+        self,
+        filename: std::path::PathBuf,
+        bytes: &'a [u8],
+    ) -> ParseProblem<'a, SyntaxError<'a>> {
+        ParseProblem {
+            line: 0,
+            column: 0,
+            problem: self,
+            filename,
+            bytes,
+        }
+    }
 }
 
 type Row = u32;
@@ -351,55 +361,6 @@ pub struct DeadEnd<'a, T> {
     pub context_stack: ContextStack<'a>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Bag<'a, T>(Vec<'a, DeadEnd<'a, T>>);
-
-impl<'a, T> Bag<'a, T> {
-    pub fn new_in(arena: &'a Bump) -> Self {
-        Bag(Vec::new_in(arena))
-    }
-
-    pub fn from_state(arena: &'a Bump, state: &State<'a>, x: T) -> Self {
-        let mut dead_ends = Vec::with_capacity_in(1, arena);
-
-        let dead_end = DeadEnd {
-            line: state.line,
-            column: state.column,
-            problem: x,
-            context_stack: state.context_stack.clone(),
-        };
-        dead_ends.push(dead_end);
-
-        Bag(dead_ends)
-    }
-
-    fn pop(&mut self) -> Option<DeadEnd<'a, T>> {
-        self.0.pop()
-    }
-
-    pub fn into_parse_problem(
-        mut self,
-        filename: std::path::PathBuf,
-        bytes: &[u8],
-    ) -> ParseProblem<'_, T> {
-        match self.pop() {
-            None => unreachable!("there is a parse error, but no problem"),
-            Some(dead_end) => {
-                let context_stack = dead_end.context_stack.into_vec();
-
-                ParseProblem {
-                    line: dead_end.line,
-                    column: dead_end.column,
-                    problem: dead_end.problem,
-                    context_stack,
-                    filename,
-                    bytes,
-                }
-            }
-        }
-    }
-}
-
 /// use std vec to escape the arena's lifetime bound
 /// since this is only used when there is in fact an error
 /// I think this is fine
@@ -408,19 +369,12 @@ pub struct ParseProblem<'a, T> {
     pub line: u32,
     pub column: u16,
     pub problem: T,
-    pub context_stack: std::vec::Vec<ContextItem>,
     pub filename: std::path::PathBuf,
     pub bytes: &'a [u8],
 }
 
 pub fn fail<'a, T>() -> impl Parser<'a, T, SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        Err((
-            NoProgress,
-            Bag::from_state(arena, &state, SyntaxError::ConditionFailed),
-            state,
-        ))
-    }
+    move |arena, state: State<'a>| Err((NoProgress, SyntaxError::ConditionFailed, state))
 }
 
 pub trait Parser<'a, Output, Error> {
@@ -467,11 +421,9 @@ where
                 let after_parse = state.clone();
 
                 match by.parse(arena, state) {
-                    Ok((_, _, state)) => Err((
-                        NoProgress,
-                        Bag::from_state(arena, &state, SyntaxError::ConditionFailed),
-                        original_state,
-                    )),
+                    Ok((_, _, state)) => {
+                        Err((NoProgress, SyntaxError::ConditionFailed, original_state))
+                    }
                     Err(_) => Ok((progress, answer, after_parse)),
                 }
             })
@@ -486,11 +438,7 @@ where
         let original_state = state.clone();
 
         match parser.parse(arena, state) {
-            Ok((_, _, _)) => Err((
-                NoProgress,
-                Bag::from_state(arena, &original_state, SyntaxError::ConditionFailed),
-                original_state,
-            )),
+            Ok((_, _, _)) => Err((NoProgress, SyntaxError::ConditionFailed, original_state)),
             Err((_, _, _)) => Ok((NoProgress, (), original_state)),
         }
     }
@@ -571,7 +519,7 @@ pub fn unexpected_eof<'a>(
     arena: &'a Bump,
     state: State<'a>,
     chars_consumed: usize,
-) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>) {
+) -> (Progress, SyntaxError<'a>, State<'a>) {
     checked_unexpected(arena, state, chars_consumed, |region| {
         SyntaxError::Eof(region)
     })
@@ -582,7 +530,7 @@ pub fn unexpected<'a>(
     chars_consumed: usize,
     _attempting: Attempting,
     state: State<'a>,
-) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>) {
+) -> (Progress, SyntaxError<'a>, State<'a>) {
     // NOTE state is the last argument because chars_consumed often depends on the state's fields
     // having state be the final argument prevents borrowing issues
     checked_unexpected(arena, state, chars_consumed, |region| {
@@ -599,7 +547,7 @@ fn checked_unexpected<'a, F>(
     state: State<'a>,
     chars_consumed: usize,
     problem_from_region: F,
-) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>)
+) -> (Progress, SyntaxError<'a>, State<'a>)
 where
     F: FnOnce(Region) -> SyntaxError<'a>,
 {
@@ -617,13 +565,7 @@ where
                 end_line: state.line,
             };
 
-            let problem = problem_from_region(region);
-
-            (
-                Progress::NoProgress,
-                Bag::from_state(arena, &state, problem),
-                state,
-            )
+            (Progress::NoProgress, problem_from_region(region), state)
         }
         _ => {
             let (_progress, fail, state) = line_too_long(arena, state);
@@ -632,10 +574,7 @@ where
     }
 }
 
-fn line_too_long<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>) {
+fn line_too_long<'a>(arena: &'a Bump, state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
     let problem = SyntaxError::LineTooLong(state.line);
     // Set column to MAX and advance the parser to end of input.
     // This way, all future parsers will fail on EOF, and then
@@ -654,11 +593,7 @@ fn line_too_long<'a>(
 
     // TODO do we make progress in this case?
     // isn't this error fatal?
-    (
-        Progress::NoProgress,
-        Bag::from_state(arena, &state, problem),
-        state,
-    )
+    (Progress::NoProgress, problem, state)
 }
 
 /// A single ASCII char that isn't a newline.
@@ -987,7 +922,7 @@ where
 
 pub fn fail_when_progress<'a, T, E>(
     progress: Progress,
-    fail: Bag<'a, E>,
+    fail: E,
     value: T,
     state: State<'a>,
 ) -> ParseResult<'a, T, E> {
@@ -1006,11 +941,9 @@ where
         Ok((progress, output, next_state)) if predicate(&output) => {
             Ok((progress, output, next_state))
         }
-        Ok((progress, _, _)) | Err((progress, _, _)) => Err((
-            progress,
-            Bag::from_state(arena, &state, SyntaxError::ConditionFailed),
-            state,
-        )),
+        Ok((progress, _, _)) | Err((progress, _, _)) => {
+            Err((progress, SyntaxError::ConditionFailed, state))
+        }
     }
 }
 
@@ -1210,6 +1143,45 @@ macro_rules! one_of {
     ($p1:expr, $($others:expr),+) => {
         one_of!($p1, one_of!($($others),+))
     };
+}
+
+#[macro_export]
+macro_rules! one_of_with_error {
+    ($toerror:expr; $p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
+
+            match $p1.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((MadeProgress, _, state)) => Err((MadeProgress, $toerror(state.line, state.column), state)),
+                Err((NoProgress, _, state)) => $p2.parse( arena, state),
+            }
+        }
+    };
+
+    ($toerror:expr; $p1:expr, $($others:expr),+) => {
+        one_of_with_error!($toerror, $p1, one_of!($($others),+))
+    };
+}
+
+fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    debug_assert_ne!(word, b'\n');
+
+    move |_arena: &'a Bump, state: State<'a>| match state.bytes.get(0) {
+        Some(x) if *x == word => Ok((
+            MadeProgress,
+            (),
+            State {
+                bytes: &state.bytes[1..],
+                column: state.column + 1,
+                ..state
+            },
+        )),
+        _ => Err((NoProgress, to_error(state.line, state.column), state)),
+    }
 }
 
 #[macro_export]
@@ -1580,11 +1552,7 @@ pub fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((
-                NoProgress,
-                Bag::from_state(arena, &state, SyntaxError::ConditionFailed),
-                state,
-            ))
+            Err((NoProgress, SyntaxError::ConditionFailed, state))
         }
     }
 }

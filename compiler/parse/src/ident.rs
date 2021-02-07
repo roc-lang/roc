@@ -1,7 +1,7 @@
 use crate::ast::Attempting;
 use crate::keyword;
 use crate::parser::Progress::{self, *};
-use crate::parser::{peek_utf8_char, unexpected, Bag, ParseResult, Parser, State, SyntaxError};
+use crate::parser::{peek_utf8_char, unexpected, ParseResult, Parser, State, SyntaxError};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -399,11 +399,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
         {
             // TODO Calculate the correct region based on state
             let region = Region::zero();
-            Err((
-                MadeProgress,
-                Bag::from_state(arena, &state, SyntaxError::ReservedKeyword(region)),
-                state,
-            ))
+            Err((MadeProgress, SyntaxError::ReservedKeyword(region), state))
         } else {
             Ok((MadeProgress, ident, state))
         }

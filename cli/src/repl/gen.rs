@@ -7,7 +7,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
-use roc_parse::parser::{Bag, SyntaxError};
+use roc_parse::parser::SyntaxError;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
@@ -22,7 +22,7 @@ pub fn gen_and_eval<'a>(
     src: &[u8],
     target: Triple,
     opt_level: OptLevel,
-) -> Result<ReplOutput, Bag<'a, SyntaxError<'a>>> {
+) -> Result<ReplOutput, SyntaxError<'a>> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };

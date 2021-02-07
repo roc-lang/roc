@@ -83,7 +83,8 @@ pub fn parse_problem<'b>(
             let doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("Unexpected token "),
-                    context(alloc, &parse_problem.context_stack, "here"),
+                    // context(alloc, &parse_problem.context_stack, "here"),
+                    todo!(),
                     alloc.text(":"),
                 ]),
                 alloc.region(region),

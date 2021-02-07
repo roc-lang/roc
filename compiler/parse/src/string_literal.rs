@@ -2,7 +2,7 @@ use crate::ast::{Attempting, EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
 use crate::parser::{
-    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof, Bag,
+    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof,
     ParseResult, Parser, State, SyntaxError,
 };
 use bumpalo::collections::vec::Vec;
@@ -291,14 +291,10 @@ where
                             // Ok((StrLiteral::Block(lines.into_bump_slice()), state))
                             Err((
                                 MadeProgress,
-                                Bag::from_state(
-                                    arena,
-                                    &state,
-                                    SyntaxError::NotYetImplemented(format!(
-                                        "TODO parse this line in a block string: {:?}",
-                                        line
-                                    )),
-                                ),
+                                SyntaxError::NotYetImplemented(format!(
+                                    "TODO parse this line in a block string: {:?}",
+                                    line
+                                )),
                                 state,
                             ))
                         }

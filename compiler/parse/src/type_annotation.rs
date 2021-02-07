@@ -4,7 +4,7 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Bag, Either,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
     ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError,
@@ -269,11 +269,7 @@ fn expression<'a>(
                 let msg =
                     "TODO: Decide the correct error to return for 'Invalid function signature'"
                         .to_string();
-                Err((
-                    progress,
-                    Bag::from_state(arena, &state, SyntaxError::NotYetImplemented(msg)),
-                    state,
-                ))
+                Err((progress, SyntaxError::NotYetImplemented(msg), state))
             }
         }
     }
