@@ -18,12 +18,12 @@ use roc_region::all::Located;
 pub fn space0_around<'a, P, S>(
     parser: P,
     min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError>
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
     S: Sized,
-    P: Parser<'a, Located<S>, SyntaxError>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -68,11 +68,11 @@ where
 pub fn space1_around<'a, P, S>(
     parser: P,
     min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError>
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -109,11 +109,11 @@ where
 pub fn space0_before<'a, P, S>(
     parser: P,
     min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError>
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -136,11 +136,11 @@ where
 pub fn space1_before<'a, P, S>(
     parser: P,
     min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError>
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -163,11 +163,11 @@ where
 pub fn space0_after<'a, P, S>(
     parser: P,
     min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError>
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -190,11 +190,11 @@ where
 pub fn space1_after<'a, P, S>(
     parser: P,
     min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError>
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -212,12 +212,12 @@ where
 }
 
 /// Zero or more (spaces/comments/newlines).
-pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError> {
+pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     spaces(false, min_indent)
 }
 
 /// One or more (spaces/comments/newlines).
-pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError> {
+pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     // TODO try benchmarking a short-circuit for the typical case: see if there is
     // exactly one space followed by char that isn't [' ', '\n', or '#'], and
     // if so, return empty slice. The case where there's exactly 1 space should
@@ -232,7 +232,7 @@ enum LineState {
     DocComment,
 }
 
-pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError> {
+pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
     then(
         and!(ascii_char(b'#'), optional(ascii_string("# "))),
         |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
@@ -260,7 +260,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError> {
 }
 
 #[inline(always)]
-pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxError> {
+pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         if spaces_expected == 0 {
             return Ok((NoProgress, (), state));
@@ -324,7 +324,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
 fn spaces<'a>(
     require_at_least_one: bool,
     min_indent: u16,
-) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError> {
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         let original_state = state.clone();
         let mut space_list = Vec::new_in(arena);

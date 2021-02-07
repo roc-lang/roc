@@ -21,8 +21,8 @@ pub struct File<'a> {
 #[derive(Debug)]
 pub enum ReadError<'a> {
     Read(std::io::Error),
-    ParseDefs(parser::Bag<'a, SyntaxError>),
-    ParseHeader(parser::Bag<'a, SyntaxError>),
+    ParseDefs(parser::Bag<'a, SyntaxError<'a>>),
+    ParseHeader(parser::Bag<'a, SyntaxError<'a>>),
     DoesntHaveRocExtension,
 }
 

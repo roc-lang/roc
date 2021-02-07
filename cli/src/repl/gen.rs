@@ -22,7 +22,7 @@ pub fn gen_and_eval<'a>(
     src: &[u8],
     target: Triple,
     opt_level: OptLevel,
-) -> Result<ReplOutput, Bag<'a, SyntaxError>> {
+) -> Result<ReplOutput, Bag<'a, SyntaxError<'a>>> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };

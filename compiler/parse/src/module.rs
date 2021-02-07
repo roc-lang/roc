@@ -18,29 +18,29 @@ use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_region::all::Located;
 
-pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
+pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     one_of!(interface_module(), app_module(), platform_module())
 }
 
 #[inline(always)]
-fn app_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
+fn app_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     map!(app_header(), |header| { Module::App { header } })
 }
 
 #[inline(always)]
-fn platform_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
+fn platform_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     map!(platform_header(), |header| { Module::Platform { header } })
 }
 
 #[inline(always)]
-fn interface_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
+fn interface_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     map!(interface_header(), |header| {
         Module::Interface { header }
     })
 }
 
 #[inline(always)]
-pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError> {
+pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError<'a>> {
     parser::map(
         and!(
             skip_first!(
@@ -71,7 +71,7 @@ pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxErro
 }
 
 #[inline(always)]
-pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError> {
+pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
     // e.g. rtfeldman/blah
     //
     // Package names and accounts can be capitalized and can contain dashes.
@@ -90,7 +90,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError> {
 pub fn parse_package_part<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
-) -> ParseResult<'a, &'a str, SyntaxError> {
+) -> ParseResult<'a, &'a str, SyntaxError<'a>> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
 
     while !state.bytes.is_empty() {
@@ -116,7 +116,7 @@ pub fn parse_package_part<'a>(
 }
 
 #[inline(always)]
-pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError> {
+pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
     move |arena, mut state: State<'a>| {
         match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
@@ -185,7 +185,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError> {
 }
 
 #[inline(always)]
-pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError> {
+pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
     map_with_arena!(
         and!(
             skip_first!(
@@ -243,7 +243,7 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError> {
 }
 
 #[inline(always)]
-pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError> {
+pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError<'a>> {
     parser::map(
         and!(
             skip_first!(
@@ -299,7 +299,7 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError>
 }
 
 #[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError> {
+pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
     // force that we pare until the end of the input
     skip_second!(zero_or_more!(space0_around(loc(def(0)), 0)), end_of_file())
 }
@@ -315,7 +315,7 @@ struct ProvidesTo<'a> {
 }
 
 #[inline(always)]
-fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, SyntaxError> {
+fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, SyntaxError<'a>> {
     map!(
         and!(
             and!(
@@ -375,7 +375,7 @@ fn provides_without_to<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
-    SyntaxError,
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
@@ -396,7 +396,7 @@ fn requires<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<TypedIdent<'a>>>,
     ),
-    SyntaxError,
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("requires")), space1(1)),
@@ -417,7 +417,7 @@ fn exposes_values<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
-    SyntaxError,
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
@@ -438,7 +438,7 @@ fn exposes_modules<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
     ),
-    SyntaxError,
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
@@ -461,7 +461,7 @@ struct Packages<'a> {
 }
 
 #[inline(always)]
-fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError> {
+fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
     map!(
         and!(
             and!(
@@ -493,7 +493,7 @@ fn imports<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ImportsEntry<'a>>>,
     ),
-    SyntaxError,
+    SyntaxError<'a>,
 > {
     and!(
         and!(
@@ -511,7 +511,7 @@ fn imports<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn effects<'a>() -> impl Parser<'a, Effects<'a>, SyntaxError> {
+fn effects<'a>() -> impl Parser<'a, Effects<'a>, SyntaxError<'a>> {
     move |arena, state| {
         let (_, spaces_before_effects_keyword, state) =
             skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
@@ -548,7 +548,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, SyntaxError> {
 }
 
 #[inline(always)]
-fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError> {
+fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError<'a>> {
     move |arena, state| {
         // You must have a field name, e.g. "email"
         let (_, ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
@@ -579,7 +579,7 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError> {
 
 #[inline(always)]
 #[allow(clippy::type_complexity)]
-fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, SyntaxError> {
+fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, SyntaxError<'a>> {
     map_with_arena!(
         and!(
             and!(

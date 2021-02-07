@@ -6,7 +6,7 @@ use bumpalo::Bump;
 use std::char;
 use std::str::from_utf8_unchecked;
 
-pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError> {
+pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     move |arena, state: State<'a>| {
         let bytes = &mut state.bytes.iter();
 
@@ -30,7 +30,7 @@ fn parse_number_literal<'a, I>(
     bytes: &mut I,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, SyntaxError>
+) -> ParseResult<'a, Expr<'a>, SyntaxError<'a>>
 where
     I: Iterator<Item = &'a u8>,
 {
@@ -166,7 +166,7 @@ fn from_base<'a>(
     bytes_parsed: usize,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, SyntaxError> {
+) -> ParseResult<'a, Expr<'a>, SyntaxError<'a>> {
     let is_negative = first_ch == '-';
     let bytes = if is_negative {
         &state.bytes[3..bytes_parsed]

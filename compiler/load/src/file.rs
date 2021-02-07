@@ -763,7 +763,7 @@ enum Msg<'a> {
         exposed_to_host: MutMap<Symbol, Variable>,
     },
 
-    FailedToParse(ParseProblem<'a, SyntaxError>),
+    FailedToParse(ParseProblem<'a, SyntaxError<'a>>),
 }
 
 #[derive(Debug)]
@@ -976,7 +976,7 @@ pub enum LoadingProblem<'a> {
         error: io::ErrorKind,
         msg: &'static str,
     },
-    ParsingFailed(ParseProblem<'a, SyntaxError>),
+    ParsingFailed(ParseProblem<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
 
     MsgChannelDied,

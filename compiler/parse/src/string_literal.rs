@@ -8,7 +8,7 @@ use crate::parser::{
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError> {
+pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
     use StrLiteral::*;
 
     move |arena: &'a Bump, mut state: State<'a>| {
@@ -256,7 +256,7 @@ fn parse_block_string<'a, I>(
     arena: &'a Bump,
     state: State<'a>,
     bytes: &mut I,
-) -> ParseResult<'a, StrLiteral<'a>, SyntaxError>
+) -> ParseResult<'a, StrLiteral<'a>, SyntaxError<'a>>
 where
     I: Iterator<Item = &'a u8>,
 {

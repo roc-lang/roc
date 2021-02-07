@@ -59,7 +59,7 @@ impl<'a> State<'a> {
         self,
         arena: &'a Bump,
         min_indent: u16,
-    ) -> Result<Self, (Bag<'a, SyntaxError>, Self)> {
+    ) -> Result<Self, (Bag<'a, SyntaxError<'a>>, Self)> {
         if self.indent_col < min_indent {
             Err((
                 Bag::from_state(arena, &self, SyntaxError::OutdentedTooFar),
@@ -84,7 +84,10 @@ impl<'a> State<'a> {
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// Advances the input by 1, to consume the newline character.
-    pub fn newline(&self, arena: &'a Bump) -> Result<Self, (Progress, Bag<'a, SyntaxError>, Self)> {
+    pub fn newline(
+        &self,
+        arena: &'a Bump,
+    ) -> Result<Self, (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
         match self.line.checked_add(1) {
             Some(line) => Ok(State {
                 bytes: &self.bytes[1..],
@@ -111,7 +114,7 @@ impl<'a> State<'a> {
         self,
         arena: &'a Bump,
         quantity: usize,
-    ) -> Result<Self, (Progress, Bag<'a, SyntaxError>, Self)> {
+    ) -> Result<Self, (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
@@ -131,7 +134,7 @@ impl<'a> State<'a> {
         &self,
         arena: &'a Bump,
         spaces: usize,
-    ) -> Result<Self, (Progress, Bag<'a, SyntaxError>, Self)> {
+    ) -> Result<Self, (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
         match (self.column as usize).checked_add(spaces) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 // Spaces don't affect is_indenting; if we were previously indneting,
@@ -188,8 +191,8 @@ impl<'a> State<'a> {
         self,
         arena: &'a Bump,
         progress: Progress,
-        reason: SyntaxError,
-    ) -> Result<(Progress, T, Self), (Progress, Bag<'a, SyntaxError>, Self)> {
+        reason: SyntaxError<'a>,
+    ) -> Result<(Progress, T, Self), (Progress, Bag<'a, SyntaxError<'a>>, Self)> {
         Err((progress, Bag::from_state(arena, &self, reason), self))
     }
 }
@@ -255,8 +258,8 @@ impl Progress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyntaxError {
+#[derive(Debug, Clone)]
+pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
     ConditionFailed,
@@ -269,6 +272,38 @@ pub enum SyntaxError {
     ArgumentsBeforeEquals(Region),
     NotYetImplemented(String),
     TODO,
+    Type(Type<'a>),
+}
+
+type Row = u32;
+type Col = u16;
+
+#[derive(Debug, Clone)]
+pub enum Type<'a> {
+    TRecord(TRecord<'a>, Row, Col),
+    ///
+    TStart(Row, Col),
+    TSpace(Row, Col),
+    ///
+    TIndentStart(Row, Col),
+}
+
+#[derive(Debug, Clone)]
+pub enum TRecord<'a> {
+    Open(Row, Col),
+    End(Row, Col),
+    ///
+    Field(Row, Col),
+    Colon(Row, Col),
+    Type(&'a Type<'a>, Row, Col),
+    ///
+    Space(Row, Col),
+    ///
+    IndentOpen(Row, Col),
+    IndentField(Row, Col),
+    IndentColon(Row, Col),
+    IndentType(Row, Col),
+    IndentEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,7 +413,7 @@ pub struct ParseProblem<'a, T> {
     pub bytes: &'a [u8],
 }
 
-pub fn fail<'a, T>() -> impl Parser<'a, T, SyntaxError> {
+pub fn fail<'a, T>() -> impl Parser<'a, T, SyntaxError<'a>> {
     move |arena, state: State<'a>| {
         Err((
             NoProgress,
@@ -418,10 +453,10 @@ where
 pub fn not_followed_by<'a, P, ByParser, By, Val>(
     parser: P,
     by: ByParser,
-) -> impl Parser<'a, Val, SyntaxError>
+) -> impl Parser<'a, Val, SyntaxError<'a>>
 where
-    ByParser: Parser<'a, By, SyntaxError>,
-    P: Parser<'a, Val, SyntaxError>,
+    ByParser: Parser<'a, By, SyntaxError<'a>>,
+    P: Parser<'a, Val, SyntaxError<'a>>,
 {
     move |arena, state: State<'a>| {
         let original_state = state.clone();
@@ -443,9 +478,9 @@ where
     }
 }
 
-pub fn not<'a, P, Val>(parser: P) -> impl Parser<'a, (), SyntaxError>
+pub fn not<'a, P, Val>(parser: P) -> impl Parser<'a, (), SyntaxError<'a>>
 where
-    P: Parser<'a, Val, SyntaxError>,
+    P: Parser<'a, Val, SyntaxError<'a>>,
 {
     move |arena, state: State<'a>| {
         let original_state = state.clone();
@@ -536,7 +571,7 @@ pub fn unexpected_eof<'a>(
     arena: &'a Bump,
     state: State<'a>,
     chars_consumed: usize,
-) -> (Progress, Bag<'a, SyntaxError>, State<'a>) {
+) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>) {
     checked_unexpected(arena, state, chars_consumed, |region| {
         SyntaxError::Eof(region)
     })
@@ -547,7 +582,7 @@ pub fn unexpected<'a>(
     chars_consumed: usize,
     _attempting: Attempting,
     state: State<'a>,
-) -> (Progress, Bag<'a, SyntaxError>, State<'a>) {
+) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>) {
     // NOTE state is the last argument because chars_consumed often depends on the state's fields
     // having state be the final argument prevents borrowing issues
     checked_unexpected(arena, state, chars_consumed, |region| {
@@ -564,9 +599,9 @@ fn checked_unexpected<'a, F>(
     state: State<'a>,
     chars_consumed: usize,
     problem_from_region: F,
-) -> (Progress, Bag<'a, SyntaxError>, State<'a>)
+) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>)
 where
-    F: FnOnce(Region) -> SyntaxError,
+    F: FnOnce(Region) -> SyntaxError<'a>,
 {
     match (state.column as usize).checked_add(chars_consumed) {
         // Crucially, this is < u16::MAX and not <= u16::MAX. This means if
@@ -600,7 +635,7 @@ where
 fn line_too_long<'a>(
     arena: &'a Bump,
     state: State<'a>,
-) -> (Progress, Bag<'a, SyntaxError>, State<'a>) {
+) -> (Progress, Bag<'a, SyntaxError<'a>>, State<'a>) {
     let problem = SyntaxError::LineTooLong(state.line);
     // Set column to MAX and advance the parser to end of input.
     // This way, all future parsers will fail on EOF, and then
@@ -628,7 +663,7 @@ fn line_too_long<'a>(
 
 /// A single ASCII char that isn't a newline.
 /// (For newlines, use newline_char(), which handles line numbers)
-pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError> {
+pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
     // Make sure this really is not a newline!
     debug_assert_ne!(expected, b'\n');
 
@@ -646,7 +681,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError> {
 /// A single '\n' character.
 /// Use this instead of ascii_char('\n') because it properly handles
 /// incrementing the line number.
-pub fn newline_char<'a>() -> impl Parser<'a, (), SyntaxError> {
+pub fn newline_char<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena, state: State<'a>| match state.bytes.first() {
         Some(b'\n') => Ok((Progress::MadeProgress, (), state.newline(arena)?)),
         Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
@@ -656,7 +691,7 @@ pub fn newline_char<'a>() -> impl Parser<'a, (), SyntaxError> {
 
 /// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
 /// which must consist entirely of ASCII hex digits.)
-pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, SyntaxError> {
+pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
     move |arena, state: State<'a>| {
         let mut buf = bumpalo::collections::String::new_in(arena);
 
@@ -679,7 +714,7 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, SyntaxError> {
 
 /// A single UTF-8-encoded char. This will both parse *and* validate that the
 /// char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char(state: &State) -> Result<(char, usize), SyntaxError> {
+pub fn peek_utf8_char<'a>(state: &State) -> Result<(char, usize), SyntaxError<'a>> {
     if !state.bytes.is_empty() {
         match char::from_utf8_slice_start(state.bytes) {
             Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
@@ -694,7 +729,10 @@ pub fn peek_utf8_char(state: &State) -> Result<(char, usize), SyntaxError> {
 
 /// A single UTF-8-encoded char, with an offset. This will both parse *and*
 /// validate that the char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char_at(state: &State, offset: usize) -> Result<(char, usize), SyntaxError> {
+pub fn peek_utf8_char_at<'a>(
+    state: &State,
+    offset: usize,
+) -> Result<(char, usize), SyntaxError<'a>> {
     if state.bytes.len() > offset {
         let bytes = &state.bytes[offset..];
 
@@ -709,7 +747,7 @@ pub fn peek_utf8_char_at(state: &State, offset: usize) -> Result<(char, usize), 
     }
 }
 
-pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, (), SyntaxError> {
+pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena, state: State<'a>| {
         let initial_state = state.clone();
         // first parse the keyword characters
@@ -734,7 +772,7 @@ pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, ()
 }
 
 /// A hardcoded string with no newlines, consisting only of ASCII characters
-pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxError> {
+pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxError<'a>> {
     // Verify that this really is exclusively ASCII characters.
     // The `unsafe` block in this function relies upon this assumption!
     //
@@ -959,9 +997,9 @@ pub fn fail_when_progress<'a, T, E>(
     }
 }
 
-pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A, SyntaxError>
+pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A, SyntaxError<'a>>
 where
-    P: Parser<'a, A, SyntaxError>,
+    P: Parser<'a, A, SyntaxError<'a>>,
     F: Fn(&A) -> bool,
 {
     move |arena: &'a Bump, state: State<'a>| match parser.parse(arena, state.clone()) {
@@ -1530,14 +1568,14 @@ where
     attempt!(attempting, parser)
 }
 
-pub fn parse_utf8(bytes: &[u8]) -> Result<&str, SyntaxError> {
+pub fn parse_utf8<'a>(bytes: &[u8]) -> Result<&str, SyntaxError<'a>> {
     match from_utf8(bytes) {
         Ok(string) => Ok(string),
         Err(_) => Err(SyntaxError::BadUtf8),
     }
 }
 
-pub fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError> {
+pub fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     |arena: &'a Bump, state: State<'a>| {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))

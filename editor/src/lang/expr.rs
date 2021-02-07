@@ -232,7 +232,7 @@ pub fn str_to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,
-) -> Result<(Expr2, self::Output), Bag<'a, SyntaxError>> {
+) -> Result<(Expr2, self::Output), Bag<'a, SyntaxError<'a>>> {
     let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(expr(0)), 0);
     let parse_res = parser.parse(&arena, state);

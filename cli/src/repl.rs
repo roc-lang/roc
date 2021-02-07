@@ -191,11 +191,11 @@ pub fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn report_parse_error(fail: Bag<'_, SyntaxError>) {
+fn report_parse_error<'a>(fail: Bag<'a, SyntaxError<'a>>) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 
-fn eval_and_format<'a>(src: &str) -> Result<String, Bag<'a, SyntaxError>> {
+fn eval_and_format<'a>(src: &str) -> Result<String, Bag<'a, SyntaxError<'a>>> {
     gen_and_eval(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|output| match output {
         ReplOutput::NoProblems { expr, expr_type } => {
             format!("\n{} {}:{} {}", expr, PINK, END_COL, expr_type)

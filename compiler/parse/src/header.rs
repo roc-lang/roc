@@ -239,7 +239,7 @@ impl<'a> Spaceable<'a> for PackageEntry<'a> {
     }
 }
 
-pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, SyntaxError> {
+pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, SyntaxError<'a>> {
     move |arena, state| {
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
@@ -269,7 +269,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, SyntaxError> {
     }
 }
 
-pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, SyntaxError> {
+pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, SyntaxError<'a>> {
     map!(
         either!(
             string_literal::parse(),
@@ -287,6 +287,6 @@ pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, SyntaxError> 
     )
 }
 
-fn package_version<'a>() -> impl Parser<'a, Version<'a>, SyntaxError> {
+fn package_version<'a>() -> impl Parser<'a, Version<'a>, SyntaxError<'a>> {
     move |_, _| todo!("TODO parse package version")
 }
