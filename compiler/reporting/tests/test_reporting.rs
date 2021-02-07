@@ -459,9 +459,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-               
+
                 I cannot find a `bar` value
-               
+
                 8│          4 -> bar baz "yay"
                                  ^^^
 

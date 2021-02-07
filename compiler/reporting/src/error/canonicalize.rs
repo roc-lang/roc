@@ -448,7 +448,7 @@ fn pretty_runtime_error<'b>(
         RuntimeError::UnsupportedPattern(_) => {
             todo!("unsupported patterns are currently not parsed!")
         }
-        RuntimeError::ValueNotExposed { module_name, ident, region } => { 
+        RuntimeError::ValueNotExposed { module_name, ident, region } => {
             alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("The "),
