@@ -1,4 +1,4 @@
-use roc_parse::parser::{ContextItem, FailReason, ParseProblem};
+use roc_parse::parser::{ContextItem, ParseProblem, SyntaxError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
@@ -33,7 +33,7 @@ pub fn parse_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     starting_line: u32,
-    parse_problem: ParseProblem,
+    parse_problem: ParseProblem<SyntaxError>,
 ) -> Report<'b> {
     let line = starting_line + parse_problem.line;
     let region = Region {
@@ -49,9 +49,9 @@ pub fn parse_problem<'b>(
         title: "PARSE PROBLEM".to_string(),
     };
 
-    use FailReason::*;
+    use SyntaxError::*;
     match parse_problem.problem {
-        FailReason::ConditionFailed => {
+        SyntaxError::ConditionFailed => {
             let doc = alloc.stack(vec![
                 alloc.reflow("A condition failed:"),
                 alloc.region(region),
@@ -63,7 +63,7 @@ pub fn parse_problem<'b>(
                 title: "PARSE PROBLEM".to_string(),
             }
         }
-        FailReason::ArgumentsBeforeEquals(region) => {
+        SyntaxError::ArgumentsBeforeEquals(region) => {
             let doc = alloc.stack(vec![
                 alloc.reflow("Unexpected tokens in front of the `=` symbol:"),
                 alloc.region(region),

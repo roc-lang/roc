@@ -2,7 +2,7 @@ use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0;
 use crate::ident::lowercase_ident;
 use crate::module::package_name;
-use crate::parser::{ascii_char, optional, Either, Parser, Progress::*, State};
+use crate::parser::{ascii_char, optional, Either, Parser, Progress::*, State, SyntaxError};
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use inlinable_string::InlinableString;
@@ -239,7 +239,7 @@ impl<'a> Spaceable<'a> for PackageEntry<'a> {
     }
 }
 
-pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>> {
+pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, SyntaxError> {
     move |arena, state| {
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
@@ -269,7 +269,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>> {
     }
 }
 
-pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>> {
+pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, SyntaxError> {
     map!(
         either!(
             string_literal::parse(),
@@ -287,6 +287,6 @@ pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>> {
     )
 }
 
-fn package_version<'a>() -> impl Parser<'a, Version<'a>> {
+fn package_version<'a>() -> impl Parser<'a, Version<'a>, SyntaxError> {
     move |_, _| todo!("TODO parse package version")
 }

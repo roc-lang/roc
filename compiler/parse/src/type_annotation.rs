@@ -5,9 +5,9 @@ use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
     allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Bag, Either,
-    FailReason, ParseResult, Parser,
+    ParseResult, Parser,
     Progress::{self, *},
-    State,
+    State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -15,7 +15,7 @@ use bumpalo::Bump;
 use roc_collections::all::arena_join;
 use roc_region::all::{Located, Region};
 
-pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError> {
     expression(min_indent)
 }
 
@@ -49,7 +49,7 @@ macro_rules! tag_union {
 }
 
 #[allow(clippy::type_complexity)]
-pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError> {
     map_with_arena!(
         and!(
             one_of!(
@@ -95,13 +95,15 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
 }
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
-fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError> {
     map!(loc!(ascii_char(b'*')), |loc_val: Located<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
 
-fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+fn loc_applied_arg<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError> {
     skip_first!(
         // Once we hit an "as", stop parsing args
         // and roll back parsing of preceding spaces
@@ -123,12 +125,16 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
     )
 }
 
-fn loc_applied_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>> {
+fn loc_applied_args<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>, SyntaxError> {
     zero_or_more!(loc_applied_arg(min_indent))
 }
 
 #[inline(always)]
-fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+fn loc_parenthetical_type<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError> {
     between!(
         ascii_char(b'('),
         space0_around(
@@ -141,7 +147,7 @@ fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAn
 
 #[inline(always)]
 #[allow(clippy::type_complexity)]
-fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
+fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>, SyntaxError> {
     map!(
         and!(
             either!(loc!(private_tag()), loc!(global_tag())),
@@ -166,7 +172,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
 }
 
 #[inline(always)]
-fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
+fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, SyntaxError> {
     use crate::type_annotation::TypeAnnotation::*;
     type Fields<'a> = Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>;
     map!(
@@ -193,7 +199,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     )
 }
 
-fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
+fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, SyntaxError> {
     map!(
         and!(
             parse_concrete_type,
@@ -218,7 +224,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     )
 }
 
-fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError> {
     use crate::blankspace::space0;
     move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;
@@ -261,7 +267,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                         .to_string();
                 Err((
                     progress,
-                    Bag::from_state(arena, &state, FailReason::NotYetImplemented(msg)),
+                    Bag::from_state(arena, &state, SyntaxError::NotYetImplemented(msg)),
                     state,
                 ))
             }
@@ -288,7 +294,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
 fn parse_concrete_type<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
-) -> ParseResult<'a, TypeAnnotation<'a>> {
+) -> ParseResult<'a, TypeAnnotation<'a>, SyntaxError> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut parts: Vec<&'a str> = Vec::new_in(arena);
 
@@ -389,7 +395,7 @@ fn parse_concrete_type<'a>(
 fn parse_type_variable<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
-) -> ParseResult<'a, TypeAnnotation<'a>> {
+) -> ParseResult<'a, TypeAnnotation<'a>, SyntaxError> {
     let mut buf = String::new_in(arena);
 
     let start_bytes_len = state.bytes.len();
@@ -445,7 +451,7 @@ fn malformed<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
     parts: Vec<&'a str>,
-) -> ParseResult<'a, TypeAnnotation<'a>> {
+) -> ParseResult<'a, TypeAnnotation<'a>, SyntaxError> {
     // assumption: progress was made to conclude that the annotation is malformed
 
     // Reconstruct the original string that we've been parsing.

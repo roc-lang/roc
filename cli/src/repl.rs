@@ -1,7 +1,7 @@
 use const_format::concatcp;
 use gen::{gen_and_eval, ReplOutput};
 use roc_gen::llvm::build::OptLevel;
-use roc_parse::parser::Bag;
+use roc_parse::parser::{Bag, SyntaxError};
 use rustyline::error::ReadlineError;
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline::Editor;
@@ -191,11 +191,11 @@ pub fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn report_parse_error(fail: Bag<'_>) {
+fn report_parse_error(fail: Bag<'_, SyntaxError>) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 
-fn eval_and_format<'a>(src: &str) -> Result<String, Bag<'a>> {
+fn eval_and_format<'a>(src: &str) -> Result<String, Bag<'a, SyntaxError>> {
     gen_and_eval(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|output| match output {
         ReplOutput::NoProblems { expr, expr_type } => {
             format!("\n{} {}:{} {}", expr, PINK, END_COL, expr_type)

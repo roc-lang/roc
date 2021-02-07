@@ -10,7 +10,7 @@ use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
-    peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
+    peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -18,29 +18,29 @@ use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_region::all::Located;
 
-pub fn header<'a>() -> impl Parser<'a, Module<'a>> {
+pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
     one_of!(interface_module(), app_module(), platform_module())
 }
 
 #[inline(always)]
-fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
+fn app_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
     map!(app_header(), |header| { Module::App { header } })
 }
 
 #[inline(always)]
-fn platform_module<'a>() -> impl Parser<'a, Module<'a>> {
+fn platform_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
     map!(platform_header(), |header| { Module::Platform { header } })
 }
 
 #[inline(always)]
-fn interface_module<'a>() -> impl Parser<'a, Module<'a>> {
+fn interface_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError> {
     map!(interface_header(), |header| {
         Module::Interface { header }
     })
 }
 
 #[inline(always)]
-pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
+pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError> {
     parser::map(
         and!(
             skip_first!(
@@ -71,7 +71,7 @@ pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
 }
 
 #[inline(always)]
-pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>> {
+pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError> {
     // e.g. rtfeldman/blah
     //
     // Package names and accounts can be capitalized and can contain dashes.
@@ -87,7 +87,10 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>> {
     )
 }
 
-pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a, &'a str> {
+pub fn parse_package_part<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+) -> ParseResult<'a, &'a str, SyntaxError> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
 
     while !state.bytes.is_empty() {
@@ -113,7 +116,7 @@ pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseRes
 }
 
 #[inline(always)]
-pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
+pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError> {
     move |arena, mut state: State<'a>| {
         match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
@@ -182,7 +185,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
 }
 
 #[inline(always)]
-pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
+pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError> {
     map_with_arena!(
         and!(
             skip_first!(
@@ -240,7 +243,7 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
 }
 
 #[inline(always)]
-pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
+pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError> {
     parser::map(
         and!(
             skip_first!(
@@ -296,7 +299,7 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
 }
 
 #[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
+pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError> {
     // force that we pare until the end of the input
     skip_second!(zero_or_more!(space0_around(loc(def(0)), 0)), end_of_file())
 }
@@ -312,7 +315,7 @@ struct ProvidesTo<'a> {
 }
 
 #[inline(always)]
-fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
+fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, SyntaxError> {
     map!(
         and!(
             and!(
@@ -372,6 +375,7 @@ fn provides_without_to<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
+    SyntaxError,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
@@ -392,6 +396,7 @@ fn requires<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<TypedIdent<'a>>>,
     ),
+    SyntaxError,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("requires")), space1(1)),
@@ -412,6 +417,7 @@ fn exposes_values<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
+    SyntaxError,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
@@ -432,6 +438,7 @@ fn exposes_modules<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
     ),
+    SyntaxError,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
@@ -454,7 +461,7 @@ struct Packages<'a> {
 }
 
 #[inline(always)]
-fn packages<'a>() -> impl Parser<'a, Packages<'a>> {
+fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError> {
     map!(
         and!(
             and!(
@@ -486,6 +493,7 @@ fn imports<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ImportsEntry<'a>>>,
     ),
+    SyntaxError,
 > {
     and!(
         and!(
@@ -503,7 +511,7 @@ fn imports<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
+fn effects<'a>() -> impl Parser<'a, Effects<'a>, SyntaxError> {
     move |arena, state| {
         let (_, spaces_before_effects_keyword, state) =
             skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
@@ -540,7 +548,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
 }
 
 #[inline(always)]
-fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
+fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError> {
     move |arena, state| {
         // You must have a field name, e.g. "email"
         let (_, ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
@@ -571,7 +579,7 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
 
 #[inline(always)]
 #[allow(clippy::type_complexity)]
-fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
+fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, SyntaxError> {
     map_with_arena!(
         and!(
             and!(

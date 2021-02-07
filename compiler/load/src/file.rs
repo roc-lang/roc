@@ -27,7 +27,7 @@ use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::module_defs;
-use roc_parse::parser::{self, ParseProblem, Parser};
+use roc_parse::parser::{self, ParseProblem, Parser, SyntaxError};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
@@ -763,7 +763,7 @@ enum Msg<'a> {
         exposed_to_host: MutMap<Symbol, Variable>,
     },
 
-    FailedToParse(ParseProblem<'a>),
+    FailedToParse(ParseProblem<'a, SyntaxError>),
 }
 
 #[derive(Debug)]
@@ -976,7 +976,7 @@ pub enum LoadingProblem<'a> {
         error: io::ErrorKind,
         msg: &'static str,
     },
-    ParsingFailed(ParseProblem<'a>),
+    ParsingFailed(ParseProblem<'a, SyntaxError>),
     UnexpectedHeader(String),
 
     MsgChannelDied,
