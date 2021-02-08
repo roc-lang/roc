@@ -181,6 +181,15 @@ mod test_reporting {
 
         list_reports(&arena, src, &mut buf, callback);
 
+        // convenient to copy-paste the generated message
+        if true {
+            if buf != expected_rendering {
+                for line in buf.split("\n") {
+                    println!("                {}", line);
+                }
+            }
+        }
+
         assert_eq!(buf, expected_rendering);
     }
 
@@ -3991,6 +4000,85 @@ mod test_reporting {
 
                 1│  Foo.Bar
                     ^^^^^^^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_annotation_dubble_colon() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f :: I64
+                f = 42
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                
+                Unexpected token while parsing a definition:
+                
+                1│  f :: I64
+                       ^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn double_equals_in_def() {
+        // NOTE: VERY BAD ERROR MESSAGE
+        //
+        // looks like `x y` are considered argument to the add, even though they are
+        // on a lower indentation level
+        report_problem_as(
+            indoc!(
+                r#"
+                x = 3
+                y = 
+                    x == 5
+                    Num.add 1 2
+
+                x y
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+                
+                The `add` function expects 2 arguments, but it got 4 instead:
+                
+                4│      Num.add 1 2
+                        ^^^^^^^
+                
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_operator() {
+        // NOTE: VERY BAD ERROR MESSAGE
+        report_problem_as(
+            indoc!(
+                r#"
+                main =
+                    5 ** 3
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                
+                Unexpected token here:
+                
+                2│      5 ** 3
+                          ^
             "#
             ),
         )

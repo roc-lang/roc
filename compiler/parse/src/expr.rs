@@ -487,10 +487,25 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
 fn equals_for_def<'a>() -> impl Parser<'a, ()> {
-    not_followed_by(
-        ascii_char(b'='),
-        one_of!(ascii_char(b'='), ascii_char(b'>')),
-    )
+    |arena, state: State<'a>| match state.bytes.get(0) {
+        Some(b'=') => match state.bytes.get(1) {
+            Some(b'=') | Some(b'>') => Err((
+                NoProgress,
+                Bag::from_state(arena, &state, FailReason::ConditionFailed),
+                state,
+            )),
+            _ => {
+                let state = state.advance_without_indenting(arena, 1)?;
+
+                Ok((MadeProgress, (), state))
+            }
+        },
+        _ => Err((
+            NoProgress,
+            Bag::from_state(arena, &state, FailReason::ConditionFailed),
+            state,
+        )),
+    }
 }
 
 /// A definition, consisting of one of these:
@@ -500,59 +515,87 @@ fn equals_for_def<'a>() -> impl Parser<'a, ()> {
 /// * A type annotation
 /// * A type annotation followed on the next line by a pattern, an `=`, and an expression
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
-    // we should fix this backtracking!
+    let indented_more = min_indent + 1;
+
+    enum DefKind {
+        DefColon,
+        DefEqual,
+    }
+
+    let def_colon_or_equals = one_of![
+        map!(equals_for_def(), |_| DefKind::DefEqual),
+        map!(ascii_char(b':'), |_| DefKind::DefColon)
+    ];
+
     attempt(
         Attempting::Def,
-        map_with_arena!(
-            either!(backtrackable(annotated_body(min_indent)), body(min_indent)),
-            to_def
+        then(
+            // backtrackable because
+            //
+            // i = 0
+            // i
+            //
+            // on the last line, we parse a pattern `i`, but it's not actually a def, so need to
+            // backtrack
+            and!(backtrackable(pattern(min_indent)), def_colon_or_equals),
+            move |arena, state, _progress, (loc_pattern, def_kind)| match def_kind {
+                DefKind::DefColon => {
+                    // Spaces after the ':' (at a normal indentation level) and then the type.
+                    // The type itself must be indented more than the pattern and ':'
+                    let (_, ann_type, state) =
+                        space0_before(type_annotation::located(indented_more), min_indent)
+                            .parse(arena, state)?;
+
+                    // see if there is a definition (assuming the preceding characters were a type
+                    // annotation
+                    let (_, opt_rest, state) = optional(and!(
+                        spaces_then_comment_or_newline(),
+                        body_at_indent(min_indent)
+                    ))
+                    .parse(arena, state)?;
+
+                    let def = match opt_rest {
+                        None => annotation_or_alias(
+                            arena,
+                            &loc_pattern.value,
+                            loc_pattern.region,
+                            ann_type,
+                        ),
+                        Some((opt_comment, (body_pattern, body_expr))) => Def::AnnotatedBody {
+                            ann_pattern: arena.alloc(loc_pattern),
+                            ann_type: arena.alloc(ann_type),
+                            comment: opt_comment,
+                            body_pattern: arena.alloc(body_pattern),
+                            body_expr: arena.alloc(body_expr),
+                        },
+                    };
+
+                    Ok((MadeProgress, def, state))
+                }
+                DefKind::DefEqual => {
+                    // Spaces after the '=' (at a normal indentation level) and then the expr.
+                    // The expr itself must be indented more than the pattern and '='
+                    let (_, body_expr, state) = space0_before(
+                        loc!(move |arena, state| { parse_expr(indented_more, arena, state) }),
+                        min_indent,
+                    )
+                    .parse(arena, state)?;
+
+                    Ok((
+                        MadeProgress,
+                        Def::Body(arena.alloc(loc_pattern), arena.alloc(body_expr)),
+                        state,
+                    ))
+                }
+            },
         ),
     )
-}
-
-fn to_def<'a>(
-    arena: &'a Bump,
-    ann_body_or_body: Either<AnnotationOrAnnotatedBody<'a>, Body<'a>>,
-) -> Def<'a> {
-    match ann_body_or_body {
-        Either::First(((ann_pattern, ann_type), None)) => {
-            annotation_or_alias(arena, &ann_pattern.value, ann_pattern.region, ann_type)
-        }
-        Either::First((
-            (ann_pattern, ann_type),
-            Some((opt_comment, (body_pattern, body_expr))),
-        )) => Def::AnnotatedBody {
-            ann_pattern: arena.alloc(ann_pattern),
-            ann_type: arena.alloc(ann_type),
-            comment: opt_comment,
-            body_pattern: arena.alloc(body_pattern),
-            body_expr: arena.alloc(body_expr),
-        },
-        Either::Second((body_pattern, body_expr)) => {
-            Def::Body(arena.alloc(body_pattern), arena.alloc(body_expr))
-        }
-    }
 }
 
 // PARSER HELPERS
 
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
     space0_after(loc_closure_param(min_indent), min_indent)
-}
-
-fn annotation<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, (Located<Pattern<'a>>, Located<TypeAnnotation<'a>>)> {
-    let indented_more = min_indent + 1;
-    and!(
-        pattern(min_indent),
-        skip_first!(
-            ascii_char(b':'),
-            // Spaces after the ':' (at a normal indentation level) and then the type.
-            // The type itself must be indented more than the pattern and ':'
-            space0_before(type_annotation::located(indented_more), min_indent)
-        )
-    )
 }
 
 fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>> {
@@ -570,29 +613,6 @@ fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>> {
 
 type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
 
-fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
-    let indented_more = min_indent + 1;
-    and!(
-        // this backtrackable is required for the case
-        //
-        // i = 64
-        //
-        // i
-        //
-        // so the final i is not considered the start of a def
-        backtrackable(pattern(min_indent)),
-        skip_first!(
-            equals_for_def(),
-            // Spaces after the '=' (at a normal indentation level) and then the expr.
-            // The expr itself must be indented more than the pattern and '='
-            space0_before(
-                loc!(move |arena, state| { parse_expr(indented_more, arena, state) }),
-                min_indent,
-            )
-        )
-    )
-}
-
 fn body_at_indent<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>> {
     let indented_more = indent_level + 1;
     and!(
@@ -606,21 +626,6 @@ fn body_at_indent<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>> {
                 indent_level,
             )
         )
-    )
-}
-
-type AnnotationOrAnnotatedBody<'a> = (
-    (Located<Pattern<'a>>, Located<TypeAnnotation<'a>>),
-    Option<(Option<&'a str>, Body<'a>)>,
-);
-
-fn annotated_body<'a>(min_indent: u16) -> impl Parser<'a, AnnotationOrAnnotatedBody<'a>> {
-    and!(
-        annotation(min_indent),
-        optional(and!(
-            spaces_then_comment_or_newline(),
-            body_at_indent(min_indent)
-        ))
     )
 }
 
