@@ -2782,7 +2782,25 @@ pub fn with_hole<'a>(
             use crate::layout::UnionVariant::*;
             let arena = env.arena;
 
-            let variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
+            let res_variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
+
+            let variant = match res_variant {
+                Ok(cached) => cached,
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    return Stmt::RuntimeError(env.arena.alloc(format!(
+                        "UnresolvedTypeVar {} line {}",
+                        file!(),
+                        line!()
+                    )));
+                }
+                Err(LayoutProblem::Erroneous) => {
+                    return Stmt::RuntimeError(env.arena.alloc(format!(
+                        "Erroneous {} line {}",
+                        file!(),
+                        line!()
+                    )));
+                }
+            };
 
             match variant {
                 Never => unreachable!(
@@ -4581,9 +4599,23 @@ fn from_can_when<'a>(
     }
     let opt_branches = to_opt_branches(env, region, branches, layout_cache);
 
-    let cond_layout = layout_cache
-        .from_var(env.arena, cond_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+    let cond_layout = match layout_cache.from_var(env.arena, cond_var, env.subs) {
+        Ok(cached) => cached,
+        Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+            return Stmt::RuntimeError(env.arena.alloc(format!(
+                "UnresolvedTypeVar {} line {}",
+                file!(),
+                line!()
+            )));
+        }
+        Err(LayoutProblem::Erroneous) => {
+            return Stmt::RuntimeError(env.arena.alloc(format!(
+                "Erroneous {} line {}",
+                file!(),
+                line!()
+            )));
+        }
+    };
 
     let ret_layout = layout_cache
         .from_var(env.arena, expr_var, env.subs)
@@ -6039,7 +6071,15 @@ fn from_can_pattern_help<'a>(
             use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
 
-            let variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
+            let res_variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
+
+            let variant = match res_variant {
+                Ok(cached) => cached,
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    return Err(RuntimeError::UnresolvedTypeVar)
+                }
+                Err(LayoutProblem::Erroneous) => return Err(RuntimeError::ErroneousType),
+            };
 
             let result = match variant {
                 Never => unreachable!(
