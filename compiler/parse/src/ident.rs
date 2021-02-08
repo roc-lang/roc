@@ -1,7 +1,9 @@
 use crate::ast::Attempting;
 use crate::keyword;
 use crate::parser::Progress::{self, *};
-use crate::parser::{peek_utf8_char, unexpected, ParseResult, Parser, State, SyntaxError};
+use crate::parser::{
+    backtrackable, peek_utf8_char, unexpected, ParseResult, Parser, State, SyntaxError,
+};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -383,7 +385,7 @@ where
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    move |arena, state| {
+    move |arena, state: State<'a>| {
         let (progress, ident, state) =
             global_tag_or_ident(|first_char| first_char.is_lowercase()).parse(arena, state)?;
 

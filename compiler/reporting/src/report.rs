@@ -2,7 +2,6 @@ use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_parse::parser::{Col, Row};
 use std::fmt;
 use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};

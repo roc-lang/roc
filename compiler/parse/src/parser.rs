@@ -336,7 +336,7 @@ pub enum BadInputError {
 pub fn bad_input_to_syntax_error<'a>(
     bad_input: BadInputError,
     row: Row,
-    col: Col,
+    _col: Col,
 ) -> SyntaxError<'a> {
     use crate::parser::BadInputError::*;
     match bad_input {
@@ -407,21 +407,6 @@ pub enum ContextStack<'a> {
 }
 
 impl<'a> ContextStack<'a> {
-    fn into_vec(self) -> std::vec::Vec<ContextItem> {
-        let mut result = std::vec::Vec::new();
-        let mut next = &self;
-
-        while let ContextStack::Cons(item, rest) = next {
-            next = rest;
-
-            result.push(*item);
-        }
-
-        result.reverse();
-
-        result
-    }
-
     pub fn uncons(&'a self) -> Option<(ContextItem, &'a Self)> {
         match self {
             ContextStack::Cons(item, rest) => Some((*item, rest)),
@@ -458,7 +443,7 @@ pub struct ParseProblem<'a, T> {
 }
 
 pub fn fail<'a, T>() -> impl Parser<'a, T, SyntaxError<'a>> {
-    move |arena, state: State<'a>| Err((NoProgress, SyntaxError::ConditionFailed, state))
+    move |_arena, state: State<'a>| Err((NoProgress, SyntaxError::ConditionFailed, state))
 }
 
 pub trait Parser<'a, Output, Error> {
@@ -505,7 +490,7 @@ where
                 let after_parse = state.clone();
 
                 match by.parse(arena, state) {
-                    Ok((_, _, state)) => {
+                    Ok((_, _, _state)) => {
                         Err((NoProgress, SyntaxError::ConditionFailed, original_state))
                     }
                     Err(_) => Ok((progress, answer, after_parse)),
@@ -659,7 +644,7 @@ where
 }
 
 fn line_too_long_e<'a, TE, E>(
-    arena: &'a Bump,
+    _arena: &'a Bump,
     state: State<'a>,
     to_error: TE,
 ) -> (Progress, E, State<'a>)
@@ -1307,6 +1292,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn in_context<'a, AddContext, P1, P2, Start, A, X, Y>(
     add_context: AddContext,
     parser_start: P1,

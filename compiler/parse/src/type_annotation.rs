@@ -241,7 +241,9 @@ macro_rules! record_type_field {
             use $crate::parser::Either::*;
 
             // You must have a field name, e.g. "email"
-            let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state).map_err(|(p, _, s)| (p, TRecord::Field(s.line, s.column), s))?;
+            let row = state.line;
+            let col = state.column;
+            let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state).map_err(|(p, _, s)| (p, TRecord::Field(row, col), s))?;
             debug_assert_eq!(progress, MadeProgress);
 
             let (_, spaces, state) =
@@ -327,7 +329,6 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, Synta
 #[inline(always)]
 fn record_type_internal<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TRecord<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
-    type Fields<'a> = Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>;
 
     let field_term = move |a, s| match term(min_indent).parse(a, s) {
         Ok(t) => Ok(t),

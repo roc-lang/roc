@@ -4133,4 +4133,29 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn recort_type_keyword_field_name() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { if : I64 } 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I just started parsing a record type, but I got stuck on this field
+                name:
+                
+                1│  f : { if : I64 } 
+                          ^^
+                
+                Looks like you are trying to use `if` as a field name, but that is a
+                reserved word. Try using a different name!
+            "#
+            ),
+        )
+    }
 }

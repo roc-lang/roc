@@ -1,33 +1,9 @@
-use roc_parse::parser::{Col, ContextItem, ParseProblem, Row, SyntaxError};
+use roc_parse::parser::{Col, ParseProblem, Row, SyntaxError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
-use crate::report::{Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{Report, RocDocAllocator};
 use ven_pretty::DocAllocator;
-
-fn context<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    context_stack: &[ContextItem],
-    default: &'a str,
-) -> RocDocBuilder<'a> {
-    match context_stack.last() {
-        Some(context_item) => {
-            // assign string to `Attempting`
-            use roc_parse::ast::Attempting::*;
-            match context_item.context {
-                Def => alloc.text("while parsing a definition"),
-                _ => {
-                    // use the default
-                    alloc.text(default)
-                }
-            }
-        }
-        None => {
-            // use the default
-            alloc.text(default)
-        }
-    }
-}
 
 pub fn parse_problem<'a>(
     alloc: &'a RocDocAllocator<'a>,
@@ -115,7 +91,7 @@ fn to_type_report<'a>(
 fn to_trecord_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    starting_line: u32,
+    _starting_line: u32,
     parse_problem: roc_parse::parser::TRecord<'a>,
     start_row: Row,
     start_col: Col,
@@ -123,6 +99,48 @@ fn to_trecord_report<'a>(
     use roc_parse::parser::TRecord;
 
     match parse_problem {
+        TRecord::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Keyword(keyword) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = to_keyword_region(row, col, keyword);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Looks like you are trying to use "),
+                        alloc.keyword(keyword),
+                        alloc.reflow(" as a field name, but that is a reserved word. Try using a different name!"),
+                    ]),
+                ]);
+
+                Report {
+                    filename: filename.clone(),
+                    doc,
+                    title: "UNFINISHED RECORD TYPE".to_string(),
+                }
+            }
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record type, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Record types look like "),
+                        alloc.parser_suggestion("{ name : String, age : Int },"),
+                        alloc.reflow(" so I was expecting to see a field name next."),
+                    ]),
+                ]);
+
+                Report {
+                    filename: filename.clone(),
+                    doc,
+                    title: "UNFINISHED RECORD TYPE".to_string(),
+                }
+            }
+        },
         TRecord::End(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
@@ -146,14 +164,59 @@ fn to_trecord_report<'a>(
             }
         }
 
+        TRecord::Field(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Keyword(keyword) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = to_keyword_region(row, col, keyword);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Looks like you are trying to use "),
+                        alloc.keyword(keyword),
+                        alloc.reflow(" as a field name, but that is a reserved word. Try using a different name!"),
+                    ]),
+                ]);
+
+                Report {
+                    filename: filename.clone(),
+                    doc,
+                    title: "UNFINISHED RECORD TYPE".to_string(),
+                }
+            }
+            Next::Other(Some(',')) => todo!(),
+            Next::Other(Some('}')) => unreachable!("or is it?"),
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I am partway through parsing a record type, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"I was expecting to see another record field defined next, so I am looking for a name like "),
+                        alloc.parser_suggestion("userName"),
+                        alloc.reflow(" or "),
+                        alloc.parser_suggestion("plantHight"),
+                        alloc.reflow("."),
+                    ]),
+                ]);
+
+                Report {
+                    filename: filename.clone(),
+                    doc,
+                    title: "PROBLEM IN RECORD TYPE".to_string(),
+                }
+            }
+        },
+
         TRecord::IndentEnd(row, col) => {
             match next_line_starts_with_close_curly(alloc.src_lines, row - 1) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
                     let region = Region::from_row_col(curly_row, curly_col);
-
-                    dbg!(region);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -203,16 +266,18 @@ fn to_trecord_report<'a>(
 
 enum Next<'a> {
     Keyword(&'a str),
-    Operator(&'a str),
+    // Operator(&'a str),
     Close(&'a str, char),
     Other(Option<char>),
 }
 
 fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a> {
-    match source_lines.get(row as usize) {
+    let row_index = row as usize;
+    let col_index = col as usize;
+    match source_lines.get(row_index) {
         None => Next::Other(None),
         Some(line) => {
-            let chars = &line[col as usize..];
+            let chars = &line[col_index..];
 
             match roc_parse::keyword::KEYWORDS
                 .iter()
@@ -238,7 +303,7 @@ fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
     if rest_of_line.starts_with(keyword) {
         match (&rest_of_line[keyword.len()..]).chars().nth(0) {
             None => true,
-            Some(c) => c.is_alphanumeric() || c == '_',
+            Some(c) => !c.is_alphanumeric(),
         }
     } else {
         false
@@ -256,5 +321,14 @@ fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<
                 _ => None,
             }
         }
+    }
+}
+
+fn to_keyword_region(row: Row, col: Col, keyword: &str) -> Region {
+    Region {
+        start_line: row,
+        start_col: col,
+        end_line: row,
+        end_col: col + keyword.len() as u16,
     }
 }
