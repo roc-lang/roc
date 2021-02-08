@@ -230,6 +230,27 @@ mod test_reporting {
     }
 
     #[test]
+    fn value_not_exposed() {
+        report_problem_as(
+            indoc!(
+                r#"
+                List.foobar 1 2
+            "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                The List module does not expose a foobar value:
+
+                1│  List.foobar 1 2
+                    ^^^^^^^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn report_unused_def() {
         report_problem_as(
             indoc!(
@@ -451,9 +472,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-               
+
                 I cannot find a `bar` value
-               
+
                 8│          4 -> bar baz "yay"
                                  ^^^
 

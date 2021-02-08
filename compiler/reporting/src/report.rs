@@ -1,6 +1,6 @@
 use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
-use roc_module::ident::{Lowercase, TagName, Uppercase};
+use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use std::fmt;
 use std::path::PathBuf;
@@ -317,6 +317,17 @@ impl<'a> RocDocAllocator<'a> {
             "app".to_string()
         } else {
             name.to_string()
+        };
+
+        self.text(name).annotate(Annotation::Module)
+    }
+
+    pub fn module_name(&'a self, name: ModuleName) -> DocBuilder<'a, Self, Annotation> {
+        let name = if name.is_empty() {
+            // Render the app module as "app"
+            "app".to_string()
+        } else {
+            name.as_str().to_string()
         };
 
         self.text(name).annotate(Annotation::Module)

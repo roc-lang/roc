@@ -344,6 +344,11 @@ fn pretty_runtime_error<'b>(
             unreachable!("")
         }
 
+        RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => {
+            // only generated during layout generation
+            unreachable!("")
+        }
+
         RuntimeError::Shadowing {
             original_region,
             shadow,
@@ -443,7 +448,20 @@ fn pretty_runtime_error<'b>(
         RuntimeError::UnsupportedPattern(_) => {
             todo!("unsupported patterns are currently not parsed!")
         }
-        RuntimeError::ValueNotExposed { .. } => todo!("value not exposed"),
+        RuntimeError::ValueNotExposed { module_name, ident, region } => {
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The "),
+                    alloc.module_name(module_name),
+                    alloc.reflow(" module does not expose a "),
+                    alloc.string(ident.to_string()),
+                    alloc.reflow(" value:"),
+                ]),
+                alloc.region(region),
+            ])
+        }
+
+
         RuntimeError::ModuleNotImported {
             module_name,
             imported_modules,

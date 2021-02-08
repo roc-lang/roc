@@ -1,6 +1,6 @@
 interface File
     exposes [ FileReadErr, FileOpenErr, FileWriteErr, DirReadErr, readUtf8 ]
-    imports [ Task.{ Task }, Effect.{ after }, Path ]
+    imports [ Task.{ Task }, fx.Effect.{ after }, Path ]
 
 Path : Path.Path
 
