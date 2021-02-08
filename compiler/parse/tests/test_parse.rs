@@ -2734,7 +2734,7 @@ mod test_parse {
 
     #[test]
     fn standalone_module_defs() {
-        use roc_parse::ast::Def::*;
+        use Def::*;
 
         let arena = Bump::new();
         let newlines1 = &[Newline, Newline];
@@ -2792,8 +2792,6 @@ mod test_parse {
 
     #[test]
     fn module_def_newline() {
-        use roc_parse::ast::Def::*;
-
         let arena = Bump::new();
 
         let src = indoc!(
@@ -2817,8 +2815,6 @@ mod test_parse {
 
     #[test]
     fn nested_def_annotation() {
-        use roc_parse::ast::Def::*;
-
         let arena = Bump::new();
 
         let src = indoc!(
@@ -2844,8 +2840,6 @@ mod test_parse {
 
     #[test]
     fn outdenting_newline_after_else() {
-        use roc_parse::ast::Def::*;
-
         let arena = Bump::new();
 
         // highlights a problem with the else branch demanding a newline after its expression

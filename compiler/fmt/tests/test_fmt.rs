@@ -17,12 +17,9 @@ mod test_fmt {
     use roc_parse::ast::{Attempting, Expr};
     use roc_parse::blankspace::space0_before;
     use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::{Bag, Parser, State, SyntaxError};
+    use roc_parse::parser::{Parser, State, SyntaxError};
 
-    fn parse_with<'a>(
-        arena: &'a Bump,
-        input: &'a str,
-    ) -> Result<Expr<'a>, Bag<'a, SyntaxError<'a>>> {
+    fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
         let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
         let parser = space0_before(loc!(roc_parse::expr::expr(0)), 0);
         let answer = parser.parse(&arena, state);
