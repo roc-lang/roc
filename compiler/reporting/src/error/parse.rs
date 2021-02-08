@@ -124,19 +124,8 @@ fn to_trecord_report<'a>(
 
     match parse_problem {
         TRecord::End(row, col) => {
-            let surroundings = Region {
-                start_col,
-                start_line: start_row,
-                end_col: col,
-                end_line: row,
-            };
-
-            let region = Region {
-                start_col: col,
-                start_line: row,
-                end_col: col,
-                end_line: row,
-            };
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
                 alloc.reflow("I am partway through parsing a record type, but I got stuck here:"),
@@ -158,40 +147,114 @@ fn to_trecord_report<'a>(
         }
 
         TRecord::IndentEnd(row, col) => {
-            // TODO check whether next character is a `}`
-            let surroundings = Region {
-                start_col,
-                start_line: start_row,
-                end_col: col,
-                end_line: row,
-            };
+            match next_line_starts_with_close_curly(alloc.src_lines, row - 1) {
+                Some((curly_row, curly_col)) => {
+                    let surroundings =
+                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
+                    let region = Region::from_row_col(curly_row, curly_col);
 
-            let region = Region {
-                start_col: col,
-                start_line: row,
-                end_col: col,
-                end_line: row,
-            };
+                    dbg!(region);
 
-            let doc = alloc.stack(vec![
-                alloc.reflow("I am partway through parsing a record type, but I got stuck here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(
-                        r"I was expecting to see a closing curly brace before this, so try adding a ",
-                    ),
-                    alloc.parser_suggestion("}"),
-                    alloc.reflow(" and see if that helps?"),
-                ]),
-            ]);
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            "I am partway through parsing a record type, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
+                        ]),
+                    ]);
 
-            Report {
-                filename: filename.clone(),
-                doc,
-                title: "UNFINISHED RECORD TYPE".to_string(),
+                    Report {
+                        filename: filename.clone(),
+                        doc,
+                        title: "NEED MORE INDENTATION".to_string(),
+                    }
+                }
+                None => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a record type, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I was expecting to see a closing curly "),
+                            alloc.reflow("brace before this, so try adding a "),
+                            alloc.parser_suggestion("}"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename: filename.clone(),
+                        doc,
+                        title: "UNFINISHED RECORD TYPE".to_string(),
+                    }
+                }
             }
         }
 
         _ => todo!("unhandled record type parse error: {:?}", &parse_problem),
+    }
+}
+
+enum Next<'a> {
+    Keyword(&'a str),
+    Operator(&'a str),
+    Close(&'a str, char),
+    Other(Option<char>),
+}
+
+fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a> {
+    match source_lines.get(row as usize) {
+        None => Next::Other(None),
+        Some(line) => {
+            let chars = &line[col as usize..];
+
+            match roc_parse::keyword::KEYWORDS
+                .iter()
+                .find(|keyword| starts_with_keyword(chars, keyword))
+            {
+                Some(keyword) => Next::Keyword(keyword),
+                None => match chars.chars().nth(0) {
+                    None => Next::Other(None),
+                    Some(c) => match c {
+                        ')' => Next::Close("parenthesis", ')'),
+                        ']' => Next::Close("square bracket", ']'),
+                        '}' => Next::Close("curly brace", '}'),
+                        // _ if is_symbol(c) => todo!("it's an operator"),
+                        _ => Next::Other(Some(c)),
+                    },
+                },
+            }
+        }
+    }
+}
+
+fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
+    if rest_of_line.starts_with(keyword) {
+        match (&rest_of_line[keyword.len()..]).chars().nth(0) {
+            None => true,
+            Some(c) => c.is_alphanumeric() || c == '_',
+        }
+    } else {
+        false
+    }
+}
+
+fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
+    match source_lines.get(row as usize + 1) {
+        None => None,
+
+        Some(line) => {
+            let spaces_dropped = line.trim_start_matches(' ');
+            match spaces_dropped.chars().nth(0) {
+                Some('}') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
+                _ => None,
+            }
+        }
     }
 }

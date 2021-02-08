@@ -4086,7 +4086,6 @@ mod test_reporting {
 
     #[test]
     fn recort_type_end() {
-        // NOTE: VERY BAD ERROR MESSAGE
         report_problem_as(
             indoc!(
                 r#"
@@ -4100,10 +4099,36 @@ mod test_reporting {
                 I am partway through parsing a record type, but I got stuck here:
                 
                 1│  f : { a: Int, 
-                  
+                                 ^
                 
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recort_type_indent_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { a: Int
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : { a: Int
+                2│  }
+                    ^
+                
+                I need this curly brace to be indented more. Try adding more spaces
+                before it!
             "#
             ),
         )

@@ -2,6 +2,7 @@ use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_parse::parser::{Col, Row};
 use std::fmt;
 use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
@@ -162,7 +163,7 @@ pub const RESET_CODE: &str = "\u{001b}[0m";
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
     upstream: BoxAllocator,
-    src_lines: &'a [&'a str],
+    pub src_lines: &'a [&'a str],
     pub home: ModuleId,
     pub interns: &'a Interns,
 }
@@ -458,7 +459,7 @@ impl<'a> RocDocAllocator<'a> {
         region: roc_region::all::Region,
         sub_region: roc_region::all::Region,
     ) -> DocBuilder<'a, Self, Annotation> {
-        debug_assert!(region.contains(&sub_region));
+        // debug_assert!(region.contains(&sub_region));
 
         // If the outer region takes more than 1 full screen (~60 lines), only show the inner region
         if region.end_line - region.start_line > 60 {
