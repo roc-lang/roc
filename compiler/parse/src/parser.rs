@@ -1243,11 +1243,9 @@ macro_rules! one_of_with_error {
     };
 }
 
-pub fn specialize<'a, P, T, X, Y>(
-    map_error: fn(X, Row, Col) -> Y,
-    parser: P,
-) -> impl Parser<'a, T, Y>
+pub fn specialize<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
+    F: Fn(X, Row, Col) -> Y,
     P: Parser<'a, T, X>,
     Y: 'a,
 {
@@ -1257,13 +1255,12 @@ where
     }
 }
 
-pub fn specialize_ref<'a, P, T, X, Y>(
-    map_error: fn(&'a X, Row, Col) -> Y,
-    parser: P,
-) -> impl Parser<'a, T, Y>
+pub fn specialize_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
+    F: Fn(&'a X, Row, Col) -> Y,
     P: Parser<'a, T, X>,
     Y: 'a,
+    X: 'a,
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
