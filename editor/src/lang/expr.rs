@@ -12,6 +12,7 @@ use inlinable_string::InlinableString;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::ident::ModuleName;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -178,7 +179,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::ValueNotExposed {
-                            module_name,
+                            module_name: ModuleName::from(module_name),
                             ident,
                             region,
                         }),
