@@ -1,11 +1,11 @@
-use crate::ast::{AssignedField, Attempting, CommentOrNewline, Tag, TypeAnnotation};
+use crate::ast::{Attempting, CommentOrNewline, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around, space0_before, space1, space1_before};
 use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, chomp_and_check_indent, not, optional, peek_utf8_char,
-    specialize, unexpected, word1, BadInputError, Either, ParseResult, Parser,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, specialize, unexpected,
+    word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError, TRecord, Type,
 };

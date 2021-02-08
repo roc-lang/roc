@@ -57,7 +57,7 @@ impl<'a> State<'a> {
 
     pub fn check_indent(
         self,
-        arena: &'a Bump,
+        _arena: &'a Bump,
         min_indent: u16,
     ) -> Result<Self, (SyntaxError<'a>, Self)> {
         if self.indent_col < min_indent {
@@ -69,7 +69,7 @@ impl<'a> State<'a> {
 
     pub fn check_indent_e<TE, E>(
         self,
-        arena: &'a Bump,
+        _arena: &'a Bump,
         min_indent: u16,
         to_error: TE,
     ) -> Result<Self, (E, Self)>
@@ -235,7 +235,7 @@ impl<'a> State<'a> {
     /// Return a failing ParseResult for the given FailReason
     pub fn fail<T, X>(
         self,
-        arena: &'a Bump,
+        _arena: &'a Bump,
         progress: Progress,
         reason: X,
     ) -> Result<(Progress, T, Self), (Progress, X, Self)> {
@@ -1000,12 +1000,12 @@ where
     }
 }
 
-pub fn fail_when_progress<'a, T, E>(
+pub fn fail_when_progress<T, E>(
     progress: Progress,
     fail: E,
     value: T,
-    state: State<'a>,
-) -> ParseResult<'a, T, E> {
+    state: State<'_>,
+) -> ParseResult<'_, T, E> {
     match progress {
         MadeProgress => Err((MadeProgress, fail, state)),
         NoProgress => Ok((NoProgress, value, state)),
@@ -1316,139 +1316,6 @@ where
     }
 }
 
-pub fn chomp_and_check_indent<'a, E1, E2, X>(
-    to_space_error: E1,
-    to_indent_error: E2,
-) -> impl Parser<'a, (), X>
-where
-    E1: Fn(BadInputError, Row, Col) -> X,
-    E2: Fn(Row, Col) -> X,
-    X: 'a,
-{
-    move |arena, state: State<'a>| {
-        let SpaceState {
-            status,
-            row,
-            col,
-            bytes,
-        } = eat_spaces(state.bytes, state.line, state.column);
-
-        let indent_col = state.indent_col;
-
-        let progress = if state.column != col || state.line != row {
-            MadeProgress
-        } else {
-            NoProgress
-        };
-
-        match status {
-            Status::Good => {
-                if col > state.indent_col && col > 1 {
-                    let new_state = State {
-                        line: row,
-                        column: col,
-                        ..state
-                    };
-
-                    Ok((progress, (), new_state))
-                } else {
-                    Err((NoProgress, to_indent_error(state.line, state.column), state))
-                }
-            }
-            Status::HasTab => {
-                let new_state = State {
-                    line: row,
-                    column: col,
-                    ..state
-                };
-                Err((NoProgress, to_indent_error(row, col), new_state))
-            }
-        }
-    }
-}
-
-enum Status {
-    Good,
-    HasTab,
-}
-
-struct SpaceState<'a> {
-    status: Status,
-    row: Row,
-    col: Col,
-    bytes: &'a [u8],
-}
-
-fn eat_spaces<'a>(mut bytes: &'a [u8], mut row: Row, mut col: Col) -> SpaceState<'a> {
-    loop {
-        match bytes.get(0) {
-            None => {
-                return SpaceState {
-                    status: Status::Good,
-                    row,
-                    col,
-                    bytes: &[],
-                };
-            }
-            Some(b' ') => {
-                bytes = &bytes[1..];
-                col += 1;
-            }
-            Some(b'\n') => {
-                bytes = &bytes[1..];
-                col = 1;
-                row += 1;
-            }
-            Some(b'#') => {
-                return eat_line_comment(&bytes[1..], row, col + 1);
-            }
-            Some(b'\r') => {
-                bytes = &bytes[1..];
-            }
-            Some(b'\t') => {
-                return SpaceState {
-                    status: Status::HasTab,
-                    row,
-                    col,
-                    bytes,
-                };
-            }
-            Some(_) => {
-                return SpaceState {
-                    status: Status::Good,
-                    row,
-                    col,
-                    bytes,
-                };
-            }
-        }
-    }
-}
-
-fn eat_line_comment<'a>(mut bytes: &'a [u8], row: Row, mut col: Col) -> SpaceState<'a> {
-    loop {
-        match bytes.get(0) {
-            None => {
-                return SpaceState {
-                    status: Status::Good,
-                    row,
-                    col,
-                    bytes: &[],
-                };
-            }
-            Some(b'\n') => {
-                return eat_spaces(&bytes[1..], row + 1, 1);
-            }
-            Some(_) => {
-                // NOTE here elm checks the character width of the word, presumably to deal with
-                // unicode?
-                bytes = &bytes[1..];
-                col += 1;
-            }
-        }
-    }
-}
-
 #[macro_export]
 macro_rules! map {
     ($parser:expr, $transform:expr) => {
@@ -1592,7 +1459,6 @@ macro_rules! attempt {
                 .map(|(progress, answer, mut state)| {
                     // If the parser suceeded, go back to what we were originally attempting.
                     // (If it failed, that's exactly where we care what we were attempting!)
-                    // debug_assert_eq!(!state.context_stack.is_empty());
                     match state.context_stack.uncons() {
                         Some((_item, rest)) => {
                             state.context_stack = rest;
@@ -1813,7 +1679,7 @@ pub fn parse_utf8<'a>(bytes: &[u8]) -> Result<&str, SyntaxError<'a>> {
 }
 
 pub fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    |arena: &'a Bump, state: State<'a>| {
+    |_arena: &'a Bump, state: State<'a>| {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {

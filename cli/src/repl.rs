@@ -191,7 +191,7 @@ pub fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn report_parse_error<'a>(fail: SyntaxError<'a>) {
+fn report_parse_error(fail: SyntaxError) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 

@@ -115,7 +115,7 @@ fn to_trecord_report<'a>(
                 ]);
 
                 Report {
-                    filename: filename.clone(),
+                    filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
                 }
@@ -135,7 +135,7 @@ fn to_trecord_report<'a>(
                 ]);
 
                 Report {
-                    filename: filename.clone(),
+                    filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
                 }
@@ -158,7 +158,7 @@ fn to_trecord_report<'a>(
             ]);
 
             Report {
-                filename: filename.clone(),
+                filename,
                 doc,
                 title: "UNFINISHED RECORD TYPE".to_string(),
             }
@@ -180,7 +180,7 @@ fn to_trecord_report<'a>(
                 ]);
 
                 Report {
-                    filename: filename.clone(),
+                    filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
                 }
@@ -204,7 +204,7 @@ fn to_trecord_report<'a>(
                 ]);
 
                 Report {
-                    filename: filename.clone(),
+                    filename,
                     doc,
                     title: "PROBLEM IN RECORD TYPE".to_string(),
                 }
@@ -229,7 +229,7 @@ fn to_trecord_report<'a>(
                     ]);
 
                     Report {
-                        filename: filename.clone(),
+                        filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
                     }
@@ -252,7 +252,7 @@ fn to_trecord_report<'a>(
                     ]);
 
                     Report {
-                        filename: filename.clone(),
+                        filename,
                         doc,
                         title: "UNFINISHED RECORD TYPE".to_string(),
                     }
@@ -284,7 +284,7 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a>
                 .find(|keyword| starts_with_keyword(chars, keyword))
             {
                 Some(keyword) => Next::Keyword(keyword),
-                None => match chars.chars().nth(0) {
+                None => match chars.chars().next() {
                     None => Next::Other(None),
                     Some(c) => match c {
                         ')' => Next::Close("parenthesis", ')'),
@@ -300,8 +300,8 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a>
 }
 
 fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
-    if rest_of_line.starts_with(keyword) {
-        match (&rest_of_line[keyword.len()..]).chars().nth(0) {
+    if let Some(stripped) = rest_of_line.strip_prefix(keyword) {
+        match stripped.chars().next() {
             None => true,
             Some(c) => !c.is_alphanumeric(),
         }
@@ -316,7 +316,7 @@ fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<
 
         Some(line) => {
             let spaces_dropped = line.trim_start_matches(' ');
-            match spaces_dropped.chars().nth(0) {
+            match spaces_dropped.chars().next() {
                 Some('}') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
                 _ => None,
             }

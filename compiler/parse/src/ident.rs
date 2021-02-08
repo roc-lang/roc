@@ -1,9 +1,7 @@
 use crate::ast::Attempting;
 use crate::keyword;
 use crate::parser::Progress::{self, *};
-use crate::parser::{
-    backtrackable, peek_utf8_char, unexpected, ParseResult, Parser, State, SyntaxError,
-};
+use crate::parser::{peek_utf8_char, unexpected, ParseResult, Parser, State, SyntaxError};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
