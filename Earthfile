@@ -41,6 +41,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # sccache
     RUN apt install libssl-dev
     RUN cargo install sccache
+    RUN sccache -V
 
 deps-image:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -81,7 +82,7 @@ test-rust:
     FROM +build-rust
     ARG RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ARG SCCACHE_DIR=/earthbuild/sccache_dir
-    RUN cargo test --release
+    RUN cargo test --release 
 
 test-all:
     BUILD +check-clippy
