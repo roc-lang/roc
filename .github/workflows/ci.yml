@@ -23,6 +23,3 @@ jobs:
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release 
         run: earthly +test-all
-
-      - name: show remaining disk space (max 144 GB)
-        run: df -h --total | grep "total\|Size"
