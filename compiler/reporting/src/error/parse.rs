@@ -108,7 +108,7 @@ fn to_type_report<'a>(
         Type::TRecord(record, row, col) => {
             to_trecord_report(alloc, filename, starting_line, record, row, col)
         }
-        _ => todo!(),
+        _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }
 
@@ -157,6 +157,41 @@ fn to_trecord_report<'a>(
             }
         }
 
-        _ => todo!(),
+        TRecord::IndentEnd(row, col) => {
+            // TODO check whether next character is a `}`
+            let surroundings = Region {
+                start_col,
+                start_line: start_row,
+                end_col: col,
+                end_line: row,
+            };
+
+            let region = Region {
+                start_col: col,
+                start_line: row,
+                end_col: col,
+                end_line: row,
+            };
+
+            let doc = alloc.stack(vec![
+                alloc.reflow("I am partway through parsing a record type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(
+                        r"I was expecting to see a closing curly brace before this, so try adding a ",
+                    ),
+                    alloc.parser_suggestion("}"),
+                    alloc.reflow(" and see if that helps?"),
+                ]),
+            ]);
+
+            Report {
+                filename: filename.clone(),
+                doc,
+                title: "UNFINISHED RECORD TYPE".to_string(),
+            }
+        }
+
+        _ => todo!("unhandled record type parse error: {:?}", &parse_problem),
     }
 }
