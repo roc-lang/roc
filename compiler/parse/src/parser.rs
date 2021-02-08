@@ -67,6 +67,22 @@ impl<'a> State<'a> {
         }
     }
 
+    pub fn check_indent_e<TE, E>(
+        self,
+        arena: &'a Bump,
+        min_indent: u16,
+        to_error: TE,
+    ) -> Result<Self, (E, Self)>
+    where
+        TE: Fn(Row, Col) -> E,
+    {
+        if self.indent_col < min_indent {
+            Err((to_error(self.line, self.column), self))
+        } else {
+            Ok(self)
+        }
+    }
+
     /// Returns the total number of bytes consumed since the parser began parsing.
     ///
     /// So if the parser has consumed 8 bytes, this function will return 8.
@@ -82,6 +98,17 @@ impl<'a> State<'a> {
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// Advances the input by 1, to consume the newline character.
     pub fn newline(&self, arena: &'a Bump) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
+        self.newline_e(arena, |_, _, _| SyntaxError::TooManyLines)
+    }
+
+    pub fn newline_e<TE, E>(
+        &self,
+        arena: &'a Bump,
+        to_error: TE,
+    ) -> Result<Self, (Progress, E, Self)>
+    where
+        TE: Fn(BadInputError, Row, Col) -> E,
+    {
         match self.line.checked_add(1) {
             Some(line) => Ok(State {
                 bytes: &self.bytes[1..],
@@ -94,7 +121,7 @@ impl<'a> State<'a> {
             }),
             None => Err((
                 Progress::NoProgress,
-                SyntaxError::TooManyLines,
+                to_error(BadInputError::TooManyLines, self.line, self.column),
                 self.clone(),
             )),
         }
@@ -109,6 +136,18 @@ impl<'a> State<'a> {
         arena: &'a Bump,
         quantity: usize,
     ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
+        self.advance_without_indenting_e(arena, quantity, bad_input_to_syntax_error)
+    }
+
+    pub fn advance_without_indenting_e<TE, E>(
+        self,
+        arena: &'a Bump,
+        quantity: usize,
+        to_error: TE,
+    ) -> Result<Self, (Progress, E, Self)>
+    where
+        TE: Fn(BadInputError, Row, Col) -> E,
+    {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
@@ -119,16 +158,29 @@ impl<'a> State<'a> {
                     ..self
                 })
             }
-            _ => Err(line_too_long(arena, self.clone())),
+            _ => Err(line_too_long_e(arena, self.clone(), to_error)),
         }
     }
-    /// Advance the parser while also indenting as appropriate.
-    /// This assumes we are only advancing with spaces, since they can indent.
+
     pub fn advance_spaces(
         &self,
         arena: &'a Bump,
         spaces: usize,
     ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
+        self.advance_spaces_e(arena, spaces, bad_input_to_syntax_error)
+    }
+
+    /// Advance the parser while also indenting as appropriate.
+    /// This assumes we are only advancing with spaces, since they can indent.
+    pub fn advance_spaces_e<TE, E>(
+        &self,
+        arena: &'a Bump,
+        spaces: usize,
+        to_error: TE,
+    ) -> Result<Self, (Progress, E, Self)>
+    where
+        TE: Fn(BadInputError, Row, Col) -> E,
+    {
         match (self.column as usize).checked_add(spaces) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 // Spaces don't affect is_indenting; if we were previously indneting,
@@ -160,7 +212,7 @@ impl<'a> State<'a> {
                     original_len: self.original_len,
                 })
             }
-            _ => Err(line_too_long(arena, self.clone())),
+            _ => Err(line_too_long_e(arena, self.clone(), to_error)),
         }
     }
 
@@ -267,6 +319,32 @@ pub enum SyntaxError<'a> {
     NotYetImplemented(String),
     TODO,
     Type(Type<'a>),
+    Space(BadInputError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadInputError {
+    HasTab,
+    ///
+    LineTooLong,
+    TooManyLines,
+    ///
+    ///
+    BadUtf8,
+}
+
+pub fn bad_input_to_syntax_error<'a>(
+    bad_input: BadInputError,
+    row: Row,
+    col: Col,
+) -> SyntaxError<'a> {
+    use crate::parser::BadInputError::*;
+    match bad_input {
+        HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
+        LineTooLong => SyntaxError::LineTooLong(row),
+        TooManyLines => SyntaxError::TooManyLines,
+        BadUtf8 => SyntaxError::BadUtf8,
+    }
 }
 
 impl<'a> SyntaxError<'a> {
@@ -285,8 +363,8 @@ impl<'a> SyntaxError<'a> {
     }
 }
 
-type Row = u32;
-type Col = u16;
+pub type Row = u32;
+pub type Col = u16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type<'a> {
@@ -305,13 +383,19 @@ pub enum TRecord<'a> {
     ///
     Field(Row, Col),
     Colon(Row, Col),
+    Optional(Row, Col),
     Type(&'a Type<'a>, Row, Col),
+
+    // TODO REMOVE in favor of Type
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
     ///
-    Space(Row, Col),
+    Space(BadInputError, Row, Col),
     ///
     IndentOpen(Row, Col),
     IndentField(Row, Col),
     IndentColon(Row, Col),
+    IndentOptional(Row, Col),
     IndentType(Row, Col),
     IndentEnd(Row, Col),
 }
@@ -574,8 +658,15 @@ where
     }
 }
 
-fn line_too_long<'a>(arena: &'a Bump, state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
-    let problem = SyntaxError::LineTooLong(state.line);
+fn line_too_long_e<'a, TE, E>(
+    arena: &'a Bump,
+    state: State<'a>,
+    to_error: TE,
+) -> (Progress, E, State<'a>)
+where
+    TE: Fn(BadInputError, Row, Col) -> E,
+{
+    let problem = to_error(BadInputError::LineTooLong, state.line, state.column);
     // Set column to MAX and advance the parser to end of input.
     // This way, all future parsers will fail on EOF, and then
     // unexpected_eof will take them back here - thus propagating
@@ -594,6 +685,10 @@ fn line_too_long<'a>(arena: &'a Bump, state: State<'a>) -> (Progress, SyntaxErro
     // TODO do we make progress in this case?
     // isn't this error fatal?
     (Progress::NoProgress, problem, state)
+}
+
+fn line_too_long<'a>(arena: &'a Bump, state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
+    line_too_long_e(arena, state, |_, line, _| SyntaxError::LineTooLong(line))
 }
 
 /// A single ASCII char that isn't a newline.
@@ -1163,7 +1258,35 @@ macro_rules! one_of_with_error {
     };
 }
 
-fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+pub fn specialize<'a, P, T, X, Y>(
+    map_error: fn(X, Row, Col) -> Y,
+    parser: P,
+) -> impl Parser<'a, T, Y>
+where
+    P: Parser<'a, T, X>,
+    Y: 'a,
+{
+    move |a, s| match parser.parse(a, s) {
+        Ok(t) => Ok(t),
+        Err((p, error, s)) => Err((p, map_error(error, s.line, s.column), s)),
+    }
+}
+
+pub fn specialize_ref<'a, P, T, X, Y>(
+    map_error: fn(&'a X, Row, Col) -> Y,
+    parser: P,
+) -> impl Parser<'a, T, Y>
+where
+    P: Parser<'a, T, X>,
+    Y: 'a,
+{
+    move |a, s| match parser.parse(a, s) {
+        Ok(t) => Ok(t),
+        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.line, s.column), s)),
+    }
+}
+
+pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Row, Col) -> E,
     E: 'a,
@@ -1181,6 +1304,162 @@ where
             },
         )),
         _ => Err((NoProgress, to_error(state.line, state.column), state)),
+    }
+}
+
+fn in_context<'a, AddContext, P1, P2, Start, A, X, Y>(
+    add_context: AddContext,
+    parser_start: P1,
+    parser_rest: P2,
+) -> impl Parser<'a, A, Y>
+where
+    AddContext: Fn(X, Row, Col) -> Y,
+    P1: Parser<'a, Start, Y>,
+    P2: Parser<'a, A, X>,
+    Y: 'a,
+{
+    move |arena, state| {
+        let (_, _, state) = parser_start.parse(arena, state)?;
+
+        match parser_rest.parse(arena, state) {
+            Ok((progress, value, state)) => Ok((progress, value, state)),
+            Err((progress, fail, state)) => {
+                Err((progress, add_context(fail, state.line, state.column), state))
+            }
+        }
+    }
+}
+
+pub fn chomp_and_check_indent<'a, E1, E2, X>(
+    to_space_error: E1,
+    to_indent_error: E2,
+) -> impl Parser<'a, (), X>
+where
+    E1: Fn(BadInputError, Row, Col) -> X,
+    E2: Fn(Row, Col) -> X,
+    X: 'a,
+{
+    move |arena, state: State<'a>| {
+        let SpaceState {
+            status,
+            row,
+            col,
+            bytes,
+        } = eat_spaces(state.bytes, state.line, state.column);
+
+        let indent_col = state.indent_col;
+
+        let progress = if state.column != col || state.line != row {
+            MadeProgress
+        } else {
+            NoProgress
+        };
+
+        match status {
+            Status::Good => {
+                if col > state.indent_col && col > 1 {
+                    let new_state = State {
+                        line: row,
+                        column: col,
+                        ..state
+                    };
+
+                    Ok((progress, (), new_state))
+                } else {
+                    Err((NoProgress, to_indent_error(state.line, state.column), state))
+                }
+            }
+            Status::HasTab => {
+                let new_state = State {
+                    line: row,
+                    column: col,
+                    ..state
+                };
+                Err((NoProgress, to_indent_error(row, col), new_state))
+            }
+        }
+    }
+}
+
+enum Status {
+    Good,
+    HasTab,
+}
+
+struct SpaceState<'a> {
+    status: Status,
+    row: Row,
+    col: Col,
+    bytes: &'a [u8],
+}
+
+fn eat_spaces<'a>(mut bytes: &'a [u8], mut row: Row, mut col: Col) -> SpaceState<'a> {
+    loop {
+        match bytes.get(0) {
+            None => {
+                return SpaceState {
+                    status: Status::Good,
+                    row,
+                    col,
+                    bytes: &[],
+                };
+            }
+            Some(b' ') => {
+                bytes = &bytes[1..];
+                col += 1;
+            }
+            Some(b'\n') => {
+                bytes = &bytes[1..];
+                col = 1;
+                row += 1;
+            }
+            Some(b'#') => {
+                return eat_line_comment(&bytes[1..], row, col + 1);
+            }
+            Some(b'\r') => {
+                bytes = &bytes[1..];
+            }
+            Some(b'\t') => {
+                return SpaceState {
+                    status: Status::HasTab,
+                    row,
+                    col,
+                    bytes,
+                };
+            }
+            Some(_) => {
+                return SpaceState {
+                    status: Status::Good,
+                    row,
+                    col,
+                    bytes,
+                };
+            }
+        }
+    }
+}
+
+fn eat_line_comment<'a>(mut bytes: &'a [u8], row: Row, mut col: Col) -> SpaceState<'a> {
+    loop {
+        match bytes.get(0) {
+            None => {
+                return SpaceState {
+                    status: Status::Good,
+                    row,
+                    col,
+                    bytes: &[],
+                };
+            }
+            Some(b'\n') => {
+                return eat_spaces(&bytes[1..], row + 1, 1);
+            }
+            Some(_) => {
+                // NOTE here elm checks the character width of the word, presumably to deal with
+                // unicode?
+                bytes = &bytes[1..];
+                col += 1;
+            }
+        }
     }
 }
 

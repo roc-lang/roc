@@ -4,10 +4,10 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
-    ParseResult, Parser,
+    allocated, ascii_char, ascii_string, chomp_and_check_indent, not, optional, peek_utf8_char,
+    specialize, unexpected, word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
-    State, SyntaxError,
+    State, SyntaxError, TRecord, Type,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -173,32 +173,189 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>, SyntaxError<'a>> {
     )
 }
 
+// #[macro_export]
+// macro_rules! zero_or_more {
+//     ($parser:expr) => {
+//         move |arena, state: State<'a>| {
+//             use bumpalo::collections::Vec;
+//
+//             let start_bytes_len = state.bytes.len();
+//
+//             match $parser.parse(arena, state) {
+//                 Ok((_, first_output, next_state)) => {
+//                     let mut state = next_state;
+//                     let mut buf = Vec::with_capacity_in(1, arena);
+//
+//                     buf.push(first_output);
+//
+//                     loop {
+//                         match $parser.parse(arena, state) {
+//                             Ok((_, next_output, next_state)) => {
+//                                 state = next_state;
+//                                 buf.push(next_output);
+//                             }
+//                             Err((fail_progress, fail, old_state)) => {
+//                                 match fail_progress {
+//                                     MadeProgress => {
+//                                         // made progress on an element and then failed; that's an error
+//                                         return Err((MadeProgress, fail, old_state));
+//                                     }
+//                                     NoProgress => {
+//                                         // the next element failed with no progress
+//                                         // report whether we made progress before
+//                                         let progress = Progress::from_lengths(start_bytes_len, old_state.bytes.len());
+//                                         return Ok((progress, buf, old_state));
+//                                     }
+//                                 }
+//                             }
+//                         }
+//                     }
+//                 }
+//                 Err((fail_progress, fail, new_state)) => {
+//                     match fail_progress {
+//                         MadeProgress => {
+//                             // made progress on an element and then failed; that's an error
+//                             Err((MadeProgress, fail, new_state))
+//                         }
+//                         NoProgress => {
+//                             // the first element failed (with no progress), but that's OK
+//                             // because we only need to parse 0 elements
+//                             Ok((NoProgress, Vec::new_in(arena), new_state))
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     };
+// }
+
+#[macro_export]
+macro_rules! record_type_field {
+    ($val_parser:expr, $min_indent:expr) => {
+        move |arena: &'a bumpalo::Bump,
+              state: $crate::parser::State<'a>|
+              -> $crate::parser::ParseResult<'a, $crate::ast::AssignedField<'a, _>, TRecord<'a>> {
+            use $crate::ast::AssignedField::*;
+            use $crate::blankspace::{space0_before_e, space0_e};
+            use $crate::ident::lowercase_ident;
+            use $crate::parser::Either::*;
+
+            // You must have a field name, e.g. "email"
+            let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state).map_err(|(p, _, s)| (p, TRecord::Field(s.line, s.column), s))?;
+            debug_assert_eq!(progress, MadeProgress);
+
+            let (_, spaces, state) =
+                space0_e($min_indent, TRecord::Space, TRecord::IndentEnd).parse(arena, state)?;
+
+
+            // Having a value is optional; both `{ email }` and `{ email: blah }` work.
+            // (This is true in both literals and types.)
+            let (_, opt_loc_val, state) = $crate::parser::optional(either!(
+                skip_first!(word1(b':', TRecord::Colon), space0_before_e($val_parser, $min_indent, TRecord::Space, TRecord::IndentColon)),
+                skip_first!(word1(b'?', TRecord::Optional), space0_before_e($val_parser, $min_indent, TRecord::Space, TRecord::IndentOptional))
+            ))
+            .parse(arena, state)?;
+
+            let answer = match opt_loc_val {
+                Some(either) => match either {
+                    First(loc_val) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
+                    Second(loc_val) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
+                },
+                // If no value was provided, record it as a Var.
+                // Canonicalize will know what to do with a Var later.
+                None => {
+                    if !spaces.is_empty() {
+                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                    } else {
+                        LabelOnly(loc_label)
+                    }
+                }
+            };
+
+            Ok((MadeProgress, answer, state))
+        }
+    };
+}
+
+macro_rules! collection_trailing_sep_e {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $space_problem:expr, $indent_problem:expr) => {
+        skip_first!(
+            $opening_brace,
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // roc_collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!($crate::parser::word1(b' ', |row, col| TRecord::Space(
+                    BadInputError::LineTooLong,
+                    row,
+                    col
+                ))),
+                skip_second!(
+                    and!(
+                        $crate::parser::trailing_sep_by0(
+                            $delimiter,
+                            $crate::blankspace::space0_around_e(
+                                $elem,
+                                $min_indent,
+                                $space_problem,
+                                $indent_problem
+                            )
+                        ),
+                        $crate::blankspace::space0_e($min_indent, $space_problem, $indent_problem)
+                    ),
+                    $closing_brace
+                )
+            )
+        )
+    };
+}
+
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
+    let f = |x, row, col| SyntaxError::Type(Type::TRecord(x, row, col));
+    specialize(f, record_type_internal(min_indent))
+}
+
+#[inline(always)]
+fn record_type_internal<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TRecord<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
     type Fields<'a> = Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>;
-    map!(
-        and!(
-            record_without_update!(
-                move |arena, state| term(min_indent).parse(arena, state),
-                min_indent
-            ),
-            optional(
-                // This could be an open record, e.g. `{ name: Str }r`
-                move |arena, state| allocated(term(min_indent)).parse(arena, state)
-            )
-        ),
-        |((fields, final_comments), ext): (
-            (Fields<'a>, &'a [CommentOrNewline<'a>]),
-            Option<&'a Located<TypeAnnotation<'a>>>,
-        )| {
-            Record {
-                fields: fields.into_bump_slice(),
-                ext,
-                final_comments,
-            }
-        }
-    )
+
+    let field_term = move |a, s| match term(min_indent).parse(a, s) {
+        Ok(t) => Ok(t),
+        Err((p, error, s)) => Err((p, TRecord::Syntax(a.alloc(error), s.line, s.column), s)),
+    };
+
+    move |arena, state| {
+        let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
+            word1(b'{', TRecord::Open),
+            loc!(record_type_field!(field_term, min_indent)),
+            word1(b',', TRecord::End),
+            word1(b'}', TRecord::End),
+            min_indent,
+            TRecord::Space,
+            TRecord::IndentEnd
+        )
+        .parse(arena, state)?;
+
+        let (_, ext, state) = optional(allocated(field_term)).parse(arena, state)?;
+
+        let result = Record {
+            fields: fields.into_bump_slice(),
+            ext,
+            final_comments,
+        };
+
+        Ok((MadeProgress, result, state))
+    }
 }
 
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
@@ -487,3 +644,29 @@ fn malformed<'a>(
         state,
     ))
 }
+
+// type Field = ();
+//
+// fn chomp_record_end<'a>(
+//     mut fields: Vec<'a, Field>,
+// ) -> impl Parser<'a, Vec<'a, Field>, TRecord<'a>> {
+//     one_of_with_error!(TRecord::End;
+//     | arena, state | {
+//         let (_,_,state) = word1(b',', TRecord::End).parse(arena, state)?;
+//         let (_, _spaces,state) = chomp_and_check_indent(TRecord::Space, TRecord::IndentField).parse(arena, state)?;
+//         let (_, field,state) = chomp_field().parse(arena, state)?;
+//         fields.push(field);
+//
+//         chomp_record_end(fields)
+//     },
+//     | arena, state | {
+//         let (_,_,state) = word1(b'}', TRecord::End).parse(arena, state)?;
+//
+//         Ok((MadeProgress, fields, state ))
+//     }
+//     )
+// }
+//
+// fn chomp_field<'a>() -> impl Parser<'a, Field, TRecord<'a>> {
+//     todo!()
+// }

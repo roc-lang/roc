@@ -1,4 +1,4 @@
-use roc_parse::parser::{ContextItem, ParseProblem, SyntaxError};
+use roc_parse::parser::{Col, ContextItem, ParseProblem, Row, SyntaxError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
@@ -29,12 +29,12 @@ fn context<'a>(
     }
 }
 
-pub fn parse_problem<'b>(
-    alloc: &'b RocDocAllocator<'b>,
+pub fn parse_problem<'a>(
+    alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     starting_line: u32,
-    parse_problem: ParseProblem<SyntaxError>,
-) -> Report<'b> {
+    parse_problem: ParseProblem<SyntaxError<'a>>,
+) -> Report<'a> {
     let line = starting_line + parse_problem.line;
     let region = Region {
         start_line: line,
@@ -84,7 +84,6 @@ pub fn parse_problem<'b>(
                 alloc.concat(vec![
                     alloc.reflow("Unexpected token "),
                     // context(alloc, &parse_problem.context_stack, "here"),
-                    todo!(),
                     alloc.text(":"),
                 ]),
                 alloc.region(region),
@@ -92,6 +91,72 @@ pub fn parse_problem<'b>(
 
             report(doc)
         }
+        Type(typ) => to_type_report(alloc, filename, starting_line, typ),
         _ => todo!("unhandled parse error: {:?}", parse_problem.problem),
+    }
+}
+
+fn to_type_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    starting_line: u32,
+    parse_problem: roc_parse::parser::Type<'a>,
+) -> Report<'a> {
+    use roc_parse::parser::Type;
+
+    match parse_problem {
+        Type::TRecord(record, row, col) => {
+            to_trecord_report(alloc, filename, starting_line, record, row, col)
+        }
+        _ => todo!(),
+    }
+}
+
+fn to_trecord_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    starting_line: u32,
+    parse_problem: roc_parse::parser::TRecord<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::TRecord;
+
+    match parse_problem {
+        TRecord::End(row, col) => {
+            let surroundings = Region {
+                start_col,
+                start_line: start_row,
+                end_col: col,
+                end_line: row,
+            };
+
+            let region = Region {
+                start_col: col,
+                start_line: row,
+                end_col: col,
+                end_line: row,
+            };
+
+            let doc = alloc.stack(vec![
+                alloc.reflow("I am partway through parsing a record type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(
+                        r"I was expecting to see a closing curly brace before this, so try adding a ",
+                    ),
+                    alloc.parser_suggestion("}"),
+                    alloc.reflow(" and see if that helps?"),
+                ]),
+            ]);
+
+            Report {
+                filename: filename.clone(),
+                doc,
+                title: "UNFINISHED RECORD TYPE".to_string(),
+            }
+        }
+
+        _ => todo!(),
     }
 }

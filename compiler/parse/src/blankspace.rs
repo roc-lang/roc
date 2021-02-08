@@ -1,15 +1,15 @@
 use crate::ast::CommentOrNewline::{self, *};
 use crate::ast::{Attempting, Spaceable};
 use crate::parser::{
-    self, and, ascii_char, ascii_string, backtrackable, optional, parse_utf8, peek_utf8_char, then,
-    unexpected, unexpected_eof, Parser,
+    self, and, ascii_char, ascii_string, backtrackable, bad_input_to_syntax_error, optional,
+    parse_utf8, peek_utf8_char, then, unexpected, unexpected_eof, BadInputError, Col, Parser,
     Progress::{self, *},
-    State, SyntaxError,
+    Row, State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::Located;
+use roc_region::all::{Located, Region};
 
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
@@ -28,6 +28,56 @@ where
 {
     parser::map_with_arena(
         and(space0(min_indent), and(parser, space0(min_indent))),
+        move |arena: &'a Bump,
+              tuples: (
+            &'a [CommentOrNewline<'a>],
+            (Located<S>, &'a [CommentOrNewline<'a>]),
+        )| {
+            let (spaces_before, (loc_val, spaces_after)) = tuples;
+
+            if spaces_before.is_empty() {
+                if spaces_after.is_empty() {
+                    loc_val
+                } else {
+                    arena
+                        .alloc(loc_val.value)
+                        .with_spaces_after(spaces_after, loc_val.region)
+                }
+            } else if spaces_after.is_empty() {
+                arena
+                    .alloc(loc_val.value)
+                    .with_spaces_before(spaces_before, loc_val.region)
+            } else {
+                let wrapped_expr = arena
+                    .alloc(loc_val.value)
+                    .with_spaces_after(spaces_after, loc_val.region);
+
+                arena
+                    .alloc(wrapped_expr.value)
+                    .with_spaces_before(spaces_before, wrapped_expr.region)
+            }
+        },
+    )
+}
+
+pub fn space0_around_e<'a, P, S, E>(
+    parser: P,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, Located<S>, E>
+where
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>, E>,
+    P: 'a,
+    E: 'a,
+{
+    parser::map_with_arena(
+        and(
+            space0_e(min_indent, space_problem, indent_problem),
+            and(parser, space0_e(min_indent, space_problem, indent_problem)),
+        ),
         move |arena: &'a Bump,
               tuples: (
             &'a [CommentOrNewline<'a>],
@@ -130,6 +180,33 @@ where
     )
 }
 
+pub fn space0_before_e<'a, P, S, E>(
+    parser: P,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, Located<S>, E>
+where
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>, E>,
+    P: 'a,
+    E: 'a,
+{
+    parser::map_with_arena(
+        and!(space0_e(min_indent, space_problem, indent_problem), parser),
+        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Located<S>)| {
+            if space_list.is_empty() {
+                loc_expr
+            } else {
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_before(space_list, loc_expr.region)
+            }
+        },
+    )
+}
+
 /// Parses the given expression with 1 or more (spaces/comments/newlines) before it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
@@ -214,6 +291,17 @@ where
 /// Zero or more (spaces/comments/newlines).
 pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     spaces(false, min_indent)
+}
+
+pub fn space0_e<'a, E>(
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
+    spaces0_help(min_indent, space_problem, indent_problem)
 }
 
 /// One or more (spaces/comments/newlines).
@@ -325,6 +413,24 @@ fn spaces<'a>(
     require_at_least_one: bool,
     min_indent: u16,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
+    spaces_help(
+        require_at_least_one,
+        min_indent,
+        bad_input_to_syntax_error,
+        |_, _| SyntaxError::OutdentedTooFar,
+        |_, _| SyntaxError::Eof(Region::zero()),
+    )
+}
+
+#[inline(always)]
+fn spaces0_help<'a, E>(
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
     move |arena: &'a Bump, state: State<'a>| {
         let original_state = state.clone();
         let mut space_list = Vec::new_in(arena);
@@ -347,17 +453,18 @@ fn spaces<'a>(
                                 ' ' => {
                                     // Don't check indentation here; it might not be enough
                                     // indentation yet, but maybe it will be after more spaces happen!
-                                    state = state.advance_spaces(arena, 1)?;
+                                    state =
+                                        state.advance_spaces_e(arena, 1, space_problem.clone())?;
                                 }
                                 '\r' => {
                                     // Ignore carriage returns.
-                                    state = state.advance_spaces(arena, 1)?;
+                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
                                 }
                                 '\n' => {
                                     // don't need to check the indent here since we'll reset it
                                     // anyway
 
-                                    state = state.newline(arena)?;
+                                    state = state.newline_e(arena, space_problem)?;
 
                                     // Newlines only get added to the list when they're outside comments.
                                     space_list.push(Newline);
@@ -370,21 +477,17 @@ fn spaces<'a>(
                                     let progress =
                                         Progress::from_lengths(start_bytes_len, state.bytes.len());
                                     state = state
-                                        .check_indent(arena, min_indent)
+                                        .check_indent_e(arena, min_indent, indent_problem)
                                         .map_err(|(fail, _)| {
                                             (progress, fail, original_state.clone())
                                         })?
-                                        .advance_without_indenting(arena, 1)?;
+                                        .advance_without_indenting_e(arena, 1, space_problem)?;
 
                                     // We're now parsing a line comment!
                                     line_state = LineState::Comment;
                                 }
                                 _ => {
-                                    return if require_at_least_one && bytes_parsed <= 1 {
-                                        // We've parsed 1 char and it was not a space,
-                                        // but we require parsing at least one space!
-                                        Err(unexpected(arena, 0, Attempting::TODO, state.clone()))
-                                    } else {
+                                    return {
                                         // First make sure we were indented enough!
                                         //
                                         // (We only do this if we've encountered any newlines.
@@ -397,11 +500,11 @@ fn spaces<'a>(
                                             state.bytes.len(),
                                         );
                                         if any_newlines {
-                                            state = state.check_indent(arena, min_indent).map_err(
-                                                |(fail, _)| {
+                                            state = state
+                                                .check_indent_e(arena, min_indent, indent_problem)
+                                                .map_err(|(fail, _)| {
                                                     (progress, fail, original_state.clone())
-                                                },
-                                            )?;
+                                                })?;
                                         }
 
                                         Ok((progress, space_list.into_bump_slice(), state))
@@ -413,7 +516,11 @@ fn spaces<'a>(
                             match ch {
                                 ' ' => {
                                     // If we're in a line comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting(arena, 1)?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        1,
+                                        space_problem,
+                                    )?;
 
                                     if comment_line_buf.len() == 1 {
                                         match comment_line_buf.chars().next() {
@@ -438,7 +545,7 @@ fn spaces<'a>(
                                     }
                                 }
                                 '\n' => {
-                                    state = state.newline(arena)?;
+                                    state = state.newline_e(arena, space_problem)?;
 
                                     match (comment_line_buf.len(), comment_line_buf.chars().next())
                                     {
@@ -463,8 +570,11 @@ fn spaces<'a>(
                                 }
                                 nonblank => {
                                     // Chars can have btye lengths of more than 1!
-                                    state = state
-                                        .advance_without_indenting(arena, nonblank.len_utf8())?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        nonblank.len_utf8(),
+                                        space_problem,
+                                    )?;
 
                                     comment_line_buf.push(nonblank);
                                 }
@@ -474,12 +584,16 @@ fn spaces<'a>(
                             match ch {
                                 ' ' => {
                                     // If we're in a doc comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting(arena, 1)?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        1,
+                                        space_problem,
+                                    )?;
 
                                     comment_line_buf.push(ch);
                                 }
                                 '\n' => {
-                                    state = state.newline(arena)?;
+                                    state = state.newline_e(arena, space_problem)?;
 
                                     // This was a newline, so end this doc comment.
                                     space_list.push(DocComment(comment_line_buf.into_bump_str()));
@@ -488,7 +602,11 @@ fn spaces<'a>(
                                     line_state = LineState::Normal;
                                 }
                                 nonblank => {
-                                    state = state.advance_without_indenting(arena, utf8_len)?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        utf8_len,
+                                        space_problem,
+                                    )?;
 
                                     comment_line_buf.push(nonblank);
                                 }
@@ -499,11 +617,277 @@ fn spaces<'a>(
                 Err(SyntaxError::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
                     let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-                    return state.fail(arena, progress, SyntaxError::BadUtf8);
+                    let row = state.line;
+                    let col = state.column;
+                    return state.fail(
+                        arena,
+                        progress,
+                        space_problem(BadInputError::BadUtf8, row, col),
+                    );
+                }
+                Err(_) => {
+                    let space_slice = space_list.into_bump_slice();
+
+                    // First make sure we were indented enough!
+                    //
+                    // (We only do this if we've encountered any newlines.
+                    // Otherwise, we assume indentation is already correct.
+                    // It's actively important for correctness that we skip
+                    // this check if there are no newlines, because otherwise
+                    // we would have false positives for single-line defs.)
+                    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+                    if any_newlines {
+                        return Ok((
+                            progress,
+                            space_slice,
+                            state
+                                .check_indent_e(arena, min_indent, indent_problem)
+                                .map_err(|(fail, _)| (progress, fail, original_state))?,
+                        ));
+                    }
+
+                    return Ok((progress, space_slice, state));
+                }
+            };
+        }
+
+        // First make sure we were indented enough!
+        //
+        // (We only do this if we've encountered any newlines.
+        // Otherwise, we assume indentation is already correct.
+        // It's actively important for correctness that we skip
+        // this check if there are no newlines, because otherwise
+        // we would have false positives for single-line defs.)
+        let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+        if any_newlines {
+            state = state
+                .check_indent_e(arena, min_indent, indent_problem)
+                .map_err(|(fail, _)| (progress, fail, original_state))?;
+        }
+
+        Ok((progress, space_list.into_bump_slice(), state))
+    }
+}
+
+#[inline(always)]
+fn spaces_help<'a, E>(
+    require_at_least_one: bool,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+    missing_space_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_state = state.clone();
+        let mut space_list = Vec::new_in(arena);
+        let mut bytes_parsed = 0;
+        let mut comment_line_buf = String::new_in(arena);
+        let mut line_state = LineState::Normal;
+        let mut state = state;
+        let mut any_newlines = false;
+
+        let start_bytes_len = state.bytes.len();
+
+        while !state.bytes.is_empty() {
+            match peek_utf8_char(&state) {
+                Ok((ch, utf8_len)) => {
+                    bytes_parsed += utf8_len;
+
+                    match line_state {
+                        LineState::Normal => {
+                            match ch {
+                                ' ' => {
+                                    // Don't check indentation here; it might not be enough
+                                    // indentation yet, but maybe it will be after more spaces happen!
+                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
+                                }
+                                '\r' => {
+                                    // Ignore carriage returns.
+                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
+                                }
+                                '\n' => {
+                                    // don't need to check the indent here since we'll reset it
+                                    // anyway
+
+                                    state = state.newline_e(arena, space_problem)?;
+
+                                    // Newlines only get added to the list when they're outside comments.
+                                    space_list.push(Newline);
+
+                                    any_newlines = true;
+                                }
+                                '#' => {
+                                    // Check indentation to make sure we were indented enough
+                                    // before this comment began.
+                                    let progress =
+                                        Progress::from_lengths(start_bytes_len, state.bytes.len());
+                                    state = state
+                                        .check_indent_e(arena, min_indent, indent_problem)
+                                        .map_err(|(fail, _)| {
+                                            (progress, fail, original_state.clone())
+                                        })?
+                                        .advance_without_indenting_e(arena, 1, space_problem)?;
+
+                                    // We're now parsing a line comment!
+                                    line_state = LineState::Comment;
+                                }
+                                _ => {
+                                    return if require_at_least_one && bytes_parsed <= 1 {
+                                        // We've parsed 1 char and it was not a space,
+                                        // but we require parsing at least one space!
+                                        Err((
+                                            NoProgress,
+                                            missing_space_problem(state.line, state.column),
+                                            state,
+                                        ))
+                                    } else {
+                                        // First make sure we were indented enough!
+                                        //
+                                        // (We only do this if we've encountered any newlines.
+                                        // Otherwise, we assume indentation is already correct.
+                                        // It's actively important for correctness that we skip
+                                        // this check if there are no newlines, because otherwise
+                                        // we would have false positives for single-line defs.)
+                                        let progress = Progress::from_lengths(
+                                            start_bytes_len,
+                                            state.bytes.len(),
+                                        );
+                                        if any_newlines {
+                                            state = state
+                                                .check_indent_e(arena, min_indent, indent_problem)
+                                                .map_err(|(fail, _)| {
+                                                    (progress, fail, original_state.clone())
+                                                })?;
+                                        }
+
+                                        Ok((progress, space_list.into_bump_slice(), state))
+                                    };
+                                }
+                            }
+                        }
+                        LineState::Comment => {
+                            match ch {
+                                ' ' => {
+                                    // If we're in a line comment, this won't affect indentation anyway.
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        1,
+                                        space_problem,
+                                    )?;
+
+                                    if comment_line_buf.len() == 1 {
+                                        match comment_line_buf.chars().next() {
+                                            Some('#') => {
+                                                // This is a comment begining with `## ` - that is,
+                                                // a doc comment.
+                                                //
+                                                // (The space is important; otherwise, this is not
+                                                // a doc comment, but rather something like a
+                                                // big separator block, e.g. ############)
+                                                line_state = LineState::DocComment;
+
+                                                // This is now the beginning of the doc comment.
+                                                comment_line_buf.clear();
+                                            }
+                                            _ => {
+                                                comment_line_buf.push(ch);
+                                            }
+                                        }
+                                    } else {
+                                        comment_line_buf.push(ch);
+                                    }
+                                }
+                                '\n' => {
+                                    state = state.newline_e(arena, space_problem)?;
+
+                                    match (comment_line_buf.len(), comment_line_buf.chars().next())
+                                    {
+                                        (1, Some('#')) => {
+                                            // This is a line with `##` - that is,
+                                            // a doc comment new line.
+                                            space_list.push(DocComment(""));
+                                            comment_line_buf = String::new_in(arena);
+
+                                            line_state = LineState::Normal;
+                                        }
+                                        _ => {
+                                            // This was a newline, so end this line comment.
+                                            space_list.push(LineComment(
+                                                comment_line_buf.into_bump_str(),
+                                            ));
+                                            comment_line_buf = String::new_in(arena);
+
+                                            line_state = LineState::Normal;
+                                        }
+                                    }
+                                }
+                                nonblank => {
+                                    // Chars can have btye lengths of more than 1!
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        nonblank.len_utf8(),
+                                        space_problem,
+                                    )?;
+
+                                    comment_line_buf.push(nonblank);
+                                }
+                            }
+                        }
+                        LineState::DocComment => {
+                            match ch {
+                                ' ' => {
+                                    // If we're in a doc comment, this won't affect indentation anyway.
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        1,
+                                        space_problem,
+                                    )?;
+
+                                    comment_line_buf.push(ch);
+                                }
+                                '\n' => {
+                                    state = state.newline_e(arena, space_problem)?;
+
+                                    // This was a newline, so end this doc comment.
+                                    space_list.push(DocComment(comment_line_buf.into_bump_str()));
+                                    comment_line_buf = String::new_in(arena);
+
+                                    line_state = LineState::Normal;
+                                }
+                                nonblank => {
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        utf8_len,
+                                        space_problem,
+                                    )?;
+
+                                    comment_line_buf.push(nonblank);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(SyntaxError::BadUtf8) => {
+                    // If we hit an invalid UTF-8 character, bail out immediately.
+                    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+                    let row = state.line;
+                    let col = state.column;
+                    return state.fail(
+                        arena,
+                        progress,
+                        space_problem(BadInputError::BadUtf8, row, col),
+                    );
                 }
                 Err(_) => {
                     if require_at_least_one && bytes_parsed == 0 {
-                        return Err(unexpected_eof(arena, state, 0));
+                        return Err((
+                            NoProgress,
+                            missing_space_problem(state.line, state.column),
+                            state,
+                        ));
                     } else {
                         let space_slice = space_list.into_bump_slice();
 
@@ -520,7 +904,7 @@ fn spaces<'a>(
                                 progress,
                                 space_slice,
                                 state
-                                    .check_indent(arena, min_indent)
+                                    .check_indent_e(arena, min_indent, indent_problem)
                                     .map_err(|(fail, _)| (progress, fail, original_state))?,
                             ));
                         }
@@ -531,9 +915,12 @@ fn spaces<'a>(
             };
         }
 
-        // If we didn't parse anything, return unexpected EOF
         if require_at_least_one && original_state.bytes.len() == state.bytes.len() {
-            Err(unexpected_eof(arena, state, 0))
+            Err((
+                NoProgress,
+                missing_space_problem(state.line, state.column),
+                state,
+            ))
         } else {
             // First make sure we were indented enough!
             //
@@ -545,7 +932,7 @@ fn spaces<'a>(
             let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
             if any_newlines {
                 state = state
-                    .check_indent(arena, min_indent)
+                    .check_indent_e(arena, min_indent, indent_problem)
                     .map_err(|(fail, _)| (progress, fail, original_state))?;
             }
 

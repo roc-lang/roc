@@ -4020,7 +4020,7 @@ mod test_reporting {
                 r#"
                 ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
                 
-                Unexpected token while parsing a definition:
+                Unexpected token :
                 
                 1│  f :: I64
                        ^
@@ -4075,10 +4075,35 @@ mod test_reporting {
                 r#"
                 ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
                 
-                Unexpected token here:
+                Unexpected token :
                 
                 2│      5 ** 3
                           ^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recort_type_end() {
+        // NOTE: VERY BAD ERROR MESSAGE
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { a: Int, 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : { a: Int, 
+                  
+                
+                I was expecting to see a closing curly brace before this, so try
+                adding a } and see if that helps?
             "#
             ),
         )
