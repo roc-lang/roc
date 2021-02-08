@@ -47,6 +47,7 @@ pub fn build_eq<'a, 'ctx, 'env>(
                 (Builtin::Int16, Builtin::Int16) => int_cmp(IntPredicate::EQ, "eq_i16"),
                 (Builtin::Int8, Builtin::Int8) => int_cmp(IntPredicate::EQ, "eq_i8"),
                 (Builtin::Int1, Builtin::Int1) => int_cmp(IntPredicate::EQ, "eq_i1"),
+                (Builtin::Usize, Builtin::Usize) => int_cmp(IntPredicate::EQ, "eq_usize"),
                 (Builtin::Float64, Builtin::Float64) => float_cmp(FloatPredicate::OEQ, "eq_f64"),
                 (Builtin::Float32, Builtin::Float32) => float_cmp(FloatPredicate::OEQ, "eq_f32"),
                 (Builtin::Str, Builtin::Str) => str_equal(env, lhs_val, rhs_val),

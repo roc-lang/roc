@@ -717,15 +717,18 @@ pub fn str_utf8_byte_problem_type() -> SolvedType {
 
 #[inline(always)]
 pub fn str_utf8_byte_problem_alias_content() -> SolvedType {
-    // [ InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation, OverlongEncoding, CodepointTooLarge, EncodesSurrogateHalf ]
+    // 1. This must have the same values as the Zig struct Utf8ByteProblem in src/str.zig
+    // 2. This must be in alphabetical order
+    //
+    // [ CodepointTooLarge, EncodesSurrogateHalf, OverlongEncoding, InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation ]
     SolvedType::TagUnion(
         vec![
-            (TagName::Global("InvalidStartByte".into()), vec![]),
-            (TagName::Global("UnexpectedEndOfSequence".into()), vec![]),
-            (TagName::Global("ExpectedContinuation".into()), vec![]),
-            (TagName::Global("OverlongEncoding".into()), vec![]),
             (TagName::Global("CodepointTooLarge".into()), vec![]),
             (TagName::Global("EncodesSurrogateHalf".into()), vec![]),
+            (TagName::Global("ExpectedContinuation".into()), vec![]),
+            (TagName::Global("InvalidStartByte".into()), vec![]),
+            (TagName::Global("OverlongEncoding".into()), vec![]),
+            (TagName::Global("UnexpectedEndOfSequence".into()), vec![]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
     )

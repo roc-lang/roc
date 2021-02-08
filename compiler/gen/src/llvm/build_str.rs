@@ -1,11 +1,14 @@
 use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, Env, InPlace, Scope,
 };
-use crate::llvm::build_list::{allocate_list, store_list};
-use crate::llvm::convert::collection;
-use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, IntValue, StructValue};
-use inkwell::AddressSpace;
+use crate::llvm::build_list::{
+    allocate_list, build_basic_phi2, empty_polymorphic_list, list_len, load_list_ptr, store_list,
+};
+use crate::llvm::convert::{collection, get_ptr_type};
+use inkwell::builder::Builder;
+use inkwell::types::{BasicTypeEnum, StructType};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
+use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
@@ -255,19 +258,128 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     zig_str_to_struct(env, zig_result).into()
 }
 
-/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+/// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
 pub fn str_from_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    bytes_symbol: Symbol,
+    parent: FunctionValue<'ctx>,
+    original_wrapper: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let bytes = load_symbol(env, scope, &bytes_symbol);
+    let builder = env.builder;
+    let ctx = env.context;
 
-    // TODO fromUtf8:
-    // let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
-    // zig_str_to_struct(env, zig_result).into()
+    let list_len = list_len(builder, original_wrapper);
+    let ptr_type = get_ptr_type(&ctx.i8_type().into(), AddressSpace::Generic);
+    let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
-    panic!("TODO fromUtf8")
+    let result_type = env
+        .module
+        .get_struct_type("str.ValidateUtf8BytesResult")
+        .unwrap();
+    let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+
+    call_void_bitcode_fn(
+        env,
+        &[result_ptr.into(), list_ptr.into(), list_len.into()],
+        &bitcode::STR_VALIDATE_UTF_BYTES,
+    );
+    let utf8_validate_bytes_result = builder
+        .build_load(result_ptr, "load_utf8_validate_bytes_result")
+        .into_struct_value();
+
+    let is_ok = builder
+        .build_extract_value(utf8_validate_bytes_result, 0, "extract_extract_is_ok")
+        .unwrap()
+        .into_int_value();
+    let byte_index = builder
+        .build_extract_value(utf8_validate_bytes_result, 1, "extract_byte_index")
+        .unwrap()
+        .into_int_value();
+    let problem_code = builder
+        .build_extract_value(utf8_validate_bytes_result, 2, "extract_problem_code")
+        .unwrap()
+        .into_int_value();
+
+    let record_type = env.context.struct_type(
+        &[
+            env.ptr_int().into(),
+            collection(env.context, env.ptr_bytes).into(),
+            env.context.bool_type().into(),
+            ctx.i8_type().into(),
+        ],
+        false,
+    );
+
+    let comparison = builder.build_int_compare(
+        IntPredicate::EQ,
+        is_ok,
+        ctx.bool_type().const_int(1, false),
+        "compare_is_ok",
+    );
+
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        || {
+            // We have a valid utf8 byte sequence
+            // TODO: Should we do something different here if we're doing this in place?
+            let zig_str =
+                call_bitcode_fn(env, &[list_ptr.into(), list_len.into()], &bitcode::STR_INIT)
+                    .into_struct_value();
+            build_struct(
+                builder,
+                record_type,
+                vec![
+                    (
+                        env.ptr_int().const_int(0 as u64, false).into(),
+                        "insert_zeroed_byte_index",
+                    ),
+                    (zig_str_to_struct(env, zig_str).into(), "insert_str"),
+                    (
+                        ctx.bool_type().const_int(1 as u64, false).into(),
+                        "insert_is_ok",
+                    ),
+                    (
+                        ctx.i8_type().const_int(0 as u64, false).into(),
+                        "insert_zeroed_problem",
+                    ),
+                ],
+            )
+            .into()
+        },
+        || {
+            // We do not have a valid utf8 byte sequence
+            build_struct(
+                builder,
+                record_type,
+                vec![
+                    (byte_index.into(), "insert_byte_index"),
+                    (empty_polymorphic_list(env).into(), "insert_zeroed_str"),
+                    (
+                        ctx.bool_type().const_int(0 as u64, false).into(),
+                        "insert_is_ok",
+                    ),
+                    (problem_code.into(), "insert_problem"),
+                ],
+            )
+            .into()
+        },
+        BasicTypeEnum::StructType(record_type),
+    )
+}
+
+fn build_struct<'env, 'ctx>(
+    builder: &'env Builder<'ctx>,
+    struct_type: StructType<'ctx>,
+    values: Vec<(BasicValueEnum<'ctx>, &str)>,
+) -> StructValue<'ctx> {
+    let mut val = struct_type.get_undef().into();
+    for (index, (value, name)) in values.iter().enumerate() {
+        val = builder
+            .build_insert_value(val, *value, index as u32, name)
+            .unwrap();
+    }
+    val.into_struct_value()
 }
 
 /// Str.equal : Str, Str -> Bool

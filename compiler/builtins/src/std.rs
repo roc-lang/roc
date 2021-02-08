@@ -4,7 +4,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
     bool_type, dict_type, float_type, int_type, list_type, nat_type, num_type, ordering_type,
-    result_type, set_type, str_type, str_utf8_problem_type, u8_type,
+    result_type, set_type, str_type, str_utf8_byte_problem_type, u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -543,7 +543,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     let bad_utf8 = SolvedType::TagUnion(
         vec![(
             TagName::Global("BadUtf8".into()),
-            vec![str_utf8_problem_type()],
+            // vec![str_utf8_problem_type()],
+            vec![str_utf8_byte_problem_type(), nat_type()],
         )],
         Box::new(SolvedType::Wildcard),
     );

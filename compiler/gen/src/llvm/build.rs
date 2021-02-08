@@ -3516,7 +3516,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromInt : Int -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_from_utf8(env, scope, args[0])
+            let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
+
+            str_from_utf8(env, parent, original_wrapper)
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
