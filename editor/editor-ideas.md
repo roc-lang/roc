@@ -51,6 +51,7 @@ These are potentially inspirational resources for the editor's design.
     * [Blueprints](https://docs.unrealengine.com/en-US/Engine/Blueprints/index.html) visual scripting (not suggesting visual scripting for Roc)
 
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
+* [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
 
 ### Productivity features
 
@@ -63,6 +64,7 @@ These are potentially inspirational resources for the editor's design.
 * Suggest automatically creating a function if the compiler says it does not exist.
 * Integrated search:
     * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
+* Webcam based eye tracking for quick selection. Could be used to select from autocomplete options instead of having to use arrows.
 
 
 ### Non-Code Related Inspiration
