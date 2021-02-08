@@ -38,6 +38,9 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
+    # sccache
+    RUN apt install libssl-dev
+    RUN cargo install sccache
 
 deps-image:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -46,7 +49,7 @@ deps-image:
 copy-dirs-and-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     # cache
-    COPY --dir sccache_dir ci/sccache ./ 
+    COPY --dir sccache_dir ./
     # roc dirs
     COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
 
@@ -57,10 +60,10 @@ test-zig:
 
 build-rust:
     FROM +copy-dirs-and-cache
-    ARG RUSTC_WRAPPER=/earthbuild/sccache
+    ARG RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ARG SCCACHE_DIR=/earthbuild/sccache_dir
-    RUN cargo build # for clippy
-    RUN cargo test --release --no-run
+    RUN cargo build; sccache --show-stats # for clippy
+    RUN cargo test --release --no-run; sccache --show-stats
 
 check-clippy:
     FROM +build-rust
@@ -76,10 +79,9 @@ save-cache:
 
 test-rust:
     FROM +build-rust
-    ARG RUSTC_WRAPPER=/earthbuild/sccache
+    ARG RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ARG SCCACHE_DIR=/earthbuild/sccache_dir
     RUN cargo test --release
-    RUN ./sccache --show-stats
 
 test-all:
     BUILD +check-clippy
