@@ -28,6 +28,7 @@ These are potentially inspirational resources for the editor's design.
 * [Xi](https://xi-editor.io/) modern text editor with concurrent editing (related to [Druid](https://github.com/linebender/druid))
 * [Self](https://selflanguage.org/) programming language
 * [Primitive](https://primitive.io/) code exploration in Virtual Reality
+* [Luna](https://www.luna-lang.org/) language for interactive data processing and visualization
 
 ### Debugging
 
