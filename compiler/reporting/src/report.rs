@@ -526,6 +526,7 @@ impl<'a> RocDocAllocator<'a> {
         if error_highlight_line {
             let highlight_text =
                 ERROR_UNDERLINE.repeat((sub_region.end_col - sub_region.start_col) as usize);
+
             let highlight_line = self
                 .line()
                 // Omit the gutter bar when we know there are no further

@@ -502,7 +502,7 @@ fn pretty_runtime_error<'b>(
                 ]),
                 alloc.region(region),
                 alloc.concat(vec![
-                    alloc.reflow("Roc uses signed 64-bit floating points, allowing values between"),
+                    alloc.reflow("Roc uses signed 64-bit floating points, allowing values between "),
                     alloc.text(format!("{:e}", f64::MIN)),
                     alloc.reflow(" and "),
                     alloc.text(format!("{:e}", f64::MAX)),

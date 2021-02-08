@@ -611,6 +611,7 @@ pub enum Attempting {
     TypeVariable,
     WhenCondition,
     WhenBranch,
+    TODO,
 }
 
 impl<'a> Expr<'a> {

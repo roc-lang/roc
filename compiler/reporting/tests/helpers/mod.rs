@@ -13,7 +13,7 @@ use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
-use roc_parse::parser::{loc, Fail, Parser, State};
+use roc_parse::parser::{loc, Bag, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::Located;
 use roc_solve::solve;
@@ -85,24 +85,8 @@ where
 }
 
 #[allow(dead_code)]
-pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
-    parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
-}
-
-#[allow(dead_code)]
-pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast::Expr<'a>>, Fail> {
-    let state = State::new(input.as_bytes(), Attempting::Module);
-    let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
-    let answer = parser.parse(&arena, state);
-
-    answer
-        .map(|(loc_expr, _)| loc_expr)
-        .map_err(|(fail, _)| fail)
-}
-
-#[allow(dead_code)]
-pub fn can_expr(expr_str: &str) -> Result<CanExprOut, ParseErrOut> {
-    can_expr_with(&Bump::new(), test_home(), expr_str)
+pub fn can_expr<'a>(arena: &'a Bump, expr_str: &'a str) -> Result<CanExprOut, ParseErrOut<'a>> {
+    can_expr_with(arena, test_home(), expr_str)
 }
 
 pub struct CanExprOut {
@@ -116,19 +100,38 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
+#[allow(dead_code)]
+pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Bag<'a>> {
+    parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
+}
+
+#[allow(dead_code)]
+pub fn parse_loc_with<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+) -> Result<Located<ast::Expr<'a>>, Bag<'a>> {
+    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
+    let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
+    let answer = parser.parse(&arena, state);
+
+    answer
+        .map(|(_, loc_expr, _)| loc_expr)
+        .map_err(|(_, fail, _)| fail)
+}
+
 #[derive(Debug)]
-pub struct ParseErrOut {
-    pub fail: Fail,
+pub struct ParseErrOut<'a> {
+    pub fail: Bag<'a>,
     pub home: ModuleId,
     pub interns: Interns,
 }
 
 #[allow(dead_code)]
-pub fn can_expr_with(
-    arena: &Bump,
+pub fn can_expr_with<'a>(
+    arena: &'a Bump,
     home: ModuleId,
-    expr_str: &str,
-) -> Result<CanExprOut, ParseErrOut> {
+    expr_str: &'a str,
+) -> Result<CanExprOut, ParseErrOut<'a>> {
     let loc_expr = match parse_loc_with(&arena, expr_str) {
         Ok(e) => e,
         Err(fail) => {
