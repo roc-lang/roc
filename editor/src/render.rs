@@ -45,6 +45,18 @@ pub fn render_expr2<'a>(
 
             queue_code_text_draw(&code_text, glyph_brush);
         }
+        Expr2::Str(text) => {
+            let code_text = Text {
+                position,
+                area_bounds,
+                color: CODE_COLOR.into(),
+                text: env.pool.get_str(text),
+                size: CODE_FONT_SIZE,
+                ..Default::default()
+            };
+
+            queue_code_text_draw(&code_text, glyph_brush);
+        }
         rest => todo!("implement {:?} render", rest),
     };
 }
