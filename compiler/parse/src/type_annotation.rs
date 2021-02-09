@@ -7,7 +7,7 @@ use crate::parser::{
     allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, specialize, specialize_ref,
     unexpected, word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
-    State, SyntaxError, TRecord, Type,
+    State, SyntaxError, TRecord, TTagUnion, Type,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -21,33 +21,44 @@ pub fn located<'a>(
     expression(min_indent)
 }
 
-macro_rules! tag_union {
-    ($min_indent:expr) => {
-        map!(
-            and!(
-                collection_trailing_sep!(
-                    ascii_char(b'['),
-                    loc!(tag_type($min_indent)),
-                    ascii_char(b','),
-                    ascii_char(b']'),
-                    $min_indent
-                ),
-                optional(
-                    // This could be an open tag union, e.g. `[ Foo, Bar ]a`
-                    move |arena: &'a Bump, state: State<'a>| allocated(term($min_indent))
-                        .parse(arena, state)
-                )
-            ),
-            |((tags, final_comments), ext): (
-                (Vec<'a, Located<Tag<'a>>>, &'a [CommentOrNewline<'a>]),
-                Option<&'a Located<TypeAnnotation<'a>>>,
-            )| TypeAnnotation::TagUnion {
-                tags: tags.into_bump_slice(),
-                ext,
-                final_comments
-            }
+#[inline(always)]
+fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
+    let f = |x, row, col| SyntaxError::Type(Type::TTagUnion(x, row, col));
+    specialize(f, tag_union_type_internal(min_indent))
+}
+
+#[inline(always)]
+fn tag_union_type_internal<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, TypeAnnotation<'a>, TTagUnion<'a>> {
+    move |arena, state| {
+        let (_, (tags, final_comments), state) = collection_trailing_sep_e!(
+            word1(b'[', TTagUnion::Open),
+            loc!(tag_type(min_indent)),
+            word1(b',', TTagUnion::End),
+            word1(b']', TTagUnion::End),
+            min_indent,
+            TTagUnion::Open,
+            TTagUnion::Space,
+            TTagUnion::IndentEnd
         )
-    };
+        .parse(arena, state)?;
+
+        // This could be an open tag union, e.g. `[ Foo, Bar ]a`
+        let (_, ext, state) = optional(allocated(specialize_ref(
+            TTagUnion::Syntax,
+            term(min_indent),
+        )))
+        .parse(arena, state)?;
+
+        let result = TypeAnnotation::TagUnion {
+            tags: tags.into_bump_slice(),
+            ext,
+            final_comments,
+        };
+
+        Ok((MadeProgress, result, state))
+    }
 }
 
 #[allow(clippy::type_complexity)]
@@ -58,7 +69,7 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>,
                 loc_wildcard(),
                 loc_parenthetical_type(min_indent),
                 loc!(record_type(min_indent)),
-                loc!(tag_union!(min_indent)),
+                loc!(tag_union_type(min_indent)),
                 loc!(applied_type(min_indent)),
                 loc!(parse_type_variable)
             ),
@@ -118,7 +129,7 @@ fn loc_applied_arg<'a>(
                 loc_wildcard(),
                 loc_parenthetical_type(min_indent),
                 loc!(record_type(min_indent)),
-                loc!(tag_union!(min_indent)),
+                loc!(tag_union_type(min_indent)),
                 loc!(parse_concrete_type),
                 loc!(parse_type_variable)
             ),
@@ -148,29 +159,30 @@ fn loc_parenthetical_type<'a>(
 }
 
 #[inline(always)]
-#[allow(clippy::type_complexity)]
-fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>, SyntaxError<'a>> {
-    map!(
-        and!(
+fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>, TTagUnion<'a>> {
+    move |arena, state: State<'a>| {
+        let (_, either_name, state) = specialize_ref(
+            TTagUnion::Syntax,
             either!(loc!(private_tag()), loc!(global_tag())),
-            // Optionally parse space-separated arguments for the constructor,
-            // e.g. `ok err` in `Result ok err`
-            loc_applied_args(min_indent)
-        ),
-        |(either_name, args): (
-            Either<Located<&'a str>, Located<&'a str>>,
-            Vec<'a, Located<TypeAnnotation<'a>>>
-        )| match either_name {
+        )
+        .parse(arena, state)?;
+
+        let (_, args, state) =
+            specialize_ref(TTagUnion::Syntax, loc_applied_args(min_indent)).parse(arena, state)?;
+
+        let result = match either_name {
             Either::First(name) => Tag::Private {
                 name,
-                args: args.into_bump_slice()
+                args: args.into_bump_slice(),
             },
             Either::Second(name) => Tag::Global {
                 name,
-                args: args.into_bump_slice()
+                args: args.into_bump_slice(),
             },
-        }
-    )
+        };
+
+        Ok((MadeProgress, result, state))
+    }
 }
 
 fn record_type_field<'a>(
@@ -248,47 +260,6 @@ fn record_type_field<'a>(
     }
 }
 
-macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $space_problem:expr, $indent_problem:expr) => {
-        skip_first!(
-            $opening_brace,
-            skip_first!(
-                // We specifically allow space characters inside here, so that
-                // `[  ]` can be successfully parsed as an empty list, and then
-                // changed by the formatter back into `[]`.
-                //
-                // We don't allow newlines or comments in the middle of empty
-                // roc_collections because those are normally stored in an Expr,
-                // and there's no Expr in which to store them in an empty collection!
-                //
-                // We could change the AST to add extra storage specifically to
-                // support empty literals containing newlines or comments, but this
-                // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::word1(b' ', |row, col| TRecord::Space(
-                    BadInputError::LineTooLong,
-                    row,
-                    col
-                ))),
-                skip_second!(
-                    and!(
-                        $crate::parser::trailing_sep_by0(
-                            $delimiter,
-                            $crate::blankspace::space0_around_e(
-                                $elem,
-                                $min_indent,
-                                $space_problem,
-                                $indent_problem
-                            )
-                        ),
-                        $crate::blankspace::space0_e($min_indent, $space_problem, $indent_problem)
-                    ),
-                    $closing_brace
-                )
-            )
-        )
-    };
-}
-
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
     let f = |x, row, col| SyntaxError::Type(Type::TRecord(x, row, col));
@@ -311,6 +282,7 @@ fn record_type_internal<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'
             word1(b',', TRecord::End),
             word1(b'}', TRecord::End),
             min_indent,
+            TRecord::Open,
             TRecord::Space,
             TRecord::IndentEnd
         )

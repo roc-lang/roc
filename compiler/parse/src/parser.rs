@@ -369,6 +369,7 @@ pub type Col = u16;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type<'a> {
     TRecord(TRecord<'a>, Row, Col),
+    TTagUnion(TTagUnion<'a>, Row, Col),
     ///
     TStart(Row, Col),
     TSpace(Row, Col),
@@ -378,8 +379,8 @@ pub enum Type<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TRecord<'a> {
-    Open(Row, Col),
     End(Row, Col),
+    Open(Row, Col),
     ///
     Field(Row, Col),
     Colon(Row, Col),
@@ -395,6 +396,23 @@ pub enum TRecord<'a> {
     IndentOpen(Row, Col),
     IndentColon(Row, Col),
     IndentOptional(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TTagUnion<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+    ///
+    Type(&'a Type<'a>, Row, Col),
+
+    // TODO REMOVE in favor of Type
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    ///
+    Space(BadInputError, Row, Col),
+    ///
+    IndentOpen(Row, Col),
     IndentEnd(Row, Col),
 }
 
@@ -1187,6 +1205,58 @@ macro_rules! collection_trailing_sep {
 }
 
 #[macro_export]
+macro_rules! collection_trailing_sep_e {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $open_problem:expr, $space_problem:expr, $indent_problem:expr) => {
+        skip_first!(
+            $opening_brace,
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // roc_collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!($crate::parser::word1(b' ', |row, col| $space_problem(
+                    BadInputError::LineTooLong,
+                    row,
+                    col
+                ))),
+                |arena, state| {
+                    let (_, elements, state) =
+                                    and!(
+                                        $crate::parser::trailing_sep_by0(
+                                            $delimiter,
+                                            $crate::blankspace::space0_around_e(
+                                                $elem,
+                                                $min_indent,
+                                                $space_problem,
+                                                $indent_problem
+                                            )
+                                        ),
+                                        $crate::blankspace::space0_e($min_indent, $space_problem, $indent_problem)
+                                    ).parse(arena, state)?;
+
+                    let (_,_, state) =
+                            if elements.0.is_empty() {
+                                one_of_with_error![$open_problem; $closing_brace].parse(arena, state)?
+                            } else {
+                                $closing_brace.parse(arena, state)?
+                            };
+
+
+                    Ok((MadeProgress, elements, state))
+                }
+            )
+        )
+    };
+}
+
+#[macro_export]
 macro_rules! and {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
@@ -1225,19 +1295,19 @@ macro_rules! one_of {
 
 #[macro_export]
 macro_rules! one_of_with_error {
-    ($toerror:expr; $p1:expr, $p2:expr) => {
+    ($toerror:expr; $p1:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
 
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((MadeProgress, _, state)) => Err((MadeProgress, $toerror(state.line, state.column), state)),
-                Err((NoProgress, _, state)) => $p2.parse( arena, state),
+                Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state )),
+                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.line, state.column), state)),
             }
         }
     };
 
     ($toerror:expr; $p1:expr, $($others:expr),+) => {
-        one_of_with_error!($toerror, $p1, one_of!($($others),+))
+        one_of_with_error!($toerror, $p1, one_of_with_error!($($others),+))
     };
 }
 

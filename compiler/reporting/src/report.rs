@@ -362,7 +362,14 @@ impl<'a> RocDocAllocator<'a> {
     pub fn note(&'a self, line: &'a str) -> DocBuilder<'a, Self, Annotation> {
         self.text("Note")
             .annotate(Annotation::Tip)
-            .append(":")
+            .append(": ")
+            .append(line)
+    }
+
+    pub fn hint(&'a self, line: &'a str) -> DocBuilder<'a, Self, Annotation> {
+        self.text("Hint")
+            .annotate(Annotation::Tip)
+            .append(": ")
             .append(line)
     }
 

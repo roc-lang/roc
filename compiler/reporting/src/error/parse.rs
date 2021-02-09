@@ -24,6 +24,21 @@ fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuil
     alloc.note("I may be confused by indentation")
 }
 
+fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.note("I may be confused by indentation")
+}
+
+fn hint_for_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.concat(vec![
+        alloc.hint("Tag names "),
+        alloc.reflow("Tag names start with an uppercase letter, like "),
+        alloc.parser_suggestion("Err"),
+        alloc.text(" or "),
+        alloc.parser_suggestion("Green"),
+        alloc.text("."),
+    ])
+}
+
 fn to_syntax_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
@@ -103,6 +118,9 @@ fn to_type_report<'a>(
 
     match parse_problem {
         Type::TRecord(record, row, col) => to_trecord_report(alloc, filename, &record, *row, *col),
+        Type::TTagUnion(tag_union, row, col) => {
+            to_ttag_union_report(alloc, filename, &tag_union, *row, *col)
+        }
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }
@@ -115,8 +133,6 @@ fn to_trecord_report<'a>(
     start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::TRecord;
-
-    dbg!(parse_problem);
 
     match *parse_problem {
         TRecord::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
@@ -348,6 +364,207 @@ fn to_trecord_report<'a>(
     }
 }
 
+fn to_ttag_union_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::TTagUnion<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::TTagUnion;
+
+    dbg!(parse_problem);
+
+    match *parse_problem {
+        TTagUnion::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Keyword(keyword) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = to_keyword_region(row, col, keyword);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a tag union, but I got stuck on this field name:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Looks like you are trying to use "),
+                        alloc.keyword(keyword),
+                        alloc.reflow(" as a tag name, but that is a reserved word. Tag names must start with a uppercase letter."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED TAG UNION TYPE".to_string(),
+                }
+            }
+            Next::Other(Some(c)) if c.is_alphabetic() => {
+                debug_assert!(c.is_lowercase());
+
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(
+                        r"I am partway through parsing a tag union type, but I got stuck here:",
+                    ),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.reflow(r"I was expecting to see a tag name."),
+                    hint_for_tag_name(alloc),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "WEIRD TAG NAME".to_string(),
+                }
+            }
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a tag union type, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Tag unions look like "),
+                        alloc.parser_suggestion("[ Many I64, None ],"),
+                        alloc.reflow(" so I was expecting to see a tag name next."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED TAG UNION TYPE".to_string(),
+                }
+            }
+        },
+
+        TTagUnion::End(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            match what_is_next(alloc.src_lines, row, col) {
+                Next::Other(Some(c)) if c.is_alphabetic() => {
+                    debug_assert!(c.is_lowercase());
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a tag union type, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.reflow(r"I was expecting to see a tag name."),
+                        hint_for_tag_name(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "WEIRD TAG NAME".to_string(),
+                    }
+                }
+                _ => {
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(r"I am partway through parsing a tag union type, but I got stuck here:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                                alloc.reflow(
+                                    r"I was expecting to see a closing square bracket before this, so try adding a ",
+                                ),
+                                alloc.parser_suggestion("]"),
+                                alloc.reflow(" and see if that helps?"),
+                            ]),
+                        ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED TAG UNION TYPE".to_string(),
+                    }
+                }
+            }
+        }
+
+        TTagUnion::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
+
+        TTagUnion::Syntax(error, row, col) => to_syntax_report(alloc, filename, error, row, col),
+
+        TTagUnion::IndentOpen(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a tag union type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"Tag unions look like "),
+                    alloc.parser_suggestion("[ Many I64, None ],"),
+                    alloc.reflow(" so I was expecting to see a tag name next."),
+                ]),
+                note_for_tag_union_type_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED TAG UNION TYPE".to_string(),
+            }
+        }
+
+        TTagUnion::IndentEnd(row, col) => {
+            match next_line_starts_with_close_square_bracket(alloc.src_lines, row - 1) {
+                Some((curly_row, curly_col)) => {
+                    let surroundings =
+                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
+                    let region = Region::from_row_col(curly_row, curly_col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            "I am partway through parsing a tag union type, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I need this square bracket to be indented more. Try adding more spaces before it!"),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "NEED MORE INDENTATION".to_string(),
+                    }
+                }
+                None => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a tag union type, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I was expecting to see a closing square "),
+                            alloc.reflow("bracket before this, so try adding a "),
+                            alloc.parser_suggestion("]"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                        note_for_tag_union_type_indent(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED TAG UNION TYPE".to_string(),
+                    }
+                }
+            }
+        }
+
+        TTagUnion::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+    }
+}
+
 fn to_space_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
@@ -431,6 +648,23 @@ fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<
             let spaces_dropped = line.trim_start_matches(' ');
             match spaces_dropped.chars().next() {
                 Some('}') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn next_line_starts_with_close_square_bracket(
+    source_lines: &[&str],
+    row: Row,
+) -> Option<(Row, Col)> {
+    match source_lines.get(row as usize + 1) {
+        None => None,
+
+        Some(line) => {
+            let spaces_dropped = line.trim_start_matches(' ');
+            match spaces_dropped.chars().next() {
+                Some(']') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
                 _ => None,
             }
         }
