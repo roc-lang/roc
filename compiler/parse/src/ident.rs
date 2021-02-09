@@ -1,6 +1,7 @@
 use crate::ast::Attempting;
 use crate::keyword;
-use crate::parser::{peek_utf8_char, unexpected, Fail, FailReason, ParseResult, Parser, State};
+use crate::parser::Progress::{self, *};
+use crate::parser::{peek_utf8_char, unexpected, Bag, FailReason, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -78,6 +79,8 @@ pub fn parse_ident<'a>(
     let is_accessor_fn;
     let mut is_private_tag = false;
 
+    let start_bytes_len = state.bytes.len();
+
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
     match peek_utf8_char(&state) {
@@ -88,20 +91,20 @@ pub fn parse_ident<'a>(
                 is_capitalized = first_ch.is_uppercase();
                 is_accessor_fn = false;
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
             } else if first_ch == '.' {
                 is_capitalized = false;
                 is_accessor_fn = true;
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
             } else if first_ch == '@' {
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
 
                 // '@' must always be followed by a capital letter!
                 match peek_utf8_char(&state) {
                     Ok((next_ch, next_bytes_parsed)) => {
                         if next_ch.is_uppercase() {
-                            state = state.advance_without_indenting(next_bytes_parsed)?;
+                            state = state.advance_without_indenting(arena, next_bytes_parsed)?;
 
                             part_buf.push('@');
                             part_buf.push(next_ch);
@@ -111,19 +114,26 @@ pub fn parse_ident<'a>(
                             is_accessor_fn = false;
                         } else {
                             return Err(unexpected(
+                                arena,
                                 bytes_parsed + next_bytes_parsed,
-                                state,
                                 Attempting::Identifier,
+                                state,
                             ));
                         }
                     }
-                    Err(reason) => return state.fail(reason),
+                    Err(reason) => {
+                        let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+                        return state.fail(arena, progress, reason);
+                    }
                 }
             } else {
-                return Err(unexpected(0, state, Attempting::Identifier));
+                return Err(unexpected(arena, 0, Attempting::Identifier, state));
             }
         }
-        Err(reason) => return state.fail(reason),
+        Err(reason) => {
+            let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+            return state.fail(arena, progress, reason);
+        }
     }
 
     while !state.bytes.is_empty() {
@@ -183,9 +193,12 @@ pub fn parse_ident<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => {
+                let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+                return state.fail(arena, progress, reason);
+            }
         }
     }
 
@@ -241,7 +254,7 @@ pub fn parse_ident<'a>(
                 // We had neither capitalized nor noncapitalized parts,
                 // yet we made it this far. The only explanation is that this was
                 // a stray '.' drifting through the cosmos.
-                return Err(unexpected(1, state, Attempting::Identifier));
+                return Err(unexpected(arena, 1, Attempting::Identifier, state));
             }
         }
     } else if is_private_tag {
@@ -255,7 +268,9 @@ pub fn parse_ident<'a>(
         }
     };
 
-    Ok(((answer, None), state))
+    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
+    debug_assert_eq!(progress, Progress::MadeProgress,);
+    Ok((Progress::MadeProgress, (answer, None), state))
 }
 
 fn malformed<'a>(
@@ -293,13 +308,14 @@ fn malformed<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => return state.fail(arena, MadeProgress, reason),
         }
     }
 
     Ok((
+        MadeProgress,
         (Ident::Malformed(full_string.into_bump_str()), next_char),
         state,
     ))
@@ -308,9 +324,9 @@ fn malformed<'a>(
 pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         // Discard next_char; we don't need it.
-        let ((string, _), state) = parse_ident(arena, state)?;
+        let (progress, (string, _), state) = parse_ident(arena, state)?;
 
-        Ok((string, state))
+        Ok((progress, string, state))
     }
 }
 
@@ -323,19 +339,19 @@ where
         let (first_letter, bytes_parsed) = match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !pred(first_letter) {
-                    return Err(unexpected(0, state, Attempting::RecordFieldLabel));
+                    return Err(unexpected(arena, 0, Attempting::RecordFieldLabel, state));
                 }
 
                 (first_letter, bytes_parsed)
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => return state.fail(arena, NoProgress, reason),
         };
 
         let mut buf = String::with_capacity_in(1, arena);
 
         buf.push(first_letter);
 
-        state = state.advance_without_indenting(bytes_parsed)?;
+        state = state.advance_without_indenting(arena, bytes_parsed)?;
 
         while !state.bytes.is_empty() {
             match peek_utf8_char(&state) {
@@ -348,17 +364,17 @@ where
                     if ch.is_alphabetic() || ch.is_ascii_digit() {
                         buf.push(ch);
 
-                        state = state.advance_without_indenting(bytes_parsed)?;
+                        state = state.advance_without_indenting(arena, bytes_parsed)?;
                     } else {
                         // This is the end of the field. We're done!
                         break;
                     }
                 }
-                Err(reason) => return state.fail(reason),
+                Err(reason) => return state.fail(arena, MadeProgress, reason),
             };
         }
 
-        Ok((buf.into_bump_str(), state))
+        Ok((MadeProgress, buf.into_bump_str(), state))
     }
 }
 
@@ -368,8 +384,11 @@ where
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
     move |arena, state| {
-        let (ident, state) =
+        let (progress, ident, state) =
             global_tag_or_ident(|first_char| first_char.is_lowercase()).parse(arena, state)?;
+
+        // to parse a valid ident, progress must be made
+        debug_assert_eq!(progress, MadeProgress);
 
         if (ident == keyword::IF)
             || (ident == keyword::THEN)
@@ -381,14 +400,12 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
             // TODO Calculate the correct region based on state
             let region = Region::zero();
             Err((
-                Fail {
-                    reason: FailReason::ReservedKeyword(region),
-                    attempting: Attempting::Identifier,
-                },
+                MadeProgress,
+                Bag::from_state(arena, &state, FailReason::ReservedKeyword(region)),
                 state,
             ))
         } else {
-            Ok((ident, state))
+            Ok((MadeProgress, ident, state))
         }
     }
 }

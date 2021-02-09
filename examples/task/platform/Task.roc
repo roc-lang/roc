@@ -1,6 +1,6 @@
 interface Task
     exposes [ Task, succeed, fail, after, map, putLine ]
-    imports [ Effect ]
+    imports [ fx.Effect ]
 
 
 Task ok err : Effect.Effect (Result ok err)
@@ -28,7 +28,7 @@ map = \effect, transform ->
     Effect.after effect \result ->
         when result is
             Ok a -> Task.succeed (transform a)
-            Err err -> Effect.always (Err err) # Task.fail err  does not work. WEIRD!
+            Err err -> Task.fail err
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})

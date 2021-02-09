@@ -41,8 +41,9 @@ mod test_reporting {
         }
     }
 
-    fn infer_expr_help(
-        expr_src: &str,
+    fn infer_expr_help<'a>(
+        arena: &'a Bump,
+        expr_src: &'a str,
     ) -> Result<
         (
             Vec<solve::TypeError>,
@@ -51,7 +52,7 @@ mod test_reporting {
             ModuleId,
             Interns,
         ),
-        ParseErrOut,
+        ParseErrOut<'a>,
     > {
         let CanExprOut {
             loc_expr,
@@ -63,7 +64,7 @@ mod test_reporting {
             mut interns,
             problems: can_problems,
             ..
-        } = can_expr(expr_src)?;
+        } = can_expr(arena, expr_src)?;
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -108,7 +109,7 @@ mod test_reporting {
         Ok((unify_problems, can_problems, mono_problems, home, interns))
     }
 
-    fn list_reports<F>(src: &str, buf: &mut String, callback: F)
+    fn list_reports<F>(arena: &Bump, src: &str, buf: &mut String, callback: F)
     where
         F: FnOnce(RocDocBuilder<'_>, &mut String),
     {
@@ -118,7 +119,7 @@ mod test_reporting {
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
 
-        match infer_expr_help(src) {
+        match infer_expr_help(arena, src) {
             Err(parse_err) => {
                 let ParseErrOut {
                     fail,
@@ -128,7 +129,8 @@ mod test_reporting {
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let doc = parse_problem(&alloc, filename, fail);
+                let problem = fail.into_parse_problem(filename.clone(), src.as_bytes());
+                let doc = parse_problem(&alloc, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
@@ -169,6 +171,7 @@ mod test_reporting {
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
+        let arena = Bump::new();
 
         let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
             doc.1
@@ -176,13 +179,23 @@ mod test_reporting {
                 .expect("list_reports")
         };
 
-        list_reports(src, &mut buf, callback);
+        list_reports(&arena, src, &mut buf, callback);
+
+        // convenient to copy-paste the generated message
+        if true {
+            if buf != expected_rendering {
+                for line in buf.split("\n") {
+                    println!("                {}", line);
+                }
+            }
+        }
 
         assert_eq!(buf, expected_rendering);
     }
 
     fn color_report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
+        let arena = Bump::new();
 
         let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
             doc.1
@@ -196,7 +209,7 @@ mod test_reporting {
                 .expect("list_reports")
         };
 
-        list_reports(src, &mut buf, callback);
+        list_reports(&arena, src, &mut buf, callback);
 
         let readable = human_readable(&buf);
 
@@ -214,6 +227,27 @@ mod test_reporting {
             .replace(RESET_CODE, "<reset>")
             .replace(BOLD_CODE, "<bold>")
             .replace(UNDERLINE_CODE, "<underline>")
+    }
+
+    #[test]
+    fn value_not_exposed() {
+        report_problem_as(
+            indoc!(
+                r#"
+                List.foobar 1 2
+            "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                The List module does not expose a foobar value:
+
+                1│  List.foobar 1 2
+                    ^^^^^^^^^^^
+                "#
+            ),
+        )
     }
 
     #[test]
@@ -438,9 +472,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-               
+
                 I cannot find a `bar` value
-               
+
                 8│          4 -> bar baz "yay"
                                  ^^^
 
@@ -551,8 +585,9 @@ mod test_reporting {
             "#
         );
 
+        let arena = Bump::new();
         let (_type_problems, _can_problems, _mono_problems, home, interns) =
-            infer_expr_help(src).expect("parse error");
+            infer_expr_help(&arena, src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -581,8 +616,9 @@ mod test_reporting {
             "#
         );
 
+        let arena = Bump::new();
         let (_type_problems, _can_problems, _mono_problems, home, mut interns) =
-            infer_expr_help(src).expect("parse error");
+            infer_expr_help(&arena, src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -3283,16 +3319,15 @@ mod test_reporting {
 
     #[test]
     fn float_out_of_range() {
+        // have to deal with some whitespace issues because of the format! macro
         report_problem_as(
-            &format!(
+            indoc!(
                 r#"
-                overflow = 1{:e}
-                underflow = -1{:e}
+                overflow = 11.7976931348623157e308
+                underflow = -11.7976931348623157e308
 
                 overflow + underflow
-                "#,
-                f64::MAX,
-                f64::MAX,
+                "#
             ),
             indoc!(
                 r#"
@@ -3300,11 +3335,11 @@ mod test_reporting {
 
                 This float literal is too big:
 
-                2│                  overflow = 11.7976931348623157e308
-                                               ^^^^^^^^^^^^^^^^^^^^^^^
+                1│  overflow = 11.7976931348623157e308
+                               ^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit floating points, allowing values
-                between-1.7976931348623157e308 and 1.7976931348623157e308
+                Roc uses signed 64-bit floating points, allowing values between
+                -1.7976931348623157e308 and 1.7976931348623157e308
 
                 Tip: Learn more about number literals at TODO
 
@@ -3312,11 +3347,11 @@ mod test_reporting {
 
                 This float literal is too small:
 
-                3│                  underflow = -11.7976931348623157e308
-                                                ^^^^^^^^^^^^^^^^^^^^^^^^
+                2│  underflow = -11.7976931348623157e308
+                                ^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit floating points, allowing values
-                between-1.7976931348623157e308 and 1.7976931348623157e308
+                Roc uses signed 64-bit floating points, allowing values between
+                -1.7976931348623157e308 and 1.7976931348623157e308
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3986,6 +4021,85 @@ mod test_reporting {
 
                 1│  Foo.Bar
                     ^^^^^^^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_annotation_dubble_colon() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f :: I64
+                f = 42
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                
+                Unexpected token while parsing a definition:
+                
+                1│  f :: I64
+                       ^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn double_equals_in_def() {
+        // NOTE: VERY BAD ERROR MESSAGE
+        //
+        // looks like `x y` are considered argument to the add, even though they are
+        // on a lower indentation level
+        report_problem_as(
+            indoc!(
+                r#"
+                x = 3
+                y = 
+                    x == 5
+                    Num.add 1 2
+
+                x y
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+                
+                The `add` function expects 2 arguments, but it got 4 instead:
+                
+                4│      Num.add 1 2
+                        ^^^^^^^
+                
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_operator() {
+        // NOTE: VERY BAD ERROR MESSAGE
+        report_problem_as(
+            indoc!(
+                r#"
+                main =
+                    5 ** 3
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                
+                Unexpected token here:
+                
+                2│      5 ** 3
+                          ^
             "#
             ),
         )

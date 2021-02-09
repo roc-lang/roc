@@ -124,7 +124,7 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            &roc_builtins::std::standard_stdlib(),
+            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             8,
@@ -287,7 +287,7 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            &roc_builtins::std::standard_stdlib(),
+            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             8,

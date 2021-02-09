@@ -1,6 +1,6 @@
 use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
-use roc_module::ident::{Lowercase, TagName, Uppercase};
+use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use std::fmt;
 use std::path::PathBuf;
@@ -316,6 +316,17 @@ impl<'a> RocDocAllocator<'a> {
         self.text(name).annotate(Annotation::Module)
     }
 
+    pub fn module_name(&'a self, name: ModuleName) -> DocBuilder<'a, Self, Annotation> {
+        let name = if name.is_empty() {
+            // Render the app module as "app"
+            "app".to_string()
+        } else {
+            name.as_str().to_string()
+        };
+
+        self.text(name).annotate(Annotation::Module)
+    }
+
     pub fn inlinable_string(&'a self, s: InlinableString) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", s)).annotate(Annotation::Module)
     }
@@ -515,6 +526,7 @@ impl<'a> RocDocAllocator<'a> {
         if error_highlight_line {
             let highlight_text =
                 ERROR_UNDERLINE.repeat((sub_region.end_col - sub_region.start_col) as usize);
+
             let highlight_line = self
                 .line()
                 // Omit the gutter bar when we know there are no further
