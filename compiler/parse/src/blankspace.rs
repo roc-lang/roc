@@ -474,6 +474,17 @@ where
 
                                     any_newlines = true;
                                 }
+                                '\t' => {
+                                    return Err((
+                                        MadeProgress,
+                                        space_problem(
+                                            BadInputError::HasTab,
+                                            state.line,
+                                            state.column,
+                                        ),
+                                        state,
+                                    ));
+                                }
                                 '#' => {
                                     // Check indentation to make sure we were indented enough
                                     // before this comment began.
@@ -579,6 +590,17 @@ where
                                         }
                                     }
                                 }
+                                '\t' => {
+                                    return Err((
+                                        MadeProgress,
+                                        space_problem(
+                                            BadInputError::HasTab,
+                                            state.line,
+                                            state.column,
+                                        ),
+                                        state,
+                                    ));
+                                }
                                 nonblank => {
                                     // Chars can have btye lengths of more than 1!
                                     state = state.advance_without_indenting_e(
@@ -611,6 +633,17 @@ where
                                     comment_line_buf = String::new_in(arena);
 
                                     line_state = LineState::Normal;
+                                }
+                                '\t' => {
+                                    return Err((
+                                        MadeProgress,
+                                        space_problem(
+                                            BadInputError::HasTab,
+                                            state.line,
+                                            state.column,
+                                        ),
+                                        state,
+                                    ));
                                 }
                                 nonblank => {
                                     state = state.advance_without_indenting_e(

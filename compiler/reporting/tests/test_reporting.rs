@@ -4106,6 +4106,31 @@ mod test_reporting {
     }
 
     #[test]
+    fn recort_type_open() {
+        // TODO we don't hit the Open error message
+        report_problem_as(
+            indoc!(
+                r#"
+                f : {
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : {
+                         ^
+                
+                I was expecting to see a closing curly brace before this, so try
+                adding a } and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn recort_type_end() {
         report_problem_as(
             indoc!(
@@ -4200,6 +4225,46 @@ mod test_reporting {
                 
                 I was expecting to see a colon, question mark, comma or closing curly
                 brace.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_tab() {
+        // a case where the message cannot be as good as elm's
+        report_problem_as(
+            "f : { foo \t }",
+            indoc!(
+                r#"
+                ── TAB CHARACTER ───────────────────────────────────────────────────────────────
+                
+                I encountered a tab character
+                
+                1│  f : { foo 	 }
+                              ^
+                
+                Tab characters are not allowed.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn comment_with_tab() {
+        report_problem_as(
+            "# comment with a \t\n4",
+            indoc!(
+                r#"
+                ── TAB CHARACTER ───────────────────────────────────────────────────────────────
+                
+                I encountered a tab character
+                
+                1│  f : { foo 	 }
+                              ^
+                
+                Tab characters are not allowed.
             "#
             ),
         )
