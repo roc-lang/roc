@@ -305,7 +305,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .unwrap();
 
                     render::render_expr2(
-                        &arena,
+                        &mut env,
                         &size,
                         &expr2,
                         CODE_TXT_XY.into(),

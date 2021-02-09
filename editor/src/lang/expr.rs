@@ -258,6 +258,7 @@ pub fn to_expr2<'a>(
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
+                        text: PoolStr::new(string, &mut env.pool),
                     };
 
                     (expr, Output::default())
