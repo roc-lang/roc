@@ -8,6 +8,8 @@ Here are some ideas and interesting resources for the editor. Feel free to make 
 
 These are potentially inspirational resources for the editor's design.
 
+Nice collection of research on innovative editors, [link](https://futureofcoding.org/catalog/).
+
 ### Package-specific editor integrations
 
 (Or possibly module-specific integrations, type-specific integrations, etc.)
@@ -53,6 +55,7 @@ These are potentially inspirational resources for the editor's design.
 
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
 * [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
+* [Lamdu](http://www.lamdu.org/) live functional programming.
 
 ### Productivity features
 
