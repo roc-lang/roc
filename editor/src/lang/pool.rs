@@ -248,7 +248,7 @@ impl PoolStr {
 
             PoolStr {
                 first_node_id,
-                len: number_of_nodes,
+                len: string.len() as u32,
             }
         } else {
             PoolStr {
