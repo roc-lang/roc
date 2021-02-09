@@ -8,6 +8,70 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
+fn build_eq_builtin<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    lhs_val: BasicValueEnum<'ctx>,
+    rhs_val: BasicValueEnum<'ctx>,
+    builtin: &Builtin<'a>,
+) -> BasicValueEnum<'ctx> {
+    let int_cmp = |pred, label| {
+        let int_val = env.builder.build_int_compare(
+            pred,
+            lhs_val.into_int_value(),
+            rhs_val.into_int_value(),
+            label,
+        );
+
+        BasicValueEnum::IntValue(int_val)
+    };
+
+    let float_cmp = |pred, label| {
+        let int_val = env.builder.build_float_compare(
+            pred,
+            lhs_val.into_float_value(),
+            rhs_val.into_float_value(),
+            label,
+        );
+
+        BasicValueEnum::IntValue(int_val)
+    };
+
+    match builtin {
+        Builtin::Int128 => int_cmp(IntPredicate::EQ, "eq_i128"),
+        Builtin::Int64 => int_cmp(IntPredicate::EQ, "eq_i64"),
+        Builtin::Int32 => int_cmp(IntPredicate::EQ, "eq_i32"),
+        Builtin::Int16 => int_cmp(IntPredicate::EQ, "eq_i16"),
+        Builtin::Int8 => int_cmp(IntPredicate::EQ, "eq_i8"),
+        Builtin::Int1 => int_cmp(IntPredicate::EQ, "eq_i1"),
+
+        Builtin::Usize => int_cmp(IntPredicate::EQ, "eq_usize"),
+
+        Builtin::Float128 => float_cmp(FloatPredicate::OEQ, "eq_f128"),
+        Builtin::Float64 => float_cmp(FloatPredicate::OEQ, "eq_f64"),
+        Builtin::Float32 => float_cmp(FloatPredicate::OEQ, "eq_f32"),
+        Builtin::Float16 => float_cmp(FloatPredicate::OEQ, "eq_f16"),
+
+        Builtin::Str => str_equal(env, lhs_val, rhs_val),
+        Builtin::List(_, elem) => build_list_eq(
+            env,
+            layout_ids,
+            &Layout::Builtin(builtin.clone()),
+            elem,
+            lhs_val.into_struct_value(),
+            rhs_val.into_struct_value(),
+        ),
+        Builtin::Set(_elem) => todo!("equality on Set"),
+        Builtin::Dict(_key, _value) => todo!("equality on Dict"),
+
+        // empty structures are always equal to themselves
+        Builtin::EmptyStr => env.context.bool_type().const_int(1, false).into(),
+        Builtin::EmptyList => env.context.bool_type().const_int(1, false).into(),
+        Builtin::EmptyDict => env.context.bool_type().const_int(1, false).into(),
+        Builtin::EmptySet => env.context.bool_type().const_int(1, false).into(),
+    }
+}
+
 pub fn build_eq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -16,79 +80,102 @@ pub fn build_eq<'a, 'ctx, 'env>(
     lhs_layout: &Layout<'a>,
     rhs_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    match (lhs_layout, rhs_layout) {
-        (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin)) => {
-            let int_cmp = |pred, label| {
-                let int_val = env.builder.build_int_compare(
-                    pred,
-                    lhs_val.into_int_value(),
-                    rhs_val.into_int_value(),
-                    label,
-                );
+    if lhs_layout != rhs_layout {
+        panic!(
+            "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
+            lhs_layout, rhs_layout
+        );
+    }
 
-                BasicValueEnum::IntValue(int_val)
-            };
+    match lhs_layout {
+        Layout::Builtin(builtin) => build_eq_builtin(env, layout_ids, lhs_val, rhs_val, builtin),
 
-            let float_cmp = |pred, label| {
-                let int_val = env.builder.build_float_compare(
-                    pred,
-                    lhs_val.into_float_value(),
-                    rhs_val.into_float_value(),
-                    label,
-                );
-
-                BasicValueEnum::IntValue(int_val)
-            };
-
-            match (lhs_builtin, rhs_builtin) {
-                (Builtin::Int128, Builtin::Int128) => int_cmp(IntPredicate::EQ, "eq_i128"),
-                (Builtin::Int64, Builtin::Int64) => int_cmp(IntPredicate::EQ, "eq_i64"),
-                (Builtin::Int32, Builtin::Int32) => int_cmp(IntPredicate::EQ, "eq_i32"),
-                (Builtin::Int16, Builtin::Int16) => int_cmp(IntPredicate::EQ, "eq_i16"),
-                (Builtin::Int8, Builtin::Int8) => int_cmp(IntPredicate::EQ, "eq_i8"),
-                (Builtin::Int1, Builtin::Int1) => int_cmp(IntPredicate::EQ, "eq_i1"),
-                (Builtin::Float64, Builtin::Float64) => float_cmp(FloatPredicate::OEQ, "eq_f64"),
-                (Builtin::Float32, Builtin::Float32) => float_cmp(FloatPredicate::OEQ, "eq_f32"),
-                (Builtin::Str, Builtin::Str) => str_equal(env, lhs_val, rhs_val),
-                (Builtin::EmptyList, Builtin::EmptyList) => {
-                    env.context.bool_type().const_int(1, false).into()
-                }
-                (Builtin::List(_, _), Builtin::EmptyList)
-                | (Builtin::EmptyList, Builtin::List(_, _)) => {
-                    unreachable!("the `==` operator makes sure its two arguments have the same type and thus layout")
-                }
-                (Builtin::List(_, elem1), Builtin::List(_, elem2)) => {
-                    debug_assert_eq!(elem1, elem2);
-
-                    build_list_eq(
-                        env,
-                        layout_ids,
-                        lhs_layout,
-                        elem1,
-                        lhs_val.into_struct_value(),
-                        rhs_val.into_struct_value(),
-                    )
-                }
-                (b1, b2) => {
-                    todo!("Handle equals for builtin layouts {:?} == {:?}", b1, b2);
-                }
-            }
+        Layout::Struct(fields) => build_struct_eq(
+            env,
+            layout_ids,
+            fields,
+            lhs_val.into_struct_value(),
+            rhs_val.into_struct_value(),
+        ),
+        other => {
+            todo!("implement equals for layouts {:?} == {:?}", other, other);
         }
-        (Layout::Struct(f1), Layout::Struct(f2)) => {
-            debug_assert_eq!(f1, f2);
+    }
+}
 
-            build_struct_eq(
+fn build_neq_builtin<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    lhs_val: BasicValueEnum<'ctx>,
+    rhs_val: BasicValueEnum<'ctx>,
+    builtin: &Builtin<'a>,
+) -> BasicValueEnum<'ctx> {
+    let int_cmp = |pred, label| {
+        let int_val = env.builder.build_int_compare(
+            pred,
+            lhs_val.into_int_value(),
+            rhs_val.into_int_value(),
+            label,
+        );
+
+        BasicValueEnum::IntValue(int_val)
+    };
+
+    let float_cmp = |pred, label| {
+        let int_val = env.builder.build_float_compare(
+            pred,
+            lhs_val.into_float_value(),
+            rhs_val.into_float_value(),
+            label,
+        );
+
+        BasicValueEnum::IntValue(int_val)
+    };
+
+    match builtin {
+        Builtin::Int128 => int_cmp(IntPredicate::NE, "neq_i128"),
+        Builtin::Int64 => int_cmp(IntPredicate::NE, "neq_i64"),
+        Builtin::Int32 => int_cmp(IntPredicate::NE, "neq_i32"),
+        Builtin::Int16 => int_cmp(IntPredicate::NE, "neq_i16"),
+        Builtin::Int8 => int_cmp(IntPredicate::NE, "neq_i8"),
+        Builtin::Int1 => int_cmp(IntPredicate::NE, "neq_i1"),
+
+        Builtin::Usize => int_cmp(IntPredicate::NE, "neq_usize"),
+
+        Builtin::Float128 => float_cmp(FloatPredicate::ONE, "neq_f128"),
+        Builtin::Float64 => float_cmp(FloatPredicate::ONE, "neq_f64"),
+        Builtin::Float32 => float_cmp(FloatPredicate::ONE, "neq_f32"),
+        Builtin::Float16 => float_cmp(FloatPredicate::ONE, "neq_f16"),
+
+        Builtin::Str => {
+            let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();
+            let result: IntValue = env.builder.build_not(is_equal, "negate");
+
+            result.into()
+        }
+        Builtin::List(_, elem) => {
+            let is_equal = build_list_eq(
                 env,
                 layout_ids,
-                f1,
+                &Layout::Builtin(builtin.clone()),
+                elem,
                 lhs_val.into_struct_value(),
                 rhs_val.into_struct_value(),
             )
+            .into_int_value();
+
+            let result: IntValue = env.builder.build_not(is_equal, "negate");
+
+            result.into()
         }
-        (other1, other2) => {
-            // TODO NOTE: This should ultimately have a _ => todo!("type mismatch!") branch
-            todo!("implement equals for layouts {:?} == {:?}", other1, other2);
-        }
+        Builtin::Set(_elem) => todo!("equality on Set"),
+        Builtin::Dict(_key, _value) => todo!("equality on Dict"),
+
+        // empty structures are always equal to themselves
+        Builtin::EmptyStr => env.context.bool_type().const_int(0, false).into(),
+        Builtin::EmptyList => env.context.bool_type().const_int(0, false).into(),
+        Builtin::EmptyDict => env.context.bool_type().const_int(0, false).into(),
+        Builtin::EmptySet => env.context.bool_type().const_int(0, false).into(),
     }
 }
 
@@ -100,94 +187,35 @@ pub fn build_neq<'a, 'ctx, 'env>(
     lhs_layout: &Layout<'a>,
     rhs_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    match (lhs_layout, rhs_layout) {
-        (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin)) => {
-            let int_cmp = |pred, label| {
-                let int_val = env.builder.build_int_compare(
-                    pred,
-                    lhs_val.into_int_value(),
-                    rhs_val.into_int_value(),
-                    label,
-                );
+    if lhs_layout != rhs_layout {
+        panic!(
+            "Inequality of different layouts; did you have a type mismatch?\n{:?} != {:?}",
+            lhs_layout, rhs_layout
+        );
+    }
 
-                BasicValueEnum::IntValue(int_val)
-            };
+    match lhs_layout {
+        Layout::Builtin(builtin) => build_neq_builtin(env, layout_ids, lhs_val, rhs_val, builtin),
 
-            let float_cmp = |pred, label| {
-                let int_val = env.builder.build_float_compare(
-                    pred,
-                    lhs_val.into_float_value(),
-                    rhs_val.into_float_value(),
-                    label,
-                );
-
-                BasicValueEnum::IntValue(int_val)
-            };
-
-            match (lhs_builtin, rhs_builtin) {
-                (Builtin::Int128, Builtin::Int128) => int_cmp(IntPredicate::NE, "neq_i128"),
-                (Builtin::Int64, Builtin::Int64) => int_cmp(IntPredicate::NE, "neq_i64"),
-                (Builtin::Int32, Builtin::Int32) => int_cmp(IntPredicate::NE, "neq_i32"),
-                (Builtin::Int16, Builtin::Int16) => int_cmp(IntPredicate::NE, "neq_i16"),
-                (Builtin::Int8, Builtin::Int8) => int_cmp(IntPredicate::NE, "neq_i8"),
-                (Builtin::Int1, Builtin::Int1) => int_cmp(IntPredicate::NE, "neq_i1"),
-                (Builtin::Float64, Builtin::Float64) => float_cmp(FloatPredicate::ONE, "neq_f64"),
-                (Builtin::Float32, Builtin::Float32) => float_cmp(FloatPredicate::ONE, "neq_f32"),
-                (Builtin::Str, Builtin::Str) => {
-                    let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();
-                    let result: IntValue = env.builder.build_not(is_equal, "negate");
-
-                    result.into()
-                }
-                (Builtin::EmptyList, Builtin::EmptyList) => {
-                    env.context.bool_type().const_int(0, false).into()
-                }
-                (Builtin::List(_, _), Builtin::EmptyList)
-                | (Builtin::EmptyList, Builtin::List(_, _)) => {
-                    unreachable!("the `==` operator makes sure its two arguments have the same type and thus layout")
-                }
-                (Builtin::List(_, elem1), Builtin::List(_, elem2)) => {
-                    debug_assert_eq!(elem1, elem2);
-
-                    let equal = build_list_eq(
-                        env,
-                        layout_ids,
-                        lhs_layout,
-                        elem1,
-                        lhs_val.into_struct_value(),
-                        rhs_val.into_struct_value(),
-                    );
-
-                    let not_equal: IntValue = env.builder.build_not(equal.into_int_value(), "not");
-
-                    not_equal.into()
-                }
-                (b1, b2) => {
-                    todo!("Handle not equals for builtin layouts {:?} == {:?}", b1, b2);
-                }
-            }
-        }
-        (Layout::Struct(f1), Layout::Struct(f2)) => {
-            debug_assert_eq!(f1, f2);
-
-            let equal = build_struct_eq(
+        Layout::Struct(fields) => {
+            let is_equal = build_struct_eq(
                 env,
                 layout_ids,
-                f1,
+                fields,
                 lhs_val.into_struct_value(),
                 rhs_val.into_struct_value(),
-            );
+            )
+            .into_int_value();
 
-            let not_equal: IntValue = env.builder.build_not(equal.into_int_value(), "not");
+            let result: IntValue = env.builder.build_not(is_equal, "negate");
 
-            not_equal.into()
+            result.into()
         }
-        (other1, other2) => {
-            // TODO NOTE: This should ultimately have a _ => todo!("type mismatch!") branch
+        other => {
             todo!(
-                "implement not equals for layouts {:?} == {:?}",
-                other1,
-                other2
+                "implement not equals for layouts {:?} != {:?}",
+                other,
+                other
             );
         }
     }
