@@ -57,7 +57,7 @@ fn to_syntax_report<'a>(
     let region = Region {
         start_line: start_row,
         end_line: start_row,
-        start_col: start_col,
+        start_col,
         end_col: start_col + 1,
     };
 
