@@ -24,7 +24,10 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN chmod +x llvm.sh
     RUN ./llvm.sh 10
     RUN ln -s /usr/bin/clang-10 /usr/bin/clang
-    RUN ln -s /usr/bin/lld-10 /usr/bin/lld
+    # use lld as linker
+    RUN ln -s /usr/bin/lld-10 /usr/bin/ld.lld
+    RUN echo "[build]" > $CARGO_HOME/config.toml
+    RUN echo "rustflags = [\"-C\", \"link-arg=-fuse-ld=lld\", \"-C\", \"target-cpu=native\"]" >> $CARGO_HOME/config.tom
     # valgrind
     RUN apt -y install autotools-dev cmake automake 
     RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
@@ -63,15 +66,18 @@ build-rust:
     FROM +copy-dirs-and-cache
     ARG RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ARG SCCACHE_DIR=/earthbuild/sccache_dir
+    ARG CARGO_INCREMENTAL=0 # no need to recompile package when using new function
     RUN cargo build; sccache --show-stats # for clippy
     RUN cargo test --release --no-run; sccache --show-stats
 
 check-clippy:
     FROM +build-rust
+    RUN cargo clippy -V
     RUN cargo clippy -- -D warnings
 
 check-rustfmt:
     FROM +copy-dirs-and-cache
+    RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
 save-cache:
