@@ -7,9 +7,10 @@ use crate::header::{
     TypedIdent,
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
+use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
-    unexpected_eof, Either, ParseResult, Parser, State,
+    self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
+    peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -95,16 +96,20 @@ pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseRes
                 if ch == '-' || ch.is_ascii_alphanumeric() {
                     part_buf.push(ch);
 
-                    state = state.advance_without_indenting(bytes_parsed)?;
+                    state = state.advance_without_indenting(arena, bytes_parsed)?;
                 } else {
-                    return Ok((part_buf.into_bump_str(), state));
+                    let progress = Progress::progress_when(!part_buf.is_empty());
+                    return Ok((progress, part_buf.into_bump_str(), state));
                 }
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => {
+                let progress = Progress::progress_when(!part_buf.is_empty());
+                return state.fail(arena, progress, reason);
+            }
         }
     }
 
-    Err(unexpected_eof(0, state.attempting, state))
+    Err(unexpected_eof(arena, state, 0))
 }
 
 #[inline(always)]
@@ -113,14 +118,14 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
         match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !first_letter.is_uppercase() {
-                    return Err(unexpected(0, state, Attempting::Module));
+                    return Err(unexpected(arena, 0, Attempting::Module, state));
                 };
 
                 let mut buf = String::with_capacity_in(4, arena);
 
                 buf.push(first_letter);
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
 
                 while !state.bytes.is_empty() {
                     match peek_utf8_char(&state) {
@@ -131,7 +136,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                             // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
                             // * A '.' separating module parts
                             if ch.is_alphabetic() || ch.is_ascii_digit() {
-                                state = state.advance_without_indenting(bytes_parsed)?;
+                                state = state.advance_without_indenting(arena, bytes_parsed)?;
 
                                 buf.push(ch);
                             } else if ch == '.' {
@@ -143,6 +148,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                                             buf.push(next);
 
                                             state = state.advance_without_indenting(
+                                                arena,
                                                 bytes_parsed + next_bytes_parsed,
                                             )?;
                                         } else {
@@ -151,25 +157,26 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                                             // There may be an identifier after this '.',
                                             // e.g. "baz" in `Foo.Bar.baz`
                                             return Ok((
+                                                MadeProgress,
                                                 ModuleName::new(buf.into_bump_str()),
                                                 state,
                                             ));
                                         }
                                     }
-                                    Err(reason) => return state.fail(reason),
+                                    Err(reason) => return state.fail(arena, MadeProgress, reason),
                                 }
                             } else {
                                 // This is the end of the module name. We're done!
                                 break;
                             }
                         }
-                        Err(reason) => return state.fail(reason),
+                        Err(reason) => return state.fail(arena, MadeProgress, reason),
                     }
                 }
 
-                Ok((ModuleName::new(buf.into_bump_str()), state))
+                Ok((MadeProgress, ModuleName::new(buf.into_bump_str()), state))
             }
-            Err(reason) => state.fail(reason),
+            Err(reason) => state.fail(arena, MadeProgress, reason),
         }
     }
 }
@@ -290,7 +297,8 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
-    zero_or_more!(space0_around(loc(def(0)), 0))
+    // force that we pare until the end of the input
+    skip_second!(zero_or_more!(space0_around(loc(def(0)), 0)), end_of_file())
 }
 
 struct ProvidesTo<'a> {
@@ -307,7 +315,10 @@ struct ProvidesTo<'a> {
 fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
     map!(
         and!(
-            and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
+            and!(
+                skip_second!(backtrackable(space1(1)), ascii_string("provides")),
+                space1(1)
+            ),
             and!(
                 collection!(
                     ascii_char(b'['),
@@ -434,6 +445,7 @@ fn exposes_modules<'a>() -> impl Parser<
     )
 }
 
+#[derive(Debug)]
 struct Packages<'a> {
     entries: Vec<'a, Located<PackageEntry<'a>>>,
 
@@ -445,7 +457,10 @@ struct Packages<'a> {
 fn packages<'a>() -> impl Parser<'a, Packages<'a>> {
     map!(
         and!(
-            and!(skip_second!(space1(1), ascii_string("packages")), space1(1)),
+            and!(
+                skip_second!(backtrackable(space1(1)), ascii_string("packages")),
+                space1(1)
+            ),
             collection!(
                 ascii_char(b'{'),
                 loc!(package_entry()),
@@ -473,7 +488,10 @@ fn imports<'a>() -> impl Parser<
     ),
 > {
     and!(
-        and!(skip_second!(space1(1), ascii_string("imports")), space1(1)),
+        and!(
+            skip_second!(backtrackable(space1(1)), ascii_string("imports")),
+            space1(1)
+        ),
         collection!(
             ascii_char(b'['),
             loc!(imports_entry()),
@@ -487,17 +505,17 @@ fn imports<'a>() -> impl Parser<
 #[inline(always)]
 fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
     move |arena, state| {
-        let (spaces_before_effects_keyword, state) =
+        let (_, spaces_before_effects_keyword, state) =
             skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
-        let (spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
+        let (_, spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
 
         // e.g. `fx.`
-        let (type_shortname, state) =
+        let (_, type_shortname, state) =
             skip_second!(lowercase_ident(), ascii_char(b'.')).parse(arena, state)?;
 
-        let ((type_name, spaces_after_type_name), state) =
+        let (_, (type_name, spaces_after_type_name), state) =
             and!(uppercase_ident(), space1(0)).parse(arena, state)?;
-        let (entries, state) = collection!(
+        let (_, entries, state) = collection!(
             ascii_char(b'{'),
             loc!(typed_ident()),
             ascii_char(b','),
@@ -507,6 +525,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
         .parse(arena, state)?;
 
         Ok((
+            MadeProgress,
             Effects {
                 spaces_before_effects_keyword,
                 spaces_after_effects_keyword,
@@ -524,11 +543,11 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
 fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
     move |arena, state| {
         // You must have a field name, e.g. "email"
-        let (ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
+        let (_, ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
 
-        let (spaces_before_colon, state) = space0(0).parse(arena, state)?;
+        let (_, spaces_before_colon, state) = space0(0).parse(arena, state)?;
 
-        let (ann, state) = skip_first!(
+        let (_, ann, state) = skip_first!(
             ascii_char(b':'),
             space0_before(type_annotation::located(0), 0)
         )
@@ -539,6 +558,7 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
         // printLine : Str -> Effect {}
 
         Ok((
+            MadeProgress,
             TypedIdent::Entry {
                 ident,
                 spaces_before_colon,

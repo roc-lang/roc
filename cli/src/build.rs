@@ -19,16 +19,16 @@ fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     ));
 }
 
-pub fn build_file(
+pub fn build_file<'a>(
+    arena: &'a Bump,
     target: &Triple,
     src_dir: PathBuf,
     roc_file_path: PathBuf,
     opt_level: OptLevel,
     emit_debug_info: bool,
     link_type: LinkType,
-) -> Result<PathBuf, LoadingProblem> {
+) -> Result<PathBuf, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
-    let arena = Bump::new();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
     // Step 1: compile the app and generate the .o file
@@ -36,13 +36,14 @@ pub fn build_file(
 
     // Release builds use uniqueness optimizations
     let stdlib = match opt_level {
-        OptLevel::Normal => roc_builtins::std::standard_stdlib(),
-        OptLevel::Optimize => roc_builtins::std::standard_stdlib(),
+        OptLevel::Normal => arena.alloc(roc_builtins::std::standard_stdlib()),
+        OptLevel::Optimize => arena.alloc(roc_builtins::std::standard_stdlib()),
     };
+
     let loaded = roc_load::file::load_and_monomorphize(
         &arena,
         roc_file_path.clone(),
-        &stdlib,
+        stdlib,
         src_dir.as_path(),
         subs_by_module,
         ptr_bytes,

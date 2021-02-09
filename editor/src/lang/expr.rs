@@ -20,7 +20,7 @@ use roc_parse::ast::StrLiteral;
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::expr::expr;
-use roc_parse::parser::{loc, Fail, Parser, State};
+use roc_parse::parser::{loc, Bag, Parser, State};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -233,15 +233,15 @@ pub fn str_to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,
-) -> Result<(Expr2, self::Output), Fail> {
-    let state = State::new(input.trim().as_bytes(), Attempting::Module);
+) -> Result<(Expr2, self::Output), Bag<'a>> {
+    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(expr(0)), 0);
     let parse_res = parser.parse(&arena, state);
 
     parse_res
-        .map(|(loc_expr, _)| arena.alloc(loc_expr.value))
+        .map(|(_, loc_expr, _)| arena.alloc(loc_expr.value))
         .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
-        .map_err(|(fail, _)| fail)
+        .map_err(|(_, fail, _)| fail)
 }
 
 pub fn to_expr2<'a>(
