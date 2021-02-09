@@ -3982,9 +3982,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         Hash => {
-            let (value, layout) = load_symbol_and_layout(scope, &args[0]);
+            debug_assert_eq!(args.len(), 2);
+            let seed = load_symbol(scope, &args[0]);
+            let (value, layout) = load_symbol_and_layout(scope, &args[1]);
 
-            hash(env, value, layout)
+            debug_assert!(seed.is_int_value());
+
+            hash(env, seed.into_int_value(), value, layout)
         }
         DictSize => {
             debug_assert_eq!(args.len(), 1);

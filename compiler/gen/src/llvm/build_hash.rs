@@ -2,22 +2,19 @@ use crate::llvm::build::call_bitcode_fn;
 use crate::llvm::build::Env;
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, IntValue};
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout};
 
 pub fn hash<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    seed: IntValue<'ctx>,
     val: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-
     let ptr_bytes = env.ptr_bytes;
 
-    // C and Zig use this value for their HashMap seed: 0xc70f6907
-    // So maybe we should too one day?
-    let seed = ctx.i64_type().const_zero();
+    // NOTE: C and Zig use this value for their initial HashMap seed: 0xc70f6907
 
     match layout {
         Layout::Builtin(builtin) => match builtin {

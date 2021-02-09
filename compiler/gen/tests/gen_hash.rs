@@ -26,4 +26,10 @@ mod gen_hash {
             u64
         );
     }
+
+    #[test]
+    fn hash_str_with_seed() {
+        assert_evals_to!("Dict.hashTestOnly 1 \"a\"", 0xbed235177f41d328, u64);
+        assert_evals_to!("Dict.hashTestOnly 2 \"abc\"", 0xbe348debe59b27c3, u64);
+    }
 }
