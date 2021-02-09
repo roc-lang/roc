@@ -1,8 +1,6 @@
 FROM rust:1.49-slim-buster
 WORKDIR /earthbuild
 
-# TODO use lld linker
-
 prep-debian:
     RUN apt -y update
 
