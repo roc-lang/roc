@@ -30,6 +30,7 @@ pub enum LowLevel {
     ListSum,
     DictSize,
     DictEmpty,
+    DictInsert,
     NumAdd,
     NumAddWrap,
     NumAddChecked,

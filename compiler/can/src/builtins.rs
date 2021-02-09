@@ -82,6 +82,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_TEST_HASH => dict_hash_test_only,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
+        DICT_INSERT => dict_insert,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -180,6 +181,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_TEST_HASH => dict_hash_test_only,
         Symbol::DICT_LEN => dict_len,
         Symbol::DICT_EMPTY => dict_empty,
+        Symbol::DICT_INSERT => dict_insert,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -1894,6 +1896,35 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
+}
+
+/// Dict.insert : Dict k v, k, v -> Dict k v
+fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let val_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictInsert,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+            (val_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (dict_var, Symbol::ARG_1),
+            (key_var, Symbol::ARG_2),
+            (val_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        dict_var,
+    )
 }
 
 /// Num.rem : Int, Int -> Result Int [ DivByZero ]*

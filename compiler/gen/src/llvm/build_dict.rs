@@ -50,6 +50,18 @@ pub fn dict_empty<'a, 'ctx, 'env>(
     zig_dict_to_struct(env, result).into()
 }
 
+pub fn dict_insert<'a, 'ctx, 'env>(
+    _env: &Env<'a, 'ctx, 'env>,
+    _scope: &Scope<'a, 'ctx>,
+    _dict: BasicValueEnum<'ctx>,
+    _key: BasicValueEnum<'ctx>,
+    _key_layout: &Layout<'a>,
+    _value: BasicValueEnum<'ctx>,
+    _value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    todo!()
+}
+
 fn dict_symbol_to_i128<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
