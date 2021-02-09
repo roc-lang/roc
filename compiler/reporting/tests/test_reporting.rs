@@ -4130,7 +4130,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn recort_type_indent_end() {
+    fn record_type_indent_end() {
         report_problem_as(
             indoc!(
                 r#"
@@ -4156,7 +4156,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn recort_type_keyword_field_name() {
+    fn record_type_keyword_field_name() {
         report_problem_as(
             indoc!(
                 r#"
@@ -4175,6 +4175,31 @@ mod test_reporting {
                 
                 Looks like you are trying to use `if` as a field name, but that is a
                 reserved word. Try using a different name!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_missing_comma() {
+        // a case where the message cannot be as good as elm's
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { foo  bar }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : { foo  bar }
+                               ^
+                
+                I was expecting to see a colon, question mark, comma or closing curly
+                brace.
             "#
             ),
         )

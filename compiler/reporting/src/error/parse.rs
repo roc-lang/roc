@@ -2,22 +2,36 @@ use roc_parse::parser::{Col, ParseProblem, Row, SyntaxError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
-use crate::report::{Report, RocDocAllocator};
+use crate::report::{Report, RocDocAllocator, RocDocBuilder};
 use ven_pretty::DocAllocator;
 
 pub fn parse_problem<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    starting_line: u32,
+    _starting_line: u32,
     parse_problem: ParseProblem<SyntaxError<'a>>,
 ) -> Report<'a> {
-    let line = starting_line + parse_problem.line;
-    let region = Region {
-        start_line: line,
-        end_line: line,
-        start_col: parse_problem.column,
-        end_col: parse_problem.column + 1,
-    };
+    to_syntax_report(
+        alloc,
+        filename,
+        &parse_problem.problem,
+        parse_problem.line,
+        parse_problem.column,
+    )
+}
+
+fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.note("I may be confused by indentation")
+}
+
+fn to_syntax_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::SyntaxError<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use SyntaxError::*;
 
     let report = |doc| Report {
         filename: filename.clone(),
@@ -25,8 +39,14 @@ pub fn parse_problem<'a>(
         title: "PARSE PROBLEM".to_string(),
     };
 
-    use SyntaxError::*;
-    match parse_problem.problem {
+    let region = Region {
+        start_line: start_row,
+        end_line: start_row,
+        start_col: start_col,
+        end_col: start_col + 1,
+    };
+
+    match parse_problem {
         SyntaxError::ConditionFailed => {
             let doc = alloc.stack(vec![
                 alloc.reflow("A condition failed:"),
@@ -42,7 +62,7 @@ pub fn parse_problem<'a>(
         SyntaxError::ArgumentsBeforeEquals(region) => {
             let doc = alloc.stack(vec![
                 alloc.reflow("Unexpected tokens in front of the `=` symbol:"),
-                alloc.region(region),
+                alloc.region(*region),
             ]);
 
             Report {
@@ -67,23 +87,22 @@ pub fn parse_problem<'a>(
 
             report(doc)
         }
-        Type(typ) => to_type_report(alloc, filename, starting_line, typ),
-        _ => todo!("unhandled parse error: {:?}", parse_problem.problem),
+        Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
+        _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
 
 fn to_type_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    starting_line: u32,
-    parse_problem: roc_parse::parser::Type<'a>,
+    parse_problem: &roc_parse::parser::Type<'a>,
+    _start_row: Row,
+    _start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::Type;
 
     match parse_problem {
-        Type::TRecord(record, row, col) => {
-            to_trecord_report(alloc, filename, starting_line, record, row, col)
-        }
+        Type::TRecord(record, row, col) => to_trecord_report(alloc, filename, &record, *row, *col),
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }
@@ -91,14 +110,15 @@ fn to_type_report<'a>(
 fn to_trecord_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    _starting_line: u32,
-    parse_problem: roc_parse::parser::TRecord<'a>,
+    parse_problem: &roc_parse::parser::TRecord<'a>,
     start_row: Row,
     start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::TRecord;
 
-    match parse_problem {
+    dbg!(parse_problem);
+
+    match *parse_problem {
         TRecord::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
@@ -141,11 +161,31 @@ fn to_trecord_report<'a>(
                 }
             }
         },
+
         TRecord::End(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
-            let doc = alloc.stack(vec![
+            match what_is_next(alloc.src_lines, row, col) {
+                Next::Other(Some(c)) if c.is_alphabetic() => {
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(r"I am partway through parsing a record type, but I got stuck here:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(
+                                r"I was expecting to see a colon, question mark, comma or closing curly brace.",
+                            ),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD TYPE".to_string(),
+                    }
+                }
+                _ => {
+                    let doc = alloc.stack(vec![
                 alloc.reflow("I am partway through parsing a record type, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
@@ -157,10 +197,12 @@ fn to_trecord_report<'a>(
                 ]),
             ]);
 
-            Report {
-                filename,
-                doc,
-                title: "UNFINISHED RECORD TYPE".to_string(),
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD TYPE".to_string(),
+                    }
+                }
             }
         }
 
@@ -211,6 +253,39 @@ fn to_trecord_report<'a>(
             }
         },
 
+        TRecord::Colon(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+        }
+        TRecord::Optional(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+        }
+
+        TRecord::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
+
+        TRecord::Syntax(error, row, col) => to_syntax_report(alloc, filename, error, row, col),
+
+        TRecord::IndentOpen(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a record type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"Record types look like "),
+                    alloc.parser_suggestion("{ name : String, age : Int },"),
+                    alloc.reflow(" so I was expecting to see a field name next."),
+                ]),
+                note_for_record_type_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED RECORD TYPE".to_string(),
+            }
+        }
+
         TRecord::IndentEnd(row, col) => {
             match next_line_starts_with_close_curly(alloc.src_lines, row - 1) {
                 Some((curly_row, curly_col)) => {
@@ -249,6 +324,7 @@ fn to_trecord_report<'a>(
                             alloc.parser_suggestion("}"),
                             alloc.reflow(" and see if that helps?"),
                         ]),
+                        note_for_record_type_indent(alloc),
                     ]);
 
                     Report {
@@ -260,7 +336,44 @@ fn to_trecord_report<'a>(
             }
         }
 
-        _ => todo!("unhandled record type parse error: {:?}", &parse_problem),
+        TRecord::IndentColon(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+        }
+
+        TRecord::IndentOptional(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+        }
+
+        TRecord::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+    }
+}
+
+fn to_space_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::BadInputError,
+    row: Row,
+    col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::BadInputError;
+
+    match parse_problem {
+        BadInputError::HasTab => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered a tab character"),
+                alloc.region(region),
+                alloc.concat(vec![alloc.reflow("Tab characters are not allowed.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "TAB CHARACTER".to_string(),
+            }
+        }
+        _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }
 

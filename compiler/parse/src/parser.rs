@@ -393,10 +393,8 @@ pub enum TRecord<'a> {
     Space(BadInputError, Row, Col),
     ///
     IndentOpen(Row, Col),
-    IndentField(Row, Col),
     IndentColon(Row, Col),
     IndentOptional(Row, Col),
-    IndentType(Row, Col),
     IndentEnd(Row, Col),
 }
 

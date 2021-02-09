@@ -359,6 +359,13 @@ impl<'a> RocDocAllocator<'a> {
             .append(self.softline())
     }
 
+    pub fn note(&'a self, line : &'a str) -> DocBuilder<'a, Self, Annotation> {
+        self.text("Note")
+            .annotate(Annotation::Tip)
+            .append(":")
+            .append(line)
+    }
+
     pub fn region_all_the_things(
         &'a self,
         region: roc_region::all::Region,

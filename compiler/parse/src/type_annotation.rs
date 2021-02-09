@@ -614,29 +614,3 @@ fn malformed<'a>(
         state,
     ))
 }
-
-// type Field = ();
-//
-// fn chomp_record_end<'a>(
-//     mut fields: Vec<'a, Field>,
-// ) -> impl Parser<'a, Vec<'a, Field>, TRecord<'a>> {
-//     one_of_with_error!(TRecord::End;
-//     | arena, state | {
-//         let (_,_,state) = word1(b',', TRecord::End).parse(arena, state)?;
-//         let (_, _spaces,state) = chomp_and_check_indent(TRecord::Space, TRecord::IndentField).parse(arena, state)?;
-//         let (_, field,state) = chomp_field().parse(arena, state)?;
-//         fields.push(field);
-//
-//         chomp_record_end(fields)
-//     },
-//     | arena, state | {
-//         let (_,_,state) = word1(b'}', TRecord::End).parse(arena, state)?;
-//
-//         Ok((MadeProgress, fields, state ))
-//     }
-//     )
-// }
-//
-// fn chomp_field<'a>() -> impl Parser<'a, Field, TRecord<'a>> {
-//     todo!()
-// }
