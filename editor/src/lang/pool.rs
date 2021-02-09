@@ -162,7 +162,7 @@ impl Pool {
 
         let node_slice: &[u8] = unsafe { &*node_ptr };
 
-        unsafe { std::str::from_utf8_unchecked(node_slice[0..pool_str.len]) }
+        unsafe { std::str::from_utf8_unchecked(&node_slice[0..pool_str.len as usize]) }
     }
 
     pub fn set<T>(&mut self, node_id: NodeId<T>, element: T) {
