@@ -21,7 +21,6 @@ Earthly may temporarily use a lot of disk space, up to 90 GB. This disk space is
 ## Contribution Tips
 
 - It is encouraged to open a pull request as you work on an issue. Do include WIP in the title of the PR as long as it is not ready for review.
-- If you have an idea for a major change talk to us on [zulip](TODO link) to prevent your work from being rejected after it's done.
 
 ## Can we do better?
 
