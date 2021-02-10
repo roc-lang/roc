@@ -1,6 +1,6 @@
 use super::app_model;
 use super::app_model::AppModel;
-use super::ed_model::{Position, RawSelection};
+use super::ed_model::Position;
 use super::ed_update;
 use crate::error::EdResult;
 use winit::event::{ModifiersState, VirtualKeyCode};
@@ -76,21 +76,6 @@ pub fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
     Ok(())
 }
 
-pub fn handle_select_all(app_model: &mut AppModel) {
-    if let Some(ref mut ed_model) = app_model.ed_model_opt {
-        if ed_model.has_focus && ed_model.text_buf.nr_of_chars() > 0 {
-            let last_pos = ed_model.text_buf.last_position();
-
-            ed_model.selection_opt = Some(RawSelection {
-                start_pos: Position { line: 0, column: 0 },
-                end_pos: last_pos,
-            });
-
-            ed_model.caret_pos = last_pos;
-        }
-    }
-}
-
 pub fn pass_keydown_to_focused(
     modifiers: &ModifiersState,
     virtual_keycode: VirtualKeyCode,
@@ -117,7 +102,7 @@ pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResu
 pub mod test_app_update {
     use crate::mvc::app_model;
     use crate::mvc::app_model::{AppModel, Clipboard};
-    use crate::mvc::app_update::{handle_copy, handle_paste, handle_select_all};
+    use crate::mvc::app_update::{handle_copy, handle_paste};
     use crate::mvc::ed_model::{EdModel, Position, RawSelection};
     use crate::mvc::ed_update::test_ed_update::gen_caret_text_buf;
     use crate::selection::test_selection::{all_lines_vec, convert_selection_to_dsl};
@@ -216,53 +201,6 @@ pub mod test_app_update {
             "ef\nghi",
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             clipboard_opt,
-        )?;
-
-        Ok(())
-    }
-
-    fn assert_select_all(
-        pre_lines_str: &[&str],
-        expected_post_lines_str: &[&str],
-    ) -> Result<(), String> {
-        let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
-
-        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, None);
-
-        handle_select_all(&mut app_model);
-
-        let ed_model = app_model.ed_model_opt.unwrap();
-        let mut text_buf_lines = all_lines_vec(&ed_model.text_buf);
-        let post_lines_str = convert_selection_to_dsl(
-            ed_model.selection_opt,
-            ed_model.caret_pos,
-            &mut text_buf_lines,
-        )?;
-
-        assert_eq!(post_lines_str, expected_post_lines_str);
-
-        Ok(())
-    }
-
-    #[test]
-    fn select_all() -> Result<(), String> {
-        assert_select_all(&["|"], &["|"])?;
-        assert_select_all(&["|a"], &["[a]|"])?;
-        assert_select_all(&["a|"], &["[a]|"])?;
-        assert_select_all(&["abc d|ef ghi"], &["[abc def ghi]|"])?;
-        assert_select_all(&["[a]|"], &["[a]|"])?;
-        assert_select_all(&["|[a]"], &["[a]|"])?;
-        assert_select_all(&["|[abc def ghi]"], &["[abc def ghi]|"])?;
-        assert_select_all(&["a\n", "[b\n", "]|"], &["[a\n", "b\n", "]|"])?;
-        assert_select_all(&["a\n", "[b]|\n", ""], &["[a\n", "b\n", "]|"])?;
-        assert_select_all(&["a\n", "|[b\n", "]"], &["[a\n", "b\n", "]|"])?;
-        assert_select_all(
-            &["abc\n", "def\n", "gh|i\n", "jkl"],
-            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
-        )?;
-        assert_select_all(
-            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
-            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
         )?;
 
         Ok(())
