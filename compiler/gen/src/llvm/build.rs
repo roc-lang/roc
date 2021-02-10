@@ -1,5 +1,5 @@
 use crate::llvm::build_dict::{dict_empty, dict_insert, dict_len};
-use crate::llvm::build_hash::hash;
+use crate::llvm::build_hash::build_hash_layout;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
@@ -3988,7 +3988,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             debug_assert!(seed.is_int_value());
 
-            hash(env, seed.into_int_value(), value, layout)
+            build_hash_layout(env, layout_ids, seed.into_int_value(), value, layout).into()
         }
         DictSize => {
             debug_assert_eq!(args.len(), 1);
