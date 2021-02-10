@@ -5,7 +5,7 @@ use roc_fmt::module::fmt_module;
 use roc_parse::ast::{Attempting, Def, Module};
 use roc_parse::module::module_defs;
 use roc_parse::parser;
-use roc_parse::parser::Parser;
+use roc_parse::parser::{Parser, SyntaxError};
 use roc_region::all::Located;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -19,15 +19,15 @@ pub struct File<'a> {
 }
 
 #[derive(Debug)]
-pub enum ReadError {
+pub enum ReadError<'a> {
     Read(std::io::Error),
-    ParseDefs(parser::Fail),
-    ParseHeader(parser::Fail),
+    ParseDefs(SyntaxError<'a>),
+    ParseHeader(SyntaxError<'a>),
     DoesntHaveRocExtension,
 }
 
 impl<'a> File<'a> {
-    pub fn read(path: &'a Path, arena: &'a Bump) -> Result<File<'a>, ReadError> {
+    pub fn read(path: &'a Path, arena: &'a Bump) -> Result<File<'a>, ReadError<'a>> {
         if path.extension() != Some(OsStr::new("roc")) {
             return Err(ReadError::DoesntHaveRocExtension);
         }
@@ -36,23 +36,23 @@ impl<'a> File<'a> {
 
         let allocation = arena.alloc(bytes);
 
-        let module_parse_state = parser::State::new(allocation, Attempting::Module);
+        let module_parse_state = parser::State::new_in(arena, allocation, Attempting::Module);
         let parsed_module = roc_parse::module::header().parse(&arena, module_parse_state);
 
         match parsed_module {
-            Ok((module, state)) => {
+            Ok((_, module, state)) => {
                 let parsed_defs = module_defs().parse(&arena, state);
 
                 match parsed_defs {
-                    Ok((defs, _)) => Ok(File {
+                    Ok((_, defs, _)) => Ok(File {
                         path,
                         module_header: module,
                         content: defs,
                     }),
-                    Err((error, _)) => Err(ReadError::ParseDefs(error)),
+                    Err((_, error, _)) => Err(ReadError::ParseDefs(error)),
                 }
             }
-            Err((error, _)) => Err(ReadError::ParseHeader(error)),
+            Err((_, error, _)) => Err(ReadError::ParseHeader(error)),
         }
     }
 

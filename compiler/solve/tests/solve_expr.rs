@@ -856,7 +856,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    \f -> (\a, b -> f b a),
+                    \f -> (\a, b -> f b a)
                 "#
             ),
             "(a, b -> c) -> (b, a -> c)",

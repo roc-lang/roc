@@ -167,7 +167,10 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
+    // This arena is never cleared and should only be used for allocations that occur rarely
     let arena = Bump::new();
+
+    let mut rects_arena = Bump::new();
 
     // Render loop
     window.request_redraw();
@@ -300,12 +303,16 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     let region = Region::new(0, 0, 0, 0);
 
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
-                        &arena, "2.0", &mut env, &mut scope, region,
+                        &arena,
+                        "\"hello\"",
+                        &mut env,
+                        &mut scope,
+                        region,
                     )
                     .unwrap();
 
                     render::render_expr2(
-                        &arena,
+                        &mut env,
                         &size,
                         &expr2,
                         CODE_TXT_XY.into(),
@@ -313,9 +320,11 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     );
                 }
 
+                rects_arena.reset();
+
                 match draw_all_rects(
                     &app_model.ed_model_opt,
-                    &arena,
+                    &rects_arena,
                     &mut encoder,
                     &frame.view,
                     &gpu_device,
@@ -423,16 +432,19 @@ fn queue_editor_text(
         position: code_coords,
         area_bounds,
         color: CODE_COLOR.into(),
-        text: editor_lines.to_owned(),
+        text: editor_lines,
         size: CODE_FONT_SIZE,
         ..Default::default()
     };
+
+    let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
+    let text = s.as_str();
 
     let caret_pos_label = Text {
         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
         area_bounds,
         color: TXT_COLOR.into(),
-        text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
+        text,
         size: 25.0,
         ..Default::default()
     };
@@ -454,7 +466,7 @@ fn _queue_no_file_text(
         position: text_coords,
         area_bounds,
         color: CODE_COLOR.into(),
-        text: text.to_owned(),
+        text,
         size: CODE_FONT_SIZE,
         ..Default::default()
     };

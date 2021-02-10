@@ -17,7 +17,7 @@ use std::path::Path;
 pub struct TextBuffer {
     pub text_rope: Rope,
     pub path_str: String,
-    pub mem_arena: Bump,
+    pub arena: Bump,
 }
 
 impl TextBuffer {
@@ -65,7 +65,7 @@ impl TextBuffer {
         } else {
             // happens very rarely
             let line_str = rope_slice.chunks().collect::<String>();
-            let arena_str_ref = self.mem_arena.alloc(line_str);
+            let arena_str_ref = self.arena.alloc(line_str);
             Ok(arena_str_ref)
         }
     }
@@ -92,7 +92,7 @@ impl TextBuffer {
             } else {
                 // happens very rarely
                 let line_str = rope_slice.chunks().collect::<String>();
-                let arena_str_ref = self.mem_arena.alloc(line_str);
+                let arena_str_ref = self.arena.alloc(line_str);
                 Some(arena_str_ref)
             }
         } else {
@@ -144,12 +144,12 @@ impl TextBuffer {
 pub fn from_path(path: &Path) -> EdResult<TextBuffer> {
     let text_rope = rope_from_path(path)?;
     let path_str = path_to_string(path);
-    let mem_arena = Bump::new();
+    let arena = Bump::new();
 
     Ok(TextBuffer {
         text_rope,
         path_str,
-        mem_arena,
+        arena,
     })
 }
 

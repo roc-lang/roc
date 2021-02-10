@@ -701,7 +701,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_REPEAT,
         top_level_function(
-            vec![nat_type(), flex(TVAR2)],
+            vec![nat_type(), flex(TVAR1)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );

@@ -1,10 +1,12 @@
 #[macro_use]
 extern crate clap;
 
+use bumpalo::Bump;
 use clap::ArgMatches;
 use clap::{App, Arg};
 use roc_build::link::LinkType;
 use roc_gen::llvm::build::OptLevel;
+use roc_load::file::LoadingProblem;
 use std::io;
 use std::path::Path;
 use std::process;
@@ -77,7 +79,9 @@ pub fn build_app<'a>() -> App<'a> {
 }
 
 pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
+    let arena = Bump::new();
     let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
+
     let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
         OptLevel::Optimize
     } else {
@@ -107,23 +111,33 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
         }
     });
 
-    let binary_path = build::build_file(
+    let res_binary_path = build::build_file(
+        &arena,
         target,
         src_dir,
         path,
         opt_level,
         emit_debug_info,
         LinkType::Executable,
-    )
-    .expect("TODO gracefully handle build_file failing");
+    );
 
-    if run_after_build {
-        // Run the compiled app
-        Command::new(binary_path)
-            .spawn()
-            .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
-            .wait()
-            .expect("TODO gracefully handle block_on failing");
+    match res_binary_path {
+        Ok(binary_path) => {
+            if run_after_build {
+                // Run the compiled app
+                Command::new(binary_path)
+                    .spawn()
+                    .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+                    .wait()
+                    .expect("TODO gracefully handle block_on failing");
+            }
+        }
+        Err(LoadingProblem::ParsingFailedReport(report)) => {
+            print!("{}", report);
+        }
+        Err(other) => {
+            panic!("build_file failed with error:\n{:?}", other);
+        }
     }
 
     Ok(())

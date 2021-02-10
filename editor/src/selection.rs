@@ -216,7 +216,7 @@ pub mod test_selection {
         TextBuffer {
             text_rope: Rope::from_str(lines_str),
             path_str: "".to_owned(),
-            mem_arena: bumpalo::Bump::new(),
+            arena: bumpalo::Bump::new(),
         }
     }
 

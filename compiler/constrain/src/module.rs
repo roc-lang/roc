@@ -26,7 +26,8 @@ pub fn constrain_module(
     module: &ModuleOutput,
     home: ModuleId,
     mode: Mode,
-    var_store: &mut VarStore,
+    // TODO remove parameter
+    _var_store: &mut VarStore,
 ) -> Constraint {
     use Mode::*;
 
@@ -40,7 +41,7 @@ pub fn constrain_module(
 
     match mode {
         Standard => constrain_decls(home, decls),
-        Uniqueness => crate::uniq::constrain_decls(home, decls, var_store),
+        Uniqueness => constrain_decls(home, decls),
     }
 }
 

@@ -12,6 +12,7 @@ use inlinable_string::InlinableString;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::ident::ModuleName;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -19,7 +20,7 @@ use roc_parse::ast::StrLiteral;
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::expr::expr;
-use roc_parse::parser::{loc, Fail, Parser, State};
+use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -178,7 +179,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::ValueNotExposed {
-                            module_name,
+                            module_name: ModuleName::from(module_name),
                             ident,
                             region,
                         }),
@@ -232,15 +233,15 @@ pub fn str_to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,
-) -> Result<(Expr2, self::Output), Fail> {
-    let state = State::new(input.trim().as_bytes(), Attempting::Module);
+) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
+    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(expr(0)), 0);
     let parse_res = parser.parse(&arena, state);
 
     parse_res
-        .map(|(loc_expr, _)| arena.alloc(loc_expr.value))
+        .map(|(_, loc_expr, _)| arena.alloc(loc_expr.value))
         .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
-        .map_err(|(fail, _)| fail)
+        .map_err(|(_, fail, _)| fail)
 }
 
 pub fn to_expr2<'a>(
@@ -257,6 +258,7 @@ pub fn to_expr2<'a>(
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
+                        text: PoolStr::new(string, &mut env.pool),
                     };
 
                     (expr, Output::default())

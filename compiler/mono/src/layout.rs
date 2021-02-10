@@ -1324,7 +1324,11 @@ impl<'a> WrappedVariant<'a> {
     }
 }
 
-pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
+pub fn union_sorted_tags<'a>(
+    arena: &'a Bump,
+    var: Variable,
+    subs: &Subs,
+) -> Result<UnionVariant<'a>, LayoutProblem> {
     let var =
         if let Content::RecursionVar { structure, .. } = subs.get_without_compacting(var).content {
             structure
@@ -1338,10 +1342,11 @@ pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> Uni
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs)
         }
+        Err((_, Content::Error)) => return Err(LayoutProblem::Erroneous),
         Err(other) => panic!("invalid content in tag union variable: {:?}", other),
     };
 
-    result
+    Ok(result)
 }
 
 fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {

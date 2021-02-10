@@ -8,6 +8,8 @@ Here are some ideas and interesting resources for the editor. Feel free to make 
 
 These are potentially inspirational resources for the editor's design.
 
+Nice collection of research on innovative editors, [link](https://futureofcoding.org/catalog/).
+
 ### Package-specific editor integrations
 
 (Or possibly module-specific integrations, type-specific integrations, etc.)
@@ -28,6 +30,7 @@ These are potentially inspirational resources for the editor's design.
 * [Xi](https://xi-editor.io/) modern text editor with concurrent editing (related to [Druid](https://github.com/linebender/druid))
 * [Self](https://selflanguage.org/) programming language
 * [Primitive](https://primitive.io/) code exploration in Virtual Reality
+* [Luna](https://www.luna-lang.org/) language for interactive data processing and visualization
 
 ### Debugging
 
@@ -51,6 +54,8 @@ These are potentially inspirational resources for the editor's design.
     * [Blueprints](https://docs.unrealengine.com/en-US/Engine/Blueprints/index.html) visual scripting (not suggesting visual scripting for Roc)
 
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
+* [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
+* [Lamdu](http://www.lamdu.org/) live functional programming.
 
 ### Productivity features
 
@@ -63,6 +68,7 @@ These are potentially inspirational resources for the editor's design.
 * Suggest automatically creating a function if the compiler says it does not exist.
 * Integrated search:
     * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
+* Webcam based eye tracking for quick selection. Could be used to select from autocomplete options instead of having to use arrows.
 
 
 ### Non-Code Related Inspiration

@@ -1,6 +1,7 @@
 use crate::procedure::References;
 use inlinable_string::InlinableString;
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
@@ -113,7 +114,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::ValueNotExposed {
-                            module_name,
+                            module_name: ModuleName::from(module_name),
                             ident,
                             region,
                         }),
