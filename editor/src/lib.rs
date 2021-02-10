@@ -167,7 +167,10 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
+    // This arena is never cleared and should only be used for allocations that occur rarely
     let arena = Bump::new();
+
+    let mut rects_arena = Bump::new();
 
     // Render loop
     window.request_redraw();
@@ -317,9 +320,11 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     );
                 }
 
+                rects_arena.reset();
+
                 match draw_all_rects(
                     &app_model.ed_model_opt,
-                    &arena,
+                    &rects_arena,
                     &mut encoder,
                     &frame.view,
                     &gpu_device,
