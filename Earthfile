@@ -27,7 +27,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN echo "[build]" > $CARGO_HOME/config.toml
     RUN echo "rustflags = [\"-C\", \"link-arg=-fuse-ld=lld\", \"-C\", \"target-cpu=native\"]" >> $CARGO_HOME/config.tom
     # valgrind
-    RUN apt -y install autotools-dev cmake automake 
+    RUN apt -y install autotools-dev cmake automake libc6-dbg
     RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
     RUN tar -xf valgrind-3.16.1.tar.bz2
     # need to cd every time, every command starts at WORKDIR

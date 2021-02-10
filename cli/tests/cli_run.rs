@@ -96,7 +96,7 @@ mod cli_run {
             "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
-            false,
+            true,
         );
     }
 
@@ -108,7 +108,7 @@ mod cli_run {
             "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
-            false,
+            true,
         );
     }
 
@@ -120,7 +120,7 @@ mod cli_run {
             "quicksort",
             &[],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            false,
+            true,
         );
     }
 
@@ -132,7 +132,7 @@ mod cli_run {
             "quicksort",
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            false,
+            true,
         );
     }
 
@@ -152,8 +152,6 @@ mod cli_run {
 
     #[test]
     #[serial(quicksort)]
-    // TODO: Stop ignoring this test once valgrind supports AVX512.
-    #[ignore]
     fn run_quicksort_optimized_valgrind() {
         check_output(
             &example_file("quicksort", "Quicksort.roc"),
@@ -180,8 +178,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_module)]
-    // TODO: Stop ignoring this test once valgrind supports AVX512.
-    #[ignore]
     fn run_multi_module_optimized_valgrind() {
         check_output(
             &example_file("multi-module", "Quicksort.roc"),
@@ -201,7 +197,7 @@ mod cli_run {
             "nqueens",
             &[],
             "4\n",
-            false,
+            true,
         );
     }
 
@@ -213,7 +209,7 @@ mod cli_run {
             "cfold",
             &[],
             "11 & 11\n",
-            false,
+            true,
         );
     }
 
@@ -225,7 +221,7 @@ mod cli_run {
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
-            false,
+            true,
         );
     }
 
@@ -237,7 +233,7 @@ mod cli_run {
             "rbtree-insert",
             &[],
             "Node Black 0 {} Empty Empty\n",
-            false,
+            true,
         );
     }
 
@@ -249,7 +245,7 @@ mod cli_run {
             "rbtree-del",
             &[],
             "30\n",
-            false,
+            true,
         );
     }
 
@@ -272,7 +268,7 @@ mod cli_run {
             "multi-dep-str",
             &[],
             "I am Dep2.str2\n",
-            false,
+            true,
         );
     }
 
@@ -284,7 +280,7 @@ mod cli_run {
             "multi-dep-str",
             &["--optimize"],
             "I am Dep2.str2\n",
-            false,
+            true,
         );
     }
 
@@ -296,7 +292,7 @@ mod cli_run {
             "multi-dep-thunk",
             &[],
             "I am Dep2.value2\n",
-            false,
+            true,
         );
     }
 
@@ -308,7 +304,7 @@ mod cli_run {
             "multi-dep-thunk",
             &["--optimize"],
             "I am Dep2.value2\n",
-            false,
+            true,
         );
     }
 }
