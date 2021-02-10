@@ -32,7 +32,7 @@ fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
     TextBuffer {
         text_rope: Rope::from_str(lines_str),
         path_str: "".to_owned(),
-        mem_arena: Bump::new(),
+        arena: Bump::new(),
     }
 }
 
