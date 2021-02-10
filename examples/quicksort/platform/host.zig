@@ -22,6 +22,10 @@ pub export fn main() i32 {
     const stderr = std.io.getStdErr().writer();
 
     var raw_numbers: [NUM_NUMS + 1]i64 = undefined;
+
+    // set refcount to one
+    raw_numbers[0] = -9223372036854775808;
+
     var numbers = raw_numbers[1..];
 
     for (numbers) |x, i| {
