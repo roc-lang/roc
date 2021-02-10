@@ -109,8 +109,21 @@ pub fn build_eq<'a, 'ctx, 'env>(
             build_tag_eq(env, layout_ids, lhs_layout, union_layout, lhs_val, rhs_val)
         }
 
-        other => {
-            todo!("implement equals for layouts {:?} == {:?}", other, other);
+        Layout::PhantomEmptyStruct => {
+            // always equal to itself
+            env.context.bool_type().const_int(1, false).into()
+        }
+
+        Layout::RecursivePointer => {
+            unreachable!("recursion pointers should never be compared directly")
+        }
+
+        Layout::Pointer(_) => {
+            unreachable!("unused")
+        }
+
+        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
+            unreachable!("the type system will guarantee these are never compared")
         }
     }
 }
@@ -224,12 +237,31 @@ pub fn build_neq<'a, 'ctx, 'env>(
 
             result.into()
         }
-        other => {
-            todo!(
-                "implement not equals for layouts {:?} != {:?}",
-                other,
-                other
-            );
+        Layout::Union(union_layout) => {
+            let is_equal =
+                build_tag_eq(env, layout_ids, lhs_layout, union_layout, lhs_val, rhs_val)
+                    .into_int_value();
+
+            let result: IntValue = env.builder.build_not(is_equal, "negate");
+
+            result.into()
+        }
+
+        Layout::PhantomEmptyStruct => {
+            // always equal to itself
+            env.context.bool_type().const_int(1, false).into()
+        }
+
+        Layout::RecursivePointer => {
+            unreachable!("recursion pointers should never be compared directly")
+        }
+
+        Layout::Pointer(_) => {
+            unreachable!("unused")
+        }
+
+        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
+            unreachable!("the type system will guarantee these are never compared")
         }
     }
 }
@@ -666,8 +698,6 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     union_layout: &UnionLayout<'a>,
 ) {
-    use inkwell::types::BasicType;
-
     let ctx = env.context;
     let builder = env.builder;
 
@@ -788,6 +818,22 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             env.builder.build_switch(id1, default, &cases);
         }
         Recursive(tags) => {
+            let ptr_equal = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                env.builder
+                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                env.builder
+                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                "compare_pointers",
+            );
+
+            let compare_tag_ids = ctx.append_basic_block(parent, "compare_tag_ids");
+
+            env.builder
+                .build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
+
+            env.builder.position_at_end(compare_tag_ids);
+
             // SAFETY we know that non-recursive tags cannot be NULL
             let id1 = unsafe { rec_tag_id_unsafe(env, tag1.into_pointer_value()) };
             let id2 = unsafe { rec_tag_id_unsafe(env, tag2.into_pointer_value()) };
@@ -838,7 +884,25 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             // drop the tag id; it is not stored
             let other_fields = &other_fields[1..];
 
-            // IDEA add up is_null_1 + is_null_2, then switch on the sum
+            let ptr_equal = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                env.builder
+                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                env.builder
+                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                "compare_pointers",
+            );
+
+            let check_for_null = ctx.append_basic_block(parent, "check_for_null");
+            let compare_other = ctx.append_basic_block(parent, "compare_other");
+
+            env.builder
+                .build_conditional_branch(ptr_equal, return_true, check_for_null);
+
+            // check for NULL
+
+            env.builder.position_at_end(check_for_null);
+
             let is_null_1 = env
                 .builder
                 .build_is_null(tag1.into_pointer_value(), "is_null");
@@ -847,24 +911,12 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 .builder
                 .build_is_null(tag2.into_pointer_value(), "is_null");
 
-            let l_is_null = ctx.append_basic_block(parent, "l_is_null");
-            let l_is_not_null = ctx.append_basic_block(parent, "l_is_not_null");
-            let compare_other = ctx.append_basic_block(parent, "compare_other");
+            let either_null = env.builder.build_or(is_null_1, is_null_2, "either_null");
 
+            // logic: the pointers are not the same, if one is NULL, the other one is not
+            // therefore the two tags are not equal
             env.builder
-                .build_conditional_branch(is_null_1, l_is_null, l_is_not_null);
-
-            // LHS is NULL
-
-            env.builder.position_at_end(l_is_null);
-            env.builder.build_return(Some(&is_null_2));
-
-            // LHS is not NULL
-
-            env.builder.position_at_end(l_is_not_null);
-
-            env.builder
-                .build_conditional_branch(is_null_2, return_false, compare_other);
+                .build_conditional_branch(either_null, return_false, compare_other);
 
             // compare the non-null case
 
@@ -881,11 +933,26 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.build_return(Some(&answer));
         }
-        NullableWrapped {
-            nullable_id,
-            other_tags,
-        } => {
-            // IDEA add up is_null_1 + is_null_2, then switch on the sum
+        NullableWrapped { other_tags, .. } => {
+            let ptr_equal = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                env.builder
+                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                env.builder
+                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                "compare_pointers",
+            );
+
+            let check_for_null = ctx.append_basic_block(parent, "check_for_null");
+            let compare_other = ctx.append_basic_block(parent, "compare_other");
+
+            env.builder
+                .build_conditional_branch(ptr_equal, return_true, check_for_null);
+
+            // check for NULL
+
+            env.builder.position_at_end(check_for_null);
+
             let is_null_1 = env
                 .builder
                 .build_is_null(tag1.into_pointer_value(), "is_null");
@@ -894,24 +961,29 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 .builder
                 .build_is_null(tag2.into_pointer_value(), "is_null");
 
-            let l_is_null = ctx.append_basic_block(parent, "l_is_null");
-            let l_is_not_null = ctx.append_basic_block(parent, "l_is_not_null");
-            let compare_other = ctx.append_basic_block(parent, "compare_other");
+            // Logic:
+            //
+            // NULL and NULL => equal
+            // NULL and not => not equal
+            // not and NULL => not equal
+            // not and not => more work required
 
-            env.builder
-                .build_conditional_branch(is_null_1, l_is_null, l_is_not_null);
+            let i8_type = env.context.i8_type();
 
-            // LHS is NULL
+            let sum = env.builder.build_int_add(
+                env.builder.build_int_cast(is_null_1, i8_type, "to_u8"),
+                env.builder.build_int_cast(is_null_2, i8_type, "to_u8"),
+                "sum_is_null",
+            );
 
-            env.builder.position_at_end(l_is_null);
-            env.builder.build_return(Some(&is_null_2));
-
-            // LHS is not NULL
-
-            env.builder.position_at_end(l_is_not_null);
-
-            env.builder
-                .build_conditional_branch(is_null_2, return_false, compare_other);
+            env.builder.build_switch(
+                sum,
+                compare_other,
+                &[
+                    (i8_type.const_int(2, false), return_true),
+                    (i8_type.const_int(1, false), return_false),
+                ],
+            );
 
             // compare the non-null case
 
@@ -965,6 +1037,22 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             env.builder.build_switch(id1, default, &cases);
         }
         NonNullableUnwrapped(field_layouts) => {
+            let ptr_equal = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                env.builder
+                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                env.builder
+                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                "compare_pointers",
+            );
+
+            let compare_fields = ctx.append_basic_block(parent, "compare_fields");
+
+            env.builder
+                .build_conditional_branch(ptr_equal, return_true, compare_fields);
+
+            env.builder.position_at_end(compare_fields);
+
             let answer = eq_ptr_to_struct(
                 env,
                 layout_ids,

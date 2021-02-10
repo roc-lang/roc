@@ -332,4 +332,47 @@ mod gen_num {
             bool
         );
     }
+
+    #[test]
+    fn eq_nullable_expr() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Empty ]
+
+                x : Expr 
+                x = Val 0 
+
+                y : Expr 
+                y = Add x x 
+
+                x != y
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn eq_rosetree() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Rose a : [ Rose (List (Rose a)) ]
+
+                x : Rose I64 
+                x = Rose [] 
+
+                y : Rose I64 
+                y = Rose [] 
+
+                x == y
+                "#
+            ),
+            true,
+            bool
+        );
+    }
 }
