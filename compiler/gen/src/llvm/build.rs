@@ -3486,7 +3486,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            str_concat(env, layout_ids, inplace, scope, args[0], args[1])
+            str_concat(env, inplace, scope, args[0], args[1])
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str

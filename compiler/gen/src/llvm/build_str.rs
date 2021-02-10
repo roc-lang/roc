@@ -3,13 +3,12 @@ use crate::llvm::build::{
 };
 use crate::llvm::build_list::{allocate_list, store_list};
 use crate::llvm::convert::collection;
-use crate::llvm::refcounting::decrement_refcount_layout;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, IntValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_mono::layout::{Builtin, Layout};
 
 use super::build::load_symbol;
 
@@ -129,7 +128,6 @@ fn zig_str_to_struct<'a, 'ctx, 'env>(
 /// Str.concat : Str, Str -> Str
 pub fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     str1_symbol: Symbol,
@@ -152,22 +150,6 @@ pub fn str_concat<'a, 'ctx, 'env>(
         &bitcode::STR_CONCAT,
     )
     .into_struct_value();
-
-    let parent = env
-        .builder
-        .get_insert_block()
-        .unwrap()
-        .get_parent()
-        .unwrap();
-
-    // fix refcounts; consume both arguments
-    let layout = Layout::Builtin(Builtin::Str);
-
-    let str1 = load_symbol(scope, &str1_symbol);
-    decrement_refcount_layout(env, parent, layout_ids, str1, &layout);
-
-    let str2 = load_symbol(scope, &str2_symbol);
-    decrement_refcount_layout(env, parent, layout_ids, str2, &layout);
 
     zig_str_to_struct(env, zig_result).into()
 }
