@@ -1,7 +1,7 @@
 use crate::ast::Attempting;
 use crate::keyword;
 use crate::parser::Progress::{self, *};
-use crate::parser::{peek_utf8_char, unexpected, Bag, FailReason, ParseResult, Parser, State};
+use crate::parser::{peek_utf8_char, unexpected, ParseResult, Parser, State, SyntaxError};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -71,7 +71,7 @@ impl<'a> Ident<'a> {
 pub fn parse_ident<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
+) -> ParseResult<'a, (Ident<'a>, Option<char>), SyntaxError<'a>> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
     let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
@@ -279,7 +279,7 @@ fn malformed<'a>(
     mut state: State<'a>,
     capitalized_parts: Vec<&'a str>,
     noncapitalized_parts: Vec<&'a str>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
+) -> ParseResult<'a, (Ident<'a>, Option<char>), SyntaxError<'a>> {
     // Reconstruct the original string that we've been parsing.
     let mut full_string = String::new_in(arena);
 
@@ -321,7 +321,7 @@ fn malformed<'a>(
     ))
 }
 
-pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
+pub fn ident<'a>() -> impl Parser<'a, Ident<'a>, SyntaxError<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         // Discard next_char; we don't need it.
         let (progress, (string, _), state) = parse_ident(arena, state)?;
@@ -330,7 +330,7 @@ pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
     }
 }
 
-pub fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str>
+pub fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str, SyntaxError<'a>>
 where
     F: Fn(char) -> bool,
 {
@@ -382,8 +382,8 @@ where
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
-    move |arena, state| {
+pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
+    move |arena, state: State<'a>| {
         let (progress, ident, state) =
             global_tag_or_ident(|first_char| first_char.is_lowercase()).parse(arena, state)?;
 
@@ -399,11 +399,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
         {
             // TODO Calculate the correct region based on state
             let region = Region::zero();
-            Err((
-                MadeProgress,
-                Bag::from_state(arena, &state, FailReason::ReservedKeyword(region)),
-                state,
-            ))
+            Err((MadeProgress, SyntaxError::ReservedKeyword(region), state))
         } else {
             Ok((MadeProgress, ident, state))
         }
@@ -415,11 +411,11 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
 /// * A module name
 /// * A type name
 /// * A global tag
-pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str> {
+pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
     global_tag_or_ident(|first_char| first_char.is_uppercase())
 }
 
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
     global_tag_or_ident(|first_char| first_char.is_alphabetic())
 }
 

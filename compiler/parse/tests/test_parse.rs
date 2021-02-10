@@ -31,7 +31,7 @@ mod test_parse {
         PackageName, PackageOrPath, PlatformHeader, To,
     };
     use roc_parse::module::{app_header, interface_header, module_defs, platform_header};
-    use roc_parse::parser::{FailReason, Parser, State};
+    use roc_parse::parser::{Parser, State, SyntaxError};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
     use std::{f64, i64};
@@ -43,7 +43,7 @@ mod test_parse {
         assert_eq!(Ok(expected_expr), actual);
     }
 
-    fn assert_parsing_fails<'a>(input: &'a str, _reason: FailReason, _attempting: Attempting) {
+    fn assert_parsing_fails<'a>(input: &'a str, _reason: SyntaxError, _attempting: Attempting) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, input);
         // let expected_fail = Fail { reason, attempting };
@@ -291,7 +291,7 @@ mod test_parse {
 
     #[test]
     fn empty_source_file() {
-        assert_parsing_fails("", FailReason::Eof(Region::zero()), Attempting::Module);
+        assert_parsing_fails("", SyntaxError::Eof(Region::zero()), Attempting::Module);
     }
 
     #[test]
@@ -310,7 +310,7 @@ mod test_parse {
 
         assert_parsing_fails(
             &too_long_str,
-            FailReason::LineTooLong(0),
+            SyntaxError::LineTooLong(0),
             Attempting::Module,
         );
     }
@@ -2734,7 +2734,7 @@ mod test_parse {
 
     #[test]
     fn standalone_module_defs() {
-        use roc_parse::ast::Def::*;
+        use Def::*;
 
         let arena = Bump::new();
         let newlines1 = &[Newline, Newline];
@@ -2792,8 +2792,6 @@ mod test_parse {
 
     #[test]
     fn module_def_newline() {
-        use roc_parse::ast::Def::*;
-
         let arena = Bump::new();
 
         let src = indoc!(
@@ -2817,8 +2815,6 @@ mod test_parse {
 
     #[test]
     fn nested_def_annotation() {
-        use roc_parse::ast::Def::*;
-
         let arena = Bump::new();
 
         let src = indoc!(
@@ -2844,8 +2840,6 @@ mod test_parse {
 
     #[test]
     fn outdenting_newline_after_else() {
-        use roc_parse::ast::Def::*;
-
         let arena = Bump::new();
 
         // highlights a problem with the else branch demanding a newline after its expression

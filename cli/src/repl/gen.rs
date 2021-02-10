@@ -7,7 +7,8 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
-use roc_parse::parser::Bag;
+use roc_load::file::LoadingProblem;
+use roc_parse::parser::SyntaxError;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
@@ -22,7 +23,7 @@ pub fn gen_and_eval<'a>(
     src: &[u8],
     target: Triple,
     opt_level: OptLevel,
-) -> Result<ReplOutput, Bag<'a>> {
+) -> Result<ReplOutput, SyntaxError<'a>> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
@@ -52,7 +53,15 @@ pub fn gen_and_eval<'a>(
         ptr_bytes,
     );
 
-    let mut loaded = loaded.expect("failed to load module");
+    let mut loaded = match loaded {
+        Ok(v) => v,
+        Err(LoadingProblem::ParsingFailedReport(report)) => {
+            return Ok(ReplOutput::Problems(vec![report]));
+        }
+        Err(e) => {
+            panic!("error while loading module: {:?}", e)
+        }
+    };
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {

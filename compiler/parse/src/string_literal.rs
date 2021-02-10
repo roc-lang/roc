@@ -2,13 +2,13 @@ use crate::ast::{Attempting, EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
 use crate::parser::{
-    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof, Bag,
-    FailReason, ParseResult, Parser, State,
+    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof,
+    ParseResult, Parser, State, SyntaxError,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
+pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
     use StrLiteral::*;
 
     move |arena: &'a Bump, mut state: State<'a>| {
@@ -256,7 +256,7 @@ fn parse_block_string<'a, I>(
     arena: &'a Bump,
     state: State<'a>,
     bytes: &mut I,
-) -> ParseResult<'a, StrLiteral<'a>>
+) -> ParseResult<'a, StrLiteral<'a>, SyntaxError<'a>>
 where
     I: Iterator<Item = &'a u8>,
 {
@@ -291,14 +291,10 @@ where
                             // Ok((StrLiteral::Block(lines.into_bump_slice()), state))
                             Err((
                                 MadeProgress,
-                                Bag::from_state(
-                                    arena,
-                                    &state,
-                                    FailReason::NotYetImplemented(format!(
-                                        "TODO parse this line in a block string: {:?}",
-                                        line
-                                    )),
-                                ),
+                                SyntaxError::NotYetImplemented(format!(
+                                    "TODO parse this line in a block string: {:?}",
+                                    line
+                                )),
                                 state,
                             ))
                         }

@@ -89,6 +89,24 @@ impl Region {
             0
         }
     }
+
+    pub fn from_row_col(row: u32, col: u16) -> Self {
+        Region {
+            start_col: col,
+            start_line: row,
+            end_col: col + 1,
+            end_line: row,
+        }
+    }
+
+    pub fn from_rows_cols(start_line: u32, start_col: u16, end_line: u32, end_col: u16) -> Self {
+        Region {
+            start_col,
+            start_line,
+            end_col,
+            end_line,
+        }
+    }
 }
 
 #[test]
