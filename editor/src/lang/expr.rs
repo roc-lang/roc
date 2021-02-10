@@ -20,7 +20,7 @@ use roc_parse::ast::StrLiteral;
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::expr::expr;
-use roc_parse::parser::{loc, Bag, Parser, State};
+use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -233,7 +233,7 @@ pub fn str_to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,
-) -> Result<(Expr2, self::Output), Bag<'a>> {
+) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
     let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(expr(0)), 0);
     let parse_res = parser.parse(&arena, state);
@@ -258,6 +258,7 @@ pub fn to_expr2<'a>(
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
+                        text: PoolStr::new(string, &mut env.pool),
                     };
 
                     (expr, Output::default())

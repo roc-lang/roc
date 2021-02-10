@@ -91,6 +91,7 @@ pub enum Expr2 {
     Float {
         number: FloatVal, // 16B
         var: Variable,    // 4B
+        text: PoolStr,    // 8B
     },
     /// string literals of length up to 30B
     SmallStr(ArrayString<U30>), // 31B

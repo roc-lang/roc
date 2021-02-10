@@ -157,6 +157,16 @@ impl Pool {
         }
     }
 
+    pub fn get_str(&self, pool_str: &PoolStr) -> &str {
+        unsafe {
+            let node_ptr = self.nodes.offset(pool_str.first_node_id.index as isize);
+
+            let node_slice: &[u8] = &*node_ptr;
+
+            std::str::from_utf8_unchecked(&node_slice[0..pool_str.len as usize])
+        }
+    }
+
     pub fn set<T>(&mut self, node_id: NodeId<T>, element: T) {
         unsafe {
             let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
@@ -238,7 +248,7 @@ impl PoolStr {
 
             PoolStr {
                 first_node_id,
-                len: number_of_nodes,
+                len: string.len() as u32,
             }
         } else {
             PoolStr {

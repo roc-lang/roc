@@ -4041,7 +4041,7 @@ mod test_reporting {
                 r#"
                 ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
                 
-                Unexpected token while parsing a definition:
+                Unexpected token :
                 
                 1│  f :: I64
                        ^
@@ -4096,10 +4096,302 @@ mod test_reporting {
                 r#"
                 ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
                 
-                Unexpected token here:
+                Unexpected token :
                 
                 2│      5 ** 3
                           ^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_union_open() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED TAG UNION TYPE ───────────────────────────────────────────────────
+                
+                I just started parsing a tag union type, but I got stuck here:
+                
+                1│  f : [
+                         ^
+                
+                Tag unions look like [ Many I64, None ], so I was expecting to see a
+                tag name next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_union_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ Yes, 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED TAG UNION TYPE ───────────────────────────────────────────────────
+                
+                I am partway through parsing a tag union type, but I got stuck here:
+                
+                1│  f : [ Yes, 
+                              ^
+                
+                I was expecting to see a closing square bracket before this, so try
+                adding a ] and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_union_lowercase_tag_name() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ lowercase ] 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
+                
+                I am partway through parsing a tag union type, but I got stuck here:
+                
+                1│  f : [ lowercase ] 
+                          ^
+                
+                I was expecting to see a tag name.
+                
+                Hint: Tag names Tag names start with an uppercase letter, like
+                Err or Green.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_union_second_lowercase_tag_name() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ Good, bad ] 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
+                
+                I am partway through parsing a tag union type, but I got stuck here:
+                
+                1│  f : [ Good, bad ] 
+                                ^
+                
+                I was expecting to see a tag name.
+                
+                Hint: Tag names Tag names start with an uppercase letter, like
+                Err or Green.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_open() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : {
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I just started parsing a record type, but I got stuck here:
+                
+                1│  f : {
+                         ^
+                
+                Record types look like { name : String, age : Int }, so I was
+                expecting to see a field name next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_open_indent() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : {
+                foo : I64,
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : {
+                2│  foo : I64,
+                    ^
+                
+                I was expecting to see a closing curly brace before this, so try
+                adding a } and see if that helps?
+                
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { a: Int, 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : { a: Int, 
+                                 ^
+                
+                I was expecting to see a closing curly brace before this, so try
+                adding a } and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_indent_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { a: Int
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : { a: Int
+                2│  }
+                    ^
+                
+                I need this curly brace to be indented more. Try adding more spaces
+                before it!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_keyword_field_name() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { if : I64 } 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I just started parsing a record type, but I got stuck on this field
+                name:
+                
+                1│  f : { if : I64 } 
+                          ^^
+                
+                Looks like you are trying to use `if` as a field name, but that is a
+                reserved word. Try using a different name!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_missing_comma() {
+        // a case where the message cannot be as good as elm's
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { foo  bar }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : { foo  bar }
+                               ^
+                
+                I was expecting to see a colon, question mark, comma or closing curly
+                brace.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_tab() {
+        // a case where the message cannot be as good as elm's
+        report_problem_as(
+            "f : { foo \t }",
+            indoc!(
+                r#"
+                ── TAB CHARACTER ───────────────────────────────────────────────────────────────
+                
+                I encountered a tab character
+                
+                1│  f : { foo 	 }
+                              ^
+                
+                Tab characters are not allowed.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn comment_with_tab() {
+        report_problem_as(
+            "# comment with a \t\n4",
+            indoc!(
+                r#"
+                ── TAB CHARACTER ───────────────────────────────────────────────────────────────
+                
+                I encountered a tab character
+                
+                1│  f : { foo 	 }
+                              ^
+                
+                Tab characters are not allowed.
             "#
             ),
         )

@@ -1,30 +1,83 @@
 use crate::ast::CommentOrNewline::{self, *};
 use crate::ast::{Attempting, Spaceable};
 use crate::parser::{
-    self, and, ascii_char, ascii_string, backtrackable, optional, parse_utf8, peek_utf8_char, then,
-    unexpected, unexpected_eof, FailReason, Parser,
+    self, and, ascii_char, ascii_string, backtrackable, bad_input_to_syntax_error, optional,
+    parse_utf8, peek_utf8_char, then, unexpected, unexpected_eof, BadInputError, Col, Parser,
     Progress::{self, *},
-    State,
+    Row, State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::Located;
+use roc_region::all::{Located, Region};
 
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
 /// SpaceAfter as appropriate.
-pub fn space0_around<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
+pub fn space0_around<'a, P, S>(
+    parser: P,
+    min_indent: u16,
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
     S: Sized,
-    P: Parser<'a, Located<S>>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
         and(space0(min_indent), and(parser, space0(min_indent))),
+        move |arena: &'a Bump,
+              tuples: (
+            &'a [CommentOrNewline<'a>],
+            (Located<S>, &'a [CommentOrNewline<'a>]),
+        )| {
+            let (spaces_before, (loc_val, spaces_after)) = tuples;
+
+            if spaces_before.is_empty() {
+                if spaces_after.is_empty() {
+                    loc_val
+                } else {
+                    arena
+                        .alloc(loc_val.value)
+                        .with_spaces_after(spaces_after, loc_val.region)
+                }
+            } else if spaces_after.is_empty() {
+                arena
+                    .alloc(loc_val.value)
+                    .with_spaces_before(spaces_before, loc_val.region)
+            } else {
+                let wrapped_expr = arena
+                    .alloc(loc_val.value)
+                    .with_spaces_after(spaces_after, loc_val.region);
+
+                arena
+                    .alloc(wrapped_expr.value)
+                    .with_spaces_before(spaces_before, wrapped_expr.region)
+            }
+        },
+    )
+}
+
+pub fn space0_around_e<'a, P, S, E>(
+    parser: P,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, Located<S>, E>
+where
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>, E>,
+    P: 'a,
+    E: 'a,
+{
+    parser::map_with_arena(
+        and(
+            space0_e(min_indent, space_problem, indent_problem),
+            and(parser, space0_e(min_indent, space_problem, indent_problem)),
+        ),
         move |arena: &'a Bump,
               tuples: (
             &'a [CommentOrNewline<'a>],
@@ -62,11 +115,14 @@ where
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
 /// SpaceAfter as appropriate.
-pub fn space1_around<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
+pub fn space1_around<'a, P, S>(
+    parser: P,
+    min_indent: u16,
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -100,11 +156,14 @@ where
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-pub fn space0_before<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
+pub fn space0_before<'a, P, S>(
+    parser: P,
+    min_indent: u16,
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -121,14 +180,44 @@ where
     )
 }
 
-/// Parses the given expression with 1 or more (spaces/comments/newlines) before it.
-/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-pub fn space1_before<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
+pub fn space0_before_e<'a, P, S, E>(
+    parser: P,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, Located<S>, E>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>>,
+    P: Parser<'a, Located<S>, E>,
+    P: 'a,
+    E: 'a,
+{
+    parser::map_with_arena(
+        and!(space0_e(min_indent, space_problem, indent_problem), parser),
+        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Located<S>)| {
+            if space_list.is_empty() {
+                loc_expr
+            } else {
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_before(space_list, loc_expr.region)
+            }
+        },
+    )
+}
+
+/// Parses the given expression with 1 or more (spaces/comments/newlines) before it.
+/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
+/// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
+pub fn space1_before<'a, P, S>(
+    parser: P,
+    min_indent: u16,
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
+where
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -148,11 +237,14 @@ where
 /// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-pub fn space0_after<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
+pub fn space0_after<'a, P, S>(
+    parser: P,
+    min_indent: u16,
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -172,11 +264,14 @@ where
 /// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-pub fn space1_after<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
+pub fn space1_after<'a, P, S>(
+    parser: P,
+    min_indent: u16,
+) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>>,
+    P: Parser<'a, Located<S>, SyntaxError<'a>>,
     P: 'a,
 {
     parser::map_with_arena(
@@ -194,12 +289,25 @@ where
 }
 
 /// Zero or more (spaces/comments/newlines).
-pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
+pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     spaces(false, min_indent)
 }
 
+pub fn space0_e<'a, E>(
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
+    spaces_help(false, min_indent, space_problem, indent_problem, |_, _| {
+        unreachable!("no spaces are required, so this is unreachable")
+    })
+}
+
 /// One or more (spaces/comments/newlines).
-pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
+pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     // TODO try benchmarking a short-circuit for the typical case: see if there is
     // exactly one space followed by char that isn't [' ', '\n', or '#'], and
     // if so, return empty slice. The case where there's exactly 1 space should
@@ -214,7 +322,7 @@ enum LineState {
     DocComment,
 }
 
-pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
+pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
     then(
         and!(ascii_char(b'#'), optional(ascii_string("# "))),
         |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
@@ -242,7 +350,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
 }
 
 #[inline(always)]
-pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
+pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         if spaces_expected == 0 {
             return Ok((NoProgress, (), state));
@@ -269,10 +377,10 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
                     ));
                 }
 
-                Err(FailReason::BadUtf8) => {
+                Err(SyntaxError::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
                     let progress = Progress::progress_when(spaces_seen != 0);
-                    return state.fail(arena, progress, FailReason::BadUtf8);
+                    return state.fail(arena, progress, SyntaxError::BadUtf8);
                 }
                 Err(_) => {
                     if spaces_seen == 0 {
@@ -306,7 +414,27 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, ()> {
 fn spaces<'a>(
     require_at_least_one: bool,
     min_indent: u16,
-) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
+    spaces_help(
+        require_at_least_one,
+        min_indent,
+        bad_input_to_syntax_error,
+        |_, _| SyntaxError::OutdentedTooFar,
+        |_, _| SyntaxError::Eof(Region::zero()),
+    )
+}
+
+#[inline(always)]
+fn spaces_help<'a, E>(
+    require_at_least_one: bool,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+    missing_space_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
     move |arena: &'a Bump, state: State<'a>| {
         let original_state = state.clone();
         let mut space_list = Vec::new_in(arena);
@@ -329,22 +457,33 @@ fn spaces<'a>(
                                 ' ' => {
                                     // Don't check indentation here; it might not be enough
                                     // indentation yet, but maybe it will be after more spaces happen!
-                                    state = state.advance_spaces(arena, 1)?;
+                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
                                 }
                                 '\r' => {
                                     // Ignore carriage returns.
-                                    state = state.advance_spaces(arena, 1)?;
+                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
                                 }
                                 '\n' => {
                                     // don't need to check the indent here since we'll reset it
                                     // anyway
 
-                                    state = state.newline(arena)?;
+                                    state = state.newline_e(arena, space_problem)?;
 
                                     // Newlines only get added to the list when they're outside comments.
                                     space_list.push(Newline);
 
                                     any_newlines = true;
+                                }
+                                '\t' => {
+                                    return Err((
+                                        MadeProgress,
+                                        space_problem(
+                                            BadInputError::HasTab,
+                                            state.line,
+                                            state.column,
+                                        ),
+                                        state,
+                                    ));
                                 }
                                 '#' => {
                                     // Check indentation to make sure we were indented enough
@@ -352,11 +491,11 @@ fn spaces<'a>(
                                     let progress =
                                         Progress::from_lengths(start_bytes_len, state.bytes.len());
                                     state = state
-                                        .check_indent(arena, min_indent)
+                                        .check_indent_e(arena, min_indent, indent_problem)
                                         .map_err(|(fail, _)| {
                                             (progress, fail, original_state.clone())
                                         })?
-                                        .advance_without_indenting(arena, 1)?;
+                                        .advance_without_indenting_e(arena, 1, space_problem)?;
 
                                     // We're now parsing a line comment!
                                     line_state = LineState::Comment;
@@ -365,7 +504,11 @@ fn spaces<'a>(
                                     return if require_at_least_one && bytes_parsed <= 1 {
                                         // We've parsed 1 char and it was not a space,
                                         // but we require parsing at least one space!
-                                        Err(unexpected(arena, 0, Attempting::TODO, state.clone()))
+                                        Err((
+                                            NoProgress,
+                                            missing_space_problem(state.line, state.column),
+                                            state,
+                                        ))
                                     } else {
                                         // First make sure we were indented enough!
                                         //
@@ -379,11 +522,11 @@ fn spaces<'a>(
                                             state.bytes.len(),
                                         );
                                         if any_newlines {
-                                            state = state.check_indent(arena, min_indent).map_err(
-                                                |(fail, _)| {
+                                            state = state
+                                                .check_indent_e(arena, min_indent, indent_problem)
+                                                .map_err(|(fail, _)| {
                                                     (progress, fail, original_state.clone())
-                                                },
-                                            )?;
+                                                })?;
                                         }
 
                                         Ok((progress, space_list.into_bump_slice(), state))
@@ -395,7 +538,11 @@ fn spaces<'a>(
                             match ch {
                                 ' ' => {
                                     // If we're in a line comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting(arena, 1)?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        1,
+                                        space_problem,
+                                    )?;
 
                                     if comment_line_buf.len() == 1 {
                                         match comment_line_buf.chars().next() {
@@ -420,7 +567,7 @@ fn spaces<'a>(
                                     }
                                 }
                                 '\n' => {
-                                    state = state.newline(arena)?;
+                                    state = state.newline_e(arena, space_problem)?;
 
                                     match (comment_line_buf.len(), comment_line_buf.chars().next())
                                     {
@@ -443,10 +590,24 @@ fn spaces<'a>(
                                         }
                                     }
                                 }
+                                '\t' => {
+                                    return Err((
+                                        MadeProgress,
+                                        space_problem(
+                                            BadInputError::HasTab,
+                                            state.line,
+                                            state.column,
+                                        ),
+                                        state,
+                                    ));
+                                }
                                 nonblank => {
                                     // Chars can have btye lengths of more than 1!
-                                    state = state
-                                        .advance_without_indenting(arena, nonblank.len_utf8())?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        nonblank.len_utf8(),
+                                        space_problem,
+                                    )?;
 
                                     comment_line_buf.push(nonblank);
                                 }
@@ -456,12 +617,16 @@ fn spaces<'a>(
                             match ch {
                                 ' ' => {
                                     // If we're in a doc comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting(arena, 1)?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        1,
+                                        space_problem,
+                                    )?;
 
                                     comment_line_buf.push(ch);
                                 }
                                 '\n' => {
-                                    state = state.newline(arena)?;
+                                    state = state.newline_e(arena, space_problem)?;
 
                                     // This was a newline, so end this doc comment.
                                     space_list.push(DocComment(comment_line_buf.into_bump_str()));
@@ -469,8 +634,23 @@ fn spaces<'a>(
 
                                     line_state = LineState::Normal;
                                 }
+                                '\t' => {
+                                    return Err((
+                                        MadeProgress,
+                                        space_problem(
+                                            BadInputError::HasTab,
+                                            state.line,
+                                            state.column,
+                                        ),
+                                        state,
+                                    ));
+                                }
                                 nonblank => {
-                                    state = state.advance_without_indenting(arena, utf8_len)?;
+                                    state = state.advance_without_indenting_e(
+                                        arena,
+                                        utf8_len,
+                                        space_problem,
+                                    )?;
 
                                     comment_line_buf.push(nonblank);
                                 }
@@ -478,14 +658,24 @@ fn spaces<'a>(
                         }
                     }
                 }
-                Err(FailReason::BadUtf8) => {
+                Err(SyntaxError::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
                     let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-                    return state.fail(arena, progress, FailReason::BadUtf8);
+                    let row = state.line;
+                    let col = state.column;
+                    return state.fail(
+                        arena,
+                        progress,
+                        space_problem(BadInputError::BadUtf8, row, col),
+                    );
                 }
                 Err(_) => {
                     if require_at_least_one && bytes_parsed == 0 {
-                        return Err(unexpected_eof(arena, state, 0));
+                        return Err((
+                            NoProgress,
+                            missing_space_problem(state.line, state.column),
+                            state,
+                        ));
                     } else {
                         let space_slice = space_list.into_bump_slice();
 
@@ -502,7 +692,7 @@ fn spaces<'a>(
                                 progress,
                                 space_slice,
                                 state
-                                    .check_indent(arena, min_indent)
+                                    .check_indent_e(arena, min_indent, indent_problem)
                                     .map_err(|(fail, _)| (progress, fail, original_state))?,
                             ));
                         }
@@ -513,9 +703,12 @@ fn spaces<'a>(
             };
         }
 
-        // If we didn't parse anything, return unexpected EOF
         if require_at_least_one && original_state.bytes.len() == state.bytes.len() {
-            Err(unexpected_eof(arena, state, 0))
+            Err((
+                NoProgress,
+                missing_space_problem(state.line, state.column),
+                state,
+            ))
         } else {
             // First make sure we were indented enough!
             //
@@ -527,7 +720,7 @@ fn spaces<'a>(
             let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
             if any_newlines {
                 state = state
-                    .check_indent(arena, min_indent)
+                    .check_indent_e(arena, min_indent, indent_problem)
                     .map_err(|(fail, _)| (progress, fail, original_state))?;
             }
 

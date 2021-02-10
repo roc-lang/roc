@@ -5,7 +5,7 @@ use roc_fmt::module::fmt_module;
 use roc_parse::ast::{Attempting, Def, Module};
 use roc_parse::module::module_defs;
 use roc_parse::parser;
-use roc_parse::parser::Parser;
+use roc_parse::parser::{Parser, SyntaxError};
 use roc_region::all::Located;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -21,8 +21,8 @@ pub struct File<'a> {
 #[derive(Debug)]
 pub enum ReadError<'a> {
     Read(std::io::Error),
-    ParseDefs(parser::Bag<'a>),
-    ParseHeader(parser::Bag<'a>),
+    ParseDefs(SyntaxError<'a>),
+    ParseHeader(SyntaxError<'a>),
     DoesntHaveRocExtension,
 }
 
