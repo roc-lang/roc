@@ -4,7 +4,7 @@ use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
 use bumpalo::collections::Vec;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
@@ -559,11 +559,30 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                 }
                 WhenRecursive::Loop(union_layout) => {
                     let field_layout = Layout::Union(union_layout.clone());
+
+                    let bt = basic_type_from_layout(
+                        env.arena,
+                        env.context,
+                        &field_layout,
+                        env.ptr_bytes,
+                    );
+
+                    // cast the i64 pointer to a pointer to block of memory
+                    let field1_cast = env
+                        .builder
+                        .build_bitcast(field1, bt, "i64_to_opaque")
+                        .into_pointer_value();
+
+                    let field2_cast = env
+                        .builder
+                        .build_bitcast(field2, bt, "i64_to_opaque")
+                        .into_pointer_value();
+
                     build_eq(
                         env,
                         layout_ids,
-                        field1,
-                        field2,
+                        field1_cast.into(),
+                        field2_cast.into(),
                         &field_layout,
                         &field_layout,
                     )
@@ -647,6 +666,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     union_layout: &UnionLayout<'a>,
 ) {
+    use inkwell::types::BasicType;
+
     let ctx = env.context;
     let builder = env.builder;
 
@@ -681,7 +702,20 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
     let entry = ctx.append_basic_block(parent, "entry");
 
+    let return_true = ctx.append_basic_block(parent, "return_true");
     let return_false = ctx.append_basic_block(parent, "return_false");
+
+    {
+        env.builder.position_at_end(return_false);
+        env.builder
+            .build_return(Some(&env.context.bool_type().const_int(0, false)));
+    }
+
+    {
+        env.builder.position_at_end(return_true);
+        env.builder
+            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+    }
 
     env.builder.position_at_end(entry);
 
@@ -689,8 +723,9 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
     match union_layout {
         NonRecursive(tags) => {
-            let id1 = get_tag_id(env, union_layout, tag1);
-            let id2 = get_tag_id(env, union_layout, tag2);
+            // SAFETY we know that non-recursive tags cannot be NULL
+            let id1 = nonrec_tag_id(env, tag1.into_struct_value());
+            let id2 = nonrec_tag_id(env, tag2.into_struct_value());
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -740,18 +775,22 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+                cases.push((
+                    env.context.i64_type().const_int(tag_id as u64, false),
+                    block,
+                ));
             }
 
-            env.builder.position_at_end(entry);
+            env.builder.position_at_end(compare_tag_fields);
 
             let default = cases.pop().unwrap().1;
 
             env.builder.build_switch(id1, default, &cases);
         }
         Recursive(tags) => {
-            let id1 = get_tag_id(env, union_layout, tag1);
-            let id2 = get_tag_id(env, union_layout, tag2);
+            // SAFETY we know that non-recursive tags cannot be NULL
+            let id1 = unsafe { rec_tag_id_unsafe(env, tag1.into_pointer_value()) };
+            let id2 = unsafe { rec_tag_id_unsafe(env, tag2.into_pointer_value()) };
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -772,127 +811,255 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                // TODO drop tag id?
-                let struct_layout = Layout::Struct(field_layouts);
-
-                let wrapper_type =
-                    basic_type_from_layout(env.arena, env.context, &struct_layout, env.ptr_bytes);
-                debug_assert!(wrapper_type.is_struct_type());
-
-                let struct1 = cast_block_of_memory_to_tag(
-                    env.builder,
-                    tag1.into_struct_value(),
-                    wrapper_type,
-                );
-                let struct2 = cast_block_of_memory_to_tag(
-                    env.builder,
-                    tag2.into_struct_value(),
-                    wrapper_type,
-                );
-
-                let answer = build_struct_eq(
+                let answer = eq_ptr_to_struct(
                     env,
                     layout_ids,
+                    union_layout,
                     field_layouts,
-                    WhenRecursive::Loop(union_layout.clone()),
-                    struct1,
-                    struct2,
+                    tag1.into_pointer_value(),
+                    tag2.into_pointer_value(),
                 );
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+                cases.push((
+                    env.context.i64_type().const_int(tag_id as u64, false),
+                    block,
+                ));
             }
 
-            env.builder.position_at_end(entry);
+            env.builder.position_at_end(compare_tag_fields);
 
             let default = cases.pop().unwrap().1;
 
             env.builder.build_switch(id1, default, &cases);
         }
-        _ => todo!(),
+        NullableUnwrapped { other_fields, .. } => {
+            // drop the tag id; it is not stored
+            let other_fields = &other_fields[1..];
+
+            // IDEA add up is_null_1 + is_null_2, then switch on the sum
+            let is_null_1 = env
+                .builder
+                .build_is_null(tag1.into_pointer_value(), "is_null");
+
+            let is_null_2 = env
+                .builder
+                .build_is_null(tag2.into_pointer_value(), "is_null");
+
+            let l_is_null = ctx.append_basic_block(parent, "l_is_null");
+            let l_is_not_null = ctx.append_basic_block(parent, "l_is_not_null");
+            let compare_other = ctx.append_basic_block(parent, "compare_other");
+
+            env.builder
+                .build_conditional_branch(is_null_1, l_is_null, l_is_not_null);
+
+            // LHS is NULL
+
+            env.builder.position_at_end(l_is_null);
+            env.builder.build_return(Some(&is_null_2));
+
+            // LHS is not NULL
+
+            env.builder.position_at_end(l_is_not_null);
+
+            env.builder
+                .build_conditional_branch(is_null_2, return_false, compare_other);
+
+            // compare the non-null case
+
+            env.builder.position_at_end(compare_other);
+
+            let answer = eq_ptr_to_struct(
+                env,
+                layout_ids,
+                union_layout,
+                other_fields,
+                tag1.into_pointer_value(),
+                tag2.into_pointer_value(),
+            );
+
+            env.builder.build_return(Some(&answer));
+        }
+        NullableWrapped {
+            nullable_id,
+            other_tags,
+        } => {
+            // IDEA add up is_null_1 + is_null_2, then switch on the sum
+            let is_null_1 = env
+                .builder
+                .build_is_null(tag1.into_pointer_value(), "is_null");
+
+            let is_null_2 = env
+                .builder
+                .build_is_null(tag2.into_pointer_value(), "is_null");
+
+            let l_is_null = ctx.append_basic_block(parent, "l_is_null");
+            let l_is_not_null = ctx.append_basic_block(parent, "l_is_not_null");
+            let compare_other = ctx.append_basic_block(parent, "compare_other");
+
+            env.builder
+                .build_conditional_branch(is_null_1, l_is_null, l_is_not_null);
+
+            // LHS is NULL
+
+            env.builder.position_at_end(l_is_null);
+            env.builder.build_return(Some(&is_null_2));
+
+            // LHS is not NULL
+
+            env.builder.position_at_end(l_is_not_null);
+
+            env.builder
+                .build_conditional_branch(is_null_2, return_false, compare_other);
+
+            // compare the non-null case
+
+            env.builder.position_at_end(compare_other);
+
+            // SAFETY we know at this point that tag1/tag2 are not NULL
+            let id1 = unsafe { rec_tag_id_unsafe(env, tag1.into_pointer_value()) };
+            let id2 = unsafe { rec_tag_id_unsafe(env, tag2.into_pointer_value()) };
+
+            let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
+
+            let same_tag =
+                env.builder
+                    .build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
+
+            env.builder
+                .build_conditional_branch(same_tag, compare_tag_fields, return_false);
+
+            env.builder.position_at_end(compare_tag_fields);
+
+            // switch on all the tag ids
+
+            let tags = other_tags;
+            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+            for (tag_id, field_layouts) in tags.iter().enumerate() {
+                let block = env.context.append_basic_block(parent, "tag_id_modify");
+                env.builder.position_at_end(block);
+
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_ids,
+                    union_layout,
+                    field_layouts,
+                    tag1.into_pointer_value(),
+                    tag2.into_pointer_value(),
+                );
+
+                env.builder.build_return(Some(&answer));
+
+                cases.push((
+                    env.context.i64_type().const_int(tag_id as u64, false),
+                    block,
+                ));
+            }
+
+            env.builder.position_at_end(compare_tag_fields);
+
+            let default = cases.pop().unwrap().1;
+
+            env.builder.build_switch(id1, default, &cases);
+        }
+        NonNullableUnwrapped(field_layouts) => {
+            let answer = eq_ptr_to_struct(
+                env,
+                layout_ids,
+                union_layout,
+                field_layouts,
+                tag1.into_pointer_value(),
+                tag2.into_pointer_value(),
+            );
+
+            env.builder.build_return(Some(&answer));
+        }
     }
 }
 
-fn get_tag_id<'a, 'ctx, 'env>(
+fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     union_layout: &UnionLayout<'a>,
-    tag: BasicValueEnum<'ctx>,
+    field_layouts: &'a [Layout<'a>],
+    tag1: PointerValue<'ctx>,
+    tag2: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    use UnionLayout::*;
+    use inkwell::types::BasicType;
 
-    match union_layout {
-        NonRecursive(_tags) | Recursive(_tags) => {
-            // for now, the tag is always the first field
-            complex_bitcast(
-                env.builder,
-                tag,
-                env.context.i64_type().into(),
-                "cast_for_tag_id",
-            )
-            .into_int_value()
-        }
+    let struct_layout = Layout::Struct(field_layouts);
 
-        NonNullableUnwrapped(_fields) => {
-            // there is only one tag; it has tag_id 0
-            env.context.i64_type().const_int(0, false)
-        }
+    let wrapper_type =
+        basic_type_from_layout(env.arena, env.context, &struct_layout, env.ptr_bytes);
+    debug_assert!(wrapper_type.is_struct_type());
 
-        NullableWrapped { nullable_id, .. } => {
-            debug_assert!(tag.is_pointer_value());
+    // cast the opaque pointer to a pointer of the correct shape
+    let struct1_ptr = env
+        .builder
+        .build_bitcast(
+            tag1,
+            wrapper_type.ptr_type(AddressSpace::Generic),
+            "opaque_to_correct",
+        )
+        .into_pointer_value();
 
-            let tag_ptr = tag.into_pointer_value();
-            let is_null = env.builder.build_is_null(tag_ptr, "is_null");
+    let struct2_ptr = env
+        .builder
+        .build_bitcast(
+            tag2,
+            wrapper_type.ptr_type(AddressSpace::Generic),
+            "opaque_to_correct",
+        )
+        .into_pointer_value();
 
-            let parent = env
-                .builder
-                .get_insert_block()
-                .unwrap()
-                .get_parent()
-                .unwrap();
+    let struct1 = env
+        .builder
+        .build_load(struct1_ptr, "load_struct1")
+        .into_struct_value();
 
-            let source_block = env.builder.get_insert_block().unwrap();
-            let merge_block = env.context.append_basic_block(parent, "merge");
-            let not_null_block = env.context.append_basic_block(parent, "not_null");
+    let struct2 = env
+        .builder
+        .build_load(struct2_ptr, "load_struct2")
+        .into_struct_value();
 
-            env.builder
-                .build_conditional_branch(is_null, merge_block, not_null_block);
+    build_struct_eq(
+        env,
+        layout_ids,
+        field_layouts,
+        WhenRecursive::Loop(union_layout.clone()),
+        struct1,
+        struct2,
+    )
+    .into_int_value()
+}
 
-            // NOT NULL
+fn nonrec_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    complex_bitcast(
+        env.builder,
+        tag.into(),
+        env.context.i64_type().into(),
+        "load_tag_id",
+    )
+    .into_int_value()
+}
 
-            env.builder.position_at_end(not_null_block);
+unsafe fn rec_tag_id_unsafe<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    let ptr = env
+        .builder
+        .build_bitcast(
+            tag,
+            env.context.i64_type().ptr_type(AddressSpace::Generic),
+            "cast_for_tag_id",
+        )
+        .into_pointer_value();
 
-            let tag_ptr = env
-                .builder
-                .build_bitcast(
-                    tag_ptr,
-                    env.context.i64_type().ptr_type(AddressSpace::Generic),
-                    "to_tag_id_ptr",
-                )
-                .into_pointer_value();
-
-            let non_null_tag_id = env.builder.build_load(tag_ptr, "read_tag_id");
-
-            env.builder.build_unconditional_branch(merge_block);
-
-            // MERGE
-
-            env.builder.position_at_end(not_null_block);
-
-            let merged = env.builder.build_phi(env.context.i64_type(), "tag_id");
-
-            merged.add_incoming(&[
-                (
-                    &env.context.i64_type().const_int(*nullable_id as u64, false),
-                    source_block,
-                ),
-                (&non_null_tag_id, not_null_block),
-            ]);
-
-            merged.as_basic_value().into_int_value()
-        }
-        NullableUnwrapped { nullable_id, .. } => {
-            todo!()
-        }
-    }
+    env.builder.build_load(ptr, "load_tag_id").into_int_value()
 }
