@@ -489,9 +489,10 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
 
                 let field_ptr = env
                     .builder
-                    .build_extract_value(wrapper_struct, 1, "increment_closure_data")
+                    .build_extract_value(wrapper_struct, 1, "moddify_rc_closure_data")
                     .unwrap();
 
+                // dbg!(&field_ptr, closure_layout.as_block_of_memory_layout());
                 modify_refcount_layout(
                     env,
                     parent,
