@@ -10,12 +10,13 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
+#[derive(Clone, Debug)]
 enum WhenRecursive<'a> {
     Unreachable,
     Loop(UnionLayout<'a>),
 }
 
-pub fn build_hash_layout<'a, 'ctx, 'env>(
+pub fn generic_hash<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     seed: IntValue<'ctx>,
@@ -23,25 +24,79 @@ pub fn build_hash_layout<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
 ) -> IntValue<'ctx> {
     // NOTE: C and Zig use this value for their initial HashMap seed: 0xc70f6907
+    build_hash_layout(
+        env,
+        layout_ids,
+        seed,
+        val,
+        layout,
+        WhenRecursive::Unreachable,
+    )
+}
 
+fn build_hash_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    seed: IntValue<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+    when_recursive: WhenRecursive<'a>,
+) -> IntValue<'ctx> {
     match layout {
-        Layout::Builtin(builtin) => hash_builtin(env, seed, val, layout, builtin),
+        Layout::Builtin(builtin) => {
+            hash_builtin(env, layout_ids, seed, val, layout, builtin, when_recursive)
+        }
 
         Layout::Struct(fields) => build_hash_struct(
             env,
             layout_ids,
             fields,
-            WhenRecursive::Unreachable,
+            when_recursive,
             seed,
             val.into_struct_value(),
         ),
+
+        Layout::PhantomEmptyStruct => {
+            // just does nothing and returns the seed
+            seed
+        }
 
         Layout::Union(union_layout) => {
             build_hash_tag(env, layout_ids, layout, union_layout, seed, val)
         }
 
-        _ => {
-            todo!("Implement hash for other layouts")
+        Layout::RecursivePointer => match when_recursive {
+            WhenRecursive::Unreachable => {
+                unreachable!("recursion pointers should never be hashed directly")
+            }
+            WhenRecursive::Loop(union_layout) => {
+                let layout = Layout::Union(union_layout.clone());
+
+                let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+
+                // cast the i64 pointer to a pointer to block of memory
+                let field_cast = env
+                    .builder
+                    .build_bitcast(val, bt, "i64_to_opaque")
+                    .into_pointer_value();
+
+                build_hash_tag(
+                    env,
+                    layout_ids,
+                    &layout,
+                    &union_layout,
+                    seed,
+                    field_cast.into(),
+                )
+            }
+        },
+
+        Layout::Pointer(_) => {
+            unreachable!("unused")
+        }
+
+        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
+            unreachable!("the type system will guarantee these are never hashed")
         }
     }
 }
@@ -52,16 +107,19 @@ fn append_hash_layout<'a, 'ctx, 'env>(
     seed: IntValue<'ctx>,
     val: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
+    when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
-    build_hash_layout(env, layout_ids, seed, val, layout)
+    build_hash_layout(env, layout_ids, seed, val, layout, when_recursive)
 }
 
 fn hash_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     seed: IntValue<'ctx>,
     val: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
     builtin: &Builtin<'a>,
+    when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     let ptr_bytes = env.ptr_bytes;
 
@@ -90,7 +148,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
             .into_int_value()
         }
         Builtin::EmptyStr | Builtin::EmptyDict | Builtin::EmptyList | Builtin::EmptySet => {
-            todo!("These are all the same, so we should just hardcode some hash value")
+            hash_empty_collection(seed)
         }
 
         Builtin::Dict(_, _) => {
@@ -99,9 +157,15 @@ fn hash_builtin<'a, 'ctx, 'env>(
         Builtin::Set(_) => {
             todo!("Implement Hash for Set")
         }
-        Builtin::List(_, _) => {
-            todo!("Implement Hash for List")
-        }
+        Builtin::List(_, element_layout) => build_hash_list(
+            env,
+            layout_ids,
+            layout,
+            element_layout,
+            when_recursive,
+            seed,
+            val.into_struct_value(),
+        ),
     }
 }
 
@@ -223,7 +287,9 @@ fn hash_struct<'a, 'ctx, 'env>(
 
     let layout = Layout::Struct(field_layouts);
 
-    if !layout.contains_refcounted() {
+    // NO SHORTCUTS: tags can contain garbage memory
+    // so comparing bits could be invalid
+    if false && !layout.contains_refcounted() {
         // this is a struct of only basic types, so we can just hash its bits
         let hash_bytes = store_and_use_as_u8_ptr(env, value.into(), &layout);
         hash_bitcode_fn(env, seed, hash_bytes, layout.stack_size(ptr_bytes))
@@ -261,11 +327,19 @@ fn hash_struct<'a, 'ctx, 'env>(
                             seed,
                             field_cast.into(),
                             &field_layout,
+                            when_recursive.clone(),
                         )
                     }
                 }
             } else {
-                seed = append_hash_layout(env, layout_ids, seed, field, field_layout);
+                seed = append_hash_layout(
+                    env,
+                    layout_ids,
+                    seed,
+                    field,
+                    field_layout,
+                    when_recursive.clone(),
+                );
             }
         }
         seed
@@ -567,7 +641,197 @@ fn hash_tag<'a, 'ctx, 'env>(
     merge_phi.as_basic_value().into_int_value()
 }
 
+fn build_hash_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
+    when_recursive: WhenRecursive<'a>,
+    seed: IntValue<'ctx>,
+    value: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::GENERIC_HASH;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arena = env.arena;
+
+            let seed_type = env.context.i64_type();
+
+            let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
+
+            let function_value = crate::llvm::refcounting::build_header_help(
+                env,
+                &fn_name,
+                seed_type.into(),
+                &[seed_type.into(), arg_type],
+            );
+
+            build_hash_list_help(
+                env,
+                layout_ids,
+                function_value,
+                when_recursive,
+                element_layout,
+            );
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+    let call = env
+        .builder
+        .build_call(function, &[seed.into(), value.into()], "struct_hash");
+
+    call.set_call_convention(FAST_CALL_CONV);
+
+    call.try_as_basic_value().left().unwrap().into_int_value()
+}
+
+fn build_hash_list_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    parent: FunctionValue<'ctx>,
+    when_recursive: WhenRecursive<'a>,
+    element_layout: &Layout<'a>,
+) {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    {
+        use inkwell::debug_info::AsDIScope;
+
+        let func_scope = parent.get_subprogram().unwrap();
+        let lexical_block = env.dibuilder.create_lexical_block(
+            /* scope */ func_scope.as_debug_info_scope(),
+            /* file */ env.compile_unit.get_file(),
+            /* line_no */ 0,
+            /* column_no */ 0,
+        );
+
+        let loc = env.dibuilder.create_debug_location(
+            ctx,
+            /* line */ 0,
+            /* column */ 0,
+            /* current_scope */ lexical_block.as_debug_info_scope(),
+            /* inlined_at */ None,
+        );
+        builder.set_current_debug_location(&ctx, loc);
+    }
+
+    // Add args to scope
+    let mut it = parent.get_param_iter();
+    let seed = it.next().unwrap().into_int_value();
+    let value = it.next().unwrap().into_struct_value();
+
+    set_name(seed.into(), Symbol::ARG_1.ident_string(&env.interns));
+    set_name(value.into(), Symbol::ARG_2.ident_string(&env.interns));
+
+    let entry = ctx.append_basic_block(parent, "entry");
+    env.builder.position_at_end(entry);
+
+    let result = hash_list(
+        env,
+        layout_ids,
+        parent,
+        seed,
+        value,
+        when_recursive,
+        element_layout,
+    );
+
+    env.builder.build_return(Some(&result));
+}
+
+fn hash_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    parent: FunctionValue<'ctx>,
+    seed: IntValue<'ctx>,
+    value: StructValue<'ctx>,
+    when_recursive: WhenRecursive<'a>,
+    element_layout: &Layout<'a>,
+) -> IntValue<'ctx> {
+    use crate::llvm::build_list::{incrementing_elem_loop, load_list};
+    use inkwell::types::BasicType;
+
+    // hash of a list is the hash of its elements
+    let done_block = env.context.append_basic_block(parent, "done");
+    let loop_block = env.context.append_basic_block(parent, "loop");
+
+    let element_type =
+        basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes);
+    let ptr_type = element_type.ptr_type(inkwell::AddressSpace::Generic);
+
+    let (length, ptr) = load_list(env.builder, value, ptr_type);
+
+    let result = env.builder.build_alloca(env.context.i64_type(), "result");
+    env.builder.build_store(result, seed);
+
+    let is_empty = env.builder.build_int_compare(
+        inkwell::IntPredicate::EQ,
+        length,
+        env.ptr_int().const_zero(),
+        "is_empty",
+    );
+
+    env.builder
+        .build_conditional_branch(is_empty, done_block, loop_block);
+
+    env.builder.position_at_end(loop_block);
+
+    let loop_fn = |_index, element| {
+        let seed = env
+            .builder
+            .build_load(result, "load_current")
+            .into_int_value();
+
+        let answer = append_hash_layout(
+            env,
+            layout_ids,
+            seed,
+            element,
+            element_layout,
+            when_recursive.clone(),
+        );
+
+        env.builder.build_store(result, answer);
+    };
+
+    incrementing_elem_loop(
+        env.builder,
+        env.context,
+        parent,
+        ptr,
+        length,
+        "current_index",
+        loop_fn,
+    );
+
+    env.builder.build_unconditional_branch(done_block);
+
+    env.builder.position_at_end(done_block);
+
+    env.builder
+        .build_load(result, "load_current")
+        .into_int_value()
+}
+
 fn hash_null<'ctx>(seed: IntValue<'ctx>) -> IntValue<'ctx> {
+    seed
+}
+
+fn hash_empty_collection<'ctx>(seed: IntValue<'ctx>) -> IntValue<'ctx> {
     seed
 }
 

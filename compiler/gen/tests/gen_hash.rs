@@ -38,7 +38,7 @@ mod gen_hash {
         assert_evals_to!("Dict.hashTestOnly 1 { x: \"a\" } ", 0xbed235177f41d328, u64);
         assert_evals_to!(
             "Dict.hashTestOnly 1 { x: 42, y: 3.14 } ",
-            9902514118285102975,
+            5348189196103430707,
             u64
         );
     }
@@ -47,7 +47,7 @@ mod gen_hash {
     fn hash_result() {
         assert_evals_to!(
             "Dict.hashTestOnly 0 (List.get [ 0x1 ] 0) ",
-            11861702399108768034,
+            2878521786781103245,
             u64
         );
     }
@@ -98,7 +98,7 @@ mod gen_hash {
                     Dict.hashTestOnly 0 (Add x x) 
                 "#
             ),
-            17097760081222710062,
+            18264046914072177411,
             u64
         );
     }
@@ -116,7 +116,41 @@ mod gen_hash {
                     Dict.hashTestOnly 0 (Add x x) 
                 "#
             ),
-            14822035946487008182,
+            11103255846683455235,
+            u64
+        );
+    }
+
+    #[test]
+    fn hash_rosetree() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Rose a : [ Rose (List (Rose a)) ]
+
+                x : Rose I64 
+                x = Rose [] 
+
+                Dict.hashTestOnly 0 x
+                "#
+            ),
+            0,
+            u64
+        );
+    }
+
+    #[test]
+    fn hash_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : List Str 
+                x = [ "foo", "bar", "baz" ] 
+
+                Dict.hashTestOnly 0 x
+                "#
+            ),
+            10731521034618280801,
             u64
         );
     }
