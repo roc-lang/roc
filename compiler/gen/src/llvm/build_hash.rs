@@ -135,7 +135,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
         | Builtin::Float128
         | Builtin::Float16
         | Builtin::Usize => {
-            let hash_bytes = store_and_use_as_u8_ptr(env, val.into(), &layout);
+            let hash_bytes = store_and_use_as_u8_ptr(env, val, &layout);
             hash_bitcode_fn(env, seed, hash_bytes, layout.stack_size(ptr_bytes))
         }
         Builtin::Str => {
@@ -287,9 +287,10 @@ fn hash_struct<'a, 'ctx, 'env>(
 
     let layout = Layout::Struct(field_layouts);
 
-    // NO SHORTCUTS: tags can contain garbage memory
-    // so comparing bits could be invalid
-    if false && !layout.contains_refcounted() {
+    // Optimization: if the bit representation of equal values is the same
+    // just hash the bits. Caveat here is tags: e.g. `Nothing` in `Just a`
+    // contains garbage bits after the tag (currently)
+    if false {
         // this is a struct of only basic types, so we can just hash its bits
         let hash_bytes = store_and_use_as_u8_ptr(env, value.into(), &layout);
         hash_bitcode_fn(env, seed, hash_bytes, layout.stack_size(ptr_bytes))
@@ -389,7 +390,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
         .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
-        .build_call(function, &[seed.into(), value.into()], "struct_hash");
+        .build_call(function, &[seed.into(), value], "struct_hash");
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -432,7 +433,7 @@ fn build_hash_tag_help<'a, 'ctx, 'env>(
     let value = it.next().unwrap();
 
     set_name(seed.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(value.into(), Symbol::ARG_2.ident_string(&env.interns));
+    set_name(value, Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -827,11 +828,11 @@ fn hash_list<'a, 'ctx, 'env>(
         .into_int_value()
 }
 
-fn hash_null<'ctx>(seed: IntValue<'ctx>) -> IntValue<'ctx> {
+fn hash_null(seed: IntValue<'_>) -> IntValue<'_> {
     seed
 }
 
-fn hash_empty_collection<'ctx>(seed: IntValue<'ctx>) -> IntValue<'ctx> {
+fn hash_empty_collection(seed: IntValue<'_>) -> IntValue<'_> {
     seed
 }
 
