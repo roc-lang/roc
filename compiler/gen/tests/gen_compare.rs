@@ -202,10 +202,10 @@ mod gen_num {
             indoc!(
                 r#"
                 x : Result I64 I64
-                x = Ok 1 
+                x = Ok 1
 
                 y : Result I64 I64
-                y = Ok 1 
+                y = Ok 1
 
                 x == y
                 "#
@@ -221,10 +221,10 @@ mod gen_num {
             indoc!(
                 r#"
                 x : Result I64 I64
-                x = Ok 1 
+                x = Ok 1
 
                 y : Result I64 I64
-                y = Err 1 
+                y = Err 1
 
                 x == y
                 "#
@@ -241,11 +241,11 @@ mod gen_num {
                 r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Var I64 ]
 
-                x : Expr 
-                x = Val 0 
+                x : Expr
+                x = Val 0
 
-                y : Expr 
-                y = Val 0 
+                y : Expr
+                y = Val 0
 
                 x == y
                 "#
@@ -279,12 +279,12 @@ mod gen_num {
             indoc!(
                 r#"
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
-                
-                x : LinkedList I64 
-                x = Cons 1 Nil 
 
-                y : LinkedList I64 
-                y = Cons 1 Nil 
+                x : LinkedList I64
+                x = Cons 1 Nil
+
+                y : LinkedList I64
+                y = Cons 1 Nil
 
                 x == y
                 "#
@@ -297,11 +297,11 @@ mod gen_num {
             indoc!(
                 r#"
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
-                
-                x : LinkedList I64 
+
+                x : LinkedList I64
                 x = Cons 1 (Cons 2 Nil)
 
-                y : LinkedList I64 
+                y : LinkedList I64
                 y = Cons 1 (Cons 2 Nil)
 
                 x == y
@@ -318,11 +318,11 @@ mod gen_num {
             indoc!(
                 r#"
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
-                
-                x : LinkedList I64 
-                x = Cons 1 Nil 
 
-                y : LinkedList I64 
+                x : LinkedList I64
+                x = Cons 1 Nil
+
+                y : LinkedList I64
                 y = Cons 1 (Cons 2 Nil)
 
                 y == x
@@ -340,11 +340,11 @@ mod gen_num {
                 r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Empty ]
 
-                x : Expr 
-                x = Val 0 
+                x : Expr
+                x = Val 0
 
-                y : Expr 
-                y = Add x x 
+                y : Expr
+                y = Add x x
 
                 x != y
                 "#
@@ -355,18 +355,59 @@ mod gen_num {
     }
 
     #[test]
-    #[ignore]
     fn eq_rosetree() {
         assert_evals_to!(
             indoc!(
                 r#"
                 Rose a : [ Rose (List (Rose a)) ]
 
+                x : Rose I64
+                x = Rose []
+
+                y : Rose I64
+                y = Rose []
+
+                x == y
+                "#
+            ),
+            true,
+            bool
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Rose a : [ Rose (List (Rose a)) ]
+
+                x : Rose I64
+                x = Rose []
+
+                y : Rose I64
+                y = Rose []
+
+                x != y
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn rosetree_with_tag() {
+        // currently stack overflows in type checking
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Rose a : [ Rose (Result (List (Rose a)) I64) ]
+
                 x : Rose I64 
-                x = Rose [] 
+                x = (Rose (Ok []))
 
                 y : Rose I64 
-                y = Rose [] 
+                y = (Rose (Ok []))
 
                 x == y
                 "#
