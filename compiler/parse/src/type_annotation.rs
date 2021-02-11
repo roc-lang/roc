@@ -1,6 +1,7 @@
 use crate::ast::{AssignedField, CommentOrNewline, Tag, TypeAnnotation};
 use crate::blankspace::{
-    space0, space0_around, space0_around_e, space0_before, space0_before_e, space1, space1_before,
+    space0, space0_around, space0_around_e, space0_before, space0_before_e, space0_e, space1,
+    space1_before,
 };
 use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
@@ -73,25 +74,19 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>,
     map_with_arena!(
         and!(
             {
-                one_of!(
-                    specialize(|x, _row, _col| SyntaxError::Type(x), loc_wildcard_e()),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TInParens(x, row, col)),
-                        loc_type_in_parens_help(min_indent)
+                specialize(
+                    |x, _, _| SyntaxError::Type(x),
+                    one_of!(
+                        loc_wildcard_e(),
+                        specialize(Type::TInParens, loc_type_in_parens_help(min_indent)),
+                        loc!(specialize(Type::TRecord, record_type_internal(min_indent))),
+                        loc!(specialize(
+                            Type::TTagUnion,
+                            tag_union_type_internal(min_indent)
+                        )),
+                        loc!(applied_type_help(min_indent)),
+                        loc!(specialize(Type::TVariable, parse_type_variable_help))
                     ),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TRecord(x, row, col)),
-                        loc!(record_type_internal(min_indent))
-                    ),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TTagUnion(x, row, col)),
-                        loc!(tag_union_type_internal(min_indent))
-                    ),
-                    loc!(applied_type(min_indent)),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TVariable(x, row, col)),
-                        loc!(parse_type_variable_help)
-                    )
                 )
             },
             |a, s| {
@@ -164,37 +159,37 @@ fn loc_wildcard_e<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>
 fn loc_applied_arg<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
+    specialize(
+        |x, _, _| SyntaxError::Type(x),
+        loc_applied_arg_help(min_indent),
+    )
+}
+
+fn loc_applied_arg_help<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     use crate::ast::Spaceable;
 
     map_with_arena!(
         and!(
-            backtrackable(space0(min_indent)),
+            backtrackable(space0_e(min_indent, Type::TSpace, Type::TIndentStart)),
             skip_first!(
                 // Once we hit an "as", stop parsing args
                 // and roll back parsing of preceding spaces
-                not(crate::parser::keyword(keyword::AS, min_indent)),
+                not_e(
+                    crate::parser::keyword(keyword::AS, min_indent),
+                    Type::TStart
+                ),
                 one_of!(
-                    specialize(|x, _row, _col| SyntaxError::Type(x), loc_wildcard_e()),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TInParens(x, row, col)),
-                        loc_type_in_parens_help(min_indent)
-                    ),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TRecord(x, row, col)),
-                        loc!(record_type_internal(min_indent))
-                    ),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TTagUnion(x, row, col)),
-                        loc!(tag_union_type_internal(min_indent))
-                    ),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TApply(x, row, col)),
-                        loc!(parse_concrete_type_help),
-                    ),
-                    specialize(
-                        |x, row, col| SyntaxError::Type(Type::TVariable(x, row, col)),
-                        loc!(parse_type_variable_help)
-                    )
+                    loc_wildcard_e(),
+                    specialize(Type::TInParens, loc_type_in_parens_help(min_indent)),
+                    loc!(specialize(Type::TRecord, record_type_internal(min_indent))),
+                    loc!(specialize(
+                        Type::TTagUnion,
+                        tag_union_type_internal(min_indent)
+                    )),
+                    loc!(specialize(Type::TApply, parse_concrete_type_help)),
+                    loc!(specialize(Type::TVariable, parse_type_variable_help))
                 )
             )
         ),
@@ -434,7 +429,7 @@ fn applied_type_help<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>,
 fn loc_applied_args_e<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>, Type<'a>> {
-    zero_or_more!(loc_applied_arg_e(min_indent))
+    zero_or_more!(loc_applied_arg_help(min_indent))
 }
 
 fn loc_applied_arg_e<'a>(
