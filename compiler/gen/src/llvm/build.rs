@@ -659,7 +659,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 pub fn build_exp_call<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    scope: &Scope<'a, 'ctx>,
+    scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     call: &roc_mono::ir::Call<'a>,
@@ -729,8 +729,22 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             run_low_level(env, layout_ids, scope, parent, layout, *op, arguments)
         }
 
-        CallType::Foreign { .. } => {
-            unreachable!("foreign symbols should always be invoked!")
+        CallType::Foreign {
+            foreign_symbol,
+            ret_layout,
+        } => {
+            // we always initially invoke foreign symbols, but if there is nothing to clean up,
+            // we emit a normal call
+            build_foreign_symbol(
+                env,
+                layout_ids,
+                scope,
+                parent,
+                foreign_symbol,
+                arguments,
+                ret_layout,
+                ForeignCallOrInvoke::Call,
+            )
         }
     }
 }
@@ -738,7 +752,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    scope: &Scope<'a, 'ctx>,
+    scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
@@ -1904,7 +1918,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             for (symbol, expr, layout) in queue {
                 debug_assert!(layout != &Layout::RecursivePointer);
 
-                let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
+                let val = build_exp_expr(env, layout_ids, scope, parent, layout, &expr);
 
                 // Make a new scope which includes the binding we just encountered.
                 // This should be done *after* compiling the bound expr, since any
@@ -2014,10 +2028,12 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 parent,
                 foreign_symbol,
                 call.arguments,
-                *symbol,
                 ret_layout,
-                pass,
-                fail,
+                ForeignCallOrInvoke::Invoke {
+                    symbol: *symbol,
+                    pass,
+                    fail,
+                },
             ),
 
             CallType::LowLevel { .. } => {
@@ -3983,6 +3999,66 @@ fn run_low_level<'a, 'ctx, 'env>(
     }
 }
 
+enum ForeignCallOrInvoke<'a> {
+    Call,
+    Invoke {
+        symbol: Symbol,
+        pass: &'a roc_mono::ir::Stmt<'a>,
+        fail: &'a roc_mono::ir::Stmt<'a>,
+    },
+}
+
+fn build_foreign_symbol_return_result<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &mut Scope<'a, 'ctx>,
+    foreign: &roc_module::ident::ForeignSymbol,
+    arguments: &[Symbol],
+    return_type: BasicTypeEnum<'ctx>,
+) -> (FunctionValue<'ctx>, &'a [BasicValueEnum<'ctx>]) {
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
+    let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
+
+    for arg in arguments.iter() {
+        let (value, layout) = load_symbol_and_layout(scope, arg);
+        arg_vals.push(value);
+        let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+        debug_assert_eq!(arg_type, value.get_type());
+        arg_types.push(arg_type);
+    }
+
+    let function_type = get_fn_type(&return_type, &arg_types);
+    let function = get_foreign_symbol(env, foreign.clone(), function_type);
+
+    (function, arg_vals.into_bump_slice())
+}
+
+fn build_foreign_symbol_write_result_into_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &mut Scope<'a, 'ctx>,
+    foreign: &roc_module::ident::ForeignSymbol,
+    arguments: &[Symbol],
+    return_pointer: PointerValue<'ctx>,
+) -> (FunctionValue<'ctx>, &'a [BasicValueEnum<'ctx>]) {
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
+    let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
+
+    arg_vals.push(return_pointer.into());
+    arg_types.push(return_pointer.get_type().into());
+
+    for arg in arguments.iter() {
+        let (value, layout) = load_symbol_and_layout(scope, arg);
+        arg_vals.push(value);
+        let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+        debug_assert_eq!(arg_type, value.get_type());
+        arg_types.push(arg_type);
+    }
+
+    let function_type = env.context.void_type().fn_type(&arg_types, false);
+    let function = get_foreign_symbol(env, foreign.clone(), function_type);
+
+    (function, arg_vals.into_bump_slice())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -3991,146 +4067,91 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     foreign: &roc_module::ident::ForeignSymbol,
     arguments: &[Symbol],
-    symbol: Symbol,
     ret_layout: &Layout<'a>,
-    pass: &'a roc_mono::ir::Stmt<'a>,
-    fail: &'a roc_mono::ir::Stmt<'a>,
+    call_or_invoke: ForeignCallOrInvoke<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
-
-    let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
-
-    let pass_block = env.context.append_basic_block(parent, "invoke_pass");
-    let fail_block = env.context.append_basic_block(parent, "invoke_fail");
+    let ret_type = basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+    let return_pointer = env.builder.build_alloca(ret_type, "return_value");
 
     // crude approximation of the C calling convention
     let pass_result_by_pointer = ret_layout.stack_size(env.ptr_bytes) > 2 * env.ptr_bytes;
 
-    if pass_result_by_pointer {
-        // the return value is too big to pass through a register, so the caller must
-        // allocate space for it on its stack, and provide a pointer to write the result into
-        let ret_type = basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
-
-        let ret_ptr_type = get_ptr_type(&ret_type, AddressSpace::Generic);
-
-        let ret_ptr = env.builder.build_alloca(ret_type, "return_value");
-
-        arg_vals.push(ret_ptr.into());
-        arg_types.push(ret_ptr_type.into());
-
-        for arg in arguments.iter() {
-            let (value, layout) = load_symbol_and_layout(scope, arg);
-            arg_vals.push(value);
-            let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
-            arg_types.push(arg_type);
-        }
-
-        let function_type = env.context.void_type().fn_type(&arg_types, false);
-        let function = get_foreign_symbol(env, foreign.clone(), function_type);
-
-        let call =
-            env.builder
-                .build_invoke(function, arg_vals.as_slice(), pass_block, fail_block, "tmp");
-
-        // this is a foreign function, use c calling convention
-        call.set_call_convention(C_CALL_CONV);
-
-        call.try_as_basic_value();
-
-        let call_result = env.builder.build_load(ret_ptr, "read_result");
-
-        {
-            env.builder.position_at_end(pass_block);
-
-            scope.insert(symbol, (ret_layout.clone(), call_result));
-
-            build_exp_stmt(env, layout_ids, scope, parent, pass);
-
-            scope.remove(&symbol);
-        }
-
-        {
-            env.builder.position_at_end(fail_block);
-
-            let landing_pad_type = {
-                let exception_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic).into();
-                let selector_value = env.context.i32_type().into();
-
-                env.context
-                    .struct_type(&[exception_ptr, selector_value], false)
-            };
-
-            env.builder
-                .build_catch_all_landing_pad(
-                    &landing_pad_type,
-                    &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
-                    "invoke_landing_pad",
-                )
-                .into_struct_value();
-
-            build_exp_stmt(env, layout_ids, scope, parent, fail);
-        }
-
-        call_result
+    let (function, arguments) = if pass_result_by_pointer {
+        build_foreign_symbol_write_result_into_ptr(env, scope, foreign, arguments, return_pointer)
     } else {
-        for arg in arguments.iter() {
-            let (value, layout) = load_symbol_and_layout(scope, arg);
-            arg_vals.push(value);
-            let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
-            arg_types.push(arg_type);
+        build_foreign_symbol_return_result(env, scope, foreign, arguments, ret_type)
+    };
+
+    match call_or_invoke {
+        ForeignCallOrInvoke::Call => {
+            let call = env.builder.build_call(function, arguments, "tmp");
+
+            // this is a foreign function, use c calling convention
+            call.set_call_convention(C_CALL_CONV);
+
+            call.try_as_basic_value();
+
+            if pass_result_by_pointer {
+                env.builder.build_load(return_pointer, "read_result")
+            } else {
+                call.try_as_basic_value().left().unwrap()
+            }
         }
+        ForeignCallOrInvoke::Invoke { symbol, pass, fail } => {
+            let pass_block = env.context.append_basic_block(parent, "invoke_pass");
+            let fail_block = env.context.append_basic_block(parent, "invoke_fail");
 
-        let ret_type = basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
-        let function_type = get_fn_type(&ret_type, &arg_types);
-        let function = get_foreign_symbol(env, foreign.clone(), function_type);
+            let call = env
+                .builder
+                .build_invoke(function, arguments, pass_block, fail_block, "tmp");
 
-        let call =
-            env.builder
-                .build_invoke(function, arg_vals.as_slice(), pass_block, fail_block, "tmp");
+            // this is a foreign function, use c calling convention
+            call.set_call_convention(C_CALL_CONV);
 
-        // this is a foreign function, use c calling convention
-        call.set_call_convention(C_CALL_CONV);
+            call.try_as_basic_value();
 
-        let call_result = call
-            .try_as_basic_value()
-            .left()
-            .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-        {
-            env.builder.position_at_end(pass_block);
-
-            scope.insert(symbol, (ret_layout.clone(), call_result));
-
-            build_exp_stmt(env, layout_ids, scope, parent, pass);
-
-            scope.remove(&symbol);
-        }
-
-        {
-            env.builder.position_at_end(fail_block);
-
-            let landing_pad_type = {
-                let exception_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic).into();
-                let selector_value = env.context.i32_type().into();
-
-                env.context
-                    .struct_type(&[exception_ptr, selector_value], false)
+            let call_result = if pass_result_by_pointer {
+                env.builder.build_load(return_pointer, "read_result")
+            } else {
+                call.try_as_basic_value().left().unwrap()
             };
 
-            env.builder
-                .build_catch_all_landing_pad(
-                    &landing_pad_type,
-                    &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
-                    "invoke_landing_pad",
-                )
-                .into_struct_value();
+            {
+                env.builder.position_at_end(pass_block);
 
-            build_exp_stmt(env, layout_ids, scope, parent, fail);
+                scope.insert(symbol, (ret_layout.clone(), call_result));
+
+                build_exp_stmt(env, layout_ids, scope, parent, pass);
+
+                scope.remove(&symbol);
+            }
+
+            {
+                env.builder.position_at_end(fail_block);
+
+                let landing_pad_type = {
+                    let exception_ptr =
+                        env.context.i8_type().ptr_type(AddressSpace::Generic).into();
+                    let selector_value = env.context.i32_type().into();
+
+                    env.context
+                        .struct_type(&[exception_ptr, selector_value], false)
+                };
+
+                env.builder
+                    .build_catch_all_landing_pad(
+                        &landing_pad_type,
+                        &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
+                        env.context.i8_type().ptr_type(AddressSpace::Generic),
+                        "invoke_landing_pad",
+                    )
+                    .into_struct_value();
+
+                build_exp_stmt(env, layout_ids, scope, parent, fail);
+            }
+
+            call_result
         }
-
-        call_result
     }
 }
 
