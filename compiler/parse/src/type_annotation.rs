@@ -1,5 +1,5 @@
 use crate::ast::{AssignedField, Attempting, CommentOrNewline, Tag, TypeAnnotation};
-use crate::blankspace::{space0_around, space0_before, space1, space1_before};
+use crate::blankspace::{space0_around, space0_around_e, space0_before, space1, space1_before};
 use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
@@ -7,7 +7,7 @@ use crate::parser::{
     allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, specialize, specialize_ref,
     unexpected, word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
-    State, SyntaxError, TRecord, TTagUnion, Type,
+    State, SyntaxError, TInParens, TRecord, TTagUnion, Type,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -67,7 +67,7 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>,
         and!(
             one_of!(
                 loc_wildcard(),
-                loc_parenthetical_type(min_indent),
+                loc_type_in_parens(min_indent),
                 loc!(record_type(min_indent)),
                 loc!(tag_union_type(min_indent)),
                 loc!(applied_type(min_indent)),
@@ -127,7 +127,7 @@ fn loc_applied_arg<'a>(
         space1_before(
             one_of!(
                 loc_wildcard(),
-                loc_parenthetical_type(min_indent),
+                loc_type_in_parens(min_indent),
                 loc!(record_type(min_indent)),
                 loc!(tag_union_type(min_indent)),
                 loc!(parse_concrete_type),
@@ -145,16 +145,26 @@ fn loc_applied_args<'a>(
 }
 
 #[inline(always)]
-fn loc_parenthetical_type<'a>(
+fn loc_type_in_parens<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
+    let f = |x, row, col| SyntaxError::Type(Type::TInParens(x, row, col));
+    specialize(f, loc_type_in_parens_help(min_indent))
+}
+
+fn loc_type_in_parens_help<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<TypeAnnotation<'a>>, TInParens<'a>> {
     between!(
-        ascii_char(b'('),
-        space0_around(
-            move |arena, state| expression(min_indent).parse(arena, state),
+        word1(b'(', TInParens::Open),
+        space0_around_e(
+            move |arena, state| specialize_ref(TInParens::Syntax, expression(min_indent))
+                .parse(arena, state),
             min_indent,
+            TInParens::Space,
+            TInParens::IndentEnd,
         ),
-        ascii_char(b')')
+        word1(b')', TInParens::End)
     )
 }
 

@@ -370,6 +370,7 @@ pub type Col = u16;
 pub enum Type<'a> {
     TRecord(TRecord<'a>, Row, Col),
     TTagUnion(TTagUnion<'a>, Row, Col),
+    TInParens(TInParens<'a>, Row, Col),
     ///
     TStart(Row, Col),
     TSpace(Row, Col),
@@ -401,6 +402,23 @@ pub enum TRecord<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TTagUnion<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+    ///
+    Type(&'a Type<'a>, Row, Col),
+
+    // TODO REMOVE in favor of Type
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    ///
+    Space(BadInputError, Row, Col),
+    ///
+    IndentOpen(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
     ///
