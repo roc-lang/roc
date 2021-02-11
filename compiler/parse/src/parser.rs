@@ -373,9 +373,11 @@ pub enum Type<'a> {
     TInParens(TInParens<'a>, Row, Col),
     TApply(TApply, Row, Col),
     TVariable(TVariable, Row, Col),
+    TWildcard(Row, Col),
     ///
     TStart(Row, Col),
-    TSpace(Row, Col),
+    TEnd(Row, Col),
+    TSpace(BadInputError, Row, Col),
     ///
     TIndentStart(Row, Col),
 }
@@ -564,6 +566,26 @@ where
 
         match parser.parse(arena, state) {
             Ok((_, _, _)) => Err((NoProgress, SyntaxError::ConditionFailed, original_state)),
+            Err((_, _, _)) => Ok((NoProgress, (), original_state)),
+        }
+    }
+}
+
+pub fn not_e<'a, P, TE, E, X, Val>(parser: P, to_error: TE) -> impl Parser<'a, (), E>
+where
+    TE: Fn(Row, Col) -> E,
+    P: Parser<'a, Val, X>,
+    E: 'a,
+{
+    move |arena, state: State<'a>| {
+        let original_state = state.clone();
+
+        match parser.parse(arena, state) {
+            Ok((_, _, _)) => Err((
+                NoProgress,
+                to_error(original_state.line, original_state.column),
+                original_state,
+            )),
             Err((_, _, _)) => Ok((NoProgress, (), original_state)),
         }
     }
@@ -863,6 +885,39 @@ pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, ()
     }
 }
 
+pub fn keyword_e<'a, E>(
+    keyword: &'static str,
+    min_indent: u16,
+    if_error: E,
+) -> impl Parser<'a, (), E>
+where
+    E: 'a + Clone,
+{
+    move |arena, state: State<'a>| {
+        let initial_state = state.clone();
+        // first parse the keyword characters
+        let (_, _, after_keyword_state) = ascii_string(keyword)
+            .parse(arena, state)
+            .map_err(|(_, _, state)| (NoProgress, if_error.clone(), state))?;
+
+        // then we must have at least one space character
+        // TODO this is potentially wasteful if there are a lot of spaces
+        match crate::blankspace::space1(min_indent).parse(arena, after_keyword_state.clone()) {
+            Err((_, _, _)) => {
+                // this is not a keyword, maybe it's `whence` or `iffy`
+                // anyway, make no progress and return the initial state
+                // so we can try something else
+                Err((NoProgress, if_error.clone(), initial_state))
+            }
+            Ok((_, _, _)) => {
+                // give back the state after parsing the keyword, but before the whitespace
+                // that way we can attach the whitespace to whatever follows
+                Ok((MadeProgress, (), after_keyword_state))
+            }
+        }
+    }
+}
+
 /// A hardcoded string with no newlines, consisting only of ASCII characters
 pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxError<'a>> {
     // Verify that this really is exclusively ASCII characters.
@@ -876,20 +931,15 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxErro
         let len = keyword.len();
 
         // TODO do this comparison in one SIMD instruction (on supported systems)
-        match state.bytes.get(0..len) {
-            Some(next_str) => {
-                if next_str == keyword.as_bytes() {
-                    Ok((
-                        Progress::MadeProgress,
-                        (),
-                        state.advance_without_indenting(arena, len)?,
-                    ))
-                } else {
-                    let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);
-                    Err((NoProgress, fail, state))
-                }
-            }
-            _ => Err(unexpected_eof(arena, state, 0)),
+        if state.bytes.starts_with(keyword.as_bytes()) {
+            Ok((
+                Progress::MadeProgress,
+                (),
+                state.advance_without_indenting(arena, len)?,
+            ))
+        } else {
+            let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);
+            Err((NoProgress, fail, state))
         }
     }
 }

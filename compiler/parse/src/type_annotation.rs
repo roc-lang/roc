@@ -1,10 +1,12 @@
 use crate::ast::{AssignedField, CommentOrNewline, Tag, TypeAnnotation};
-use crate::blankspace::{space0_around, space0_around_e, space0_before, space1, space1_before};
+use crate::blankspace::{
+    space0_around, space0_around_e, space0_before, space0_before_e, space1, space1_before,
+};
 use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char_e, specialize,
+    allocated, ascii_char, ascii_string, not, not_e, optional, peek_utf8_char_e, specialize,
     specialize_ref, word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
@@ -60,30 +62,69 @@ fn tag_union_type_internal<'a>(
     }
 }
 
+//                    specialize(
+//                        |x, row, col| SyntaxError::Type(Type::TVariable(x, row, col)),
+//                        loc!(parse_type_variable_help)
+//                    )
+//
+
 #[allow(clippy::type_complexity)]
 pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
     map_with_arena!(
         and!(
-            one_of!(
-                loc_wildcard(),
-                loc_type_in_parens(min_indent),
-                loc!(record_type(min_indent)),
-                loc!(tag_union_type(min_indent)),
-                loc!(applied_type(min_indent)),
-                loc!(parse_type_variable)
-            ),
+            {
+                one_of!(
+                    specialize(|x, _row, _col| SyntaxError::Type(x), loc_wildcard_e()),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TInParens(x, row, col)),
+                        loc_type_in_parens_help(min_indent)
+                    ),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TRecord(x, row, col)),
+                        loc!(record_type_internal(min_indent))
+                    ),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TTagUnion(x, row, col)),
+                        loc!(tag_union_type_internal(min_indent))
+                    ),
+                    loc!(applied_type(min_indent)),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TVariable(x, row, col)),
+                        loc!(parse_type_variable_help)
+                    )
+                )
+            },
             |a, s| {
+                //                optional(
+                //                    // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
+                //                    and!(
+                //                        space1(min_indent),
+                //                        skip_first!(
+                //                            crate::parser::keyword(keyword::AS, min_indent),
+                //                            space1_before(term(min_indent), min_indent)
+                //                        )
+                //                    ),
+                //                )
+                //                .parse(a, s)
+                /*
                 optional(
-                    // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
+                    // Inline alias notation, e.g. [ Nil, Cons a (List a) ] as List a
                     and!(
-                        space1(min_indent),
+                        space0_e(min_indent, Type::TSpace, Type::TIndentStart),
                         skip_first!(
-                            crate::parser::keyword(keyword::AS, min_indent),
-                            space1_before(term(min_indent), min_indent)
+                            crate::parser::keyword_e(keyword::AS, min_indent, Type::TEnd(0, 0)),
+                            space0_before_e(
+                                term_help(min_indent),
+                                min_indent,
+                                Type::TSpace,
+                                Type::TIndentStart
+                            )
                         )
                     ),
                 )
                 .parse(a, s)
+                */
+                Ok((NoProgress, None, s))
             }
         ),
         |arena: &'a Bump,
@@ -109,6 +150,13 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>,
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
     map!(loc!(ascii_char(b'*')), |loc_val: Located<()>| {
+        loc_val.map(|_| TypeAnnotation::Wildcard)
+    })
+}
+
+/// The `*` type variable, e.g. in (List *) Wildcard,
+fn loc_wildcard_e<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
+    map!(loc!(word1(b'*', Type::TWildcard)), |loc_val: Located<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
@@ -332,6 +380,71 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, Synt
                 _ => unreachable!(),
             }
         }
+    )
+}
+
+fn applied_type_help<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, Type<'a>> {
+    map!(
+        and!(
+            specialize(Type::TApply, parse_concrete_type_help),
+            // Optionally parse space-separated arguments for the constructor,
+            // e.g. `Str Float` in `Map Str Float`
+            loc_applied_args_e(min_indent)
+        ),
+        |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Located<TypeAnnotation<'a>>>)| {
+            match &ctor {
+                TypeAnnotation::Apply(ref module_name, ref name, _) => {
+                    if args.is_empty() {
+                        // ctor is already an Apply with no args, so return it directly.
+                        ctor
+                    } else {
+                        TypeAnnotation::Apply(*module_name, *name, args.into_bump_slice())
+                    }
+                }
+                TypeAnnotation::Malformed(_) => ctor,
+                _ => unreachable!(),
+            }
+        }
+    )
+}
+
+fn loc_applied_args_e<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>, Type<'a>> {
+    zero_or_more!(loc_applied_arg_e(min_indent))
+}
+
+fn loc_applied_arg_e<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
+    // Once we hit an "as", stop parsing args
+    // and roll back parsing of preceding spaces
+    let start_is_not_as = not_e(
+        and!(
+            space1(min_indent),
+            crate::parser::keyword(keyword::AS, min_indent)
+        ),
+        Type::TStart,
+    );
+
+    skip_first!(
+        start_is_not_as,
+        space0_before_e(
+            one_of!(
+                loc_wildcard_e(),
+                specialize(Type::TInParens, loc_type_in_parens_help(min_indent)),
+                loc!(specialize(Type::TRecord, record_type_internal(min_indent))),
+                loc!(specialize(
+                    Type::TTagUnion,
+                    tag_union_type_internal(min_indent)
+                )),
+                loc!(specialize(Type::TApply, parse_concrete_type_help)),
+                loc!(specialize(Type::TVariable, parse_type_variable_help))
+            ),
+            min_indent,
+            Type::TSpace,
+            Type::TIndentStart
+        )
     )
 }
 
