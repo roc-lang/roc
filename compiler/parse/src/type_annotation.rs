@@ -1,13 +1,13 @@
 use crate::ast::{AssignedField, CommentOrNewline, Tag, TypeAnnotation};
 use crate::blankspace::{
-    space0_around, space0_around_e, space0_before, space0_before_e, space1, space1_before,
+    space0, space0_around, space0_around_e, space0_before, space0_before_e, space1, space1_before,
 };
 use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, not_e, optional, peek_utf8_char_e, specialize,
-    specialize_ref, word1, BadInputError, Either, ParseResult, Parser,
+    allocated, ascii_char, ascii_string, backtrackable, not, not_e, optional, peek_utf8_char_e,
+    specialize, specialize_ref, word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
@@ -164,24 +164,44 @@ fn loc_wildcard_e<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>
 fn loc_applied_arg<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
-    skip_first!(
-        // Once we hit an "as", stop parsing args
-        // and roll back parsing of preceding spaces
-        not(and!(
-            space1(min_indent),
-            crate::parser::keyword(keyword::AS, min_indent)
-        )),
-        space1_before(
-            one_of!(
-                loc_wildcard(),
-                loc_type_in_parens(min_indent),
-                loc!(record_type(min_indent)),
-                loc!(tag_union_type(min_indent)),
-                loc!(parse_concrete_type),
-                loc!(parse_type_variable)
-            ),
-            min_indent
-        )
+    use crate::ast::Spaceable;
+
+    map_with_arena!(
+        and!(
+            backtrackable(space0(min_indent)),
+            skip_first!(
+                // Once we hit an "as", stop parsing args
+                // and roll back parsing of preceding spaces
+                not(crate::parser::keyword(keyword::AS, min_indent)),
+                one_of!(
+                    specialize(|x, _row, _col| SyntaxError::Type(x), loc_wildcard_e()),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TInParens(x, row, col)),
+                        loc_type_in_parens_help(min_indent)
+                    ),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TRecord(x, row, col)),
+                        loc!(record_type_internal(min_indent))
+                    ),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TTagUnion(x, row, col)),
+                        loc!(tag_union_type_internal(min_indent))
+                    ),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TApply(x, row, col)),
+                        loc!(parse_concrete_type_help),
+                    ),
+                    specialize(
+                        |x, row, col| SyntaxError::Type(Type::TVariable(x, row, col)),
+                        loc!(parse_type_variable_help)
+                    )
+                )
+            )
+        ),
+        |arena: &'a Bump, (spaces, argument): (_, Located<TypeAnnotation<'a>>)| {
+            let Located { region, value } = argument;
+            arena.alloc(value).with_spaces_before(spaces, region)
+        }
     )
 }
 
@@ -361,7 +381,10 @@ fn record_type_internal<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
     map!(
         and!(
-            parse_concrete_type,
+            specialize(
+                |x, row, col| SyntaxError::Type(Type::TApply(x, row, col)),
+                parse_concrete_type_help,
+            ),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
             loc_applied_args(min_indent)
