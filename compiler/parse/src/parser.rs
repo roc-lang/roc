@@ -371,6 +371,7 @@ pub enum Type<'a> {
     TRecord(TRecord<'a>, Row, Col),
     TTagUnion(TTagUnion<'a>, Row, Col),
     TInParens(TInParens<'a>, Row, Col),
+    TApply(TApply<'a>, Row, Col),
     ///
     TStart(Row, Col),
     TSpace(Row, Col),
@@ -432,6 +433,22 @@ pub enum TInParens<'a> {
     ///
     IndentOpen(Row, Col),
     IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TApply<'a> {
+    Type(&'a Type<'a>, Row, Col),
+
+    // TODO REMOVE in favor of Type
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    ///
+    Space(BadInputError, Row, Col),
+    ///
+    DoubleDot(Row, Col),
+    TrailingDot(Row, Col),
+    StartIsNumber(Row, Col),
+    StartNotUppercase(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

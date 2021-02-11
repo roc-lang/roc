@@ -4396,4 +4396,177 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    #[ignore]
+    fn type_in_parens_start() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : (
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a record type, but I got stuck here:
+                
+                1│  f : { a: Int, 
+                                 ^
+                
+                I was expecting to see a closing curly brace before this, so try
+                adding a } and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_in_parens_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : ( I64
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a type in parentheses, but I got stuck
+                here:
+                
+                1│  f : ( I64
+                             ^
+                
+                I was expecting to see a closing parenthesis before this, so try
+                adding a ) and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_apply_double_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo..Bar 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
+                
+                I encountered two dots in a row:
+                
+                1│  f : Foo..Bar 
+                            ^
+                
+                Try removing one of them.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_apply_trailing_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo.Bar.
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TRAILING DOT ────────────────────────────────────────────────────────────────
+                
+                I encountered a dot with nothing after it:
+                
+                1│  f : Foo.Bar.
+                                ^
+                
+                Dots are used to refer to a type in a qualified way, like
+                Num.I64 or List.List a. Try adding a type name next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn type_apply_stray_dot() {
+        // TODO good message
+        report_problem_as(
+            indoc!(
+                r#"
+                f : . 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
+                
+                I am partway through parsing a type in parentheses, but I got stuck
+                here:
+                
+                1│  f : ( I64
+                             ^
+                
+                I was expecting to see a closing parenthesis before this, so try
+                adding a ) and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_apply_start_with_number() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo.1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+                
+                I encountered a number at the start of a qualified name segment:
+                
+                1│  f : Foo.1
+                            ^
+                
+                All parts of a qualified type name must start with an uppercase
+                letter, like Num.I64 or List.List a.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_apply_start_with_lowercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo.foo
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+                
+                I encountered a lowercase letter at the start of a qualified name
+                segment:
+                
+                1│  f : Foo.foo
+                            ^
+                
+                All parts of a qualified type name must start with an uppercase
+                letter, like Num.I64 or List.List a.
+            "#
+            ),
+        )
+    }
 }

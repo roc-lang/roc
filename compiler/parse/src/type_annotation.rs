@@ -7,7 +7,7 @@ use crate::parser::{
     allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, specialize, specialize_ref,
     unexpected, word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
-    State, SyntaxError, TInParens, TRecord, TTagUnion, Type,
+    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, Type,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -155,6 +155,7 @@ fn loc_type_in_parens<'a>(
 fn loc_type_in_parens_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, TInParens<'a>> {
+    // TODO what if the middle parser returns EOF?
     between!(
         word1(b'(', TInParens::Open),
         space0_around_e(
@@ -399,11 +400,27 @@ fn expression<'a>(
 
 // /// A bound type variable, e.g. `a` in `(a -> a)`
 // BoundVariable(&'a str),
-
 fn parse_concrete_type<'a>(
     arena: &'a Bump,
-    mut state: State<'a>,
+    state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
+    let row = state.line;
+    let col = state.column;
+
+    match parse_concrete_type_help(arena, state) {
+        Ok(value) => Ok(value),
+        Err((progress, problem, new_state)) => Err((
+            progress,
+            SyntaxError::Type(Type::TApply(problem, row, col)),
+            new_state,
+        )),
+    }
+}
+
+fn parse_concrete_type_help<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+) -> ParseResult<'a, TypeAnnotation<'a>, TApply<'a>> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut parts: Vec<&'a str> = Vec::new_in(arena);
 
@@ -415,12 +432,19 @@ fn parse_concrete_type<'a>(
             if first_letter.is_alphabetic() && first_letter.is_uppercase() {
                 part_buf.push(first_letter);
             } else {
-                return Err(unexpected(arena, 0, Attempting::ConcreteType, state));
+                let problem = TApply::StartNotUppercase(state.line, state.column + 1);
+                return Err((NoProgress, problem, state));
             }
 
-            state = state.advance_without_indenting(arena, bytes_parsed)?;
+            state = state.advance_without_indenting_e(arena, bytes_parsed, TApply::Space)?;
         }
-        Err(reason) => return state.fail(arena, NoProgress, reason),
+        Err(reason) => {
+            return Err((
+                NoProgress,
+                TApply::Syntax(arena.alloc(reason), state.line, state.column),
+                state,
+            ))
+        }
     }
 
     let mut next_char = None;
@@ -436,21 +460,33 @@ fn parse_concrete_type<'a>(
                 if ch.is_alphabetic() {
                     if part_buf.is_empty() && !ch.is_uppercase() {
                         // Each part must begin with a capital letter.
-                        return malformed(Some(ch), arena, state, parts);
+                        return Err((
+                            MadeProgress,
+                            TApply::StartNotUppercase(state.line, state.column),
+                            state,
+                        ));
                     }
 
                     part_buf.push(ch);
                 } else if ch.is_ascii_digit() {
                     // Parts may not start with numbers!
                     if part_buf.is_empty() {
-                        return malformed(Some(ch), arena, state, parts);
+                        return Err((
+                            MadeProgress,
+                            TApply::StartIsNumber(state.line, state.column),
+                            state,
+                        ));
                     }
 
                     part_buf.push(ch);
                 } else if ch == '.' {
                     // Having two consecutive dots is an error.
                     if part_buf.is_empty() {
-                        return malformed(Some(ch), arena, state, parts);
+                        return Err((
+                            MadeProgress,
+                            TApply::DoubleDot(state.line, state.column),
+                            state,
+                        ));
                     }
 
                     parts.push(part_buf.into_bump_str());
@@ -464,12 +500,14 @@ fn parse_concrete_type<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting_e(arena, bytes_parsed, TApply::Space)?;
             }
             Err(reason) => {
-                let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-
-                return state.fail(arena, progress, reason);
+                return Err((
+                    MadeProgress,
+                    TApply::Syntax(arena.alloc(reason), state.line, state.column),
+                    state,
+                ));
             }
         }
     }
@@ -481,14 +519,11 @@ fn parse_concrete_type<'a>(
         //
         // If we made it this far and don't have a next_char, then necessarily
         // we have consumed a '.' char previously.
-        return malformed(next_char.or(Some('.')), arena, state, parts);
-    }
-
-    if part_buf.is_empty() {
-        // We had neither capitalized nor noncapitalized parts,
-        // yet we made it this far. The only explanation is that this was
-        // a stray '.' drifting through the cosmos.
-        return Err(unexpected(arena, 1, Attempting::Identifier, state));
+        return Err((
+            MadeProgress,
+            TApply::TrailingDot(state.line, state.column),
+            state,
+        ));
     }
 
     let answer = TypeAnnotation::Apply(
@@ -497,8 +532,7 @@ fn parse_concrete_type<'a>(
         &[],
     );
 
-    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-    Ok((progress, answer, state))
+    Ok((MadeProgress, answer, state))
 }
 
 fn parse_type_variable<'a>(
