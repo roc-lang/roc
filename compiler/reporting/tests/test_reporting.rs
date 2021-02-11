@@ -4027,7 +4027,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn type_annotation_dubble_colon() {
+    fn type_annotation_double_colon() {
         report_problem_as(
             indoc!(
                 r#"

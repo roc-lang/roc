@@ -371,7 +371,8 @@ pub enum Type<'a> {
     TRecord(TRecord<'a>, Row, Col),
     TTagUnion(TTagUnion<'a>, Row, Col),
     TInParens(TInParens<'a>, Row, Col),
-    TApply(TApply<'a>, Row, Col),
+    TApply(TApply, Row, Col),
+    TVariable(TVariable, Row, Col),
     ///
     TStart(Row, Col),
     TSpace(Row, Col),
@@ -436,19 +437,23 @@ pub enum TInParens<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TApply<'a> {
-    Type(&'a Type<'a>, Row, Col),
-
-    // TODO REMOVE in favor of Type
-    Syntax(&'a SyntaxError<'a>, Row, Col),
-
+pub enum TApply {
     ///
+    StartNotUppercase(Row, Col),
+    End(Row, Col),
     Space(BadInputError, Row, Col),
     ///
     DoubleDot(Row, Col),
     TrailingDot(Row, Col),
     StartIsNumber(Row, Col),
-    StartNotUppercase(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TVariable {
+    ///
+    StartNotLowercase(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -790,6 +795,27 @@ pub fn peek_utf8_char<'a>(state: &State) -> Result<(char, usize), SyntaxError<'a
         Err(SyntaxError::Eof(
             Region::zero(), /* TODO get a better region */
         ))
+    }
+}
+
+/// A single UTF-8-encoded char. This will both parse *and* validate that the
+/// char is valid UTF-8, but it will *not* advance the state.
+pub fn peek_utf8_char_e<'a, EOF, TE, E>(
+    state: &State,
+    end_of_file: EOF,
+    to_error: TE,
+) -> Result<(char, usize), E>
+where
+    TE: Fn(BadInputError, Row, Col) -> E,
+    EOF: Fn(Row, Col) -> E,
+{
+    if !state.bytes.is_empty() {
+        match char::from_utf8_slice_start(state.bytes) {
+            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
+            Err(_) => Err(to_error(BadInputError::BadUtf8, state.line, state.column)),
+        }
+    } else {
+        Err(end_of_file(state.line, state.column))
     }
 }
 

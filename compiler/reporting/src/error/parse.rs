@@ -776,9 +776,9 @@ fn to_tinparens_report<'a>(
 fn to_tapply_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::TApply<'a>,
-    start_row: Row,
-    start_col: Col,
+    parse_problem: &roc_parse::parser::TApply,
+    _start_row: Row,
+    _start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::TApply;
 
@@ -861,7 +861,25 @@ fn to_tapply_report<'a>(
                 title: "WEIRD QUALIFIED NAME".to_string(),
             }
         }
-        _ => todo!("unhandled type parse error: {:?}", &parse_problem),
+
+        TApply::End(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I reached the end of the input file while parsing a qualified type name",
+                ),
+                alloc.region(region),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "END OF FILE".to_string(),
+            }
+        }
+
+        TApply::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
     }
 }
 

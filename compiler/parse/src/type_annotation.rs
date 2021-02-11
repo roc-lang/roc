@@ -1,18 +1,17 @@
-use crate::ast::{AssignedField, Attempting, CommentOrNewline, Tag, TypeAnnotation};
+use crate::ast::{AssignedField, CommentOrNewline, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around, space0_around_e, space0_before, space1, space1_before};
 use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, specialize, specialize_ref,
-    unexpected, word1, BadInputError, Either, ParseResult, Parser,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char_e, specialize,
+    specialize_ref, word1, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
-    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, Type,
+    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_collections::all::arena_join;
 use roc_region::all::{Located, Region};
 
 pub fn located<'a>(
@@ -420,14 +419,12 @@ fn parse_concrete_type<'a>(
 fn parse_concrete_type_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
-) -> ParseResult<'a, TypeAnnotation<'a>, TApply<'a>> {
+) -> ParseResult<'a, TypeAnnotation<'a>, TApply> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut parts: Vec<&'a str> = Vec::new_in(arena);
 
-    let start_bytes_len = state.bytes.len();
-
     // Qualified types must start with a capitalized letter.
-    match peek_utf8_char(&state) {
+    match peek_utf8_char_e(&state, TApply::StartNotUppercase, TApply::Space) {
         Ok((first_letter, bytes_parsed)) => {
             if first_letter.is_alphabetic() && first_letter.is_uppercase() {
                 part_buf.push(first_letter);
@@ -438,19 +435,11 @@ fn parse_concrete_type_help<'a>(
 
             state = state.advance_without_indenting_e(arena, bytes_parsed, TApply::Space)?;
         }
-        Err(reason) => {
-            return Err((
-                NoProgress,
-                TApply::Syntax(arena.alloc(reason), state.line, state.column),
-                state,
-            ))
-        }
+        Err(reason) => return Err((NoProgress, reason, state)),
     }
 
-    let mut next_char = None;
-
     while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
+        match peek_utf8_char_e(&state, TApply::End, TApply::Space) {
             Ok((ch, bytes_parsed)) => {
                 // After the first character, only these are allowed:
                 //
@@ -495,19 +484,13 @@ fn parse_concrete_type_help<'a>(
                     part_buf = String::new_in(arena);
                 } else {
                     // This must be the end of the type. We're done!
-                    next_char = Some(ch);
-
                     break;
                 }
 
                 state = state.advance_without_indenting_e(arena, bytes_parsed, TApply::Space)?;
             }
             Err(reason) => {
-                return Err((
-                    MadeProgress,
-                    TApply::Syntax(arena.alloc(reason), state.line, state.column),
-                    state,
-                ));
+                return Err((MadeProgress, reason, state));
             }
         }
     }
@@ -537,31 +520,49 @@ fn parse_concrete_type_help<'a>(
 
 fn parse_type_variable<'a>(
     arena: &'a Bump,
-    mut state: State<'a>,
+    state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
+    let row = state.line;
+    let col = state.column;
+
+    match parse_type_variable_help(arena, state) {
+        Ok(value) => Ok(value),
+        Err((progress, problem, new_state)) => Err((
+            progress,
+            SyntaxError::Type(Type::TVariable(problem, row, col)),
+            new_state,
+        )),
+    }
+}
+
+fn parse_type_variable_help<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+) -> ParseResult<'a, TypeAnnotation<'a>, TVariable> {
     let mut buf = String::new_in(arena);
 
     let start_bytes_len = state.bytes.len();
 
-    match peek_utf8_char(&state) {
+    match peek_utf8_char_e(&state, TVariable::StartNotLowercase, TVariable::Space) {
         Ok((first_letter, bytes_parsed)) => {
             // Type variables must start with a lowercase letter.
             if first_letter.is_alphabetic() && first_letter.is_lowercase() {
                 buf.push(first_letter);
             } else {
-                return Err(unexpected(arena, 0, Attempting::TypeVariable, state));
+                return Err((
+                    NoProgress,
+                    TVariable::StartNotLowercase(state.line, state.column),
+                    state,
+                ));
             }
 
-            state = state.advance_without_indenting(arena, bytes_parsed)?;
+            state = state.advance_without_indenting_e(arena, bytes_parsed, TVariable::Space)?;
         }
-        Err(reason) => {
-            let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-            return state.fail(arena, progress, reason);
-        }
+        Err(reason) => return Err((NoProgress, reason, state)),
     }
 
     while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
+        match peek_utf8_char_e(&state, TVariable::End, TVariable::Space) {
             Ok((ch, bytes_parsed)) => {
                 // After the first character, only these are allowed:
                 //
@@ -574,11 +575,10 @@ fn parse_type_variable<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting_e(arena, bytes_parsed, TVariable::Space)?;
             }
             Err(reason) => {
-                let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-                return state.fail(arena, progress, reason);
+                return state.fail(arena, MadeProgress, reason);
             }
         }
     }
@@ -587,46 +587,4 @@ fn parse_type_variable<'a>(
 
     let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
     Ok((progress, answer, state))
-}
-
-fn malformed<'a>(
-    opt_bad_char: Option<char>,
-    arena: &'a Bump,
-    mut state: State<'a>,
-    parts: Vec<&'a str>,
-) -> ParseResult<'a, TypeAnnotation<'a>, SyntaxError<'a>> {
-    // assumption: progress was made to conclude that the annotation is malformed
-
-    // Reconstruct the original string that we've been parsing.
-    let mut full_string = String::new_in(arena);
-
-    full_string.push_str(arena_join(arena, &mut parts.into_iter(), ".").into_bump_str());
-
-    if let Some(bad_char) = opt_bad_char {
-        full_string.push(bad_char);
-    }
-
-    // Consume the remaining chars in the identifier.
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                // We can't use ch.is_alphanumeric() here because that passes for
-                // things that are "numeric" but not ASCII digits, like `¾`
-                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
-                    full_string.push(ch);
-                } else {
-                    break;
-                }
-
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
-            }
-            Err(reason) => return state.fail(arena, MadeProgress, reason),
-        }
-    }
-
-    Ok((
-        MadeProgress,
-        TypeAnnotation::Malformed(full_string.into_bump_str()),
-        state,
-    ))
 }
