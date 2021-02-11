@@ -3,6 +3,7 @@ use bumpalo::collections::Vec;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{Literal, Stmt};
+use roc_mono::layout::{Builtin, Layout};
 use std::marker::PhantomData;
 use target_lexicon::Triple;
 
@@ -66,6 +67,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src1: GeneralReg,
         src2: GeneralReg,
     );
+    fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String);
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -120,7 +122,7 @@ pub struct Backend64Bit<
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
     buf: Vec<'a, u8>,
-    relocs: Vec<'a, Relocation<'a>>,
+    relocs: Vec<'a, Relocation>,
 
     /// leaf_function is true if the only calls this function makes are tail calls.
     /// If that is the case, we can skip emitting the frame pointer and updating the stack.
@@ -223,7 +225,7 @@ impl<
         &mut self.free_map
     }
 
-    fn finalize(&mut self) -> Result<(&'a [u8], &[&Relocation]), String> {
+    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String> {
         let mut out = bumpalo::vec![in self.env.arena];
 
         // Setup stack.
@@ -231,6 +233,7 @@ impl<
         used_regs.extend(&self.general_used_callee_saved_regs);
         let aligned_stack_size =
             CC::setup_stack(&mut out, self.leaf_function, &used_regs, self.stack_size)?;
+        let setup_offset = out.len();
 
         // Add function body.
         out.extend(&self.buf);
@@ -239,9 +242,81 @@ impl<
         CC::cleanup_stack(&mut out, self.leaf_function, &used_regs, aligned_stack_size)?;
         ASM::ret(&mut out);
 
+        // Update relocs to include stack setup offset.
         let mut out_relocs = bumpalo::vec![in self.env.arena];
-        out_relocs.extend(&self.relocs);
+        let old_relocs = std::mem::replace(&mut self.relocs, bumpalo::vec![in self.env.arena]);
+        out_relocs.extend(old_relocs.into_iter().map(|reloc| match reloc {
+            Relocation::LocalData { offset, data } => Relocation::LocalData {
+                offset: offset + setup_offset as u64,
+                data,
+            },
+            Relocation::LinkedData { offset, name } => Relocation::LinkedData {
+                offset: offset + setup_offset as u64,
+                name,
+            },
+            Relocation::LinkedFunction { offset, name } => Relocation::LinkedFunction {
+                offset: offset + setup_offset as u64,
+                name,
+            },
+        }));
         Ok((out.into_bump_slice(), out_relocs.into_bump_slice()))
+    }
+
+    fn build_fn_call(
+        &mut self,
+        dst: &Symbol,
+        fn_name: String,
+        _args: &'a [Symbol],
+        _arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        // Save used caller saved regs.
+        let old_general_used_regs = std::mem::replace(
+            &mut self.general_used_regs,
+            bumpalo::vec![in self.env.arena],
+        );
+        for (reg, saved_sym) in old_general_used_regs.into_iter() {
+            if CC::general_caller_saved(&reg) {
+                self.general_free_regs.push(reg);
+                self.free_to_stack(&saved_sym)?;
+            } else {
+                self.general_used_regs.push((reg, saved_sym));
+            }
+        }
+        let old_float_used_regs =
+            std::mem::replace(&mut self.float_used_regs, bumpalo::vec![in self.env.arena]);
+        for (reg, saved_sym) in old_float_used_regs.into_iter() {
+            if CC::float_caller_saved(&reg) {
+                self.float_free_regs.push(reg);
+                self.free_to_stack(&saved_sym)?;
+            } else {
+                self.float_used_regs.push((reg, saved_sym));
+            }
+        }
+
+        // Put values in param regs or on top of the stack.
+        // TODO: deal with arg passing. This will be call conv specific.
+
+        // Call function and generate reloc.
+        ASM::call(&mut self.buf, &mut self.relocs, fn_name);
+
+        // move return value to dst.
+        match ret_layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+                Ok(())
+            }
+            Layout::Builtin(Builtin::Float64) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
+                Ok(())
+            }
+            x => Err(format!(
+                "recieving return type, {:?}, is not yet implemented",
+                x
+            )),
+        }
     }
 
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {

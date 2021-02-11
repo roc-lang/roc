@@ -263,6 +263,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn call(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>, _fn_name: String) {
+        unimplemented!("calling functions literal not yet implemented for AArch64");
+    }
+
+    #[inline(always)]
     fn mov_freg64_imm64(
         _buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,

@@ -139,6 +139,35 @@ mod gen_num {
         assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
     }
 
+    #[test]
+    fn gen_int_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    4 == 4
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_basic_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
+                    always42 = \_ -> 42
+
+                    always42 5
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
     /*
     #[test]
     fn f64_sqrt() {
@@ -251,20 +280,7 @@ mod gen_num {
             f64
         );
     }
-    */
-    #[test]
-    fn gen_int_eq() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    4 == 4
-                "#
-            ),
-            true,
-            bool
-        );
-    }
-    /*
+
     #[test]
     fn gen_int_neq() {
         assert_evals_to!(
@@ -630,21 +646,6 @@ mod gen_num {
         );
     }
 
-    #[test]
-    fn gen_basic_fn() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    always42 : Num.Num Num.Integer -> Num.Num Num.Integer
-                    always42 = \_ -> 42
-
-                    always42 5
-                "#
-            ),
-            42,
-            i64
-        );
-    }
 
     #[test]
     fn int_to_float() {

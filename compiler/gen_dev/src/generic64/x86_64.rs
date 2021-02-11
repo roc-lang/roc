@@ -399,6 +399,14 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
+    fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String) {
+        buf.extend(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
+        relocs.push(Relocation::LinkedFunction {
+            offset: buf.len() as u64 - 4,
+            name: fn_name,
+        });
+    }
+    #[inline(always)]
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,

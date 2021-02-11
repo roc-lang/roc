@@ -4,11 +4,11 @@
 
 use bumpalo::{collections::Vec, Bump};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::TagName;
+use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use target_lexicon::Triple;
 
 mod generic64;
@@ -33,8 +33,9 @@ const INLINED_SYMBOLS: [Symbol; 4] = [
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
+#[derive(Debug)]
 #[allow(dead_code)]
-pub enum Relocation<'a> {
+pub enum Relocation {
     LocalData {
         offset: u64,
         // This should probably technically be a bumpalo::Vec.
@@ -43,11 +44,11 @@ pub enum Relocation<'a> {
     },
     LinkedFunction {
         offset: u64,
-        name: &'a str,
+        name: String,
     },
     LinkedData {
         offset: u64,
-        name: &'a str,
+        name: String,
     },
 }
 
@@ -67,10 +68,10 @@ where
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pionter and setup stack space.
     /// finalize is run at the end of build_proc when all internal code is finalized.
-    fn finalize(&mut self) -> Result<(&'a [u8], &[&Relocation]), String>;
+    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String>;
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[&Relocation]), String> {
+    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
         // TODO: let the backend know of all the arguments.
         // let start = std::time::Instant::now();
@@ -136,7 +137,12 @@ where
                 arguments,
             }) => {
                 match call_type {
-                    CallType::ByName { name: func_sym, .. } => {
+                    CallType::ByName {
+                        name: func_sym,
+                        arg_layouts,
+                        ret_layout,
+                        ..
+                    } => {
                         match *func_sym {
                             Symbol::NUM_ABS => {
                                 // Instead of calling the function, just inline it.
@@ -153,6 +159,15 @@ where
                             Symbol::BOOL_EQ => {
                                 // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::Eq, arguments, layout)
+                            }
+                            x if x
+                                .module_string(&self.env().interns)
+                                .starts_with(ModuleName::APP) =>
+                            {
+                                let fn_name = LayoutIds::default()
+                                    .get(*func_sym, layout)
+                                    .to_symbol_string(*func_sym, &self.env().interns);
+                                self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                             }
                             x => Err(format!("the function, {:?}, is not yet implemented", x)),
                         }
@@ -217,6 +232,17 @@ where
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
+
+    /// build_fn_call creates a call site for a function.
+    /// This includes dealing with things like saving regs and propagating the returned value.
+    fn build_fn_call(
+        &mut self,
+        dst: &Symbol,
+        fn_name: String,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
 
     /// build_num_abs_i64 stores the absolute value of src into dst.
     /// It only deals with inputs and outputs of i64 type.

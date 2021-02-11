@@ -114,11 +114,12 @@ fn build_object<'a, B: Backend<'a>>(
     }
 
     // Build procedures.
+    let mut relocations = bumpalo::vec![in env.arena];
     for (fn_name, proc_id, proc) in procs {
         let mut local_data_index = 0;
-        let (proc_data, relocations) = backend.build_proc(proc)?;
+        let (proc_data, relocs) = backend.build_proc(proc)?;
         let proc_offset = output.add_symbol_data(proc_id, text, proc_data, 16);
-        for reloc in relocations {
+        for reloc in relocs {
             let elfreloc = match reloc {
                 Relocation::LocalData { offset, data } => {
                     let data_symbol = write::Symbol {
@@ -174,10 +175,13 @@ fn build_object<'a, B: Backend<'a>>(
                     }
                 }
             };
-            output
-                .add_relocation(text, elfreloc)
-                .map_err(|e| format!("{:?}", e))?;
+            relocations.push(elfreloc);
         }
+    }
+    for reloc in relocations {
+        output
+            .add_relocation(text, reloc)
+            .map_err(|e| format!("{:?}", e))?;
     }
     Ok(output)
 }
