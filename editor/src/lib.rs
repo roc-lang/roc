@@ -303,11 +303,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     let region = Region::new(0, 0, 0, 0);
 
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
-                        &arena,
-                        "\"hello\"",
-                        &mut env,
-                        &mut scope,
-                        region,
+                        &arena, "True", &mut env, &mut scope, region,
                     )
                     .unwrap();
 
