@@ -138,20 +138,6 @@ mod cli_run {
 
     #[test]
     #[serial(quicksort)]
-    // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
-    #[ignore]
-    fn run_quicksort_valgrind() {
-        check_output(
-            &example_file("quicksort", "Quicksort.roc"),
-            "quicksort",
-            &[],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            true,
-        );
-    }
-
-    #[test]
-    #[serial(quicksort)]
     fn run_quicksort_optimized_valgrind() {
         check_output(
             &example_file("quicksort", "Quicksort.roc"),
