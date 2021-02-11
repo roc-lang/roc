@@ -261,6 +261,16 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
+    fn own_arg(&mut self, x: Symbol) {
+        self.own_var(x);
+    }
+
+    fn own_args(&mut self, xs: &[Symbol]) {
+        for x in xs.iter() {
+            self.own_arg(*x);
+        }
+    }
+
     /// For each xs[i], if xs[i] is owned, then mark ps[i] as owned.
     /// We use this action to preserve tail calls. That is, if we have
     /// a tail call `f xs`, if the i-th parameter is borrowed, but `xs[i]` is owned
@@ -308,31 +318,33 @@ impl<'a> BorrowInfState<'a> {
         } = e;
 
         match call_type {
-            ByName {
-                name, arg_layouts, ..
-            }
-            | ByPointer {
-                name, arg_layouts, ..
-            } => {
+            ByName { name, .. } => {
                 // get the borrow signature of the applied function
-                let ps = match self.param_map.get_symbol(*name) {
-                    Some(slice) => slice,
-                    None => Vec::from_iter_in(
-                        arg_layouts.iter().cloned().map(|layout| Param {
-                            symbol: Symbol::UNDERSCORE,
-                            borrow: false,
-                            layout,
-                        }),
-                        self.arena,
-                    )
-                    .into_bump_slice(),
-                };
+                match self.param_map.get_symbol(*name) {
+                    Some(ps) => {
+                        // the return value will be owned
+                        self.own_var(z);
 
+                        // if the function exects an owned argument (ps), the argument must be owned (args)
+                        self.own_args_using_params(arguments, ps);
+                    }
+                    None => {
+                        // this is really an indirect call, but the function was bound to a symbol
+                        // the return value will be owned
+                        self.own_var(z);
+
+                        // if the function exects an owned argument (ps), the argument must be owned (args)
+                        self.own_args(arguments);
+                    }
+                }
+            }
+
+            ByPointer { .. } => {
                 // the return value will be owned
                 self.own_var(z);
 
                 // if the function exects an owned argument (ps), the argument must be owned (args)
-                self.own_args_using_params(arguments, ps);
+                self.own_args(arguments);
             }
 
             LowLevel { op } => {
