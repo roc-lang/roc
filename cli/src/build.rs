@@ -3,6 +3,7 @@ use roc_build::{
     link::{link, rebuild_host, LinkType},
     program,
 };
+use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
@@ -47,6 +48,7 @@ pub fn build_file<'a>(
         src_dir.as_path(),
         subs_by_module,
         ptr_bytes,
+        builtin_defs_map,
     )?;
 
     let path_to_platform = loaded.platform_path.clone();

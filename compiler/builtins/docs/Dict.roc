@@ -1,6 +1,8 @@
-interface Dict2
+interface Dict
     exposes [ isEmpty, map ]
     imports []
+
+size : Dict * * -> Nat
 
 isEmpty : Dict * * -> Bool
 
@@ -13,4 +15,8 @@ isEmpty : Dict * * -> Bool
 ## 
 ## `map` functions like this are common in Roc, and they all work similarly.
 ## See for example #Result.map, #List.map, and #Set.map.
-map : List before, (before -> after) -> List after
+map :
+    Dict beforeKey beforeValue,
+    (\{ key: beforeKey, value: beforeValue } ->
+        { key: afterKey, value: afterValue }
+    ) -> Dict afterKey afterValue
