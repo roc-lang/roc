@@ -425,9 +425,6 @@ pub enum TInParens<'a> {
     ///
     Type(&'a Type<'a>, Row, Col),
 
-    // TODO REMOVE in favor of Type
-    Syntax(&'a SyntaxError<'a>, Row, Col),
-
     ///
     Space(BadInputError, Row, Col),
     ///

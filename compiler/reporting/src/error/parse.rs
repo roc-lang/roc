@@ -807,8 +807,6 @@ fn to_tinparens_report<'a>(
 
         TInParens::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
 
-        TInParens::Syntax(error, row, col) => to_syntax_report(alloc, filename, error, row, col),
-
         TInParens::IndentOpen(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
