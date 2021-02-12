@@ -1,15 +1,13 @@
 use crate::ast::{AssignedField, CommentOrNewline, Tag, TypeAnnotation};
-use crate::blankspace::{
-    space0, space0_around, space0_around_e, space0_before, space0_before_e, space0_e,
-};
+use crate::blankspace::{space0_around_e, space0_before_e, space0_e};
 use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, backtrackable, not_e, optional, peek_utf8_char_e,
-    specialize, specialize_ref, word1, word2, BadInputError, Col, Either, ParseResult, Parser,
+    allocated, backtrackable, not_e, optional, peek_utf8_char_e, specialize, specialize_ref, word1,
+    word2, BadInputError, Either, ParseResult, Parser,
     Progress::{self, *},
-    Row, State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
+    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -51,20 +49,6 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TT
         };
 
         Ok((MadeProgress, result, state))
-    }
-}
-
-fn check_indent<'a, TE, E>(min_indent: u16, to_problem: TE) -> impl Parser<'a, (), E>
-where
-    TE: Fn(Row, Col) -> E,
-    E: 'a,
-{
-    move |_arena, state: State<'a>| {
-        if state.indent_col < min_indent {
-            Err((NoProgress, to_problem(state.line, state.column), state))
-        } else {
-            Ok((NoProgress, (), state))
-        }
     }
 }
 
@@ -247,7 +231,7 @@ fn record_type_field<'a>(
         debug_assert_eq!(progress, MadeProgress);
 
         let (_, spaces, state) =
-            space0_e(min_indent, TRecord::Space, TRecord::IndentEnd).parse(arena, state)?;
+            debug!(space0_e(min_indent, TRecord::Space, TRecord::IndentEnd)).parse(arena, state)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -312,9 +296,11 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TReco
 
     move |arena, state| {
         let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
+            // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
             word1(b'{', TRecord::Open),
             loc!(record_type_field(min_indent)),
             word1(b',', TRecord::End),
+            // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
             word1(b'}', TRecord::End),
             min_indent,
             TRecord::Open,
@@ -377,13 +363,20 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
         .parse(arena, state)?;
 
         let (p2, rest, state) = zero_or_more!(skip_first!(
-            word1(b',', Type::TStart),
-            space0_around_e(
-                term_help(min_indent),
-                min_indent,
-                Type::TSpace,
-                Type::TIndentStart
-            )
+            word1(b',', Type::TFunctionArgument),
+            one_of![
+                space0_around_e(
+                    term_help(min_indent),
+                    min_indent,
+                    Type::TSpace,
+                    Type::TIndentStart
+                ),
+                |_, state: State<'a>| Err((
+                    NoProgress,
+                    Type::TFunctionArgument(state.line, state.column),
+                    state
+                ))
+            ]
         ))
         .parse(arena, state)?;
 

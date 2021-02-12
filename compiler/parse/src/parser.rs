@@ -72,12 +72,14 @@ impl<'a> State<'a> {
         _arena: &'a Bump,
         min_indent: u16,
         to_error: TE,
+        row: Row,
+        col: Col,
     ) -> Result<Self, (E, Self)>
     where
         TE: Fn(Row, Col) -> E,
     {
         if self.indent_col < min_indent {
-            Err((to_error(self.line, self.column), self))
+            Err((to_error(row, col), self))
         } else {
             Ok(self)
         }
@@ -378,6 +380,7 @@ pub enum Type<'a> {
     TStart(Row, Col),
     TEnd(Row, Col),
     TSpace(BadInputError, Row, Col),
+    TFunctionArgument(Row, Col),
     ///
     TIndentStart(Row, Col),
     TIndentEnd(Row, Col),
@@ -1494,6 +1497,31 @@ where
             Err((NoProgress, to_error(state.line, state.column), state))
         }
     }
+}
+
+pub fn check_indent<'a, TE, E>(min_indent: u16, to_problem: TE) -> impl Parser<'a, (), E>
+where
+    TE: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    move |_arena, state: State<'a>| {
+        dbg!(state.indent_col, min_indent);
+        if state.indent_col < min_indent {
+            Err((NoProgress, to_problem(state.line, state.column), state))
+        } else {
+            Ok((NoProgress, (), state))
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! word1_check_indent {
+    ($word:expr, $word_problem:expr, $min_indent:expr, $indent_problem:expr) => {
+        and!(
+            word1($word, $word_problem),
+            crate::parser::check_indent($min_indent, $indent_problem)
+        )
+    };
 }
 
 #[allow(dead_code)]

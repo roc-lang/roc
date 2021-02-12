@@ -4246,8 +4246,7 @@ mod test_reporting {
                 I am partway through parsing a record type, but I got stuck here:
                 
                 1│  f : {
-                2│  foo : I64,
-                    ^
+                         ^
                 
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
@@ -4589,8 +4588,115 @@ mod test_reporting {
                 I just started parsing an inline type alias, but I got stuck here:
                 
                 1│  f : I64 as 
-                2│  f = 0
-                    ^
+                              ^
+                
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_double_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : I64,,I64 -> I64 
+                f = 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── DOUBLE COMMA ────────────────────────────────────────────────────────────────
+                
+                I just started parsing a function argument type, but I encounterd two
+                commas in a row:
+                
+                1│  f : I64,,I64 -> I64 
+                            ^
+                
+                Try removing one of them.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_argument_no_arrow() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : I64, I64 
+                f = 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
+                
+                I just started parsing a type, but I got stuck here:
+                
+                1│  f : I64, I64 
+                                ^
+                
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_argument_arrow_then_nothing() {
+        // TODO could do better by pointing out we're parsing a function type
+        report_problem_as(
+            indoc!(
+                r#"
+                f : I64, I64 -> 
+                f = 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
+                
+                I just started parsing a type, but I got stuck here:
+                
+                1│  f : I64, I64 -> 
+                                   ^
+                
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn foobar() {
+        // TODO fix error on new row
+        // we should make whitespace only consumed when it puts us in a validly-indented position
+        report_problem_as(
+            indoc!(
+                r#"
+                f : I64 ->
+                f = 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
+                
+                I just started parsing a type, but I got stuck here:
+                
+                1│  f : I64 ->
+                              ^
                 
                 Note: I may be confused by indentation
             "#

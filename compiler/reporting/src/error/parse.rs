@@ -102,6 +102,24 @@ fn to_syntax_report<'a>(
 
             report(doc)
         }
+        SyntaxError::Eof(region) => {
+            let doc = alloc.stack(vec![alloc.reflow("End of Field"), alloc.region(*region)]);
+
+            Report {
+                filename,
+                doc,
+                title: "PARSE PROBLEM".to_string(),
+            }
+        }
+        SyntaxError::OutdentedTooFar => {
+            let doc = alloc.stack(vec![alloc.reflow("OutdentedTooFar")]);
+
+            Report {
+                filename,
+                doc,
+                title: "PARSE PROBLEM".to_string(),
+            }
+        }
         Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -125,6 +143,43 @@ fn to_type_report<'a>(
             to_tinparens_report(alloc, filename, &tinparens, *row, *col)
         }
         Type::TApply(tapply, row, col) => to_tapply_report(alloc, filename, &tapply, *row, *col),
+
+        Type::TFunctionArgument(row, col) => match what_is_next(alloc.src_lines, *row, *col) {
+            Next::Other(Some(',')) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+                let region = Region::from_row_col(*row, *col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a function argument type, but I encounterd two commas in a row:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![alloc.reflow("Try removing one of them.")]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "DOUBLE COMMA".to_string(),
+                }
+            }
+            _ => todo!(),
+        },
+
+        Type::TStart(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED TYPE".to_string(),
+            }
+        }
 
         Type::TIndentStart(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
@@ -342,7 +397,7 @@ fn to_trecord_report<'a>(
         }
 
         TRecord::IndentEnd(row, col) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, row - 1) {
+            match next_line_starts_with_close_curly(alloc.src_lines, row.saturating_sub(1)) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
