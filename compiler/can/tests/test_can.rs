@@ -968,6 +968,21 @@ mod test_can {
     }
 
     #[test]
+    fn dict() {
+        let src = indoc!(
+            r#"
+                x = Dict.empty
+                
+                Dict.len x
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
     fn unused_def_regression() {
         let src = indoc!(
             r#"

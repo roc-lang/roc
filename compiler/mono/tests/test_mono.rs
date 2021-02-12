@@ -12,6 +12,7 @@ mod helpers;
 // Test monomorphization
 #[cfg(test)]
 mod test_mono {
+    use roc_can::builtins::builtin_defs_map;
     use roc_collections::all::MutMap;
     use roc_module::symbol::Symbol;
     use roc_mono::ir::Proc;
@@ -54,6 +55,7 @@ mod test_mono {
         }
 
         let exposed_types = MutMap::default();
+
         let loaded = roc_load::file::load_and_monomorphize_from_str(
             arena,
             filename,
@@ -62,6 +64,7 @@ mod test_mono {
             src_dir,
             exposed_types,
             8,
+            builtin_defs_map,
         );
 
         let mut loaded = loaded.expect("failed to load module");
@@ -626,6 +629,31 @@ mod test_mono {
                             jump Test.11;
                     else
                         jump Test.11;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn dict() {
+        compiles_to_ir(
+            r#"
+            Dict.len Dict.empty
+            "#,
+            indoc!(
+                r#"
+                procedure Dict.2 ():
+                    let Test.4 = lowlevel DictEmpty ;
+                    ret Test.4;
+
+                procedure Dict.6 (#Attr.2):
+                    let Test.3 = lowlevel DictSize #Attr.2;
+                    ret Test.3;
+
+                procedure Test.0 ():
+                    let Test.2 = FunctionPointer Dict.2;
+                    let Test.1 = CallByName Dict.6 Test.2;
+                    ret Test.1;
                 "#
             ),
         )

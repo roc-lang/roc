@@ -1,5 +1,6 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
+use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use tempfile::tempdir;
 
@@ -51,6 +52,7 @@ pub fn helper<'a>(
         src_dir,
         exposed_types,
         8,
+        builtin_defs_map,
     );
 
     let mut loaded = loaded.expect("failed to load module");

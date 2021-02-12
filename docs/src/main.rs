@@ -6,6 +6,7 @@ extern crate serde_derive;
 extern crate pulldown_cmark;
 extern crate serde_json;
 use roc_builtins::std::StdLib;
+use roc_can::builtins::builtin_defs_map;
 use roc_load::docs::Documentation;
 use roc_load::docs::ModuleDocumentation;
 
@@ -133,6 +134,7 @@ fn files_to_documentations(
             src_dir,
             MutMap::default(),
             8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
+            builtin_defs_map,
         )
         .expect("TODO gracefully handle load failing");
         files_docs.extend(loaded.documentation.drain().map(|x| x.1));

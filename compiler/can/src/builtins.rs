@@ -79,6 +79,10 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_KEEP_IF => list_keep_if,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
+        DICT_TEST_HASH => dict_hash_test_only,
+        DICT_LEN => dict_len,
+        DICT_EMPTY => dict_empty,
+        DICT_INSERT => dict_insert,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -174,6 +178,10 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_KEEP_IF => list_keep_if,
         Symbol::LIST_WALK => list_walk,
         Symbol::LIST_WALK_BACKWARDS => list_walk_backwards,
+        Symbol::DICT_TEST_HASH => dict_hash_test_only,
+        Symbol::DICT_LEN => dict_len,
+        Symbol::DICT_EMPTY => dict_empty,
+        Symbol::DICT_INSERT => dict_insert,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -1780,7 +1788,7 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-// List.contains : List elem, elem, -> Bool
+/// List.contains : List elem, elem -> Bool
 fn list_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let elem_var = var_store.fresh();
@@ -1825,6 +1833,97 @@ fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_list_var,
+    )
+}
+
+/// Dict.hashTestOnly : k, v -> Nat
+pub fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let key_var = var_store.fresh();
+    let value_var = var_store.fresh();
+    let nat_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::Hash,
+        args: vec![
+            (key_var, Var(Symbol::ARG_1)),
+            (value_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: nat_var,
+    };
+
+    defn(
+        symbol,
+        vec![(key_var, Symbol::ARG_1), (value_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        nat_var,
+    )
+}
+
+/// Dict.len : Dict * * -> Nat
+fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let size_var = var_store.fresh();
+    let dict_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictSize,
+        args: vec![(dict_var, Var(Symbol::ARG_1))],
+        ret_var: size_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        size_var,
+    )
+}
+
+/// Dict.empty : Dict * *
+fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let body = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: dict_var,
+    };
+
+    Def {
+        annotation: None,
+        expr_var: dict_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Dict.insert : Dict k v, k, v -> Dict k v
+fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let val_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictInsert,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+            (val_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (dict_var, Symbol::ARG_1),
+            (key_var, Symbol::ARG_2),
+            (val_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        dict_var,
     )
 }
 

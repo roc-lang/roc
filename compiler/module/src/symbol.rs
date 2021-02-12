@@ -741,6 +741,7 @@ define_builtins! {
         11 DEC: "#dec" // internal function that increments the refcount
         12 ARG_CLOSURE: "#arg_closure" // symbol used to store the closure record
         13 LIST_EQ: "#list_eq" // internal function that checks list equality
+        14 GENERIC_HASH: "#generic_hash" // internal function that checks list equality
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -892,6 +893,11 @@ define_builtins! {
         3 DICT_SINGLETON: "singleton"
         4 DICT_GET: "get"
         5 DICT_INSERT: "insert"
+        6 DICT_LEN: "len"
+
+        // This should not be exposed to users, its for testing the
+        // hash function ONLY
+        7 DICT_TEST_HASH: "hashTestOnly"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
