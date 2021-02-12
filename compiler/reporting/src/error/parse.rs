@@ -31,10 +31,21 @@ fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocB
 fn hint_for_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.concat(vec![
         alloc.hint("Tag names "),
-        alloc.reflow("Tag names start with an uppercase letter, like "),
+        alloc.reflow("start with an uppercase letter, like "),
         alloc.parser_suggestion("Err"),
         alloc.text(" or "),
         alloc.parser_suggestion("Green"),
+        alloc.text("."),
+    ])
+}
+
+fn hint_for_private_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.concat(vec![
+        alloc.hint("Private tag names "),
+        alloc.reflow("start with a `@` symbol followed by an uppercase letter, like "),
+        alloc.parser_suggestion("@UID"),
+        alloc.text(" or "),
+        alloc.parser_suggestion("@SecretKey"),
         alloc.text("."),
     ])
 }
@@ -372,8 +383,6 @@ fn to_trecord_report<'a>(
 
         TRecord::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
 
-        TRecord::Syntax(error, row, col) => to_syntax_report(alloc, filename, error, row, col),
-
         TRecord::IndentOpen(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
@@ -555,6 +564,22 @@ fn to_ttag_union_report<'a>(
                         title: "WEIRD TAG NAME".to_string(),
                     }
                 }
+                Next::Other(Some('@')) => {
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a tag union type, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.reflow(r"I was expecting to see a private tag name."),
+                        hint_for_private_tag_name(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "WEIRD TAG NAME".to_string(),
+                    }
+                }
                 _ => {
                     let doc = alloc.stack(vec![
                         alloc.reflow(r"I am partway through parsing a tag union type, but I got stuck here:"),
@@ -578,8 +603,6 @@ fn to_ttag_union_report<'a>(
         }
 
         TTagUnion::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
-
-        TTagUnion::Syntax(error, row, col) => to_syntax_report(alloc, filename, error, row, col),
 
         TTagUnion::IndentOpen(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);

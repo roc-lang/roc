@@ -1,11 +1,10 @@
 use crate::ast::{AssignedField, CommentOrNewline, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_e, space0_before_e, space0_e};
-use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
     allocated, backtrackable, not_e, optional, peek_utf8_char_e, specialize, specialize_ref, word1,
-    word2, BadInputError, Either, ParseResult, Parser,
+    word2, BadInputError, ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
@@ -36,11 +35,9 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TT
         .parse(arena, state)?;
 
         // This could be an open tag union, e.g. `[ Foo, Bar ]a`
-        let (_, ext, state) = optional(allocated(specialize_ref(
-            TTagUnion::Syntax,
-            term(min_indent),
-        )))
-        .parse(arena, state)?;
+        let (_, ext, state) =
+            optional(allocated(specialize_ref(TTagUnion::Type, term(min_indent))))
+                .parse(arena, state)?;
 
         let result = TypeAnnotation::TagUnion {
             tags: tags.into_bump_slice(),
@@ -52,13 +49,7 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TT
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
-    specialize(|x, _, _| SyntaxError::Type(x), term_help(min_indent))
-}
-
-#[allow(clippy::type_complexity)]
-fn term_help<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
+fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     map_with_arena!(
         and!(
             one_of!(
@@ -78,7 +69,7 @@ fn term_help<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>
                             crate::parser::keyword_e(keyword::AS, Type::TEnd(0, 0))
                         ),
                         space0_before_e(
-                            term_help(min_indent),
+                            term(min_indent),
                             min_indent,
                             Type::TSpace,
                             Type::TAsIndentStart
@@ -116,18 +107,7 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> 
     })
 }
 
-fn loc_applied_arg<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
-    specialize(
-        |x, _, _| SyntaxError::Type(x),
-        loc_applied_arg_help(min_indent),
-    )
-}
-
-fn loc_applied_arg_help<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
+fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     use crate::ast::Spaceable;
 
     map_with_arena!(
@@ -161,12 +141,6 @@ fn loc_applied_arg_help<'a>(
     )
 }
 
-fn loc_applied_args<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>, SyntaxError<'a>> {
-    zero_or_more!(loc_applied_arg(min_indent))
-}
-
 fn loc_type_in_parens<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, TInParens<'a>> {
@@ -187,27 +161,129 @@ fn loc_type_in_parens<'a>(
 #[inline(always)]
 fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>, TTagUnion<'a>> {
     move |arena, state: State<'a>| {
-        let (_, either_name, state) = specialize_ref(
-            TTagUnion::Syntax,
-            either!(loc!(private_tag()), loc!(global_tag())),
-        )
-        .parse(arena, state)?;
+        let (_, name, state) = loc!(parse_tag_name(TTagUnion::End)).parse(arena, state)?;
 
         let (_, args, state) =
-            specialize_ref(TTagUnion::Syntax, loc_applied_args(min_indent)).parse(arena, state)?;
+            specialize_ref(TTagUnion::Type, loc_applied_args_e(min_indent)).parse(arena, state)?;
 
-        let result = match either_name {
-            Either::First(name) => Tag::Private {
+        let result = if name.value.starts_with('@') {
+            Tag::Private {
                 name,
                 args: args.into_bump_slice(),
-            },
-            Either::Second(name) => Tag::Global {
+            }
+        } else {
+            Tag::Global {
                 name,
                 args: args.into_bump_slice(),
-            },
+            }
         };
 
         Ok((MadeProgress, result, state))
+    }
+}
+
+use crate::parser::{Col, Row};
+fn parse_tag_name<'a, F, E>(to_problem: F) -> impl Parser<'a, &'a str, E>
+where
+    F: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    use encode_unicode::CharExt;
+
+    move |arena, mut state: State<'a>| {
+        let mut buf;
+
+        match char::from_utf8_slice_start(state.bytes) {
+            Ok((first_letter, bytes_parsed)) => match first_letter {
+                '@' => {
+                    debug_assert_eq!(bytes_parsed, 1);
+
+                    // parsing a private tag name
+                    match char::from_utf8_slice_start(&state.bytes[1..]) {
+                        Ok((second_letter, bytes_parsed_2)) if second_letter.is_uppercase() => {
+                            let total_parsed = bytes_parsed + bytes_parsed_2;
+
+                            buf = String::with_capacity_in(total_parsed, arena);
+
+                            buf.push('@');
+                            buf.push(second_letter);
+
+                            state = state
+                                .advance_without_indenting(arena, total_parsed)
+                                .map_err(|(progress, _, state)| {
+                                    (progress, to_problem(state.line, state.column), state)
+                                })?;
+                        }
+                        _ => {
+                            // important for error messages
+                            state = state
+                                .advance_without_indenting(arena, bytes_parsed)
+                                .map_err(|(progress, _, state)| {
+                                    (progress, to_problem(state.line, state.column), state)
+                                })?;
+
+                            let row = state.line;
+                            let col = state.column;
+                            return state.fail(arena, MadeProgress, to_problem(row, col));
+                        }
+                    }
+                }
+
+                _ if first_letter.is_uppercase() => {
+                    buf = String::with_capacity_in(1, arena);
+
+                    buf.push(first_letter);
+
+                    state = state
+                        .advance_without_indenting(arena, bytes_parsed)
+                        .map_err(|(progress, _, state)| {
+                            (progress, to_problem(state.line, state.column), state)
+                        })?;
+                }
+
+                _ => {
+                    let row = state.line;
+                    let col = state.column;
+                    return state.fail(arena, NoProgress, to_problem(row, col));
+                }
+            },
+            Err(_) => {
+                let row = state.line;
+                let col = state.column;
+                return state.fail(arena, NoProgress, to_problem(row, col));
+            }
+        };
+
+        while !state.bytes.is_empty() {
+            match char::from_utf8_slice_start(state.bytes) {
+                Ok((ch, bytes_parsed)) => {
+                    // After the first character, only these are allowed:
+                    //
+                    // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+                    // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                    // * A ':' indicating the end of the field
+                    if ch.is_alphabetic() || ch.is_ascii_digit() {
+                        buf.push(ch);
+
+                        state = state
+                            .advance_without_indenting(arena, bytes_parsed)
+                            .map_err(|(progress, _, state)| {
+                                (progress, to_problem(state.line, state.column), state)
+                            })?;
+                    } else {
+                        // This is the end of the field. We're done!
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let row = state.line;
+                    let col = state.column;
+                    return state.fail(arena, MadeProgress, to_problem(row, col));
+                }
+            };
+        }
+
+        Ok((MadeProgress, buf.into_bump_str(), state))
     }
 }
 
@@ -231,7 +307,7 @@ fn record_type_field<'a>(
         debug_assert_eq!(progress, MadeProgress);
 
         let (_, spaces, state) =
-            debug!(space0_e(min_indent, TRecord::Space, TRecord::IndentEnd)).parse(arena, state)?;
+            space0_e(min_indent, TRecord::Space, TRecord::IndentEnd).parse(arena, state)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -241,7 +317,7 @@ fn record_type_field<'a>(
         ))
         .parse(arena, state)?;
 
-        let val_parser = specialize_ref(TRecord::Syntax, term(min_indent));
+        let val_parser = specialize_ref(TRecord::Type, term(min_indent));
 
         match opt_loc_val {
             Some(First(_)) => {
@@ -289,11 +365,6 @@ fn record_type_field<'a>(
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TRecord<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
 
-    let field_term = move |a, s| match term(min_indent).parse(a, s) {
-        Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, TRecord::Syntax(a.alloc(error), s.line, s.column), s)),
-    };
-
     move |arena, state| {
         let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
@@ -309,6 +380,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TReco
         )
         .parse(arena, state)?;
 
+        let field_term = specialize_ref(TRecord::Type, term(min_indent));
         let (_, ext, state) = optional(allocated(field_term)).parse(arena, state)?;
 
         let result = Record {
@@ -349,13 +421,13 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, Type
 fn loc_applied_args_e<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>, Type<'a>> {
-    zero_or_more!(loc_applied_arg_help(min_indent))
+    zero_or_more!(loc_applied_arg(min_indent))
 }
 
 fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before_e(
-            term_help(min_indent),
+            term(min_indent),
             min_indent,
             Type::TSpace,
             Type::TIndentStart,
@@ -366,7 +438,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
             word1(b',', Type::TFunctionArgument),
             one_of![
                 space0_around_e(
-                    term_help(min_indent),
+                    term(min_indent),
                     min_indent,
                     Type::TSpace,
                     Type::TIndentStart
@@ -390,7 +462,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
 
         if is_function.is_some() {
             let (p4, return_type, state) = space0_before_e(
-                term_help(min_indent),
+                term(min_indent),
                 min_indent,
                 Type::TSpace,
                 Type::TIndentStart,

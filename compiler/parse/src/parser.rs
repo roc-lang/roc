@@ -391,18 +391,14 @@ pub enum Type<'a> {
 pub enum TRecord<'a> {
     End(Row, Col),
     Open(Row, Col),
-    ///
+
     Field(Row, Col),
     Colon(Row, Col),
     Optional(Row, Col),
     Type(&'a Type<'a>, Row, Col),
 
-    // TODO REMOVE in favor of Type
-    Syntax(&'a SyntaxError<'a>, Row, Col),
-
-    ///
     Space(BadInputError, Row, Col),
-    ///
+
     IndentOpen(Row, Col),
     IndentColon(Row, Col),
     IndentOptional(Row, Col),
@@ -413,15 +409,11 @@ pub enum TRecord<'a> {
 pub enum TTagUnion<'a> {
     End(Row, Col),
     Open(Row, Col),
-    ///
+
     Type(&'a Type<'a>, Row, Col),
 
-    // TODO REMOVE in favor of Type
-    Syntax(&'a SyntaxError<'a>, Row, Col),
-
-    ///
     Space(BadInputError, Row, Col),
-    ///
+
     IndentOpen(Row, Col),
     IndentEnd(Row, Col),
 }

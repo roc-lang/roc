@@ -4173,8 +4173,7 @@ mod test_reporting {
                 
                 I was expecting to see a tag name.
                 
-                Hint: Tag names Tag names start with an uppercase letter, like
-                Err or Green.
+                Hint: Tag names start with an uppercase letter, like Err or Green.
             "#
             ),
         )
@@ -4199,8 +4198,7 @@ mod test_reporting {
                 
                 I was expecting to see a tag name.
                 
-                Hint: Tag names Tag names start with an uppercase letter, like
-                Err or Green.
+                Hint: Tag names start with an uppercase letter, like Err or Green.
             "#
             ),
         )
@@ -4677,13 +4675,12 @@ mod test_reporting {
     }
 
     #[test]
-    fn foobar() {
-        // TODO fix error on new row
-        // we should make whitespace only consumed when it puts us in a validly-indented position
+    fn invalid_private_tag_name() {
+        // TODO could do better by pointing out we're parsing a function type
         report_problem_as(
             indoc!(
                 r#"
-                f : I64 ->
+                f : [ @Foo Bool, @100 I64 ] 
                 f = 0
 
                 f
@@ -4691,14 +4688,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
+                ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
                 
-                I just started parsing a type, but I got stuck here:
+                I am partway through parsing a tag union type, but I got stuck here:
                 
-                1│  f : I64 ->
-                              ^
+                1│  f : [ @Foo Bool, @100 I64 ] 
+                                     ^
                 
-                Note: I may be confused by indentation
+                I was expecting to see a private tag name.
+                
+                Hint: Private tag names start with a `@` symbol followed by an
+                uppercase letter, like @UID or @SecretKey.
             "#
             ),
         )
