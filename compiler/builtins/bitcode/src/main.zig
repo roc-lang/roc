@@ -10,6 +10,9 @@ comptime {
     exportDictFn(dict.dictLen, "len");
     exportDictFn(dict.dictEmpty, "empty");
     exportDictFn(dict.dictInsert, "insert");
+    exportDictFn(dict.dictRemove, "remove");
+    exportDictFn(dict.dictContains, "contains");
+
     exportDictFn(hash.wyhash, "hash");
     exportDictFn(hash.wyhash_rocstr, "hash_str");
 }

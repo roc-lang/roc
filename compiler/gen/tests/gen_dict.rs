@@ -39,4 +39,72 @@ mod gen_dict {
             usize
         );
     }
+
+    #[test]
+    fn dict_empty_contains() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : Dict I64 F64
+                empty = Dict.empty
+
+                Dict.contains empty 42
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    fn dict_nonempty_contains() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : Dict I64 F64
+                empty = Dict.insert Dict.empty 42 3.14
+
+                Dict.contains empty 42
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn dict_empty_remove() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : Dict I64 F64
+                empty = Dict.empty
+
+                empty
+                    |> Dict.remove 42
+                    |> Dict.len
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn dict_nonempty_remove() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : Dict I64 F64
+                empty = Dict.insert Dict.empty 42 3.14
+
+                empty
+                    |> Dict.remove 42
+                    |> Dict.len
+                "#
+            ),
+            0,
+            i64
+        );
+    }
 }

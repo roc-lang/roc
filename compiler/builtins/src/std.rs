@@ -770,6 +770,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // Dict.insert : Dict k v, k, v -> Dict k v
     add_type(
         Symbol::DICT_INSERT,
         top_level_function(
@@ -779,6 +780,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 flex(TVAR2),
             ],
             Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.remove : Dict k v, k -> Dict k v
+    add_type(
+        Symbol::DICT_REMOVE,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1)],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.contains : Dict k v, k -> Bool
+    add_type(
+        Symbol::DICT_CONTAINS,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1)],
+            Box::new(bool_type()),
         ),
     );
 

@@ -17,6 +17,14 @@ const Slot = packed enum(u8) {
     PreviouslyFilled,
 };
 
+const MaybeIndexTag = enum {
+    index, not_found
+};
+
+const MaybeIndex = union(MaybeIndexTag) {
+    index: usize, not_found: void
+};
+
 // aligmnent of elements. The number (16 or 8) indicates the maximum
 // alignment of the key and value. The tag furthermore indicates
 // which has the biggest aligmnent. If both are the same, we put
@@ -175,7 +183,7 @@ pub const RocDict = extern struct {
         return new_dict;
     }
 
-    fn getSlot(self: *RocDict, capacity: usize, index: usize, key_width: usize, value_width: usize) Slot {
+    fn getSlot(self: *const RocDict, capacity: usize, index: usize, key_width: usize, value_width: usize) Slot {
         const offset = capacity * (key_width + value_width) + index * @sizeOf(Slot);
 
         if (self.dict_bytes) |u8_ptr| {
@@ -212,7 +220,7 @@ pub const RocDict = extern struct {
         }
     }
 
-    fn getKey(self: *RocDict, capacity: usize, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
+    fn getKey(self: *const RocDict, capacity: usize, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (index * key_width);
@@ -245,7 +253,7 @@ pub const RocDict = extern struct {
         }
     }
 
-    fn getValue(self: *RocDict, capacity: usize, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
+    fn getValue(self: *const RocDict, capacity: usize, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (capacity * key_width) + (index * value_width);
@@ -258,6 +266,34 @@ pub const RocDict = extern struct {
             return u8_ptr + offset;
         } else {
             unreachable;
+        }
+    }
+
+    fn findIndex(self: *const RocDict, capacity: usize, seed: u64, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn) MaybeIndex {
+        if (self.isEmpty()) {
+            return MaybeIndex.not_found;
+        }
+
+        const n = capacity;
+        // hash the key, and modulo by the maximum size
+        // (so we get an in-bounds index)
+        const hash = hash_fn(seed, key);
+        const index = hash % n;
+
+        switch (self.getSlot(n, index, key_width, value_width)) {
+            Slot.Empty, Slot.PreviouslyFilled => {
+                return MaybeIndex.not_found;
+            },
+            Slot.Filled => {
+                // is this the same key, or a new key?
+                const current_key = self.getKey(n, index, alignment, key_width, value_width);
+
+                if (is_eq(key, current_key)) {
+                    return MaybeIndex{ .index = index };
+                } else {
+                    unreachable;
+                }
+            },
         }
     }
 };
@@ -276,12 +312,14 @@ pub fn dictLen(dict: RocDict) callconv(.C) usize {
     return dict.dict_entries_len;
 }
 
-// Dict.insert : Dict k v, k, v -> Dict k v
+// commonly used type aliases
 const Opaque = ?[*]u8;
 const HashFn = fn (u64, ?[*]u8) callconv(.C) u64;
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const Dec = fn (?[*]u8) callconv(.C) void;
-pub fn dictInsert(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_value: Dec, output: *RocDict) callconv(.C) void {
+
+// Dict.insert : Dict k v, k, v -> Dict k v
+pub fn dictInsert(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
     const n: usize = 8;
     const seed: u64 = 0;
 
@@ -325,6 +363,9 @@ pub fn dictInsert(dict: RocDict, alignment: Alignment, key: Opaque, key_width: u
                 const current_value = result.getValue(n, index, alignment, key_width, value_width);
                 dec_value(current_value);
 
+                // we must consume the key argument!
+                dec_key(key);
+
                 result.setValue(n, index, alignment, key_width, value_width, value);
             } else {
                 // TODO rehash, possibly grow the allocation?
@@ -335,6 +376,51 @@ pub fn dictInsert(dict: RocDict, alignment: Alignment, key: Opaque, key_width: u
 
     // write result into pointer
     output.* = result;
+}
+
+// Dict.remove : Dict k v, k -> Dict k v
+pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
+    const capacity: usize = input.dict_slot_len;
+    const n = capacity;
+    const seed: u64 = 0;
+
+    switch (input.findIndex(capacity, seed, alignment, key, key_width, value_width, hash_fn, is_eq)) {
+        MaybeIndex.not_found => {
+            // the key was not found; we're done
+            output.* = input;
+            return;
+        },
+        MaybeIndex.index => |index| {
+            // TODO make sure input is unique (or duplicate otherwise)
+            var dict = input;
+
+            dict.setSlot(n, index, key_width, value_width, Slot.PreviouslyFilled);
+            const old_key = dict.getKey(n, index, alignment, key_width, value_width);
+            const old_value = dict.getValue(n, index, alignment, key_width, value_width);
+
+            dec_key(old_key);
+            dec_value(old_value);
+
+            dict.dict_entries_len -= 1;
+
+            output.* = dict;
+        },
+    }
+}
+
+// Dict.contains : Dict k v, k -> Bool
+pub fn dictContains(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn) callconv(.C) bool {
+    const capacity: usize = dict.dict_slot_len;
+    const seed: u64 = 0;
+
+    switch (dict.findIndex(capacity, seed, alignment, key, key_width, value_width, hash_fn, is_eq)) {
+        MaybeIndex.not_found => {
+            return false;
+        },
+        MaybeIndex.index => |_| {
+            return true;
+        },
+    }
 }
 
 test "RocDict.init() contains nothing" {

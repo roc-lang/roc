@@ -83,6 +83,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
         DICT_INSERT => dict_insert,
+        DICT_REMOVE => dict_remove,
+        DICT_CONTAINS => dict_contains,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -182,6 +184,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_LEN => dict_len,
         Symbol::DICT_EMPTY => dict_empty,
         Symbol::DICT_INSERT => dict_insert,
+        Symbol::DICT_REMOVE => dict_remove,
+        Symbol::DICT_CONTAINS => dict_contains,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -1924,6 +1928,53 @@ fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         dict_var,
+    )
+}
+
+/// Dict.remove : Dict k v, k -> Dict k v
+fn dict_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictRemove,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        dict_var,
+    )
+}
+
+/// Dict.contains : Dict k v, k -> Bool
+fn dict_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictContains,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        bool_var,
     )
 }
 

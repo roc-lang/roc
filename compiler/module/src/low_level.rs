@@ -31,6 +31,8 @@ pub enum LowLevel {
     DictSize,
     DictEmpty,
     DictInsert,
+    DictRemove,
+    DictContains,
     NumAdd,
     NumAddWrap,
     NumAddChecked,

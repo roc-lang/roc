@@ -40,3 +40,5 @@ pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
 pub const DICT_LEN: &str = "roc_builtins.dict.len";
 pub const DICT_EMPTY: &str = "roc_builtins.dict.empty";
 pub const DICT_INSERT: &str = "roc_builtins.dict.insert";
+pub const DICT_REMOVE: &str = "roc_builtins.dict.remove";
+pub const DICT_CONTAINS: &str = "roc_builtins.dict.contains";

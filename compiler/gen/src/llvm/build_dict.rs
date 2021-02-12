@@ -91,7 +91,6 @@ pub fn dict_empty<'a, 'ctx, 'env>(
 pub fn dict_insert<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    _scope: &Scope<'a, 'ctx>,
     dict: BasicValueEnum<'ctx>,
     key: BasicValueEnum<'ctx>,
     key_layout: &Layout<'a>,
@@ -105,7 +104,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
-    let value_ptr = builder.build_alloca(key.get_type(), "value_ptr");
+    let value_ptr = builder.build_alloca(value.get_type(), "value_ptr");
 
     env.builder
         .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
@@ -127,7 +126,9 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
-    let dec_value_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Dec);
+
+    let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Dec);
+    let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, RCOperation::Dec);
 
     call_void_bitcode_fn(
         env,
@@ -140,6 +141,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
             value_width.into(),
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
+            dec_key_fn.as_global_value().as_pointer_value().into(),
             dec_value_fn.as_global_value().as_pointer_value().into(),
             result_ptr.into(),
         ],
@@ -153,6 +155,122 @@ pub fn dict_insert<'a, 'ctx, 'env>(
             .into_struct_value(),
     )
     .into()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_remove<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict: BasicValueEnum<'ctx>,
+    key: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
+
+    env.builder
+        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(key_ptr, key);
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let result_ptr = builder.build_alloca(zig_dict_type, "result_ptr");
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
+    let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
+
+    let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Dec);
+    let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, RCOperation::Dec);
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            dict_ptr.into(),
+            alignment_iv.into(),
+            env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
+            key_width.into(),
+            value_width.into(),
+            hash_fn.as_global_value().as_pointer_value().into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+            dec_key_fn.as_global_value().as_pointer_value().into(),
+            dec_value_fn.as_global_value().as_pointer_value().into(),
+            result_ptr.into(),
+        ],
+        &bitcode::DICT_REMOVE,
+    );
+
+    zig_dict_to_struct(
+        env,
+        builder
+            .build_load(result_ptr, "load_result")
+            .into_struct_value(),
+    )
+    .into()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_contains<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict: BasicValueEnum<'ctx>,
+    key: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
+
+    env.builder
+        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(key_ptr, key);
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
+    let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
+
+    call_bitcode_fn(
+        env,
+        &[
+            dict_ptr.into(),
+            alignment_iv.into(),
+            env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
+            key_width.into(),
+            value_width.into(),
+            hash_fn.as_global_value().as_pointer_value().into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+        ],
+        &bitcode::DICT_CONTAINS,
+    )
 }
 
 fn build_hash_wrapper<'a, 'ctx, 'env>(
@@ -250,7 +368,7 @@ fn build_eq_wrapper<'a, 'ctx, 'env>(
             debug_info_init!(env, function_value);
 
             env.builder
-                .build_return(Some(&env.context.bool_type().const_zero()));
+                .build_return(Some(&env.context.bool_type().const_int(1, false)));
 
             function_value
         }
