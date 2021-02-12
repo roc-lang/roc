@@ -7,9 +7,9 @@ use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
     allocated, ascii_char, ascii_string, backtrackable, not_e, optional, peek_utf8_char_e,
-    specialize, specialize_ref, word1, BadInputError, Either, ParseResult, Parser,
+    specialize, specialize_ref, word1, BadInputError, Col, Either, ParseResult, Parser,
     Progress::{self, *},
-    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
+    Row, State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -54,61 +54,56 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TT
     }
 }
 
-//                    specialize(
-//                        |x, row, col| SyntaxError::Type(Type::TVariable(x, row, col)),
-//                        loc!(parse_type_variable_help)
-//                    )
-//
+fn check_indent<'a, TE, E>(min_indent: u16, to_problem: TE) -> impl Parser<'a, (), E>
+where
+    TE: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    move |_arena, state: State<'a>| {
+        if state.indent_col < min_indent {
+            Err((NoProgress, to_problem(state.line, state.column), state))
+        } else {
+            Ok((NoProgress, (), state))
+        }
+    }
+}
 
 #[allow(clippy::type_complexity)]
-pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
+fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
+    specialize(|x, _, _| SyntaxError::Type(x), term_help(min_indent))
+}
+
+#[allow(clippy::type_complexity)]
+fn term_help<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     map_with_arena!(
         and!(
-            {
-                specialize(
-                    |x, _, _| SyntaxError::Type(x),
-                    one_of!(
-                        loc_wildcard(),
-                        specialize(Type::TInParens, loc_type_in_parens(min_indent)),
-                        loc!(specialize(Type::TRecord, record_type(min_indent))),
-                        loc!(specialize(Type::TTagUnion, tag_union_type(min_indent))),
-                        loc!(applied_type(min_indent)),
-                        loc!(specialize(Type::TVariable, parse_type_variable))
-                    ),
-                )
-            },
-            |a, s| {
-                //                optional(
-                //                    // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
-                //                    and!(
-                //                        space1(min_indent),
-                //                        skip_first!(
-                //                            crate::parser::keyword(keyword::AS, min_indent),
-                //                            space1_before(term(min_indent), min_indent)
-                //                        )
-                //                    ),
-                //                )
-                //                .parse(a, s)
-                /*
-                optional(
-                    // Inline alias notation, e.g. [ Nil, Cons a (List a) ] as List a
+            one_of!(
+                loc_wildcard(),
+                specialize(Type::TInParens, loc_type_in_parens(min_indent)),
+                loc!(specialize(Type::TRecord, record_type(min_indent))),
+                loc!(specialize(Type::TTagUnion, tag_union_type(min_indent))),
+                loc!(applied_type(min_indent)),
+                loc!(specialize(Type::TVariable, parse_type_variable))
+            ),
+            // Inline alias notation, e.g. [ Nil, Cons a (List a) ] as List a
+            one_of![
+                map!(
                     and!(
-                        space0_e(min_indent, Type::TSpace, Type::TIndentStart),
-                        skip_first!(
-                            crate::parser::keyword_e(keyword::AS, min_indent, Type::TEnd(0, 0)),
-                            space0_before_e(
-                                term_help(min_indent),
-                                min_indent,
-                                Type::TSpace,
-                                Type::TIndentStart
-                            )
+                        skip_second!(
+                            backtrackable(space0_e(min_indent, Type::TSpace, Type::TIndentEnd)),
+                            crate::parser::keyword_e(keyword::AS, Type::TEnd(0, 0))
+                        ),
+                        space0_before_e(
+                            term_help(min_indent),
+                            min_indent,
+                            Type::TSpace,
+                            Type::TAsIndentStart
                         )
                     ),
-                )
-                .parse(a, s)
-                */
-                Ok((NoProgress, None, s))
-            }
+                    Some
+                ),
+                |_, state| Ok((NoProgress, None, state))
+            ]
         ),
         |arena: &'a Bump,
          (loc_ann, opt_as): (
@@ -157,10 +152,10 @@ fn loc_applied_arg_help<'a>(
             skip_first!(
                 // Once we hit an "as", stop parsing args
                 // and roll back parsing of preceding spaces
-                not_e(
-                    crate::parser::keyword(keyword::AS, min_indent),
+                debug!(not_e(
+                    debug!(crate::parser::keyword(keyword::AS, min_indent)),
                     Type::TStart
-                ),
+                )),
                 one_of!(
                     loc_wildcard(),
                     specialize(Type::TInParens, loc_type_in_parens(min_indent)),

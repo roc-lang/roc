@@ -111,8 +111,8 @@ fn to_type_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::Type<'a>,
-    _start_row: Row,
-    _start_col: Col,
+    start_row: Row,
+    start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::Type;
 
@@ -125,6 +125,41 @@ fn to_type_report<'a>(
             to_tinparens_report(alloc, filename, &tinparens, *row, *col)
         }
         Type::TApply(tapply, row, col) => to_tapply_report(alloc, filename, &tapply, *row, *col),
+
+        Type::TIndentStart(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED TYPE".to_string(),
+            }
+        }
+
+        Type::TAsIndentStart(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing an inline type alias, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED INLINE ALIAS".to_string(),
+            }
+        }
+
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }

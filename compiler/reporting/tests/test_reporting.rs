@@ -4570,4 +4570,31 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn type_inline_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : I64 as 
+                f = 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED INLINE ALIAS ─────────────────────────────────────────────────────
+                
+                I just started parsing an inline type alias, but I got stuck here:
+                
+                1│  f : I64 as 
+                2│  f = 0
+                    ^
+                
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
 }

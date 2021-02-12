@@ -380,6 +380,8 @@ pub enum Type<'a> {
     TSpace(BadInputError, Row, Col),
     ///
     TIndentStart(Row, Col),
+    TIndentEnd(Row, Col),
+    TAsIndentStart(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -861,7 +863,10 @@ pub fn peek_utf8_char_at<'a>(
     }
 }
 
-pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, (), SyntaxError<'a>> {
+pub fn keyword<'a>(
+    keyword: &'static str,
+    _min_indent: u16,
+) -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena, state: State<'a>| {
         let initial_state = state.clone();
         // first parse the keyword characters
@@ -869,27 +874,23 @@ pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, ()
 
         // then we must have at least one space character
         // TODO this is potentially wasteful if there are a lot of spaces
-        match crate::blankspace::space1(min_indent).parse(arena, after_keyword_state.clone()) {
-            Err((_, fail, _)) => {
-                // this is not a keyword, maybe it's `whence` or `iffy`
-                // anyway, make no progress and return the initial state
-                // so we can try something else
-                Err((NoProgress, fail, initial_state))
-            }
-            Ok((_, _, _)) => {
+        match peek_utf8_char(&after_keyword_state) {
+            Ok((next, _width)) if next == ' ' || next == '#' || next == '\n' => {
                 // give back the state after parsing the keyword, but before the whitespace
                 // that way we can attach the whitespace to whatever follows
                 Ok((MadeProgress, (), after_keyword_state))
+            }
+            _ => {
+                // this is not a keyword, maybe it's `whence` or `iffy`
+                // anyway, make no progress and return the initial state
+                // so we can try something else
+                Err((NoProgress, SyntaxError::ConditionFailed, initial_state))
             }
         }
     }
 }
 
-pub fn keyword_e<'a, E>(
-    keyword: &'static str,
-    min_indent: u16,
-    if_error: E,
-) -> impl Parser<'a, (), E>
+pub fn keyword_e<'a, E>(keyword: &'static str, if_error: E) -> impl Parser<'a, (), E>
 where
     E: 'a + Clone,
 {
@@ -902,17 +903,17 @@ where
 
         // then we must have at least one space character
         // TODO this is potentially wasteful if there are a lot of spaces
-        match crate::blankspace::space1(min_indent).parse(arena, after_keyword_state.clone()) {
-            Err((_, _, _)) => {
+        match peek_utf8_char(&after_keyword_state) {
+            Ok((next, _width)) if next == ' ' || next == '#' || next == '\n' => {
+                // give back the state after parsing the keyword, but before the whitespace
+                // that way we can attach the whitespace to whatever follows
+                Ok((MadeProgress, (), after_keyword_state))
+            }
+            _ => {
                 // this is not a keyword, maybe it's `whence` or `iffy`
                 // anyway, make no progress and return the initial state
                 // so we can try something else
                 Err((NoProgress, if_error.clone(), initial_state))
-            }
-            Ok((_, _, _)) => {
-                // give back the state after parsing the keyword, but before the whitespace
-                // that way we can attach the whitespace to whatever follows
-                Ok((MadeProgress, (), after_keyword_state))
             }
         }
     }
