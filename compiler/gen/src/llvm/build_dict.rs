@@ -1,9 +1,10 @@
+use crate::debug_info_init;
 use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout,
     set_name, Env, Scope,
 };
-use crate::llvm::convert::{basic_type_from_layout, collection};
-use inkwell::types::{BasicType, BasicTypeEnum};
+use crate::llvm::convert::basic_type_from_layout;
+use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
@@ -37,29 +38,6 @@ impl Alignment {
             }
         }
     }
-}
-
-macro_rules! debug_info_init {
-    ($env:expr, $function_value:expr) => {{
-        use inkwell::debug_info::AsDIScope;
-
-        let func_scope = $function_value.get_subprogram().unwrap();
-        let lexical_block = $env.dibuilder.create_lexical_block(
-            /* scope */ func_scope.as_debug_info_scope(),
-            /* file */ $env.compile_unit.get_file(),
-            /* line_no */ 0,
-            /* column_no */ 0,
-        );
-
-        let loc = $env.dibuilder.create_debug_location(
-            $env.context,
-            /* line */ 0,
-            /* column */ 0,
-            /* current_scope */ lexical_block.as_debug_info_scope(),
-            /* inlined_at */ None,
-        );
-        $env.builder.set_current_debug_location(&$env.context, loc);
-    }};
 }
 
 pub fn dict_len<'a, 'ctx, 'env>(
@@ -111,7 +89,7 @@ pub fn dict_empty<'a, 'ctx, 'env>(
 pub fn dict_insert<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    scope: &Scope<'a, 'ctx>,
+    _scope: &Scope<'a, 'ctx>,
     dict: BasicValueEnum<'ctx>,
     key: BasicValueEnum<'ctx>,
     key_layout: &Layout<'a>,
@@ -191,10 +169,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-
             let seed_type = env.context.i64_type();
-
             let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
             let function_value = crate::llvm::refcounting::build_header_help(
@@ -258,8 +233,6 @@ fn build_eq_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-
             let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
             let function_value = crate::llvm::refcounting::build_header_help(
@@ -304,8 +277,6 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-
             let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
             let function_value = crate::llvm::refcounting::build_header_help(
@@ -331,18 +302,6 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
         .set_current_debug_location(env.context, di_location);
 
     function_value
-}
-
-fn dict_symbol_to_i128<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    symbol: Symbol,
-) -> IntValue<'ctx> {
-    let dict = load_symbol(scope, &symbol);
-
-    let i128_type = env.context.i128_type().into();
-
-    complex_bitcast(&env.builder, dict, i128_type, "dict_to_i128").into_int_value()
 }
 
 fn dict_symbol_to_zig_dict<'a, 'ctx, 'env>(

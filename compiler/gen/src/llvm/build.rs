@@ -56,6 +56,30 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
+#[macro_export]
+macro_rules! debug_info_init {
+    ($env:expr, $function_value:expr) => {{
+        use inkwell::debug_info::AsDIScope;
+
+        let func_scope = $function_value.get_subprogram().unwrap();
+        let lexical_block = $env.dibuilder.create_lexical_block(
+            /* scope */ func_scope.as_debug_info_scope(),
+            /* file */ $env.compile_unit.get_file(),
+            /* line_no */ 0,
+            /* column_no */ 0,
+        );
+
+        let loc = $env.dibuilder.create_debug_location(
+            $env.context,
+            /* line */ 0,
+            /* column */ 0,
+            /* current_scope */ lexical_block.as_debug_info_scope(),
+            /* inlined_at */ None,
+        );
+        $env.builder.set_current_debug_location(&$env.context, loc);
+    }};
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
     Normal,
@@ -2656,22 +2680,7 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = c_function.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        env.context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(env.context, loc);
+    debug_info_init!(env, c_function);
 
     // drop the final argument, which is the pointer we write the result into
     let args = c_function.get_params();
@@ -2713,22 +2722,7 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = size_function.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        env.context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(env.context, loc);
+    debug_info_init!(env, size_function);
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
@@ -2940,22 +2934,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let basic_block = context.append_basic_block(wrapper_function, "entry");
     builder.position_at_end(basic_block);
 
-    let func_scope = wrapper_function.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        env.context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(env.context, loc);
+    debug_info_init!(env, wrapper_function);
 
     let result = invoke_and_catch(
         env,
@@ -3355,23 +3334,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-
-    builder.set_current_debug_location(&context, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {

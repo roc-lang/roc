@@ -1,3 +1,4 @@
+use crate::debug_info_init;
 use crate::llvm::build::{
     cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
     LLVM_SADD_WITH_OVERFLOW_I64,
@@ -8,7 +9,6 @@ use crate::llvm::convert::{
 };
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
-use inkwell::debug_info::AsDIScope;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -192,23 +192,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let entry = ctx.append_basic_block(parent, "entry");
         builder.position_at_end(entry);
 
-        let subprogram = parent.get_subprogram().unwrap();
-        let lexical_block = env.dibuilder.create_lexical_block(
-            /* scope */ subprogram.as_debug_info_scope(),
-            /* file */ env.compile_unit.get_file(),
-            /* line_no */ 0,
-            /* column_no */ 0,
-        );
-
-        let loc = env.dibuilder.create_debug_location(
-            &ctx,
-            /* line */ 0,
-            /* column */ 0,
-            /* current_scope */ lexical_block.as_debug_info_scope(),
-            /* inlined_at */ None,
-        );
-
-        env.builder.set_current_debug_location(&ctx, loc);
+        debug_info_init!(env, parent);
 
         let refcount_ptr = {
             let raw_refcount_ptr = parent.get_nth_param(0).unwrap();
@@ -576,22 +560,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        ctx,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&ctx, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
@@ -683,22 +652,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        ctx,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&ctx, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
@@ -869,22 +823,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&context, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
@@ -939,8 +878,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
-
-    builder.set_current_debug_location(&context, loc);
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
@@ -1174,22 +1111,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&context, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
