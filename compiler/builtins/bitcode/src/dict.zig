@@ -129,6 +129,17 @@ pub fn dictLen(dict: RocDict) callconv(.C) usize {
     return dict.dict_entries_len;
 }
 
+// Dict.insert : Dict k v, k, v -> Dict k v
+const Opaque = ?[*]u8;
+const HashFn = fn (u64, ?[*]u8) callconv(.C) u64;
+const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
+const Dec = fn (?[*]u8) callconv(.C) void;
+pub fn dictInsert(dict: RocDict, alignment: usize, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash: HashFn, is_eq: EqFn, dec_value: Dec, result: *RocDict) callconv(.C) void {
+    result.* = RocDict.empty();
+
+    return;
+}
+
 test "RocDict.init() contains nothing" {
     const key_size = @sizeOf(usize);
     const value_size = @sizeOf(usize);

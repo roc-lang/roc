@@ -39,3 +39,4 @@ pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
 pub const DICT_LEN: &str = "roc_builtins.dict.len";
 pub const DICT_EMPTY: &str = "roc_builtins.dict.empty";
+pub const DICT_INSERT: &str = "roc_builtins.dict.insert";

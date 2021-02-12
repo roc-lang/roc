@@ -4004,7 +4004,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict, _) = load_symbol_and_layout(scope, &args[0]);
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
             let (value, value_layout) = load_symbol_and_layout(scope, &args[2]);
-            dict_insert(env, scope, dict, key, key_layout, value, value_layout)
+            dict_insert(
+                env,
+                layout_ids,
+                scope,
+                dict,
+                key,
+                key_layout,
+                value,
+                value_layout,
+            )
         }
     }
 }

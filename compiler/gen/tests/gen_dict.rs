@@ -25,4 +25,18 @@ mod gen_dict {
             usize
         );
     }
+
+    #[test]
+    fn dict_insert_empty() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Dict.insert Dict.empty 42 32
+                    |> Dict.len
+                "#
+            ),
+            1,
+            usize
+        );
+    }
 }

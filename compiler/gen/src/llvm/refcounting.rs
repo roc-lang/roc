@@ -394,8 +394,10 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
                 // TODO decrement all values
             }
 
-            todo!();
+            // todo!();
+            dbg!("DOING NOTHING WITH REFCOUNTING");
         }
+
         Str => {
             let wrapper_struct = value.into_struct_value();
             modify_refcount_str(env, layout_ids, mode, layout, wrapper_struct);
