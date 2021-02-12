@@ -4,8 +4,9 @@ use crate::llvm::build::{
     set_name, Env, Scope,
 };
 use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout};
 use inkwell::types::BasicType;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
@@ -86,6 +87,7 @@ pub fn dict_empty<'a, 'ctx, 'env>(
     zig_dict_to_struct(env, result).into()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn dict_insert<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -125,7 +127,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
-    let dec_value_fn = build_rc_wrapper(env, layout_ids, key_layout);
+    let dec_value_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Dec);
 
     call_void_bitcode_fn(
         env,
@@ -261,10 +263,17 @@ fn build_eq_wrapper<'a, 'ctx, 'env>(
     function_value
 }
 
+#[allow(dead_code)]
+enum RCOperation {
+    Inc,
+    Dec,
+}
+
 fn build_rc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
+    rc_operation: RCOperation,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -290,6 +299,30 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             env.builder.position_at_end(entry);
 
             debug_info_init!(env, function_value);
+
+            let mut it = function_value.get_param_iter();
+            let value_ptr = it.next().unwrap().into_pointer_value();
+
+            set_name(value_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
+
+            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic);
+
+            let value_cast = env
+                .builder
+                .build_bitcast(value_ptr, value_type, "load_opaque")
+                .into_pointer_value();
+
+            let value = env.builder.build_load(value_cast, "load_opaque");
+
+            match rc_operation {
+                RCOperation::Inc => {
+                    increment_refcount_layout(env, function_value, layout_ids, 1, value, layout);
+                }
+                RCOperation::Dec => {
+                    decrement_refcount_layout(env, function_value, layout_ids, value, layout);
+                }
+            }
 
             env.builder.build_return(None);
 
