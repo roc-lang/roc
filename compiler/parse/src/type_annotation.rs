@@ -1,4 +1,4 @@
-use crate::ast::{AssignedField, CommentOrNewline, Tag, TypeAnnotation};
+use crate::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_e, space0_before_e, space0_e};
 use crate::ident::join_module_parts;
 use crate::keyword;
@@ -83,7 +83,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Typ
         |arena: &'a Bump,
          (loc_ann, opt_as): (
             Located<TypeAnnotation<'a>>,
-            Option<(&'a [CommentOrNewline<'a>], Located<TypeAnnotation<'a>>)>
+            Option<(&'a [_], Located<TypeAnnotation<'a>>)>
         )| {
             match opt_as {
                 Some((spaces, loc_as)) => {

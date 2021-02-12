@@ -816,7 +816,7 @@ pub fn peek_utf8_char<'a>(state: &State) -> Result<(char, usize), SyntaxError<'a
 
 /// A single UTF-8-encoded char. This will both parse *and* validate that the
 /// char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char_e<'a, EOF, TE, E>(
+pub fn peek_utf8_char_e<EOF, TE, E>(
     state: &State,
     end_of_file: EOF,
     to_error: TE,
