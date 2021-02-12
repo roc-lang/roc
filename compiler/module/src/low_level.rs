@@ -28,6 +28,9 @@ pub enum LowLevel {
     ListWalk,
     ListWalkBackwards,
     ListSum,
+    DictSize,
+    DictEmpty,
+    DictInsert,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
@@ -66,4 +69,5 @@ pub enum LowLevel {
     And,
     Or,
     Not,
+    Hash,
 }

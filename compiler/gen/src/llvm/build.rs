@@ -1,3 +1,5 @@
+use crate::llvm::build_dict::{dict_empty, dict_insert, dict_len};
+use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
@@ -7,6 +9,7 @@ use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_int, str_join_with,
     str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
 };
+
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
@@ -3995,6 +3998,31 @@ fn run_low_level<'a, 'ctx, 'env>(
                 clone,
                 empty,
             )
+        }
+        Hash => {
+            debug_assert_eq!(args.len(), 2);
+            let seed = load_symbol(scope, &args[0]);
+            let (value, layout) = load_symbol_and_layout(scope, &args[1]);
+
+            debug_assert!(seed.is_int_value());
+
+            generic_hash(env, layout_ids, seed.into_int_value(), value, layout).into()
+        }
+        DictSize => {
+            debug_assert_eq!(args.len(), 1);
+            dict_len(env, scope, args[0])
+        }
+        DictEmpty => {
+            debug_assert_eq!(args.len(), 0);
+            dict_empty(env, scope)
+        }
+        DictInsert => {
+            debug_assert_eq!(args.len(), 3);
+
+            let (dict, _) = load_symbol_and_layout(scope, &args[0]);
+            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (value, value_layout) = load_symbol_and_layout(scope, &args[2]);
+            dict_insert(env, scope, dict, key, key_layout, value, value_layout)
         }
     }
 }

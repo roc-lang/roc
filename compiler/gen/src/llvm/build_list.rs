@@ -136,7 +136,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     )
 }
 
-/// List.prepend List elem, elem -> List elem
+/// List.prepend : List elem, elem -> List elem
 pub fn list_prepend<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     inplace: InPlace,

@@ -600,5 +600,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         }
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
         StrFromInt => arena.alloc_slice_copy(&[irrelevant]),
+        Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        DictSize => arena.alloc_slice_copy(&[borrowed]),
+        DictEmpty => &[],
+        DictInsert => arena.alloc_slice_copy(&[owned, owned, owned]),
     }
 }
