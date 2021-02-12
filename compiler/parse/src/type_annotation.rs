@@ -19,7 +19,7 @@ use roc_region::all::{Located, Region};
 pub fn located<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
-    specialize(|x, _, _| SyntaxError::Type(x), expression_e(min_indent))
+    specialize(|x, _, _| SyntaxError::Type(x), expression(min_indent))
 }
 
 #[inline(always)]
@@ -190,7 +190,7 @@ fn loc_type_in_parens<'a>(
     between!(
         word1(b'(', TInParens::Open),
         space0_around_e(
-            move |arena, state| specialize_ref(TInParens::Type, expression_e(min_indent))
+            move |arena, state| specialize_ref(TInParens::Type, expression(min_indent))
                 .parse(arena, state),
             min_indent,
             TInParens::Space,
@@ -366,55 +366,7 @@ fn loc_applied_args_e<'a>(
     zero_or_more!(loc_applied_arg_help(min_indent))
 }
 
-fn expression<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        let (p1, first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;
-        let (p2, rest, state) = zero_or_more!(skip_first!(
-            ascii_char(b','),
-            space0_around(term(min_indent), min_indent)
-        ))
-        .parse(arena, state)?;
-
-        // TODO this space0 is dropped, so newlines just before the function arrow when there
-        // is only one argument are not seen by the formatter. Can we do better?
-        let (p3, is_function, state) =
-            optional(skip_first!(space0(min_indent), ascii_string("->"))).parse(arena, state)?;
-
-        if is_function.is_some() {
-            let (p4, return_type, state) =
-                space0_before(term(min_indent), min_indent).parse(arena, state)?;
-
-            // prepare arguments
-            let mut arguments = Vec::with_capacity_in(rest.len() + 1, &arena);
-            arguments.push(first);
-            arguments.extend(rest);
-            let output = arena.alloc(arguments);
-
-            let result = Located {
-                region: return_type.region,
-                value: TypeAnnotation::Function(output, arena.alloc(return_type)),
-            };
-            let progress = p1.or(p2).or(p3).or(p4);
-            Ok((progress, result, state))
-        } else {
-            let progress = p1.or(p2).or(p3);
-            // if there is no function arrow, there cannot be more than 1 "argument"
-            if rest.is_empty() {
-                Ok((progress, first, state))
-            } else {
-                // e.g. `Int,Int` without an arrow and return type
-                let msg =
-                    "TODO: Decide the correct error to return for 'Invalid function signature'"
-                        .to_string();
-                Err((progress, SyntaxError::NotYetImplemented(msg), state))
-            }
-        }
-    }
-}
-
-fn expression_e<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
+fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before_e(
             term_help(min_indent),
