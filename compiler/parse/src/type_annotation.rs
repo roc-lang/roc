@@ -7,7 +7,7 @@ use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
     allocated, ascii_char, ascii_string, backtrackable, not_e, optional, peek_utf8_char_e,
-    specialize, specialize_ref, word1, BadInputError, Col, Either, ParseResult, Parser,
+    specialize, specialize_ref, word1, word2, BadInputError, Col, Either, ParseResult, Parser,
     Progress::{self, *},
     Row, State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
@@ -19,7 +19,7 @@ use roc_region::all::{Located, Region};
 pub fn located<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
-    expression(min_indent)
+    specialize(|x, _, _| SyntaxError::Type(x), expression_e(min_indent))
 }
 
 #[inline(always)]
@@ -190,7 +190,7 @@ fn loc_type_in_parens<'a>(
     between!(
         word1(b'(', TInParens::Open),
         space0_around_e(
-            move |arena, state| specialize_ref(TInParens::Syntax, expression(min_indent))
+            move |arena, state| specialize_ref(TInParens::Type, expression_e(min_indent))
                 .parse(arena, state),
             min_indent,
             TInParens::Space,
@@ -409,6 +409,69 @@ fn expression<'a>(
                     "TODO: Decide the correct error to return for 'Invalid function signature'"
                         .to_string();
                 Err((progress, SyntaxError::NotYetImplemented(msg), state))
+            }
+        }
+    }
+}
+
+fn expression_e<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
+    move |arena, state: State<'a>| {
+        let (p1, first, state) = space0_before_e(
+            term_help(min_indent),
+            min_indent,
+            Type::TSpace,
+            Type::TIndentStart,
+        )
+        .parse(arena, state)?;
+
+        let (p2, rest, state) = zero_or_more!(skip_first!(
+            word1(b',', Type::TStart),
+            space0_around_e(
+                term_help(min_indent),
+                min_indent,
+                Type::TSpace,
+                Type::TIndentStart
+            )
+        ))
+        .parse(arena, state)?;
+
+        // TODO this space0 is dropped, so newlines just before the function arrow when there
+        // is only one argument are not seen by the formatter. Can we do better?
+        let (p3, is_function, state) = optional(skip_first!(
+            space0_e(min_indent, Type::TSpace, Type::TIndentStart),
+            word2(b'-', b'>', Type::TStart)
+        ))
+        .parse(arena, state)?;
+
+        if is_function.is_some() {
+            let (p4, return_type, state) = space0_before_e(
+                term_help(min_indent),
+                min_indent,
+                Type::TSpace,
+                Type::TIndentStart,
+            )
+            .parse(arena, state)?;
+
+            // prepare arguments
+            let mut arguments = Vec::with_capacity_in(rest.len() + 1, &arena);
+            arguments.push(first);
+            arguments.extend(rest);
+            let output = arena.alloc(arguments);
+
+            let result = Located {
+                region: return_type.region,
+                value: TypeAnnotation::Function(output, arena.alloc(return_type)),
+            };
+            let progress = p1.or(p2).or(p3).or(p4);
+            Ok((progress, result, state))
+        } else {
+            let progress = p1.or(p2).or(p3);
+            // if there is no function arrow, there cannot be more than 1 "argument"
+            if rest.is_empty() {
+                Ok((progress, first, state))
+            } else {
+                // e.g. `Int,Int` without an arrow and return type
+                panic!()
             }
         }
     }

@@ -1469,6 +1469,33 @@ where
     }
 }
 
+pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    debug_assert_ne!(word_1, b'\n');
+    debug_assert_ne!(word_2, b'\n');
+
+    let needle = [word_1, word_2];
+
+    move |_arena: &'a Bump, state: State<'a>| {
+        if state.bytes.starts_with(&needle) {
+            Ok((
+                MadeProgress,
+                (),
+                State {
+                    bytes: &state.bytes[2..],
+                    column: state.column + 2,
+                    ..state
+                },
+            ))
+        } else {
+            Err((NoProgress, to_error(state.line, state.column), state))
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn in_context<'a, AddContext, P1, P2, Start, A, X, Y>(
     add_context: AddContext,
