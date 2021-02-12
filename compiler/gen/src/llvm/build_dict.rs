@@ -336,35 +336,13 @@ fn zig_dict_to_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     zig_dict: StructValue<'ctx>,
 ) -> StructValue<'ctx> {
-    let builder = env.builder;
-
-    // get the RocStr type defined by zig
-    let zig_str_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
-    let ret_type = BasicTypeEnum::StructType(collection(env.context, env.ptr_bytes));
-
-    // a roundabout way of casting (LLVM does not accept a standard bitcast)
-    let allocation = builder.build_alloca(zig_str_type, "zig_result");
-
-    builder.build_store(allocation, zig_dict);
-
-    let ptr3 = builder
-        .build_bitcast(
-            allocation,
-            env.context.i128_type().ptr_type(AddressSpace::Generic),
-            "cast",
-        )
-        .into_pointer_value();
-
-    let ptr4 = builder
-        .build_bitcast(
-            ptr3,
-            ret_type.into_struct_type().ptr_type(AddressSpace::Generic),
-            "cast",
-        )
-        .into_pointer_value();
-
-    builder.build_load(ptr4, "load").into_struct_value()
+    complex_bitcast(
+        env.builder,
+        zig_dict.into(),
+        crate::llvm::convert::dict(env.context, env.ptr_bytes).into(),
+        "to_zig_dict",
+    )
+    .into_struct_value()
 }
 
 fn struct_to_zig_dict<'a, 'ctx, 'env>(

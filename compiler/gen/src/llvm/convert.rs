@@ -185,7 +185,7 @@ pub fn basic_type_from_builtin<'ctx>(
         Float64 => context.f64_type().as_basic_type_enum(),
         Float32 => context.f32_type().as_basic_type_enum(),
         Float16 => context.f16_type().as_basic_type_enum(),
-        Dict(_, _) | EmptyDict => collection(context, ptr_bytes).into(),
+        Dict(_, _) | EmptyDict => dict(context, ptr_bytes).into(),
         Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
         List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
         EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
@@ -258,6 +258,16 @@ pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
     let u8_ptr = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
     ctx.struct_type(&[u8_ptr.into(), usize_type.into()], false)
+}
+
+pub fn dict(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
+    let usize_type = ptr_int(ctx, ptr_bytes);
+    let u8_ptr = ctx.i8_type().ptr_type(AddressSpace::Generic);
+
+    ctx.struct_type(
+        &[u8_ptr.into(), usize_type.into(), usize_type.into()],
+        false,
+    )
 }
 
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
