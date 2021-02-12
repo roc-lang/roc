@@ -368,7 +368,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
         '\u{1}' // Ctrl + A
         | '\u{3}' // Ctrl + C
         | '\u{16}' // Ctrl + V
-        | '\u{30}' // Ctrl + X
+        | '\u{18}' // Ctrl + X
         | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
         | '\u{f0000}'..='\u{ffffd}' // ^
         | '\u{100000}'..='\u{10fffd}' // ^

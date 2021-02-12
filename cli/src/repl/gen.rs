@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
+use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
@@ -51,6 +52,7 @@ pub fn gen_and_eval<'a>(
         src_dir,
         exposed_types,
         ptr_bytes,
+        builtin_defs_map,
     );
 
     let mut loaded = match loaded {
@@ -125,6 +127,9 @@ pub fn gen_and_eval<'a>(
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
+
+        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
         let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
         let builder = context.create_builder();
 
@@ -156,8 +161,6 @@ pub fn gen_and_eval<'a>(
                 });
             }
         };
-
-        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
         let module = arena.alloc(module);
         let (module_pass, function_pass) =

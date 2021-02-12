@@ -1,6 +1,6 @@
 use crate::error::EdResult;
 use crate::mvc::app_model::AppModel;
-use crate::mvc::app_update::{handle_copy, handle_paste, pass_keydown_to_focused};
+use crate::mvc::app_update::{handle_copy, handle_cut, handle_paste, pass_keydown_to_focused};
 use winit::event::VirtualKeyCode::*;
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
@@ -22,11 +22,7 @@ pub fn handle_keydown(
 
         Copy => handle_copy(app_model)?,
         Paste => handle_paste(app_model)?,
-        Cut => {
-            //handle_cut(app_model)?
-            todo!("cut");
-        }
-
+        Cut => handle_cut(app_model)?,
         C => {
             if modifiers.ctrl() {
                 handle_copy(app_model)?
@@ -39,8 +35,7 @@ pub fn handle_keydown(
         }
         X => {
             if modifiers.ctrl() {
-                //handle_cut(app_model)?
-                todo!("cut");
+                handle_cut(app_model)?
             }
         }
 
