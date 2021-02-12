@@ -332,6 +332,83 @@ pub fn handle_select_all(ed_model: &mut EdModel) {
     }
 }
 
+impl EdModel {
+    pub fn move_caret_w_mods(&mut self, new_pos: Position, mods: &ModifiersState) {
+        let caret_pos = self.caret_pos;
+
+        // one does not simply move the caret
+        if new_pos != caret_pos {
+            if mods.shift() {
+                if let Some(selection) = self.selection_opt {
+                    if new_pos < selection.start_pos {
+                        if caret_pos > selection.start_pos {
+                            self.set_selection(
+                                new_pos,
+                                selection.start_pos
+                            )
+                        } else {
+                            self.set_selection(
+                                new_pos,
+                                selection.end_pos
+                            )
+                        }
+                    } else if new_pos > selection.end_pos {
+                        if caret_pos < selection.end_pos {
+                            self.set_selection(
+                                selection.end_pos,
+                                new_pos
+                            )
+                        } else {
+                            self.set_selection(
+                                selection.start_pos,
+                                new_pos
+                            )
+                        }
+                    } else if new_pos > caret_pos {
+                        self.set_selection(
+                            new_pos,
+                            selection.end_pos
+                        )
+                    } else if new_pos < caret_pos {
+                        self.set_selection(
+                            selection.start_pos,
+                            new_pos
+                        )
+                    }
+                } else if new_pos < self.caret_pos {
+                        self.set_selection(
+                            new_pos,
+                            caret_pos
+                        ) 
+                } else {
+                    self.set_selection(
+                        caret_pos,
+                        new_pos
+                    ) 
+                }
+            } else {
+                self.selection_opt = None;
+            }
+
+            self.caret_pos = new_pos;
+        }
+    }
+
+    pub fn set_selection(&mut self, start_pos: Position, end_pos: Position) {
+        self.selection_opt =
+            if start_pos != end_pos {
+                Some(
+                    RawSelection {
+                        start_pos,
+                        end_pos
+                    }
+                )
+            } else {
+                None
+            }
+    }
+}
+
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<()> {
     let old_caret_pos = ed_model.caret_pos;
 
@@ -417,6 +494,53 @@ pub fn handle_key_down(
             if modifiers.ctrl() {
                 handle_select_all(ed_model)
             }
+        }
+        Home => {
+            let curr_line_nr = ed_model.caret_pos.line;
+            // TODO no unwrap
+            let curr_line_str = ed_model.text_buf.line(curr_line_nr).unwrap();
+            let line_char_iter = curr_line_str.chars();
+
+            let mut first_no_space_char_col = 0;
+            let mut non_space_found = false;
+
+            for c in line_char_iter {
+                if !c.is_whitespace() {
+                    non_space_found = true;
+                    break; 
+                } else {
+                    first_no_space_char_col += 1;
+                }
+            }
+
+            if !non_space_found {
+                first_no_space_char_col = 0;
+            }
+
+            ed_model.move_caret_w_mods(
+                Position {
+                    line: ed_model.caret_pos.line,
+                    column: first_no_space_char_col
+                },
+                modifiers
+            )
+        }
+        End => {
+            let curr_line = ed_model.caret_pos.line;
+            // TODO no unwrap
+            let new_col = 
+                max(
+                        0,
+                        ed_model.text_buf.line_len(curr_line).unwrap() - 1
+                    );
+
+            let new_pos =
+                Position {
+                    line: curr_line,
+                    column: new_col
+                };
+
+            ed_model.move_caret_w_mods(new_pos, modifiers);
         }
         _ => {}
     }
@@ -622,4 +746,8 @@ pub mod test_ed_update {
 
         Ok(())
     }
+
+    // TODO hometest
+
+    // TODO endtest
 }

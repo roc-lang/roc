@@ -53,6 +53,7 @@ mod keyboard_input;
 pub mod lang;
 mod mvc;
 //pub mod mvc; // for benchmarking
+mod ui;
 mod resources;
 mod selection;
 mod text_buffer;
