@@ -10,6 +10,35 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
+#[repr(u8)]
+enum Alignment {
+    Align16KeyFirst = 0,
+    Align16ValueFirst = 1,
+    Align8KeyFirst = 2,
+    Align8ValueFirst = 3,
+}
+
+impl Alignment {
+    fn from_key_value_layout(key: &Layout, value: &Layout, ptr_bytes: u32) -> Alignment {
+        let key_align = key.alignment_bytes(ptr_bytes);
+        let value_align = value.alignment_bytes(ptr_bytes);
+
+        if key_align >= value_align {
+            match key_align.max(value_align) {
+                8 => Alignment::Align8KeyFirst,
+                16 => Alignment::Align16KeyFirst,
+                _ => unreachable!(),
+            }
+        } else {
+            match key_align.max(value_align) {
+                8 => Alignment::Align8ValueFirst,
+                16 => Alignment::Align16ValueFirst,
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
 macro_rules! debug_info_init {
     ($env:expr, $function_value:expr) => {{
         use inkwell::debug_info::AsDIScope;
@@ -113,11 +142,8 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 
     let result_ptr = builder.build_alloca(zig_dict_type, "result_ptr");
 
-    let alignment = key_layout
-        .alignment_bytes(env.ptr_bytes)
-        .max(value_layout.alignment_bytes(env.ptr_bytes));
-
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
