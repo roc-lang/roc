@@ -152,10 +152,10 @@ fn loc_applied_arg_help<'a>(
             skip_first!(
                 // Once we hit an "as", stop parsing args
                 // and roll back parsing of preceding spaces
-                debug!(not_e(
-                    debug!(crate::parser::keyword(keyword::AS, min_indent)),
+                not_e(
+                    crate::parser::keyword(keyword::AS, min_indent),
                     Type::TStart
-                )),
+                ),
                 one_of!(
                     loc_wildcard(),
                     specialize(Type::TInParens, loc_type_in_parens(min_indent)),
@@ -166,9 +166,13 @@ fn loc_applied_arg_help<'a>(
                 )
             )
         ),
-        |arena: &'a Bump, (spaces, argument): (_, Located<TypeAnnotation<'a>>)| {
-            let Located { region, value } = argument;
-            arena.alloc(value).with_spaces_before(spaces, region)
+        |arena: &'a Bump, (spaces, argument): (&'a [_], Located<TypeAnnotation<'a>>)| {
+            if spaces.is_empty() {
+                argument
+            } else {
+                let Located { region, value } = argument;
+                arena.alloc(value).with_spaces_before(spaces, region)
+            }
         }
     )
 }
