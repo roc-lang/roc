@@ -906,6 +906,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
+    //  : Attr * (Dict k v) -> Attr * Nat
+    add_type(Symbol::DICT_LEN, {
+        let_tvars! { star1, k , v, star2, int };
+
+        unique_function(vec![dict_type(star1, k, v)], int_type(star2, int))
+    });
+
     // empty : Attr * (Dict k v)
     add_type(Symbol::DICT_EMPTY, {
         let_tvars! { star, k , v };

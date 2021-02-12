@@ -4,7 +4,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
     bool_type, dict_type, float_type, int_type, list_type, nat_type, num_type, ordering_type,
-    result_type, set_type, str_type,
+    result_type, set_type, str_type, u64_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -729,7 +729,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
-    // empty : Dict k v
+    // Dict.hashTestOnly : Nat, v -> Nat
+    add_type(
+        Symbol::DICT_TEST_HASH,
+        top_level_function(vec![u64_type(), flex(TVAR2)], Box::new(nat_type())),
+    );
+
+    // len : Dict * * -> Nat
+    add_type(
+        Symbol::DICT_LEN,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2))],
+            Box::new(nat_type()),
+        ),
+    );
+
+    // empty : Dict * *
     add_type(Symbol::DICT_EMPTY, dict_type(flex(TVAR1), flex(TVAR2)));
 
     // singleton : k, v -> Dict k v

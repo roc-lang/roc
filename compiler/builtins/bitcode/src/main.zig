@@ -2,6 +2,17 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// Dict Module
+const dict = @import("dict.zig");
+const hash = @import("hash.zig");
+
+comptime {
+    exportDictFn(dict.dictLen, "len");
+    exportDictFn(dict.dictEmpty, "empty");
+    exportDictFn(hash.wyhash, "hash");
+    exportDictFn(hash.wyhash_rocstr, "hash_str");
+}
+
 // Num Module
 const num = @import("num.zig");
 comptime {
@@ -36,6 +47,9 @@ fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "str." ++ func_name);
+}
+fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "dict." ++ func_name);
 }
 
 // Run all tests in imported modules

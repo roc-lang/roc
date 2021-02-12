@@ -816,6 +816,7 @@ dependencies = [
  "pretty_assertions",
  "pulldown-cmark",
  "roc_builtins",
+ "roc_can",
  "roc_collections",
  "roc_load",
  "serde",
