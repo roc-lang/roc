@@ -1,7 +1,11 @@
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
+use roc_can::builtins::{builtin_defs_map, dict_hash_test_only};
+use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::symbol::Symbol;
+use roc_types::subs::VarStore;
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -14,6 +18,15 @@ fn promote_expr_to_module(src: &str) -> String {
     }
 
     buffer
+}
+pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
+    match builtin_defs_map(symbol, var_store) {
+        Some(def) => Some(def),
+        None => match symbol {
+            Symbol::DICT_TEST_HASH => Some(dict_hash_test_only(symbol, var_store)),
+            _ => None,
+        },
+    }
 }
 
 pub fn helper<'a>(
@@ -53,6 +66,7 @@ pub fn helper<'a>(
         src_dir,
         exposed_types,
         ptr_bytes,
+        test_builtin_defs,
     );
 
     let mut loaded = loaded.expect("failed to load module");

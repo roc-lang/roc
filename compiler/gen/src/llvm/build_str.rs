@@ -3,8 +3,9 @@ use crate::llvm::build::{
 };
 use crate::llvm::build_list::{allocate_list, store_list};
 use crate::llvm::convert::collection;
+use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, IntValue, StructValue};
+use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
@@ -68,7 +69,7 @@ fn str_symbol_to_i128<'a, 'ctx, 'env>(
     complex_bitcast(&env.builder, string, i128_type, "str_to_i128").into_int_value()
 }
 
-fn str_to_i128<'a, 'ctx, 'env>(
+pub fn str_to_i128<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: BasicValueEnum<'ctx>,
 ) -> IntValue<'ctx> {
@@ -123,6 +124,24 @@ fn zig_str_to_struct<'a, 'ctx, 'env>(
         .into_pointer_value();
 
     builder.build_load(ptr4, "load").into_struct_value()
+}
+
+pub fn destructure<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+    let length = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
+        .unwrap()
+        .into_int_value();
+
+    // a `*mut u8` pointer
+    let generic_ptr = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    (generic_ptr, length)
 }
 
 /// Str.concat : Str, Str -> Str

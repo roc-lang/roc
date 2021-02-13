@@ -25,13 +25,26 @@ pub fn init_model(file_path: &Path) -> EdResult<EdModel> {
     })
 }
 
-pub fn get_selected_str(ed_model: &EdModel) -> EdResult<Option<&str>> {
-    if let Some(curr_selection) = ed_model.selection_opt {
-        let selected_str = ed_model.text_buf.get_selection(curr_selection)?;
+impl EdModel {
+    pub fn get_selected_str(&self) -> EdResult<Option<&str>> {
+        if let Some(curr_selection) = self.selection_opt {
+            let selected_str = self.text_buf.get_selection(curr_selection)?;
 
-        Ok(Some(selected_str))
-    } else {
-        Ok(None)
+            Ok(Some(selected_str))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn del_selection(&mut self) -> EdResult<()> {
+        if let Some(selection) = self.selection_opt {
+            self.text_buf.del_selection(selection)?;
+
+            self.caret_pos = selection.start_pos;
+        }
+        self.selection_opt = None;
+
+        Ok(())
     }
 }
 
