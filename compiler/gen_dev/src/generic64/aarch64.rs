@@ -267,7 +267,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             );
         }
     }
-
     #[inline(always)]
     fn add_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
@@ -277,7 +276,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         add_reg64_reg64_reg64(buf, dst, src1, src2);
     }
-
     #[inline(always)]
     fn add_freg64_freg64_freg64(
         _buf: &mut Vec<'_, u8>,
@@ -294,6 +292,20 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
+        unimplemented!("jump instructions not yet implemented for AArch64");
+    }
+    #[inline(always)]
+    fn jne_reg64_imm64_imm32(
+        _buf: &mut Vec<'_, u8>,
+        _reg: AArch64GeneralReg,
+        _imm: u64,
+        _offset: i32,
+    ) -> usize {
+        unimplemented!("jump not equal instructions not yet implemented for AArch64");
+    }
+
+    #[inline(always)]
     fn mov_freg64_imm64(
         _buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
@@ -302,7 +314,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         unimplemented!("loading float literal not yet implemented for AArch64");
     }
-
     #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm: i64) {
         let mut remaining = imm as u64;
@@ -320,12 +331,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             movk_reg64_imm16(buf, dst, remaining as u16, 3);
         }
     }
-
     #[inline(always)]
     fn mov_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
         unimplemented!("moving data between float registers not yet implemented for AArch64");
     }
-
     #[inline(always)]
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
         mov_reg64_reg64(buf, dst, src);
@@ -414,7 +423,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             );
         }
     }
-
     #[inline(always)]
     fn sub_reg64_reg64_reg64(
         _buf: &mut Vec<'_, u8>,
@@ -434,6 +442,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         unimplemented!("registers equality not implemented yet for AArch64");
     }
+
     #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret_reg64(buf, AArch64GeneralReg::LR)
