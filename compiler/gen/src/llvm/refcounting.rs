@@ -374,25 +374,16 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
             todo!();
         }
         Dict(key_layout, value_layout) => {
-            if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
-                crate::llvm::build_dict::dict_elements_rc(
-                    env,
-                    layout_ids,
-                    value,
-                    key_layout,
-                    value_layout,
-                    mode,
-                );
-            }
-
             let wrapper_struct = value.into_struct_value();
-            let data_ptr = env
-                .builder
-                .build_extract_value(wrapper_struct, 0, "get_data_ptr")
-                .unwrap()
-                .into_pointer_value();
-
-            PointerToRefcount::from_ptr_to_data(env, data_ptr);
+            modify_refcount_dict(
+                env,
+                layout_ids,
+                mode,
+                layout,
+                key_layout,
+                value_layout,
+                wrapper_struct,
+            );
         }
 
         Str => {
@@ -698,6 +689,131 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.position_at_end(modification_block);
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, str_wrapper);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+    refcount_ptr.modify(call_mode, layout, env);
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+fn modify_refcount_dict<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    layout: &Layout<'a>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let (call_name, symbol) = match mode {
+        Mode::Inc(_) => ("increment_str", Symbol::INC),
+        Mode::Dec => ("decrement_str", Symbol::DEC),
+    };
+
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, mode, &fn_name);
+
+            modify_refcount_dict_help(
+                env,
+                layout_ids,
+                mode,
+                layout,
+                key_layout,
+                value_layout,
+                function_value,
+            );
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    call_help(env, function, mode, original_wrapper.into(), call_name);
+}
+
+fn modify_refcount_dict_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    layout: &Layout<'a>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let parent = fn_val;
+
+    let wrapper_struct = arg_val.into_struct_value();
+
+    let len = builder
+        .build_extract_value(wrapper_struct, 1, "read_dict_len")
+        .unwrap()
+        .into_int_value();
+
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "modify_rc_str_cont");
+    let modification_block = ctx.append_basic_block(parent, "modify_rc");
+
+    let is_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        "is_non_empty",
+    );
+
+    builder.build_conditional_branch(is_non_empty, modification_block, cont_block);
+    builder.position_at_end(modification_block);
+
+    if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
+        crate::llvm::build_dict::dict_elements_rc(
+            env,
+            layout_ids,
+            wrapper_struct.into(),
+            key_layout,
+            value_layout,
+            mode,
+        );
+    }
+
+    let data_ptr = env
+        .builder
+        .build_extract_value(wrapper_struct, 0, "get_data_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, data_ptr);
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env);
 
