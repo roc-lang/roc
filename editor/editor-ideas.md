@@ -68,6 +68,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * Suggest automatically creating a function if the compiler says it does not exist.
 * Integrated search:
     * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
+* Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
 
 #### Autocomplete
 
