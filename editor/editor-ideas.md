@@ -69,6 +69,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * Integrated search:
     * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
 * Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
+* Search friendly editor docs inside the editor. Offer to send search string to Roc maintainers when no results, or if no results were clicked.
 
 #### Autocomplete
 
@@ -101,6 +102,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
     * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
     * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
         * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
+* Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Voice input:
     * Good for accessibility.
     * https://www.youtube.com/watch?v=Ffa3cXM7bjc is interesting for inspiration.
