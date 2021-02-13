@@ -46,6 +46,7 @@ impl Output {
     }
 }
 
+#[derive(Debug)]
 pub struct Env<'a> {
     pub home: ModuleId,
     pub var_store: &'a mut VarStore,
@@ -807,6 +808,13 @@ pub fn to_expr2<'a>(
             todo!()
         }
         Nested(sub_expr) => to_expr2(env, scope, sub_expr, region),
+        Var { module_name, ident } => {
+            dbg!("module_name: {}, ident: {}", module_name, ident);
+            dbg!(env);
+            dbg!(scope);
+
+            todo!("implement Var")
+        }
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
@@ -841,7 +849,7 @@ pub fn to_expr2<'a>(
             );
         }
 
-        _ => todo!(),
+        rest => todo!("not yet implemented {:?}", rest),
     }
 }
 

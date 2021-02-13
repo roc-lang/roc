@@ -65,6 +65,7 @@ impl<T> PartialEq for NodeId<T> {
 
 impl<T> Copy for NodeId<T> {}
 
+#[derive(Debug)]
 pub struct Pool {
     nodes: *mut [u8; NODE_BYTES],
     num_nodes: u32,
@@ -339,6 +340,10 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
                 len: 0,
             }
         }
+    }
+
+    pub fn push(&mut self, _item: T) {
+        todo!();
     }
 
     pub fn iter(&self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
