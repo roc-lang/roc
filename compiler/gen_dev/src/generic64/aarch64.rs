@@ -1,6 +1,9 @@
-use crate::generic64::{Assembler, CallConv, RegTrait};
+use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
 use crate::Relocation;
 use bumpalo::collections::Vec;
+use roc_collections::all::MutMap;
+use roc_module::symbol::Symbol;
+use roc_mono::layout::Layout;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -138,10 +141,13 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         buf: &mut Vec<'_, u8>,
         saved_regs: &[AArch64GeneralReg],
         requested_stack_size: i32,
+        fn_call_stack_size: i32,
     ) -> Result<i32, String> {
         // Full size is upcast to i64 to make sure we don't overflow here.
         let full_stack_size = requested_stack_size
             .checked_add(8 * saved_regs.len() as i32 + 8) // The extra 8 is space to store the frame pointer.
+            .ok_or("Ran out of stack space")?
+            .checked_add(fn_call_stack_size)
             .ok_or("Ran out of stack space")?;
         let alignment = if full_stack_size <= 0 {
             0
@@ -155,6 +161,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         };
         if let Some(aligned_stack_size) = full_stack_size.checked_add(offset as i32) {
             if aligned_stack_size > 0 {
+                AArch64Assembler::mov_reg64_reg64(
+                    buf,
+                    AArch64GeneralReg::FP,
+                    AArch64GeneralReg::ZRSP,
+                );
                 AArch64Assembler::sub_reg64_reg64_imm32(
                     buf,
                     AArch64GeneralReg::ZRSP,
@@ -168,9 +179,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
                 AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::LR);
                 offset -= 8;
                 AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
+
+                offset = aligned_stack_size - fn_call_stack_size;
                 for reg in saved_regs {
                     offset -= 8;
-                    AArch64Assembler::mov_stack32_reg64(buf, offset, *reg);
+                    AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
                 }
                 Ok(aligned_stack_size)
             } else {
@@ -186,6 +199,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         buf: &mut Vec<'_, u8>,
         saved_regs: &[AArch64GeneralReg],
         aligned_stack_size: i32,
+        fn_call_stack_size: i32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
@@ -194,9 +208,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, offset);
             offset -= 8;
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
+
+            offset = aligned_stack_size - fn_call_stack_size;
             for reg in saved_regs {
                 offset -= 8;
-                AArch64Assembler::mov_reg64_stack32(buf, *reg, offset);
+                AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
             }
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
@@ -206,6 +222,25 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
             );
         }
         Ok(())
+    }
+
+    #[inline(always)]
+    fn load_args<'a>(
+        _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _args: &'a [(Layout<'a>, Symbol)],
+    ) -> Result<(), String> {
+        Err("Loading args not yet implemented for AArch64".to_string())
+    }
+
+    #[inline(always)]
+    fn store_args<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _symbol_map: &MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _args: &'a [Symbol],
+        _arg_layouts: &[Layout<'a>],
+        _ret_layout: &Layout<'a>,
+    ) -> Result<u32, String> {
+        Err("Storing args not yet implemented for AArch64".to_string())
     }
 }
 

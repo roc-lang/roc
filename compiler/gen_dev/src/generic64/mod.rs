@@ -36,12 +36,31 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
         buf: &mut Vec<'a, u8>,
         general_saved_regs: &[GeneralReg],
         requested_stack_size: i32,
+        fn_call_stack_size: i32,
     ) -> Result<i32, String>;
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
         general_saved_regs: &[GeneralReg],
         aligned_stack_size: i32,
+        fn_call_stack_size: i32,
     ) -> Result<(), String>;
+
+    // load_args updates the symbol map to know where every arg is stored.
+    fn load_args<'a>(
+        symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
+        args: &'a [(Layout<'a>, Symbol)],
+    ) -> Result<(), String>;
+
+    // store_args stores the args in registers and on the stack for function calling.
+    // It returns the amount of stack space needed to temporarily store the args.
+    fn store_args<'a>(
+        buf: &mut Vec<'a, u8>,
+        symbol_map: &MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
+        ret_layout: &Layout<'a>,
+    ) -> Result<u32, String>;
 }
 
 /// Assembler contains calls to the backend assembly generator.
@@ -76,6 +95,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
 
+    // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
@@ -104,7 +124,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
 #[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
-enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
+pub enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // These may need layout, but I am not sure.
     // I think whenever a symbol would be used, we specify layout anyways.
     GeneralReg(GeneralReg),
@@ -149,7 +169,9 @@ pub struct Backend64Bit<
     general_used_callee_saved_regs: MutSet<GeneralReg>,
     float_used_callee_saved_regs: MutSet<FloatReg>,
 
-    stack_size: i32,
+    stack_size: u32,
+    // The ammount of stack space needed to pass args for function calling.
+    fn_call_stack_size: u32,
 }
 
 impl<
@@ -178,6 +200,7 @@ impl<
             float_used_regs: bumpalo::vec![in env.arena],
             float_used_callee_saved_regs: MutSet::default(),
             stack_size: 0,
+            fn_call_stack_size: 0,
         })
     }
 
@@ -187,6 +210,7 @@ impl<
 
     fn reset(&mut self) {
         self.stack_size = 0;
+        self.fn_call_stack_size = 0;
         self.last_seen_map.clear();
         self.free_map.clear();
         self.symbols_map.clear();
@@ -225,14 +249,24 @@ impl<
         // Setup stack.
         let mut used_regs = bumpalo::vec![in self.env.arena];
         used_regs.extend(&self.general_used_callee_saved_regs);
-        let aligned_stack_size = CC::setup_stack(&mut out, &used_regs, self.stack_size)?;
+        let aligned_stack_size = CC::setup_stack(
+            &mut out,
+            &used_regs,
+            self.stack_size as i32,
+            self.fn_call_stack_size as i32,
+        )?;
         let setup_offset = out.len();
 
         // Add function body.
         out.extend(&self.buf);
 
         // Cleanup stack.
-        CC::cleanup_stack(&mut out, &used_regs, aligned_stack_size)?;
+        CC::cleanup_stack(
+            &mut out,
+            &used_regs,
+            aligned_stack_size,
+            self.fn_call_stack_size as i32,
+        )?;
         ASM::ret(&mut out);
 
         // Update relocs to include stack setup offset.
@@ -255,12 +289,31 @@ impl<
         Ok((out.into_bump_slice(), out_relocs.into_bump_slice()))
     }
 
+    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String> {
+        CC::load_args(&mut self.symbols_map, args)?;
+        // Update used and free regs.
+        for (sym, storage) in &self.symbols_map {
+            match storage {
+                SymbolStorage::GeneralReg(reg) | SymbolStorage::BaseAndGeneralReg(reg, _) => {
+                    self.general_free_regs.retain(|r| *r != *reg);
+                    self.general_used_regs.push((*reg, *sym));
+                }
+                SymbolStorage::FloatReg(reg) | SymbolStorage::BaseAndFloatReg(reg, _) => {
+                    self.float_free_regs.retain(|r| *r != *reg);
+                    self.float_used_regs.push((*reg, *sym));
+                }
+                SymbolStorage::Base(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     fn build_fn_call(
         &mut self,
         dst: &Symbol,
         fn_name: String,
-        _args: &'a [Symbol],
-        _arg_layouts: &[Layout<'a>],
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
         // Save used caller saved regs.
@@ -288,7 +341,14 @@ impl<
         }
 
         // Put values in param regs or on top of the stack.
-        // TODO: deal with arg passing. This will be call conv specific.
+        let tmp_stack_size = CC::store_args(
+            &mut self.buf,
+            &self.symbols_map,
+            args,
+            arg_layouts,
+            ret_layout,
+        )?;
+        self.fn_call_stack_size = std::cmp::max(self.fn_call_stack_size, tmp_stack_size);
 
         // Call function and generate reloc.
         ASM::call(&mut self.buf, &mut self.relocs, fn_name);
@@ -479,23 +539,20 @@ impl<
                     .insert(*sym, SymbolStorage::GeneralReg(reg));
                 Ok(reg)
             }
-            Some(SymbolStorage::FloatReg(_reg)) => {
-                Err("Cannot load floating point symbol into GeneralReg".to_string())
-            }
-            Some(SymbolStorage::BaseAndGeneralReg(reg, offset)) => {
-                self.symbols_map
-                    .insert(*sym, SymbolStorage::BaseAndGeneralReg(reg, offset));
-                Ok(reg)
-            }
-            Some(SymbolStorage::BaseAndFloatReg(_reg, _offset)) => {
-                Err("Cannot load floating point symbol into GeneralReg".to_string())
-            }
             Some(SymbolStorage::Base(offset)) => {
                 let reg = self.claim_general_reg(sym)?;
                 self.symbols_map
                     .insert(*sym, SymbolStorage::BaseAndGeneralReg(reg, offset));
                 ASM::mov_reg64_base32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
+            }
+            Some(SymbolStorage::BaseAndGeneralReg(reg, offset)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::BaseAndGeneralReg(reg, offset));
+                Ok(reg)
+            }
+            Some(SymbolStorage::FloatReg(_)) | Some(SymbolStorage::BaseAndFloatReg(_, _)) => {
+                Err("Cannot load floating point symbol into GeneralReg".to_string())
             }
             None => Err(format!("Unknown symbol: {}", sym)),
         }
@@ -504,19 +561,8 @@ impl<
     fn load_to_float_reg(&mut self, sym: &Symbol) -> Result<FloatReg, String> {
         let val = self.symbols_map.remove(sym);
         match val {
-            Some(SymbolStorage::GeneralReg(_reg)) => {
-                Err("Cannot load integer point symbol into FloatReg".to_string())
-            }
             Some(SymbolStorage::FloatReg(reg)) => {
                 self.symbols_map.insert(*sym, SymbolStorage::FloatReg(reg));
-                Ok(reg)
-            }
-            Some(SymbolStorage::BaseAndGeneralReg(_reg, _offset)) => {
-                Err("Cannot load integer point symbol into FloatReg".to_string())
-            }
-            Some(SymbolStorage::BaseAndFloatReg(reg, offset)) => {
-                self.symbols_map
-                    .insert(*sym, SymbolStorage::BaseAndFloatReg(reg, offset));
                 Ok(reg)
             }
             Some(SymbolStorage::Base(offset)) => {
@@ -526,6 +572,14 @@ impl<
                 ASM::mov_freg64_base32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
+            Some(SymbolStorage::BaseAndFloatReg(reg, offset)) => {
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::BaseAndFloatReg(reg, offset));
+                Ok(reg)
+            }
+            Some(SymbolStorage::GeneralReg(_)) | Some(SymbolStorage::BaseAndGeneralReg(_, _)) => {
+                Err("Cannot load integer point symbol into FloatReg".to_string())
+            }
             None => Err(format!("Unknown symbol: {}", sym)),
         }
     }
@@ -534,17 +588,23 @@ impl<
         let val = self.symbols_map.remove(sym);
         match val {
             Some(SymbolStorage::GeneralReg(reg)) => {
-                let offset = self.increase_stack_size(8)?;
-                // For base addresssing, use the negative offset.
-                ASM::mov_base32_reg64(&mut self.buf, -offset, reg);
-                self.symbols_map.insert(*sym, SymbolStorage::Base(-offset));
+                let offset = self.increase_stack_size(8)? as i32;
+                // For base addresssing, use the negative offset - 8.
+                ASM::mov_base32_reg64(&mut self.buf, -offset - 8, reg);
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::Base(-offset - 8));
                 Ok(())
             }
             Some(SymbolStorage::FloatReg(reg)) => {
-                let offset = self.increase_stack_size(8)?;
+                let offset = self.increase_stack_size(8)? as i32;
                 // For base addresssing, use the negative offset.
-                ASM::mov_base32_freg64(&mut self.buf, -offset, reg);
-                self.symbols_map.insert(*sym, SymbolStorage::Base(-offset));
+                ASM::mov_base32_freg64(&mut self.buf, -offset - 8, reg);
+                self.symbols_map
+                    .insert(*sym, SymbolStorage::Base(-offset - 8));
+                Ok(())
+            }
+            Some(SymbolStorage::Base(offset)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::Base(offset));
                 Ok(())
             }
             Some(SymbolStorage::BaseAndGeneralReg(_, offset)) => {
@@ -555,21 +615,22 @@ impl<
                 self.symbols_map.insert(*sym, SymbolStorage::Base(offset));
                 Ok(())
             }
-            Some(SymbolStorage::Base(offset)) => {
-                self.symbols_map.insert(*sym, SymbolStorage::Base(offset));
-                Ok(())
-            }
             None => Err(format!("Unknown symbol: {}", sym)),
         }
     }
 
     /// increase_stack_size increase the current stack size and returns the offset of the stack.
-    fn increase_stack_size(&mut self, amount: i32) -> Result<i32, String> {
+    fn increase_stack_size(&mut self, amount: u32) -> Result<u32, String> {
         debug_assert!(amount > 0);
         let offset = self.stack_size;
         if let Some(new_size) = self.stack_size.checked_add(amount) {
-            self.stack_size = new_size;
-            Ok(offset)
+            // Since stack size is u32, but the max offset is i32, if we pass i32 max, we have overflowed.
+            if new_size > i32::MAX as u32 {
+                Err("Ran out of stack space".to_string())
+            } else {
+                self.stack_size = new_size;
+                Ok(offset)
+            }
         } else {
             Err("Ran out of stack space".to_string())
         }

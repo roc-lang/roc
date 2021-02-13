@@ -168,6 +168,36 @@ mod gen_num {
         );
     }
 
+    #[test]
+    fn gen_wrap_add_nums() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    add2 = \num1, num2 -> num1 + num2
+
+                    add2 4 5
+                "#
+            ),
+            9,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_wrap_add_nums_force_stack() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    add9 = \num1, num2, num3, num4, num5, num6, num7, num8, num9 -> num1 + num2 + num3 + num4 + num5 + num6 + num7 + num8 + num9
+
+                    add9 1 2 3 4 5 6 7 8 9
+                "#
+            ),
+            45,
+            i64
+        );
+    }
+
     /*
     #[test]
     fn f64_sqrt() {
@@ -247,21 +277,6 @@ mod gen_num {
             ),
             true,
             bool
-        );
-    }
-
-    #[test]
-    fn gen_wrap_add_nums() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    add2 = \num1, num2 -> num1 + num2
-
-                    add2 4 5
-                "#
-            ),
-            9,
-            i64
         );
     }
 

@@ -70,10 +70,14 @@ where
     /// finalize is run at the end of build_proc when all internal code is finalized.
     fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String>;
 
+    // load_args is used to let the backend know what the args are.
+    // The backend should track these args so it can use them as needed.
+    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String>;
+
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
-        // TODO: let the backend know of all the arguments.
+        self.load_args(&proc.args)?;
         // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
@@ -167,6 +171,8 @@ where
                                 let fn_name = LayoutIds::default()
                                     .get(*func_sym, layout)
                                     .to_symbol_string(*func_sym, &self.env().interns);
+                                // Now that the arguments are needed, load them if they are literals.
+                                self.load_literal_symbols(arguments)?;
                                 self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                             }
                             x => Err(format!("the function, {:?}, is not yet implemented", x)),
