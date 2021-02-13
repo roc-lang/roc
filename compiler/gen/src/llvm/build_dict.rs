@@ -569,8 +569,33 @@ fn build_eq_wrapper<'a, 'ctx, 'env>(
 
             debug_info_init!(env, function_value);
 
-            env.builder
-                .build_return(Some(&env.context.bool_type().const_int(1, false)));
+            let mut it = function_value.get_param_iter();
+            let value_ptr1 = it.next().unwrap().into_pointer_value();
+            let value_ptr2 = it.next().unwrap().into_pointer_value();
+
+            set_name(value_ptr1.into(), Symbol::ARG_1.ident_string(&env.interns));
+            set_name(value_ptr2.into(), Symbol::ARG_2.ident_string(&env.interns));
+
+            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic);
+
+            let value_cast1 = env
+                .builder
+                .build_bitcast(value_ptr1, value_type, "load_opaque")
+                .into_pointer_value();
+
+            let value_cast2 = env
+                .builder
+                .build_bitcast(value_ptr2, value_type, "load_opaque")
+                .into_pointer_value();
+
+            let value1 = env.builder.build_load(value_cast1, "load_opaque");
+            let value2 = env.builder.build_load(value_cast2, "load_opaque");
+
+            let result =
+                crate::llvm::compare::generic_eq(env, layout_ids, value1, value2, layout, layout);
+
+            env.builder.build_return(Some(&result));
 
             function_value
         }
