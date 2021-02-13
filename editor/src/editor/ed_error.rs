@@ -21,13 +21,6 @@ pub enum EdError {
     ))]
     ClipboardInitFailed { err_msg: String },
 
-    #[snafu(display(
-        "FileOpenFailed: failed to open file with path {} with the following error: {}.",
-        path_str,
-        err_msg
-    ))]
-    FileOpenFailed { path_str: String, err_msg: String },
-
     #[snafu(display("InvalidSelection: {}.", err_msg))]
     InvalidSelection {
         err_msg: String,
@@ -49,9 +42,6 @@ pub enum EdError {
         len: usize,
         backtrace: Backtrace,
     },
-
-    #[snafu(display("TextBufReadFailed: the file {} could be opened but we encountered the following error while trying to read it: {}.", path_str, err_msg))]
-    TextBufReadFailed { path_str: String, err_msg: String },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;

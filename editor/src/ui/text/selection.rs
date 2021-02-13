@@ -1,21 +1,48 @@
-use crate::ui::error::{UIResult, InvalidSelection};
+use crate::ui::ui_error::{UIResult, InvalidSelection};
+use crate::ui::colors;
+use super::text_pos::TextPos;
+use super::lines::Lines;
 use bumpalo::collections::Vec as BumpVec;
-use bumpalo::Bump;
 use snafu::ensure;
+use std::fmt;
 
 #[derive(Debug, Copy, Clone)]
 pub struct RawSelection {
-    pub start_pos: TxtPos,
-    pub end_pos: TxtPos,
+    pub start_pos: TextPos,
+    pub end_pos: TextPos,
+}
+
+impl RawSelection {
+    pub fn make_raw_sel(start_pos: TextPos, end_pos: TextPos) -> RawSelection {
+        RawSelection {
+            start_pos,
+            end_pos
+        }
+    }
+}
+
+impl std::fmt::Display for RawSelection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "RawSelection: start_pos: line:{} col:{}, end_pos: line:{} col:{}",
+            self.start_pos.line, self.start_pos.column, self.end_pos.line, self.end_pos.column
+        )
+    }
 }
 
 //using the "parse don't validate" pattern
+#[derive(Debug)]
 pub struct ValidSelection {
-    pub selection: RawSelection,
+    pub start_pos: TextPos,
+    pub end_pos: TextPos,
 }
 
-pub fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
-    let RawSelection { start_pos, end_pos } = selection;
+pub fn validate_raw_sel(raw_sel: RawSelection) -> UIResult<ValidSelection> {
+    validate_selection(raw_sel.start_pos, raw_sel.end_pos)
+}
+
+pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<ValidSelection> {
 
     ensure!(
         start_pos.line <= end_pos.line,
@@ -39,18 +66,22 @@ pub fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
     );
 
     Ok(ValidSelection {
-        selection: RawSelection { start_pos, end_pos },
+        start_pos, end_pos,
     })
 }
 
+
+use bumpalo::Bump;
+use crate::graphics::primitives::rect::Rect;
+use crate::ui::text::lines::Lines;
+
 pub fn create_selection_rects<'a>(
-    raw_sel: RawSelection,
-    text_buf: &TextBuffer,
+    valid_sel: ValidSelection,
+    lines: &dyn Lines,
     glyph_dim_rect: &Rect,
     arena: &'a Bump,
-) -> EdResult<BumpVec<'a, Rect>> {
-    let valid_sel = validate_selection(raw_sel)?;
-    let RawSelection { start_pos, end_pos } = valid_sel.selection;
+) -> UIResult<BumpVec<'a, Rect>> {
+    let ValidSelection { start_pos, end_pos } = valid_sel;
 
     let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
 
@@ -73,7 +104,7 @@ pub fn create_selection_rects<'a>(
         Ok(all_rects)
     } else {
         // first line
-        let end_col = text_buf.line_len_res(start_pos.line)?;
+        let end_col = lines.line_len(start_pos.line)?;
         let width = ((end_col as f32) * glyph_dim_rect.width)
             - ((start_pos.column as f32) * glyph_dim_rect.width);
 
@@ -91,7 +122,7 @@ pub fn create_selection_rects<'a>(
         let first_mid_line = start_pos.line + 1;
 
         for i in first_mid_line..(first_mid_line + nr_mid_lines) {
-            let mid_line_len = text_buf.line_len_res(i)?;
+            let mid_line_len = lines.line_len(i)?;
 
             let width = (mid_line_len as f32) * glyph_dim_rect.width;
 
@@ -126,13 +157,14 @@ pub fn create_selection_rects<'a>(
 
 #[cfg(test)]
 pub mod test_selection {
-    use crate::error::{EdResult, OutOfBounds};
-    use crate::mvc::ed_model::{Position, RawSelection};
-    use crate::mvc::ed_update::{
+    use crate::ui::ui_error::{UIResult, OutOfBounds};
+    use crate::ui::text::text_pos::TextPos;
+    use crate::ui::text::selection::{ValidSelection, validate_selection};
+    use crate::editor::mvc::ed_update::{
         move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
     };
-    use crate::text_buffer::TextBuffer;
-    use crate::vec_result::get_res;
+    use crate::ui::text::big_selectable_text::BigSelectableText;
+    use crate::ui::util::slice_get;
     use core::cmp::Ordering;
     use pest::Parser;
     use ropey::Rope;
@@ -146,14 +178,14 @@ pub mod test_selection {
 
     // show selection and caret position as symbols in lines for easy testing
     pub fn convert_selection_to_dsl(
-        raw_sel_opt: Option<RawSelection>,
-        caret_pos: Position,
+        selection_opt: Option<ValidSelection>,
+        caret_pos: TextPos,
         lines: &mut [String],
-    ) -> EdResult<&[String]> {
-        if let Some(raw_sel) = raw_sel_opt {
+    ) -> UIResult<&[String]> {
+        if let Some(sel) = selection_opt {
             let mut to_insert = vec![
-                (raw_sel.start_pos, '['),
-                (raw_sel.end_pos, ']'),
+                (sel.start_pos, '['),
+                (sel.end_pos, ']'),
                 (caret_pos, '|'),
             ];
             let symbol_map: HashMap<char, usize> =
@@ -191,7 +223,7 @@ pub mod test_selection {
         Ok(lines)
     }
 
-    fn insert_at_pos(lines: &mut [String], pos: Position, insert_char: char) -> EdResult<()> {
+    fn insert_at_pos(lines: &mut [String], pos: TextPos, insert_char: char) -> UIResult<()> {
         let line = get_mut_res(pos.line, lines)?;
         line.insert(pos.column, insert_char);
 
@@ -202,7 +234,7 @@ pub mod test_selection {
     fn get_mut_res<T>(
         index: usize,
         vec: &mut [T],
-    ) -> EdResult<&mut <usize as SliceIndex<[T]>>::Output> {
+    ) -> UIResult<&mut <usize as SliceIndex<[T]>>::Output> {
         let vec_len = vec.len();
 
         let elt_ref = vec.get_mut(index).context(OutOfBounds {
@@ -252,7 +284,7 @@ pub mod test_selection {
     // Retrieve selection and position from formatted string
     pub fn convert_dsl_to_selection(
         lines: &[String],
-    ) -> Result<(Option<RawSelection>, Position), String> {
+    ) -> Result<(Option<ValidSelection>, TextPos), String> {
         let lines_str: String = lines.join("");
 
         let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str)
@@ -319,24 +351,28 @@ pub mod test_selection {
 
         // Make sure return makes sense
         if let Some((line, column)) = caret_opt {
-            let caret_pos = Position { line, column };
+            let caret_pos = TextPos { line, column };
             if sel_start_opt.is_none() && sel_end_opt.is_none() {
                 Ok((None, caret_pos))
             } else if let Some((start_line, start_column)) = sel_start_opt {
                 if let Some((end_line, end_column)) = sel_end_opt {
-                    Ok((
-                        Some(RawSelection {
-                            start_pos: Position {
-                                line: start_line,
-                                column: start_column,
-                            },
-                            end_pos: Position {
-                                line: end_line,
-                                column: end_column,
-                            },
-                        }),
-                        caret_pos,
-                    ))
+                    Ok(
+                        (
+                            Some(
+                                validate_selection(
+                                    TextPos {
+                                            line: start_line,
+                                            column: start_column,
+                                        },
+                                    TextPos {
+                                            line: end_line,
+                                            column: end_column,
+                                        },
+                                ).unwrap()
+                            ),
+                            caret_pos
+                        )
+                    )
                 } else {
                     Err("Selection end ']' was not found, but selection start '[' was. Bad input string.".to_owned())
                 }
