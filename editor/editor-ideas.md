@@ -68,8 +68,19 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * Suggest automatically creating a function if the compiler says it does not exist.
 * Integrated search:
     * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
-* Webcam based eye tracking for quick selection. Could be used to select from autocomplete options instead of having to use arrows.
 
+#### Autocomplete
+
+- Use more space for autocomplete options:
+   * Multiple columns. Columns could have different sources, i.e. middle column suggests based on current folder, left column on whole project, right column on github.
+   * show cell with completion + auto import suggestion
+- Webcam based eye tracking for quick selection.
+- Machine Learning:
+   * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
+
+#### Productivity Inspiration
+
+* [Kite](https://www.kite.com/) AI autocomplete and doc viewer.
 
 ### Non-Code Related Inspiration
 
@@ -86,7 +97,6 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 
 * Ability to record all changes to abstract syntax tree with user permission.
     * I think it is possible to create powerful automatic error resolution by having a dataset available of ast's with a specific error and the subsequent transformation that fixed the error.
-    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
     * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
     * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
         * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
@@ -98,6 +108,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
         * Add latest datetime package to dependencies.
         * Generate unit test for this function.
         * Show edit history for this function.
+    * Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
+    Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
 
 
 ## Testing
