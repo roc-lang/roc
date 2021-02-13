@@ -116,6 +116,10 @@ impl TextBuffer {
         self.text_rope.len_lines()
     }
 
+    pub fn nr_of_chars(&self) -> usize {
+        self.text_rope.len_chars()
+    }
+
     // expensive function, don't use it if it can be done with a specialized, more efficient function
     // TODO use pool allocation here
     pub fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a> {
@@ -132,12 +136,26 @@ impl TextBuffer {
         self.text_rope.line_to_char(pos.line) + pos.column
     }
 
+    fn char_indx_to_pos(&self, char_indx: usize) -> Position {
+        let line = self.text_rope.char_to_line(char_indx);
+
+        let char_idx_line_start = self.pos_to_char_indx(Position { line, column: 0 });
+
+        let column = char_indx - char_idx_line_start;
+
+        Position { line, column }
+    }
+
     fn sel_to_tup(&self, raw_sel: RawSelection) -> EdResult<(usize, usize)> {
         let valid_sel = validate_selection(raw_sel)?;
         let start_char_indx = self.pos_to_char_indx(valid_sel.selection.start_pos);
         let end_char_indx = self.pos_to_char_indx(valid_sel.selection.end_pos);
 
         Ok((start_char_indx, end_char_indx))
+    }
+
+    pub fn last_position(&self) -> Position {
+        self.char_indx_to_pos(self.nr_of_chars())
     }
 }
 
