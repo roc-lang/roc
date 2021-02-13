@@ -444,6 +444,9 @@ where
         let mut state = state;
         let mut any_newlines = false;
 
+        let start_row = original_state.line;
+        let start_col = original_state.column;
+
         let start_bytes_len = state.bytes.len();
 
         while !state.bytes.is_empty() {
@@ -491,7 +494,13 @@ where
                                     let progress =
                                         Progress::from_lengths(start_bytes_len, state.bytes.len());
                                     state = state
-                                        .check_indent_e(arena, min_indent, indent_problem)
+                                        .check_indent_e(
+                                            arena,
+                                            min_indent,
+                                            indent_problem,
+                                            start_row,
+                                            start_col,
+                                        )
                                         .map_err(|(fail, _)| {
                                             (progress, fail, original_state.clone())
                                         })?
@@ -523,7 +532,13 @@ where
                                         );
                                         if any_newlines {
                                             state = state
-                                                .check_indent_e(arena, min_indent, indent_problem)
+                                                .check_indent_e(
+                                                    arena,
+                                                    min_indent,
+                                                    indent_problem,
+                                                    start_row,
+                                                    start_col,
+                                                )
                                                 .map_err(|(fail, _)| {
                                                     (progress, fail, original_state.clone())
                                                 })?;
@@ -692,7 +707,13 @@ where
                                 progress,
                                 space_slice,
                                 state
-                                    .check_indent_e(arena, min_indent, indent_problem)
+                                    .check_indent_e(
+                                        arena,
+                                        min_indent,
+                                        indent_problem,
+                                        start_row,
+                                        start_col,
+                                    )
                                     .map_err(|(fail, _)| (progress, fail, original_state))?,
                             ));
                         }
@@ -720,7 +741,7 @@ where
             let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
             if any_newlines {
                 state = state
-                    .check_indent_e(arena, min_indent, indent_problem)
+                    .check_indent_e(arena, min_indent, indent_problem, start_row, start_col)
                     .map_err(|(fail, _)| (progress, fail, original_state))?;
             }
 

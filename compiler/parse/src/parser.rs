@@ -72,12 +72,14 @@ impl<'a> State<'a> {
         _arena: &'a Bump,
         min_indent: u16,
         to_error: TE,
+        row: Row,
+        col: Col,
     ) -> Result<Self, (E, Self)>
     where
         TE: Fn(Row, Col) -> E,
     {
         if self.indent_col < min_indent {
-            Err((to_error(self.line, self.column), self))
+            Err((to_error(row, col), self))
         } else {
             Ok(self)
         }
@@ -370,29 +372,33 @@ pub type Col = u16;
 pub enum Type<'a> {
     TRecord(TRecord<'a>, Row, Col),
     TTagUnion(TTagUnion<'a>, Row, Col),
+    TInParens(TInParens<'a>, Row, Col),
+    TApply(TApply, Row, Col),
+    TVariable(TVariable, Row, Col),
+    TWildcard(Row, Col),
     ///
     TStart(Row, Col),
-    TSpace(Row, Col),
+    TEnd(Row, Col),
+    TSpace(BadInputError, Row, Col),
+    TFunctionArgument(Row, Col),
     ///
     TIndentStart(Row, Col),
+    TIndentEnd(Row, Col),
+    TAsIndentStart(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TRecord<'a> {
     End(Row, Col),
     Open(Row, Col),
-    ///
+
     Field(Row, Col),
     Colon(Row, Col),
     Optional(Row, Col),
     Type(&'a Type<'a>, Row, Col),
 
-    // TODO REMOVE in favor of Type
-    Syntax(&'a SyntaxError<'a>, Row, Col),
-
-    ///
     Space(BadInputError, Row, Col),
-    ///
+
     IndentOpen(Row, Col),
     IndentColon(Row, Col),
     IndentOptional(Row, Col),
@@ -403,17 +409,47 @@ pub enum TRecord<'a> {
 pub enum TTagUnion<'a> {
     End(Row, Col),
     Open(Row, Col),
-    ///
+
     Type(&'a Type<'a>, Row, Col),
 
-    // TODO REMOVE in favor of Type
-    Syntax(&'a SyntaxError<'a>, Row, Col),
+    Space(BadInputError, Row, Col),
+
+    IndentOpen(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TInParens<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+    ///
+    Type(&'a Type<'a>, Row, Col),
 
     ///
     Space(BadInputError, Row, Col),
     ///
     IndentOpen(Row, Col),
     IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TApply {
+    ///
+    StartNotUppercase(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+    ///
+    DoubleDot(Row, Col),
+    TrailingDot(Row, Col),
+    StartIsNumber(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TVariable {
+    ///
+    StartNotLowercase(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -524,6 +560,26 @@ where
 
         match parser.parse(arena, state) {
             Ok((_, _, _)) => Err((NoProgress, SyntaxError::ConditionFailed, original_state)),
+            Err((_, _, _)) => Ok((NoProgress, (), original_state)),
+        }
+    }
+}
+
+pub fn not_e<'a, P, TE, E, X, Val>(parser: P, to_error: TE) -> impl Parser<'a, (), E>
+where
+    TE: Fn(Row, Col) -> E,
+    P: Parser<'a, Val, X>,
+    E: 'a,
+{
+    move |arena, state: State<'a>| {
+        let original_state = state.clone();
+
+        match parser.parse(arena, state) {
+            Ok((_, _, _)) => Err((
+                NoProgress,
+                to_error(original_state.line, original_state.column),
+                original_state,
+            )),
             Err((_, _, _)) => Ok((NoProgress, (), original_state)),
         }
     }
@@ -758,6 +814,27 @@ pub fn peek_utf8_char<'a>(state: &State) -> Result<(char, usize), SyntaxError<'a
     }
 }
 
+/// A single UTF-8-encoded char. This will both parse *and* validate that the
+/// char is valid UTF-8, but it will *not* advance the state.
+pub fn peek_utf8_char_e<EOF, TE, E>(
+    state: &State,
+    end_of_file: EOF,
+    to_error: TE,
+) -> Result<(char, usize), E>
+where
+    TE: Fn(BadInputError, Row, Col) -> E,
+    EOF: Fn(Row, Col) -> E,
+{
+    if !state.bytes.is_empty() {
+        match char::from_utf8_slice_start(state.bytes) {
+            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
+            Err(_) => Err(to_error(BadInputError::BadUtf8, state.line, state.column)),
+        }
+    } else {
+        Err(end_of_file(state.line, state.column))
+    }
+}
+
 /// A single UTF-8-encoded char, with an offset. This will both parse *and*
 /// validate that the char is valid UTF-8, but it will *not* advance the state.
 pub fn peek_utf8_char_at<'a>(
@@ -778,7 +855,10 @@ pub fn peek_utf8_char_at<'a>(
     }
 }
 
-pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, (), SyntaxError<'a>> {
+pub fn keyword<'a>(
+    keyword: &'static str,
+    _min_indent: u16,
+) -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena, state: State<'a>| {
         let initial_state = state.clone();
         // first parse the keyword characters
@@ -786,17 +866,46 @@ pub fn keyword<'a>(keyword: &'static str, min_indent: u16) -> impl Parser<'a, ()
 
         // then we must have at least one space character
         // TODO this is potentially wasteful if there are a lot of spaces
-        match crate::blankspace::space1(min_indent).parse(arena, after_keyword_state.clone()) {
-            Err((_, fail, _)) => {
-                // this is not a keyword, maybe it's `whence` or `iffy`
-                // anyway, make no progress and return the initial state
-                // so we can try something else
-                Err((NoProgress, fail, initial_state))
-            }
-            Ok((_, _, _)) => {
+        match peek_utf8_char(&after_keyword_state) {
+            Ok((next, _width)) if next == ' ' || next == '#' || next == '\n' => {
                 // give back the state after parsing the keyword, but before the whitespace
                 // that way we can attach the whitespace to whatever follows
                 Ok((MadeProgress, (), after_keyword_state))
+            }
+            _ => {
+                // this is not a keyword, maybe it's `whence` or `iffy`
+                // anyway, make no progress and return the initial state
+                // so we can try something else
+                Err((NoProgress, SyntaxError::ConditionFailed, initial_state))
+            }
+        }
+    }
+}
+
+pub fn keyword_e<'a, E>(keyword: &'static str, if_error: E) -> impl Parser<'a, (), E>
+where
+    E: 'a + Clone,
+{
+    move |arena, state: State<'a>| {
+        let initial_state = state.clone();
+        // first parse the keyword characters
+        let (_, _, after_keyword_state) = ascii_string(keyword)
+            .parse(arena, state)
+            .map_err(|(_, _, state)| (NoProgress, if_error.clone(), state))?;
+
+        // then we must have at least one space character
+        // TODO this is potentially wasteful if there are a lot of spaces
+        match peek_utf8_char(&after_keyword_state) {
+            Ok((next, _width)) if next == ' ' || next == '#' || next == '\n' => {
+                // give back the state after parsing the keyword, but before the whitespace
+                // that way we can attach the whitespace to whatever follows
+                Ok((MadeProgress, (), after_keyword_state))
+            }
+            _ => {
+                // this is not a keyword, maybe it's `whence` or `iffy`
+                // anyway, make no progress and return the initial state
+                // so we can try something else
+                Err((NoProgress, if_error.clone(), initial_state))
             }
         }
     }
@@ -815,20 +924,15 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxErro
         let len = keyword.len();
 
         // TODO do this comparison in one SIMD instruction (on supported systems)
-        match state.bytes.get(0..len) {
-            Some(next_str) => {
-                if next_str == keyword.as_bytes() {
-                    Ok((
-                        Progress::MadeProgress,
-                        (),
-                        state.advance_without_indenting(arena, len)?,
-                    ))
-                } else {
-                    let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);
-                    Err((NoProgress, fail, state))
-                }
-            }
-            _ => Err(unexpected_eof(arena, state, 0)),
+        if state.bytes.starts_with(keyword.as_bytes()) {
+            Ok((
+                Progress::MadeProgress,
+                (),
+                state.advance_without_indenting(arena, len)?,
+            ))
+        } else {
+            let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);
+            Err((NoProgress, fail, state))
         }
     }
 }
@@ -1355,6 +1459,58 @@ where
         )),
         _ => Err((NoProgress, to_error(state.line, state.column), state)),
     }
+}
+
+pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    debug_assert_ne!(word_1, b'\n');
+    debug_assert_ne!(word_2, b'\n');
+
+    let needle = [word_1, word_2];
+
+    move |_arena: &'a Bump, state: State<'a>| {
+        if state.bytes.starts_with(&needle) {
+            Ok((
+                MadeProgress,
+                (),
+                State {
+                    bytes: &state.bytes[2..],
+                    column: state.column + 2,
+                    ..state
+                },
+            ))
+        } else {
+            Err((NoProgress, to_error(state.line, state.column), state))
+        }
+    }
+}
+
+pub fn check_indent<'a, TE, E>(min_indent: u16, to_problem: TE) -> impl Parser<'a, (), E>
+where
+    TE: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    move |_arena, state: State<'a>| {
+        dbg!(state.indent_col, min_indent);
+        if state.indent_col < min_indent {
+            Err((NoProgress, to_problem(state.line, state.column), state))
+        } else {
+            Ok((NoProgress, (), state))
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! word1_check_indent {
+    ($word:expr, $word_problem:expr, $min_indent:expr, $indent_problem:expr) => {
+        and!(
+            word1($word, $word_problem),
+            crate::parser::check_indent($min_indent, $indent_problem)
+        )
+    };
 }
 
 #[allow(dead_code)]

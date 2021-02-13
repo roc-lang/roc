@@ -38,6 +38,9 @@ pub fn handle_keydown(
                 handle_cut(app_model)?
             }
         }
+
+        A => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model),
+
         _ => (),
     }
 
