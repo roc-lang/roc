@@ -19,6 +19,28 @@ use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
+macro_rules! return_on_layout_error {
+    ($env:expr, $layout_result:expr) => {
+        match $layout_result {
+            Ok(cached) => cached,
+            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                return Stmt::RuntimeError($env.arena.alloc(format!(
+                    "UnresolvedTypeVar {} line {}",
+                    file!(),
+                    line!()
+                )));
+            }
+            Err(LayoutProblem::Erroneous) => {
+                return Stmt::RuntimeError($env.arena.alloc(format!(
+                    "Erroneous {} line {}",
+                    file!(),
+                    line!()
+                )));
+            }
+        }
+    };
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
     PatternProblem(crate::exhaustive::Error),
@@ -3790,11 +3812,10 @@ pub fn with_hole<'a>(
                     )
                     .into_bump_slice();
 
-                    let full_layout = layout_cache
-                        .from_var(env.arena, fn_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
+                    let full_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.from_var(env.arena, fn_var, env.subs)
+                    );
 
                     let arg_layouts = match full_layout {
                         Layout::FunctionPointer(args, _) => args,
@@ -3802,11 +3823,10 @@ pub fn with_hole<'a>(
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
 
-                    let ret_layout = layout_cache
-                        .from_var(env.arena, ret_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
+                    let ret_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.from_var(env.arena, ret_var, env.subs)
+                    );
 
                     // if the function expression (loc_expr) is already a symbol,
                     // re-use that symbol, and don't define its value again
