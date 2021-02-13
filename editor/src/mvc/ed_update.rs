@@ -318,6 +318,20 @@ fn del_selection(selection: RawSelection, ed_model: &mut EdModel) -> EdResult<()
     Ok(())
 }
 
+// TODO move this to impl EdModel
+pub fn handle_select_all(ed_model: &mut EdModel) {
+    if ed_model.text_buf.nr_of_chars() > 0 {
+        let last_pos = ed_model.text_buf.last_position();
+
+        ed_model.selection_opt = Some(RawSelection {
+            start_pos: Position { line: 0, column: 0 },
+            end_pos: last_pos,
+        });
+
+        ed_model.caret_pos = last_pos;
+    }
+}
+
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<()> {
     let old_caret_pos = ed_model.caret_pos;
 
@@ -351,9 +365,10 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
             ed_model.selection_opt = None;
         }
-        '\u{3}' // Ctrl + C
+        '\u{1}' // Ctrl + A
+        | '\u{3}' // Ctrl + C
         | '\u{16}' // Ctrl + V
-        | '\u{30}' // Ctrl + X
+        | '\u{18}' // Ctrl + X
         | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
         | '\u{f0000}'..='\u{ffffd}' // ^
         | '\u{100000}'..='\u{10fffd}' // ^
@@ -397,6 +412,12 @@ pub fn handle_key_down(
         Up => handle_arrow(move_caret_up, modifiers, ed_model),
         Right => handle_arrow(move_caret_right, modifiers, ed_model),
         Down => handle_arrow(move_caret_down, modifiers, ed_model),
+
+        A => {
+            if modifiers.ctrl() {
+                handle_select_all(ed_model)
+            }
+        }
         _ => {}
     }
 }
@@ -405,7 +426,7 @@ pub fn handle_key_down(
 pub mod test_ed_update {
     use crate::mvc::app_update::test_app_update::mock_app_model;
     use crate::mvc::ed_model::{Position, RawSelection};
-    use crate::mvc::ed_update::handle_new_char;
+    use crate::mvc::ed_update::{handle_new_char, handle_select_all};
     use crate::selection::test_selection::{
         all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, text_buffer_from_dsl_str,
     };
@@ -551,6 +572,53 @@ pub mod test_ed_update {
             'z',
         )?;
         assert_insert(&["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["z|"], 'z')?;
+
+        Ok(())
+    }
+
+    fn assert_select_all(
+        pre_lines_str: &[&str],
+        expected_post_lines_str: &[&str],
+    ) -> Result<(), String> {
+        let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
+
+        let app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, None);
+        let mut ed_model = app_model.ed_model_opt.unwrap();
+
+        handle_select_all(&mut ed_model);
+
+        let mut text_buf_lines = all_lines_vec(&ed_model.text_buf);
+        let post_lines_str = convert_selection_to_dsl(
+            ed_model.selection_opt,
+            ed_model.caret_pos,
+            &mut text_buf_lines,
+        )?;
+
+        assert_eq!(post_lines_str, expected_post_lines_str);
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_all() -> Result<(), String> {
+        assert_select_all(&["|"], &["|"])?;
+        assert_select_all(&["|a"], &["[a]|"])?;
+        assert_select_all(&["a|"], &["[a]|"])?;
+        assert_select_all(&["abc d|ef ghi"], &["[abc def ghi]|"])?;
+        assert_select_all(&["[a]|"], &["[a]|"])?;
+        assert_select_all(&["|[a]"], &["[a]|"])?;
+        assert_select_all(&["|[abc def ghi]"], &["[abc def ghi]|"])?;
+        assert_select_all(&["a\n", "[b\n", "]|"], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(&["a\n", "[b]|\n", ""], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(&["a\n", "|[b\n", "]"], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(
+            &["abc\n", "def\n", "gh|i\n", "jkl"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+        )?;
+        assert_select_all(
+            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+        )?;
 
         Ok(())
     }
