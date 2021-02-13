@@ -7,6 +7,8 @@ const Allocator = mem.Allocator;
 const level_size = 32;
 
 const INITIAL_SEED = 0xc70f6907;
+const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
+const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 
 const InPlace = packed enum(u8) {
     InPlace,
@@ -136,8 +138,7 @@ pub const RocDict = extern struct {
                 if (result_in_place == InPlace.InPlace) {
                     as_usize_array[0] = @intCast(usize, number_of_slots);
                 } else {
-                    const v: isize = std.math.minInt(isize);
-                    as_usize_array[0] = @bitCast(usize, v);
+                    as_usize_array[0] = REFCOUNT_ONE;
                 }
 
                 var as_u8_array = @ptrCast([*]u8, new_bytes);
@@ -157,9 +158,8 @@ pub const RocDict = extern struct {
                     as_usize_array[0] = 0;
                     as_usize_array[1] = @intCast(usize, number_of_slots);
                 } else {
-                    const v: isize = std.math.minInt(isize);
                     as_usize_array[0] = 0;
-                    as_usize_array[1] = @bitCast(usize, v);
+                    as_usize_array[1] = REFCOUNT_ONE;
                 }
 
                 var as_u8_array = @ptrCast([*]u8, new_bytes);
@@ -197,8 +197,7 @@ pub const RocDict = extern struct {
                 var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
 
                 var as_usize_array = @ptrCast([*]usize, new_bytes);
-                const v: isize = std.math.minInt(isize);
-                as_usize_array[0] = @bitCast(usize, v);
+                as_usize_array[0] = REFCOUNT_ONE;
 
                 var as_u8_array = @ptrCast([*]u8, new_bytes);
                 const first_slot = as_u8_array + @sizeOf(usize);
@@ -257,7 +256,14 @@ pub const RocDict = extern struct {
     }
 
     pub fn refcountIsOne(self: RocDict) bool {
-        return false;
+        if (self.isEmpty()) {
+            // empty dicts are not refcounted at all
+            return false;
+        }
+
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.dict_bytes));
+
+        return (ptr - 1)[0] == REFCOUNT_ONE;
     }
 
     pub fn capacity(self: RocDict) usize {
