@@ -284,18 +284,18 @@ pub const RocDict = extern struct {
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
         // we copied potentially-refcounted values; make sure to increment
-        const size = new_dict.dict_entries_len;
-        const n = new_dict.number_of_levels;
+        const size = new_dict.capacity();
         var i: usize = 0;
 
         i = 0;
         while (i < size) : (i += 1) {
-            inc_key(new_dict.getKey(i, alignment, key_width, value_width));
-        }
-
-        i = 0;
-        while (i < size) : (i += 1) {
-            inc_value(new_dict.getValue(i, alignment, key_width, value_width));
+            switch (new_dict.getSlot(i, key_width, value_width)) {
+                Slot.Filled => {
+                    inc_key(new_dict.getKey(i, alignment, key_width, value_width));
+                    inc_value(new_dict.getValue(i, alignment, key_width, value_width));
+                },
+                else => {},
+            }
         }
 
         return new_dict;
@@ -387,24 +387,26 @@ pub const RocDict = extern struct {
         }
     }
 
-    fn findIndex(self: *const RocDict, seed: u64, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn) MaybeIndex {
+    fn findIndex(self: *const RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn) MaybeIndex {
         if (self.isEmpty()) {
             return MaybeIndex.not_found;
         }
+
+        var seed: u64 = INITIAL_SEED;
 
         var current_level: usize = 1;
         var current_level_size: usize = 8;
         var next_level_size: usize = 2 * current_level_size;
 
-        // hash the key, and modulo by the maximum size
-        // (so we get an in-bounds index)
-        const hash = hash_fn(seed, key);
-        var index = hash % current_level_size;
-
         while (true) {
             if (current_level > self.number_of_levels) {
                 return MaybeIndex.not_found;
             }
+
+            // hash the key, and modulo by the maximum size
+            // (so we get an in-bounds index)
+            const hash = hash_fn(seed, key);
+            const index = hash % current_level_size;
 
             switch (self.getSlot(index, key_width, value_width)) {
                 Slot.Empty, Slot.PreviouslyFilled => {
@@ -420,6 +422,8 @@ pub const RocDict = extern struct {
                         current_level += 1;
                         current_level_size *= 2;
                         next_level_size *= 2;
+
+                        seed = nextSeed(seed);
                         continue;
                     }
                 },
@@ -523,9 +527,7 @@ pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
 
 // Dict.remove : Dict k v, k -> Dict k v
 pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, dec_key: Dec, inc_value: Inc, dec_value: Dec, output: *RocDict) callconv(.C) void {
-    const seed: u64 = INITIAL_SEED;
-
-    switch (input.findIndex(seed, alignment, key, key_width, value_width, hash_fn, is_eq)) {
+    switch (input.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
         MaybeIndex.not_found => {
             // the key was not found; we're done
             output.* = input;
@@ -551,9 +553,7 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
 
 // Dict.contains : Dict k v, k -> Bool
 pub fn dictContains(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn) callconv(.C) bool {
-    const seed: u64 = INITIAL_SEED;
-
-    switch (dict.findIndex(seed, alignment, key, key_width, value_width, hash_fn, is_eq)) {
+    switch (dict.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
         MaybeIndex.not_found => {
             return false;
         },
@@ -565,9 +565,7 @@ pub fn dictContains(dict: RocDict, alignment: Alignment, key: Opaque, key_width:
 
 // Dict.get : Dict k v, k -> { flag: bool, value: Opaque }
 pub fn dictGet(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_value: Inc) callconv(.C) extern struct { value: Opaque, flag: bool } {
-    const seed: u64 = INITIAL_SEED;
-
-    switch (dict.findIndex(seed, alignment, key, key_width, value_width, hash_fn, is_eq)) {
+    switch (dict.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
         MaybeIndex.not_found => {
             return .{ .flag = false, .value = null };
         },
@@ -582,18 +580,17 @@ pub fn dictGet(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usiz
 // Dict.elementsRc
 // increment or decrement all dict elements (but not the dict's allocation itself)
 pub fn elementsRc(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, modify_key: Inc, modify_value: Inc) callconv(.C) void {
-    const size = dict.dict_entries_len;
-    const n = dict.number_of_levels;
+    const size = dict.capacity();
+
     var i: usize = 0;
-
-    i = 0;
     while (i < size) : (i += 1) {
-        modify_key(dict.getKey(i, alignment, key_width, value_width));
-    }
-
-    i = 0;
-    while (i < size) : (i += 1) {
-        modify_value(dict.getValue(i, alignment, key_width, value_width));
+        switch (dict.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                modify_key(dict.getKey(i, alignment, key_width, value_width));
+                modify_value(dict.getValue(i, alignment, key_width, value_width));
+            },
+            else => {},
+        }
     }
 }
 
