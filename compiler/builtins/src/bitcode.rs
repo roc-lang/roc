@@ -43,3 +43,4 @@ pub const DICT_INSERT: &str = "roc_builtins.dict.insert";
 pub const DICT_REMOVE: &str = "roc_builtins.dict.remove";
 pub const DICT_CONTAINS: &str = "roc_builtins.dict.contains";
 pub const DICT_GET: &str = "roc_builtins.dict.get";
+pub const DICT_ELEMENTS_RC: &str = "roc_builtins.dict.elementsRc";

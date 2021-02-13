@@ -490,6 +490,24 @@ pub fn dictGet(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usiz
     }
 }
 
+// Dict.elementsRc
+// increment or decrement all dict elements (but not the dict's allocation itself)
+pub fn elementsRc(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, modify_key: Inc, modify_value: Inc) callconv(.C) void {
+    const size = dict.dict_entries_len;
+    const n = dict.dict_slot_len;
+    var i: usize = 0;
+
+    i = 0;
+    while (i < size) : (i += 1) {
+        modify_key(dict.getKey(n, i, alignment, key_width, value_width));
+    }
+
+    i = 0;
+    while (i < size) : (i += 1) {
+        modify_value(dict.getValue(n, i, alignment, key_width, value_width));
+    }
+}
+
 test "RocDict.init() contains nothing" {
     const key_size = @sizeOf(usize);
     const value_size = @sizeOf(usize);

@@ -375,11 +375,24 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
         }
         Dict(key_layout, value_layout) => {
             if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
-                // TODO decrement all values
+                crate::llvm::build_dict::dict_elements_rc(
+                    env,
+                    layout_ids,
+                    value,
+                    key_layout,
+                    value_layout,
+                    mode,
+                );
             }
 
-            // todo!();
-            dbg!("DOING NOTHING WITH REFCOUNTING");
+            let wrapper_struct = value.into_struct_value();
+            let data_ptr = env
+                .builder
+                .build_extract_value(wrapper_struct, 0, "get_data_ptr")
+                .unwrap()
+                .into_pointer_value();
+
+            PointerToRefcount::from_ptr_to_data(env, data_ptr);
         }
 
         Str => {
@@ -749,7 +762,7 @@ pub fn build_header_help<'a, 'ctx, 'env>(
 }
 
 #[derive(Clone, Copy)]
-enum Mode {
+pub enum Mode {
     Inc(u64),
     Dec,
 }

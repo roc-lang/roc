@@ -13,6 +13,7 @@ comptime {
     exportDictFn(dict.dictRemove, "remove");
     exportDictFn(dict.dictContains, "contains");
     exportDictFn(dict.dictGet, "get");
+    exportDictFn(dict.elementsRc, "elementsRc");
 
     exportDictFn(hash.wyhash, "hash");
     exportDictFn(hash.wyhash_rocstr, "hash_str");
