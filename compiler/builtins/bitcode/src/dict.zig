@@ -202,11 +202,6 @@ pub const RocDict = extern struct {
 
         i = 0;
         while (i < size) : (i += 1) {
-            new_dict.setSlot(n, i, key_width, value_width, Slot.Empty);
-        }
-
-        i = 0;
-        while (i < size) : (i += 1) {
             inc_key(new_dict.getKey(n, i, alignment, key_width, value_width));
         }
 
