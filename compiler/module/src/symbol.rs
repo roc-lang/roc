@@ -904,6 +904,8 @@ define_builtins! {
 
         8 DICT_REMOVE: "remove"
         9 DICT_CONTAINS: "contains"
+        10 DICT_KEYS: "keys"
+        11 DICT_VALUES: "values"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias

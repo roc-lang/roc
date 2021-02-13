@@ -1,5 +1,5 @@
 use crate::llvm::build_dict::{
-    dict_contains, dict_empty, dict_get, dict_insert, dict_len, dict_remove,
+    dict_contains, dict_empty, dict_get, dict_insert, dict_keys, dict_len, dict_remove, dict_values,
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
@@ -4038,6 +4038,38 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
                 Layout::Builtin(Builtin::Dict(_, value_layout)) => {
                     dict_get(env, layout_ids, dict, key, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictKeys => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_keys(env, layout_ids, dict, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictValues => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_values(env, layout_ids, dict, key_layout, value_layout)
                 }
                 _ => unreachable!("invalid dict layout"),
             }

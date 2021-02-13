@@ -34,6 +34,8 @@ pub enum LowLevel {
     DictRemove,
     DictContains,
     DictGetUnsafe,
+    DictKeys,
+    DictValues,
     NumAdd,
     NumAddWrap,
     NumAddChecked,

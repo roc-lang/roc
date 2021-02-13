@@ -86,6 +86,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_REMOVE => dict_remove,
         DICT_GET => dict_get,
         DICT_CONTAINS => dict_contains,
+        DICT_KEYS => dict_keys,
+        DICT_VALUES => dict_values,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -188,6 +190,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_REMOVE => dict_remove,
         Symbol::DICT_GET => dict_get,
         Symbol::DICT_CONTAINS => dict_contains,
+        Symbol::DICT_KEYS => dict_keys,
+        Symbol::DICT_VALUES => dict_values,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -2059,6 +2063,46 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_var,
+    )
+}
+
+/// Dict.keys : Dict k v -> List k
+fn dict_keys(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictKeys,
+        args: vec![(dict_var, Var(Symbol::ARG_1))],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
+/// Dict.values : Dict k v -> List v
+fn dict_values(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictValues,
+        args: vec![(dict_var, Var(Symbol::ARG_1))],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        list_var,
     )
 }
 

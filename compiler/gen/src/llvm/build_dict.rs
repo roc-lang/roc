@@ -443,6 +443,28 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn dict_keys<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    todo!()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_values<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    todo!()
+}
+
 fn build_hash_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
