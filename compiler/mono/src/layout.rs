@@ -70,7 +70,9 @@ pub struct ClosureLayout<'a> {
     /// the vec is likely to be small, so linear search is fine
     captured: &'a [(TagName, &'a [Layout<'a>])],
 
-    layout: &'a Layout<'a>,
+    /// use with care; there is some stuff happening here re. unwrapping
+    /// one-element records that might cause issues
+    pub layout: &'a Layout<'a>,
 }
 
 impl<'a> ClosureLayout<'a> {
