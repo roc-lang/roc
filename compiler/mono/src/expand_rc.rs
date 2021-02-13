@@ -157,6 +157,16 @@ impl<'a, 'i> Env<'a, 'i> {
         }
     }
 
+    fn insert_struct_info(&mut self, symbol: Symbol, fields: &'a [Layout<'a>]) {
+        self.constructor_map.insert(symbol, 0);
+        self.layout_map.insert(symbol, Layout::Struct(fields));
+    }
+
+    fn remove_struct_info(&mut self, symbol: Symbol) {
+        self.constructor_map.remove(&symbol);
+        self.layout_map.remove(&symbol);
+    }
+
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
@@ -212,6 +222,10 @@ fn layout_for_constructor<'a>(
                     HasFields(fields)
                 }
             }
+        }
+        Struct(fields) => {
+            debug_assert_eq!(constructor, 0);
+            HasFields(fields)
         }
         _ => unreachable!(),
     }
@@ -322,7 +336,39 @@ enum ConstructorLayout<T> {
     Unknown,
 }
 
-pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
+pub fn expand_and_cancel_proc<'a>(
+    env: &mut Env<'a, '_>,
+    stmt: &'a Stmt<'a>,
+    arguments: &'a [(Layout<'a>, Symbol)],
+) -> &'a Stmt<'a> {
+    let mut introduced = Vec::new_in(env.arena);
+
+    for (layout, symbol) in arguments {
+        match layout {
+            Layout::Struct(fields) => {
+                env.insert_struct_info(*symbol, fields);
+
+                introduced.push(*symbol);
+            }
+            Layout::Closure(_, closure_layout, _) => {
+                if let Layout::Struct(fields) = closure_layout.layout {
+                    env.insert_struct_info(*symbol, fields);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let result = expand_and_cancel(env, stmt);
+
+    for symbol in introduced {
+        env.remove_struct_info(symbol);
+    }
+
+    result
+}
+
+fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
     use Stmt::*;
 
     let mut deferred_default = Deferred {
@@ -351,7 +397,7 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                 // prevent long chains of `Let`s from blowing the stack
                 let mut literal_stack = Vec::new_in(env.arena);
 
-                while !matches!(&expr, Expr::AccessAtIndex { .. } ) {
+                while !matches!(&expr, Expr::AccessAtIndex { .. } | Expr::Struct(_)) {
                     if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
                         literal_stack.push((symbol, expr.clone(), layout.clone()));
 
@@ -366,25 +412,38 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
 
                 let new_cont;
 
-                if let Expr::AccessAtIndex {
-                    structure, index, ..
-                } = &expr
-                {
-                    let entry = env
-                        .alias_map
-                        .entry(*structure)
-                        .or_insert_with(MutMap::default);
+                match &expr {
+                    Expr::AccessAtIndex {
+                        structure, index, ..
+                    } => {
+                        let entry = env
+                            .alias_map
+                            .entry(*structure)
+                            .or_insert_with(MutMap::default);
 
-                    entry.insert(*index, symbol);
+                        entry.insert(*index, symbol);
 
-                    new_cont = expand_and_cancel(env, cont);
+                        new_cont = expand_and_cancel(env, cont);
 
-                    // make sure to remove the alias, so other branches don't use it by accident
-                    env.alias_map
-                        .get_mut(structure)
-                        .and_then(|map| map.remove(index));
-                } else {
-                    new_cont = expand_and_cancel(env, cont);
+                        // make sure to remove the alias, so other branches don't use it by accident
+                        env.alias_map
+                            .get_mut(structure)
+                            .and_then(|map| map.remove(index));
+                    }
+                    Expr::Struct(_) => {
+                        if let Layout::Struct(fields) = layout {
+                            env.insert_struct_info(symbol, fields);
+
+                            new_cont = expand_and_cancel(env, cont);
+
+                            env.remove_struct_info(symbol);
+                        } else {
+                            new_cont = expand_and_cancel(env, cont);
+                        }
+                    }
+                    _ => {
+                        new_cont = expand_and_cancel(env, cont);
+                    }
                 }
 
                 let stmt = Let(symbol, expr.clone(), layout.clone(), new_cont);

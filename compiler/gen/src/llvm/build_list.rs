@@ -3,7 +3,10 @@ use crate::llvm::build::{
 };
 use crate::llvm::compare::build_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
-use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout};
+use crate::llvm::refcounting::{
+    decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
+    PointerToRefcount,
+};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
@@ -685,13 +688,38 @@ pub fn list_set<'a, 'ctx, 'env>(
                 original_wrapper,
                 load_list_ptr(builder, original_wrapper, ptr_type),
             ),
-            InPlace::Clone => clone_nonempty_list(
-                env,
-                output_inplace,
-                list_len,
-                load_list_ptr(builder, original_wrapper, ptr_type),
-                elem_layout,
-            ),
+            InPlace::Clone => {
+                let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
+
+                let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, list_ptr);
+                let refcount = refcount_ptr.get_refcount(env);
+
+                let rc_is_one = refcount_is_one_comparison(env, refcount);
+
+                let source_block = env.builder.get_insert_block().unwrap();
+                let clone_block = ctx.append_basic_block(parent, "clone");
+                let done_block = ctx.append_basic_block(parent, "done");
+
+                env.builder
+                    .build_conditional_branch(rc_is_one, done_block, clone_block);
+
+                env.builder.position_at_end(clone_block);
+
+                let cloned =
+                    clone_nonempty_list(env, output_inplace, list_len, list_ptr, elem_layout).0;
+
+                env.builder.build_unconditional_branch(done_block);
+
+                env.builder.position_at_end(done_block);
+
+                let list_type = original_wrapper.get_type();
+                let merged = env.builder.build_phi(list_type, "writable_list");
+                merged.add_incoming(&[(&original_wrapper, source_block), (&cloned, clone_block)]);
+
+                let result = merged.as_basic_value().into_struct_value();
+
+                (result, load_list_ptr(builder, result, ptr_type))
+            }
         };
 
         // If we got here, we passed the bounds check, so this is an in-bounds GEP
