@@ -812,7 +812,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict.values : Dict k v -> List v
     add_type(
-        Symbol::DICT_KEYS,
+        Symbol::DICT_VALUES,
         top_level_function(
             vec![dict_type(flex(TVAR1), flex(TVAR2))],
             Box::new(list_type(flex(TVAR2))),
