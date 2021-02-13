@@ -23,14 +23,6 @@ pub struct Env<'a> {
     pub lazy_literals: bool,
 }
 
-// INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
-const INLINED_SYMBOLS: [Symbol; 4] = [
-    Symbol::NUM_ABS,
-    Symbol::NUM_ADD,
-    Symbol::NUM_SUB,
-    Symbol::BOOL_EQ,
-];
-
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
 #[derive(Debug)]

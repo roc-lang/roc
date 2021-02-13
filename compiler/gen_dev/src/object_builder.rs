@@ -1,5 +1,5 @@
 use crate::generic64::{aarch64, x86_64, Backend64Bit};
-use crate::{Backend, Env, Relocation, INLINED_SYMBOLS};
+use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use object::write;
 use object::write::{Object, StandardSection, Symbol, SymbolSection};
@@ -84,11 +84,6 @@ fn build_object<'a, B: Backend<'a>>(
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((sym, layout), proc) in procedures {
-        // This is temporary until we support passing args to functions.
-        if INLINED_SYMBOLS.contains(&sym) {
-            continue;
-        }
-
         let fn_name = layout_ids
             .get(sym, &layout)
             .to_symbol_string(sym, &env.interns);
