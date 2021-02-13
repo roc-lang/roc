@@ -31,10 +31,21 @@ fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocB
 fn hint_for_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.concat(vec![
         alloc.hint("Tag names "),
-        alloc.reflow("Tag names start with an uppercase letter, like "),
+        alloc.reflow("start with an uppercase letter, like "),
         alloc.parser_suggestion("Err"),
         alloc.text(" or "),
         alloc.parser_suggestion("Green"),
+        alloc.text("."),
+    ])
+}
+
+fn hint_for_private_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.concat(vec![
+        alloc.hint("Private tag names "),
+        alloc.reflow("start with an `@` symbol followed by an uppercase letter, like "),
+        alloc.parser_suggestion("@UID"),
+        alloc.text(" or "),
+        alloc.parser_suggestion("@SecretKey"),
         alloc.text("."),
     ])
 }
@@ -102,6 +113,24 @@ fn to_syntax_report<'a>(
 
             report(doc)
         }
+        SyntaxError::Eof(region) => {
+            let doc = alloc.stack(vec![alloc.reflow("End of Field"), alloc.region(*region)]);
+
+            Report {
+                filename,
+                doc,
+                title: "PARSE PROBLEM".to_string(),
+            }
+        }
+        SyntaxError::OutdentedTooFar => {
+            let doc = alloc.stack(vec![alloc.reflow("OutdentedTooFar")]);
+
+            Report {
+                filename,
+                doc,
+                title: "PARSE PROBLEM".to_string(),
+            }
+        }
         Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -111,8 +140,8 @@ fn to_type_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::Type<'a>,
-    _start_row: Row,
-    _start_col: Col,
+    start_row: Row,
+    start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::Type;
 
@@ -121,6 +150,82 @@ fn to_type_report<'a>(
         Type::TTagUnion(tag_union, row, col) => {
             to_ttag_union_report(alloc, filename, &tag_union, *row, *col)
         }
+        Type::TInParens(tinparens, row, col) => {
+            to_tinparens_report(alloc, filename, &tinparens, *row, *col)
+        }
+        Type::TApply(tapply, row, col) => to_tapply_report(alloc, filename, &tapply, *row, *col),
+
+        Type::TFunctionArgument(row, col) => match what_is_next(alloc.src_lines, *row, *col) {
+            Next::Other(Some(',')) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+                let region = Region::from_row_col(*row, *col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a function argument type, but I encounterd two commas in a row:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![alloc.reflow("Try removing one of them.")]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "DOUBLE COMMA".to_string(),
+                }
+            }
+            _ => todo!(),
+        },
+
+        Type::TStart(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED TYPE".to_string(),
+            }
+        }
+
+        Type::TIndentStart(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED TYPE".to_string(),
+            }
+        }
+
+        Type::TAsIndentStart(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing an inline type alias, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED INLINE ALIAS".to_string(),
+            }
+        }
+
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }
@@ -278,8 +383,6 @@ fn to_trecord_report<'a>(
 
         TRecord::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
 
-        TRecord::Syntax(error, row, col) => to_syntax_report(alloc, filename, error, row, col),
-
         TRecord::IndentOpen(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
@@ -303,7 +406,7 @@ fn to_trecord_report<'a>(
         }
 
         TRecord::IndentEnd(row, col) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, row - 1) {
+            match next_line_starts_with_close_curly(alloc.src_lines, row.saturating_sub(1)) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
@@ -372,8 +475,6 @@ fn to_ttag_union_report<'a>(
     start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::TTagUnion;
-
-    dbg!(parse_problem);
 
     match *parse_problem {
         TTagUnion::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
@@ -463,6 +564,22 @@ fn to_ttag_union_report<'a>(
                         title: "WEIRD TAG NAME".to_string(),
                     }
                 }
+                Next::Other(Some('@')) => {
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a tag union type, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.reflow(r"I was expecting to see a private tag name."),
+                        hint_for_private_tag_name(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "WEIRD TAG NAME".to_string(),
+                    }
+                }
                 _ => {
                     let doc = alloc.stack(vec![
                         alloc.reflow(r"I am partway through parsing a tag union type, but I got stuck here:"),
@@ -486,8 +603,6 @@ fn to_ttag_union_report<'a>(
         }
 
         TTagUnion::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
-
-        TTagUnion::Syntax(error, row, col) => to_syntax_report(alloc, filename, error, row, col),
 
         TTagUnion::IndentOpen(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
@@ -562,6 +677,320 @@ fn to_ttag_union_report<'a>(
         }
 
         TTagUnion::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+    }
+}
+
+fn to_tinparens_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::TInParens<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::TInParens;
+
+    match *parse_problem {
+        TInParens::Open(row, col) => {
+            match what_is_next(alloc.src_lines, row, col) {
+                Next::Keyword(keyword) => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = to_keyword_region(row, col, keyword);
+
+                    let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just saw an open parenthesis, so I was expecting to see a type next."),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Something like "),
+                        alloc.parser_suggestion("(List Person)"),
+                        alloc.text(" or "),
+                        alloc.parser_suggestion("(Result I64 Str)"),
+                    ]),
+                ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED PARENTHESES".to_string(),
+                    }
+                }
+                Next::Other(Some(c)) if c.is_alphabetic() => {
+                    debug_assert!(c.is_lowercase());
+
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                    alloc.reflow(
+                        r"I am partway through parsing a type in parentheses, but I got stuck here:",
+                    ),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.reflow(r"I was expecting to see a tag name."),
+                    hint_for_tag_name(alloc),
+                ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "WEIRD TAG NAME".to_string(),
+                    }
+                }
+                _ => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I just started parsing a type in parentheses, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(r"Tag unions look like "),
+                            alloc.parser_suggestion("[ Many I64, None ],"),
+                            alloc.reflow(" so I was expecting to see a tag name next."),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED PARENTHESES".to_string(),
+                    }
+                }
+            }
+        }
+
+        TInParens::End(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            match what_is_next(alloc.src_lines, row, col) {
+                Next::Other(Some(c)) if c.is_alphabetic() => {
+                    debug_assert!(c.is_lowercase());
+
+                    // TODO hint for tuples?
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a type in parentheses, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.reflow(r"I was expecting to see a tag name."),
+                        hint_for_tag_name(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "WEIRD TAG NAME".to_string(),
+                    }
+                }
+                _ => {
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(r"I am partway through parsing a type in parentheses, but I got stuck here:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                                alloc.reflow(
+                                    r"I was expecting to see a closing parenthesis before this, so try adding a ",
+                                ),
+                                alloc.parser_suggestion(")"),
+                                alloc.reflow(" and see if that helps?"),
+                            ]),
+                        ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED PARENTHESES".to_string(),
+                    }
+                }
+            }
+        }
+
+        TInParens::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
+
+        TInParens::IndentOpen(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc
+                    .reflow(r"I just started parsing a type in parentheses, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"Tag unions look like "),
+                    alloc.parser_suggestion("[ Many I64, None ],"),
+                    alloc.reflow(" so I was expecting to see a tag name next."),
+                ]),
+                note_for_tag_union_type_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
+            }
+        }
+
+        TInParens::IndentEnd(row, col) => {
+            match next_line_starts_with_close_square_bracket(alloc.src_lines, row - 1) {
+                Some((curly_row, curly_col)) => {
+                    let surroundings =
+                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
+                    let region = Region::from_row_col(curly_row, curly_col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            "I am partway through parsing a type in parentheses, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I need this square bracket to be indented more. Try adding more spaces before it!"),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "NEED MORE INDENTATION".to_string(),
+                    }
+                }
+                None => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a type in parentheses, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I was expecting to see a closing square "),
+                            alloc.reflow("bracket before this, so try adding a "),
+                            alloc.parser_suggestion("]"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                        note_for_tag_union_type_indent(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED PARENTHESES".to_string(),
+                    }
+                }
+            }
+        }
+
+        TInParens::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+    }
+}
+
+fn to_tapply_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::TApply,
+    _start_row: Row,
+    _start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::TApply;
+
+    match *parse_problem {
+        TApply::DoubleDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered two dots in a row:"),
+                alloc.region(region),
+                alloc.concat(vec![alloc.reflow("Try removing one of them.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "DOUBLE DOT".to_string(),
+            }
+        }
+        TApply::TrailingDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered a dot with nothing after it:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Dots are used to refer to a type in a qualified way, like "),
+                    alloc.parser_suggestion("Num.I64"),
+                    alloc.text(" or "),
+                    alloc.parser_suggestion("List.List a"),
+                    alloc.reflow(". Try adding a type name next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "TRAILING DOT".to_string(),
+            }
+        }
+        TApply::StartIsNumber(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered a number at the start of a qualified name segment:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
+                    alloc.parser_suggestion("Num.I64"),
+                    alloc.text(" or "),
+                    alloc.parser_suggestion("List.List a"),
+                    alloc.text("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD QUALIFIED NAME".to_string(),
+            }
+        }
+        TApply::StartNotUppercase(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered a lowercase letter at the start of a qualified name segment:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
+                    alloc.parser_suggestion("Num.I64"),
+                    alloc.text(" or "),
+                    alloc.parser_suggestion("List.List a"),
+                    alloc.text("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD QUALIFIED NAME".to_string(),
+            }
+        }
+
+        TApply::End(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I reached the end of the input file while parsing a qualified type name",
+                ),
+                alloc.region(region),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "END OF FILE".to_string(),
+            }
+        }
+
+        TApply::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
     }
 }
 
