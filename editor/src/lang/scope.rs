@@ -33,15 +33,17 @@ fn to_type2(
 ) -> Type2 {
     match solved_type {
         SolvedType::Alias(symbol, solved_type_variables, solved_actual) => {
-            let mut type_variables =
-                PoolVec::with_capacity(solved_type_variables.len() as u32, pool);
+            let type_variables = PoolVec::with_capacity(solved_type_variables.len() as u32, pool);
 
-            for (lowercase, solved_arg) in solved_type_variables {
+            for (type_variable_node_id, (lowercase, solved_arg)) in type_variables
+                .iter_node_ids()
+                .zip(solved_type_variables.iter())
+            {
                 let typ2 = to_type2(pool, solved_arg, free_vars, var_store);
 
                 let node = pool.add(typ2);
 
-                type_variables.push((PoolStr::new(lowercase.as_str(), pool), node));
+                pool[type_variable_node_id] = (PoolStr::new(lowercase.as_str(), pool), node);
             }
 
             let actual_typ2 = to_type2(pool, solved_actual, free_vars, var_store);
@@ -53,19 +55,19 @@ fn to_type2(
             typ2
         }
         SolvedType::TagUnion(tags, ext) => {
-            let mut new_tags = PoolVec::with_capacity(tags.len() as u32, pool);
+            let new_tags = PoolVec::with_capacity(tags.len() as u32, pool);
 
-            for (_tag_name, args) in tags {
-                let mut new_args = PoolVec::with_capacity(args.len() as u32, pool);
+            for (tag_node_id, (_tag_name, args)) in new_tags.iter_node_ids().zip(tags.iter()) {
+                let new_args = PoolVec::with_capacity(args.len() as u32, pool);
 
-                for arg in args.iter() {
+                for (arg_node_id, arg) in new_args.iter_node_ids().zip(args.iter()) {
                     let node = to_type2(pool, arg, free_vars, var_store);
 
-                    new_args.push(node);
+                    pool[arg_node_id] = node;
                 }
 
                 // tagname as PoolStr
-                new_tags.push((PoolStr::new("", pool), new_args));
+                pool[tag_node_id] = (PoolStr::new("", pool), new_args);
             }
 
             let actual_typ2 = to_type2(pool, ext, free_vars, var_store);

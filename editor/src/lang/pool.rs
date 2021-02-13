@@ -342,10 +342,6 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
         }
     }
 
-    pub fn push(&mut self, _item: T) {
-        todo!();
-    }
-
     pub fn iter(&self, pool: &'a Pool) -> impl ExactSizeIterator<Item = &'a T> {
         self.pool_list_iter(pool)
     }
