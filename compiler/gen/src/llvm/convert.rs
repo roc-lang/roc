@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
+use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
@@ -45,6 +46,18 @@ pub fn get_array_type<'ctx>(bt_enum: &BasicTypeEnum<'ctx>, size: u32) -> ArrayTy
         PointerType(typ) => typ.array_type(size),
         StructType(typ) => typ.array_type(size),
         VectorType(typ) => typ.array_type(size),
+    }
+}
+
+/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
+pub fn as_const_zero<'ctx>(bt_enum: &BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    match bt_enum {
+        ArrayType(typ) => typ.const_zero().into(),
+        IntType(typ) => typ.const_zero().into(),
+        FloatType(typ) => typ.const_zero().into(),
+        PointerType(typ) => typ.const_zero().into(),
+        StructType(typ) => typ.const_zero().into(),
+        VectorType(typ) => typ.const_zero().into(),
     }
 }
 

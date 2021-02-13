@@ -472,6 +472,24 @@ pub fn dictContains(dict: RocDict, alignment: Alignment, key: Opaque, key_width:
     }
 }
 
+// Dict.get : Dict k v, k -> { flag: bool, value: Opaque }
+pub fn dictGet(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_value: Inc) callconv(.C) extern struct { value: Opaque, flag: bool } {
+    const capacity: usize = dict.dict_slot_len;
+    const n: usize = capacity;
+    const seed: u64 = 0;
+
+    switch (dict.findIndex(capacity, seed, alignment, key, key_width, value_width, hash_fn, is_eq)) {
+        MaybeIndex.not_found => {
+            return .{ .flag = false, .value = null };
+        },
+        MaybeIndex.index => |index| {
+            var value = dict.getValue(n, index, alignment, key_width, value_width);
+            inc_value(value);
+            return .{ .flag = true, .value = value };
+        },
+    }
+}
+
 test "RocDict.init() contains nothing" {
     const key_size = @sizeOf(usize);
     const value_size = @sizeOf(usize);

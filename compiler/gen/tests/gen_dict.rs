@@ -107,4 +107,46 @@ mod gen_dict {
             i64
         );
     }
+
+    #[test]
+    fn dict_nonempty_get() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : Dict I64 F64
+                empty = Dict.insert Dict.empty 42 3.14
+
+                withDefault = \x, def ->
+                    when  x is
+                        Ok v -> v
+                        Err _ -> def
+
+                empty
+                    |> Dict.insert 42 3.14
+                    |> Dict.get 42
+                    |> withDefault 0
+                "#
+            ),
+            3.14,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                withDefault = \x, def ->
+                    when  x is
+                        Ok v -> v
+                        Err _ -> def
+
+                Dict.empty
+                    |> Dict.insert 42 3.14
+                    |> Dict.get 43
+                    |> withDefault 0
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
 }

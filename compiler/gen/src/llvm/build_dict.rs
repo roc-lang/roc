@@ -3,7 +3,7 @@ use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout,
     set_name, Env, Scope,
 };
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{as_const_zero, basic_type_from_layout};
 use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout};
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
@@ -282,6 +282,120 @@ pub fn dict_contains<'a, 'ctx, 'env>(
         ],
         &bitcode::DICT_CONTAINS,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_get<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict: BasicValueEnum<'ctx>,
+    key: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
+
+    env.builder
+        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(key_ptr, key);
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
+    let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
+
+    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, RCOperation::Inc);
+
+    // { flag: bool, value: *const u8 }
+    let result = call_bitcode_fn(
+        env,
+        &[
+            dict_ptr.into(),
+            alignment_iv.into(),
+            env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
+            key_width.into(),
+            value_width.into(),
+            hash_fn.as_global_value().as_pointer_value().into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+            inc_value_fn.as_global_value().as_pointer_value().into(),
+        ],
+        &bitcode::DICT_GET,
+    )
+    .into_struct_value();
+
+    let flag = env
+        .builder
+        .build_extract_value(result, 1, "get_flag")
+        .unwrap()
+        .into_int_value();
+
+    let value_u8_ptr = env
+        .builder
+        .build_extract_value(result, 0, "get_value_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    let start_block = env.builder.get_insert_block().unwrap();
+    let parent = start_block.get_parent().unwrap();
+
+    let if_not_null = env.context.append_basic_block(parent, "if_not_null");
+    let done_block = env.context.append_basic_block(parent, "done");
+
+    let value_bt = basic_type_from_layout(env.arena, env.context, value_layout, env.ptr_bytes);
+    let default = as_const_zero(&value_bt);
+
+    env.builder
+        .build_conditional_branch(flag, if_not_null, done_block);
+
+    env.builder.position_at_end(if_not_null);
+    let value_ptr = env
+        .builder
+        .build_bitcast(
+            value_u8_ptr,
+            value_bt.ptr_type(AddressSpace::Generic),
+            "from_opaque",
+        )
+        .into_pointer_value();
+    let loaded = env.builder.build_load(value_ptr, "load_value");
+    env.builder.build_unconditional_branch(done_block);
+
+    env.builder.position_at_end(done_block);
+    let result_phi = env.builder.build_phi(value_bt, "result");
+
+    result_phi.add_incoming(&[(&default, start_block), (&loaded, if_not_null)]);
+
+    let value = result_phi.as_basic_value();
+
+    let result = env
+        .context
+        .struct_type(&[value_bt, env.context.bool_type().into()], false)
+        .const_zero();
+
+    let result = env
+        .builder
+        .build_insert_value(result, flag, 1, "insert_flag")
+        .unwrap();
+
+    env.builder
+        .build_insert_value(result, value, 0, "insert_value")
+        .unwrap()
+        .into_struct_value()
+        .into()
 }
 
 fn build_hash_wrapper<'a, 'ctx, 'env>(

@@ -1,4 +1,6 @@
-use crate::llvm::build_dict::{dict_contains, dict_empty, dict_insert, dict_len, dict_remove};
+use crate::llvm::build_dict::{
+    dict_contains, dict_empty, dict_get, dict_insert, dict_len, dict_remove,
+};
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
@@ -4001,6 +4003,23 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
                 Layout::Builtin(Builtin::Dict(_, value_layout)) => {
                     dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictGetUnsafe => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    unreachable!("we can't make up a layout for the return value");
+                    // in other words, make sure to check whether the dict is empty first
+                }
+                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
+                    dict_get(env, layout_ids, dict, key, key_layout, value_layout)
                 }
                 _ => unreachable!("invalid dict layout"),
             }
