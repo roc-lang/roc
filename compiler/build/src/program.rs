@@ -81,11 +81,21 @@ pub fn gen_from_mono_module(
     // module.strip_debug_info();
 
     // mark our zig-defined builtins as internal
+    use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::module::Linkage;
+
+    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    debug_assert!(kind_id > 0);
+    let attr = context.create_enum_attribute(kind_id, 1);
+
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
         if name.starts_with("roc_builtins") {
             function.set_linkage(Linkage::Internal);
+        }
+
+        if name.starts_with("roc_builtins.dict") {
+            function.add_attribute(AttributeLoc::Function, attr);
         }
     }
 

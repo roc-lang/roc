@@ -172,13 +172,48 @@ pub const RocDict = extern struct {
         return self.len() == 0;
     }
 
-    pub fn clone(self: RocDict, allocator: *Allocator, in_place: InPlace, key_size: usize, value_size: usize) RocDict {
-        var new_dict = RocDict.init(allocator, self.dict_slot_len, self.dict_entries_len, key_size, value_size);
+    pub fn refcountIsOne(self: RocDict) bool {
+        return false;
+    }
+
+    pub fn makeUnique(self: RocDict, allocator: *Allocator, in_place: InPlace, alignment: Alignment, key_width: usize, value_width: usize, inc_key: Inc, inc_value: Inc) RocDict {
+        if (self.isEmpty()) {
+            return self;
+        }
+
+        if (self.refcountIsOne()) {
+            return self;
+        }
+
+        // unfortunately, we have to clone
+
+        var new_dict = RocDict.allocate(allocator, in_place, self.dict_slot_len, self.dict_entries_len, alignment.toUsize(), key_width, value_width);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, self.dict_bytes);
         var new_bytes: [*]u8 = @ptrCast([*]u8, new_dict.dict_bytes);
 
-        @memcpy(new_bytes, old_bytes, self.dict_slot_len);
+        const number_of_bytes = self.dict_slot_len * (@sizeOf(Slot) + key_width + value_width);
+        @memcpy(new_bytes, old_bytes, number_of_bytes);
+
+        // we copied potentially-refcounted values; make sure to increment
+        const size = new_dict.dict_entries_len;
+        const n = new_dict.dict_slot_len;
+        var i: usize = 0;
+
+        i = 0;
+        while (i < size) : (i += 1) {
+            new_dict.setSlot(n, i, key_width, value_width, Slot.Empty);
+        }
+
+        i = 0;
+        while (i < size) : (i += 1) {
+            inc_key(new_dict.getKey(n, i, alignment, key_width, value_width));
+        }
+
+        i = 0;
+        while (i < size) : (i += 1) {
+            inc_value(new_dict.getValue(n, i, alignment, key_width, value_width));
+        }
 
         return new_dict;
     }
@@ -316,30 +351,44 @@ pub fn dictLen(dict: RocDict) callconv(.C) usize {
 const Opaque = ?[*]u8;
 const HashFn = fn (u64, ?[*]u8) callconv(.C) u64;
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
+
+const Inc = fn (?[*]u8) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
 
 // Dict.insert : Dict k v, k, v -> Dict k v
-pub fn dictInsert(dict: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
-    const n: usize = 8;
+pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, dec_key: Dec, inc_value: Inc, dec_value: Dec, output: *RocDict) callconv(.C) void {
+    const n: usize = std.math.max(input.dict_slot_len, 8);
     const seed: u64 = 0;
 
-    var result = RocDict.allocate(
-        std.heap.c_allocator,
-        InPlace.Clone,
-        n, // number_of_slots,
-        0, // number_of_entries,
-        alignment.toUsize(),
-        key_width,
-        value_width,
-    );
+    var result: RocDict = blk: {
+        if (input.isEmpty()) {
+            var temp = RocDict.allocate(
+                std.heap.c_allocator,
+                InPlace.Clone,
+                n, // number_of_slots,
+                0, // number_of_entries,
+                alignment.toUsize(),
+                key_width,
+                value_width,
+            );
 
-    {
-        var i: usize = 0;
-        while (i < n) {
-            result.setSlot(n, i, key_width, value_width, Slot.Empty);
-            i += 1;
+            {
+                var i: usize = 0;
+                while (i < n) {
+                    temp.setSlot(n, i, key_width, value_width, Slot.Empty);
+                    i += 1;
+                }
+            }
+
+            break :blk temp;
+        } else {
+            const in_place = InPlace.Clone;
+
+            var temp = input.makeUnique(std.heap.c_allocator, in_place, alignment, key_width, value_width, inc_key, inc_value);
+
+            break :blk temp;
         }
-    }
+    };
 
     // hash the key, and modulo by the maximum size
     // (so we get an in-bounds index)
@@ -379,7 +428,7 @@ pub fn dictInsert(dict: RocDict, alignment: Alignment, key: Opaque, key_width: u
 }
 
 // Dict.remove : Dict k v, k -> Dict k v
-pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
+pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, dec_key: Dec, inc_value: Inc, dec_value: Dec, output: *RocDict) callconv(.C) void {
     const capacity: usize = input.dict_slot_len;
     const n = capacity;
     const seed: u64 = 0;

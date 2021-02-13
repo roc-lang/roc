@@ -5,6 +5,7 @@ use crate::llvm::build::{
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout};
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, StructValue};
 use inkwell::AddressSpace;
@@ -127,7 +128,10 @@ pub fn dict_insert<'a, 'ctx, 'env>(
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
 
+    let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Inc);
     let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Dec);
+
+    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, RCOperation::Inc);
     let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, RCOperation::Dec);
 
     call_void_bitcode_fn(
@@ -141,7 +145,9 @@ pub fn dict_insert<'a, 'ctx, 'env>(
             value_width.into(),
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
+            inc_key_fn.as_global_value().as_pointer_value().into(),
             dec_key_fn.as_global_value().as_pointer_value().into(),
+            inc_value_fn.as_global_value().as_pointer_value().into(),
             dec_value_fn.as_global_value().as_pointer_value().into(),
             result_ptr.into(),
         ],
@@ -194,7 +200,10 @@ pub fn dict_remove<'a, 'ctx, 'env>(
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
 
+    let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Inc);
     let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, RCOperation::Dec);
+
+    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, RCOperation::Inc);
     let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, RCOperation::Dec);
 
     call_void_bitcode_fn(
@@ -207,7 +216,9 @@ pub fn dict_remove<'a, 'ctx, 'env>(
             value_width.into(),
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
+            inc_key_fn.as_global_value().as_pointer_value().into(),
             dec_key_fn.as_global_value().as_pointer_value().into(),
+            inc_value_fn.as_global_value().as_pointer_value().into(),
             dec_value_fn.as_global_value().as_pointer_value().into(),
             result_ptr.into(),
         ],
@@ -299,6 +310,11 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
                 &[seed_type.into(), arg_type.into()],
             );
 
+            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+            debug_assert!(kind_id > 0);
+            let attr = env.context.create_enum_attribute(kind_id, 1);
+            function_value.add_attribute(AttributeLoc::Function, attr);
+
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);
 
@@ -362,6 +378,11 @@ fn build_eq_wrapper<'a, 'ctx, 'env>(
                 &[arg_type.into(), arg_type.into()],
             );
 
+            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+            debug_assert!(kind_id > 0);
+            let attr = env.context.create_enum_attribute(kind_id, 1);
+            function_value.add_attribute(AttributeLoc::Function, attr);
+
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);
 
@@ -401,6 +422,11 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
         .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
 
+    let fn_name = match rc_operation {
+        RCOperation::Inc => format!("{}_inc", fn_name),
+        RCOperation::Dec => format!("{}_dec", fn_name),
+    };
+
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
@@ -412,6 +438,11 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
                 env.context.void_type().into(),
                 &[arg_type.into()],
             );
+
+            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+            debug_assert!(kind_id > 0);
+            let attr = env.context.create_enum_attribute(kind_id, 1);
+            function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);
