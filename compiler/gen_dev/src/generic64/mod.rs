@@ -34,13 +34,11 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        leaf_function: bool,
         general_saved_regs: &[GeneralReg],
         requested_stack_size: i32,
     ) -> Result<i32, String>;
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        leaf_function: bool,
         general_saved_regs: &[GeneralReg],
         aligned_stack_size: i32,
     ) -> Result<(), String>;
@@ -77,10 +75,17 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: GeneralReg, imm: i64);
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+
+    fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
+    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
+    fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
+    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
+
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
+
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn sub_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
@@ -104,9 +109,9 @@ enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // I think whenever a symbol would be used, we specify layout anyways.
     GeneralReg(GeneralReg),
     FloatReg(FloatReg),
-    Stack(i32),
-    StackAndGeneralReg(GeneralReg, i32),
-    StackAndFloatReg(FloatReg, i32),
+    Base(i32),
+    BaseAndGeneralReg(GeneralReg, i32),
+    BaseAndFloatReg(FloatReg, i32),
 }
 
 pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
@@ -123,10 +128,6 @@ pub struct Backend64Bit<
     env: &'a Env<'a>,
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
-
-    /// leaf_function is true if the only calls this function makes are tail calls.
-    /// If that is the case, we can skip emitting the frame pointer and updating the stack.
-    leaf_function: bool,
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
@@ -164,7 +165,6 @@ impl<
             phantom_asm: PhantomData,
             phantom_cc: PhantomData,
             env,
-            leaf_function: true,
             buf: bumpalo::vec!(in env.arena),
             relocs: bumpalo::vec!(in env.arena),
             last_seen_map: MutMap::default(),
@@ -187,7 +187,6 @@ impl<
 
     fn reset(&mut self) {
         self.stack_size = 0;
-        self.leaf_function = true;
         self.last_seen_map.clear();
         self.free_map.clear();
         self.symbols_map.clear();
@@ -202,11 +201,6 @@ impl<
         self.float_used_regs.clear();
         self.float_free_regs
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
-    }
-
-    fn set_not_leaf_function(&mut self) {
-        self.leaf_function = false;
-        self.stack_size = CC::SHADOW_SPACE_SIZE as i32;
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
@@ -231,15 +225,14 @@ impl<
         // Setup stack.
         let mut used_regs = bumpalo::vec![in self.env.arena];
         used_regs.extend(&self.general_used_callee_saved_regs);
-        let aligned_stack_size =
-            CC::setup_stack(&mut out, self.leaf_function, &used_regs, self.stack_size)?;
+        let aligned_stack_size = CC::setup_stack(&mut out, &used_regs, self.stack_size)?;
         let setup_offset = out.len();
 
         // Add function body.
         out.extend(&self.buf);
 
         // Cleanup stack.
-        CC::cleanup_stack(&mut out, self.leaf_function, &used_regs, aligned_stack_size)?;
+        CC::cleanup_stack(&mut out, &used_regs, aligned_stack_size)?;
         ASM::ret(&mut out);
 
         // Update relocs to include stack setup offset.
@@ -489,19 +482,19 @@ impl<
             Some(SymbolStorage::FloatReg(_reg)) => {
                 Err("Cannot load floating point symbol into GeneralReg".to_string())
             }
-            Some(SymbolStorage::StackAndGeneralReg(reg, offset)) => {
+            Some(SymbolStorage::BaseAndGeneralReg(reg, offset)) => {
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndGeneralReg(reg, offset));
+                    .insert(*sym, SymbolStorage::BaseAndGeneralReg(reg, offset));
                 Ok(reg)
             }
-            Some(SymbolStorage::StackAndFloatReg(_reg, _offset)) => {
+            Some(SymbolStorage::BaseAndFloatReg(_reg, _offset)) => {
                 Err("Cannot load floating point symbol into GeneralReg".to_string())
             }
-            Some(SymbolStorage::Stack(offset)) => {
+            Some(SymbolStorage::Base(offset)) => {
                 let reg = self.claim_general_reg(sym)?;
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndGeneralReg(reg, offset));
-                ASM::mov_reg64_stack32(&mut self.buf, reg, offset as i32);
+                    .insert(*sym, SymbolStorage::BaseAndGeneralReg(reg, offset));
+                ASM::mov_reg64_base32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
             None => Err(format!("Unknown symbol: {}", sym)),
@@ -518,19 +511,19 @@ impl<
                 self.symbols_map.insert(*sym, SymbolStorage::FloatReg(reg));
                 Ok(reg)
             }
-            Some(SymbolStorage::StackAndGeneralReg(_reg, _offset)) => {
+            Some(SymbolStorage::BaseAndGeneralReg(_reg, _offset)) => {
                 Err("Cannot load integer point symbol into FloatReg".to_string())
             }
-            Some(SymbolStorage::StackAndFloatReg(reg, offset)) => {
+            Some(SymbolStorage::BaseAndFloatReg(reg, offset)) => {
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndFloatReg(reg, offset));
+                    .insert(*sym, SymbolStorage::BaseAndFloatReg(reg, offset));
                 Ok(reg)
             }
-            Some(SymbolStorage::Stack(offset)) => {
+            Some(SymbolStorage::Base(offset)) => {
                 let reg = self.claim_float_reg(sym)?;
                 self.symbols_map
-                    .insert(*sym, SymbolStorage::StackAndFloatReg(reg, offset));
-                ASM::mov_freg64_stack32(&mut self.buf, reg, offset as i32);
+                    .insert(*sym, SymbolStorage::BaseAndFloatReg(reg, offset));
+                ASM::mov_freg64_base32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
             None => Err(format!("Unknown symbol: {}", sym)),
@@ -542,26 +535,28 @@ impl<
         match val {
             Some(SymbolStorage::GeneralReg(reg)) => {
                 let offset = self.increase_stack_size(8)?;
-                ASM::mov_stack32_reg64(&mut self.buf, offset as i32, reg);
-                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
+                // For base addresssing, use the negative offset.
+                ASM::mov_base32_reg64(&mut self.buf, -offset, reg);
+                self.symbols_map.insert(*sym, SymbolStorage::Base(-offset));
                 Ok(())
             }
             Some(SymbolStorage::FloatReg(reg)) => {
                 let offset = self.increase_stack_size(8)?;
-                ASM::mov_stack32_freg64(&mut self.buf, offset as i32, reg);
-                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
+                // For base addresssing, use the negative offset.
+                ASM::mov_base32_freg64(&mut self.buf, -offset, reg);
+                self.symbols_map.insert(*sym, SymbolStorage::Base(-offset));
                 Ok(())
             }
-            Some(SymbolStorage::StackAndGeneralReg(_, offset)) => {
-                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
+            Some(SymbolStorage::BaseAndGeneralReg(_, offset)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::Base(offset));
                 Ok(())
             }
-            Some(SymbolStorage::StackAndFloatReg(_, offset)) => {
-                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
+            Some(SymbolStorage::BaseAndFloatReg(_, offset)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::Base(offset));
                 Ok(())
             }
-            Some(SymbolStorage::Stack(offset)) => {
-                self.symbols_map.insert(*sym, SymbolStorage::Stack(offset));
+            Some(SymbolStorage::Base(offset)) => {
+                self.symbols_map.insert(*sym, SymbolStorage::Base(offset));
                 Ok(())
             }
             None => Err(format!("Unknown symbol: {}", sym)),

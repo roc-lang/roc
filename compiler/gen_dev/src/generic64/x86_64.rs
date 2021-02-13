@@ -143,21 +143,19 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        leaf_function: bool,
         general_saved_regs: &[X86_64GeneralReg],
         requested_stack_size: i32,
     ) -> Result<i32, String> {
-        x86_64_generic_setup_stack(buf, leaf_function, general_saved_regs, requested_stack_size)
+        x86_64_generic_setup_stack(buf, general_saved_regs, requested_stack_size)
     }
 
     #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        leaf_function: bool,
         general_saved_regs: &[X86_64GeneralReg],
         aligned_stack_size: i32,
     ) -> Result<(), String> {
-        x86_64_generic_cleanup_stack(buf, leaf_function, general_saved_regs, aligned_stack_size)
+        x86_64_generic_cleanup_stack(buf, general_saved_regs, aligned_stack_size)
     }
 }
 
@@ -256,52 +254,45 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
     #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        leaf_function: bool,
         saved_regs: &[X86_64GeneralReg],
         requested_stack_size: i32,
     ) -> Result<i32, String> {
-        x86_64_generic_setup_stack(buf, leaf_function, saved_regs, requested_stack_size)
+        x86_64_generic_setup_stack(buf, saved_regs, requested_stack_size)
     }
 
     #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        leaf_function: bool,
         saved_regs: &[X86_64GeneralReg],
         aligned_stack_size: i32,
     ) -> Result<(), String> {
-        x86_64_generic_cleanup_stack(buf, leaf_function, saved_regs, aligned_stack_size)
+        x86_64_generic_cleanup_stack(buf, saved_regs, aligned_stack_size)
     }
 }
 
 #[inline(always)]
 fn x86_64_generic_setup_stack<'a>(
     buf: &mut Vec<'a, u8>,
-    leaf_function: bool,
     saved_regs: &[X86_64GeneralReg],
     requested_stack_size: i32,
 ) -> Result<i32, String> {
-    if !leaf_function {
-        X86_64Assembler::push_reg64(buf, X86_64GeneralReg::RBP);
-        X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RBP, X86_64GeneralReg::RSP);
-    }
-    for reg in saved_regs {
-        X86_64Assembler::push_reg64(buf, *reg);
-    }
+    X86_64Assembler::push_reg64(buf, X86_64GeneralReg::RBP);
+    X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RBP, X86_64GeneralReg::RSP);
 
-    // full size is upcast to i64 to make sure we don't overflow here.
-    let full_size = 8 * saved_regs.len() as i64 + requested_stack_size as i64;
-    let alignment = if full_size <= 0 {
+    let full_stack_size = requested_stack_size
+        .checked_add(8 * saved_regs.len() as i32)
+        .ok_or("Ran out of stack space")?;
+    let alignment = if full_stack_size <= 0 {
         0
     } else {
-        full_size % STACK_ALIGNMENT as i64
+        full_stack_size % STACK_ALIGNMENT as i32
     };
     let offset = if alignment == 0 {
         0
     } else {
         STACK_ALIGNMENT - alignment as u8
     };
-    if let Some(aligned_stack_size) = requested_stack_size.checked_add(offset as i32) {
+    if let Some(aligned_stack_size) = full_stack_size.checked_add(offset as i32) {
         if aligned_stack_size > 0 {
             X86_64Assembler::sub_reg64_reg64_imm32(
                 buf,
@@ -309,6 +300,13 @@ fn x86_64_generic_setup_stack<'a>(
                 X86_64GeneralReg::RSP,
                 aligned_stack_size,
             );
+
+            // Put values at the top of the stack  to avoid conflicts with previously saved variables.
+            let mut offset = aligned_stack_size;
+            for reg in saved_regs {
+                offset -= 8;
+                X86_64Assembler::mov_base32_reg64(buf, -offset, *reg);
+            }
             Ok(aligned_stack_size)
         } else {
             Ok(0)
@@ -321,11 +319,15 @@ fn x86_64_generic_setup_stack<'a>(
 #[inline(always)]
 fn x86_64_generic_cleanup_stack<'a>(
     buf: &mut Vec<'a, u8>,
-    leaf_function: bool,
     saved_regs: &[X86_64GeneralReg],
     aligned_stack_size: i32,
 ) -> Result<(), String> {
     if aligned_stack_size > 0 {
+        let mut offset = aligned_stack_size;
+        for reg in saved_regs {
+            offset -= 8;
+            X86_64Assembler::mov_reg64_base32(buf, *reg, -offset);
+        }
         X86_64Assembler::add_reg64_reg64_imm32(
             buf,
             X86_64GeneralReg::RSP,
@@ -333,13 +335,8 @@ fn x86_64_generic_cleanup_stack<'a>(
             aligned_stack_size,
         );
     }
-    for reg in saved_regs.iter().rev() {
-        X86_64Assembler::pop_reg64(buf, *reg);
-    }
-    if !leaf_function {
-        X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RSP, X86_64GeneralReg::RBP);
-        X86_64Assembler::pop_reg64(buf, X86_64GeneralReg::RBP);
-    }
+    X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RSP, X86_64GeneralReg::RBP);
+    X86_64Assembler::pop_reg64(buf, X86_64GeneralReg::RBP);
     Ok(())
 }
 
@@ -431,6 +428,26 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
         mov_reg64_reg64(buf, dst, src);
     }
+
+    #[inline(always)]
+    fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _offset: i32) {
+        unimplemented!(
+            "loading floating point reg from base offset not yet implemented for X86_64"
+        );
+    }
+    #[inline(always)]
+    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+        mov_reg64_base32(buf, dst, offset);
+    }
+    #[inline(always)]
+    fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: X86_64FloatReg) {
+        unimplemented!("saving floating point reg to base offset not yet implemented for X86_64");
+    }
+    #[inline(always)]
+    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+        mov_base32_reg64(buf, offset, src);
+    }
+
     #[inline(always)]
     fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _offset: i32) {
         unimplemented!("loading floating point reg from stack not yet implemented for X86_64");
@@ -643,7 +660,33 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
     binop_reg64_reg64(0x89, buf, dst, src);
 }
 
-/// `MOV r64,r/m64` -> Move r/m64 to r64.
+/// `MOV r64,r/m64` -> Move r/m64 to r64. where m64 references the base pionter.
+#[inline(always)]
+fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+    // This can be optimized based on how many bytes the offset actually is.
+    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
+    // Also, this may technically be faster genration since stack operations should be so common.
+    let rex = add_reg_extension(dst, REX_W);
+    let dst_mod = (dst as u8 % 8) << 3;
+    buf.reserve(8);
+    buf.extend(&[rex, 0x8B, 0x85 + dst_mod]);
+    buf.extend(&offset.to_le_bytes());
+}
+
+/// `MOV r/m64,r64` -> Move r64 to r/m64. where m64 references the base pionter.
+#[inline(always)]
+fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+    // This can be optimized based on how many bytes the offset actually is.
+    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
+    // Also, this may technically be faster genration since stack operations should be so common.
+    let rex = add_reg_extension(src, REX_W);
+    let src_mod = (src as u8 % 8) << 3;
+    buf.reserve(8);
+    buf.extend(&[rex, 0x89, 0x85 + src_mod]);
+    buf.extend(&offset.to_le_bytes());
+}
+
+/// `MOV r64,r/m64` -> Move r/m64 to r64. where m64 references the stack pionter.
 #[inline(always)]
 fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
     // This can be optimized based on how many bytes the offset actually is.
@@ -656,7 +699,7 @@ fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) 
     buf.extend(&offset.to_le_bytes());
 }
 
-/// `MOV r/m64,r64` -> Move r64 to r/m64.
+/// `MOV r/m64,r64` -> Move r64 to r/m64. where m64 references the stack pionter.
 #[inline(always)]
 fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
     // This can be optimized based on how many bytes the offset actually is.
@@ -973,6 +1016,36 @@ mod tests {
             buf.clear();
             mov_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_mov_reg64_base32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, offset), expected) in &[
+            ((X86_64GeneralReg::RAX, TEST_I32), [0x48, 0x8B, 0x85]),
+            ((X86_64GeneralReg::R15, TEST_I32), [0x4C, 0x8B, 0xBD]),
+        ] {
+            buf.clear();
+            mov_reg64_base32(&mut buf, *dst, *offset);
+            assert_eq!(expected, &buf[..3]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
+        }
+    }
+
+    #[test]
+    fn test_mov_base32_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((offset, src), expected) in &[
+            ((TEST_I32, X86_64GeneralReg::RAX), [0x48, 0x89, 0x85]),
+            ((TEST_I32, X86_64GeneralReg::R15), [0x4C, 0x89, 0xBD]),
+        ] {
+            buf.clear();
+            mov_base32_reg64(&mut buf, *offset, *src);
+            assert_eq!(expected, &buf[..3]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
     }
 

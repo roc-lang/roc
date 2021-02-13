@@ -338,11 +338,7 @@ where
     /// set_free_map sets the free map to the given map.
     fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>);
 
-    /// set_not_leaf_function lets the backend know that it is not a leaf function.
-    fn set_not_leaf_function(&mut self);
-
     /// scan_ast runs through the ast and fill the last seen map.
-    /// It also checks if the function is a leaf function or not.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
     fn scan_ast(&mut self, stmt: &Stmt<'a>) {
         match stmt {
@@ -469,18 +465,12 @@ where
         }
 
         match call_type {
-            CallType::ByName { name: sym, .. } => {
-                // For functions that we won't inline, we should not be a leaf function.
-                if !INLINED_SYMBOLS.contains(sym) {
-                    self.set_not_leaf_function();
-                }
-            }
+            CallType::ByName { .. } => {}
             CallType::ByPointer { name: sym, .. } => {
-                self.set_not_leaf_function();
                 self.set_last_seen(*sym, stmt);
             }
             CallType::LowLevel { .. } => {}
-            CallType::Foreign { .. } => self.set_not_leaf_function(),
+            CallType::Foreign { .. } => {}
         }
     }
 }
