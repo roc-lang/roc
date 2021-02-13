@@ -42,7 +42,7 @@ fn hint_for_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
 fn hint_for_private_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.concat(vec![
         alloc.hint("Private tag names "),
-        alloc.reflow("start with a `@` symbol followed by an uppercase letter, like "),
+        alloc.reflow("start with an `@` symbol followed by an uppercase letter, like "),
         alloc.parser_suggestion("@UID"),
         alloc.text(" or "),
         alloc.parser_suggestion("@SecretKey"),
