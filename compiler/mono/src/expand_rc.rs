@@ -430,22 +430,17 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                             .get_mut(structure)
                             .and_then(|map| map.remove(index));
                     }
-                    Expr::Struct(_) => match layout {
-                        Layout::Struct(fields) => {
+                    Expr::Struct(_) => {
+                        if let Layout::Struct(fields) = layout {
                             env.insert_struct_info(symbol, fields);
 
                             new_cont = expand_and_cancel(env, cont);
 
                             env.remove_struct_info(symbol);
-                        }
-                        Layout::Closure(_, _closure_layout, _) => {
-                            // TODO figure out if we can do better with closures
+                        } else {
                             new_cont = expand_and_cancel(env, cont);
                         }
-                        _ => {
-                            unreachable!("struct must have struct layout, but got {:?}", layout);
-                        }
-                    },
+                    }
                     _ => {
                         new_cont = expand_and_cancel(env, cont);
                     }
