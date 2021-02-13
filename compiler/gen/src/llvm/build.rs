@@ -9,7 +9,7 @@ use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_int, str_join_with,
     str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
 };
-use crate::llvm::compare::{build_eq, build_neq, generic_eq, generic_neq};
+use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
     collection, get_fn_type, get_ptr_type, ptr_int,
