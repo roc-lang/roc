@@ -29,7 +29,7 @@ pub enum Type2 {
     },
 
     EmptyTagUnion,
-    TagUnion(PoolVec<(PoolStr, PoolVec<TypeId>)>, TypeId),
+    TagUnion(PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId),
     RecursiveTagUnion(Variable, PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId),
 
     EmptyRec,
