@@ -58,7 +58,7 @@ fn to_type2(
             let new_tags = PoolVec::with_capacity(tags.len() as u32, pool);
 
             for (tag_node_id, (_tag_name, args)) in new_tags.iter_node_ids().zip(tags.iter()) {
-                let new_args = PoolVec::with_capacity(args.len() as u32, pool);
+                let new_args: PoolVec<Type2> = PoolVec::with_capacity(args.len() as u32, pool);
 
                 for (arg_node_id, arg) in new_args.iter_node_ids().zip(args.iter()) {
                     let node = to_type2(pool, arg, free_vars, var_store);
@@ -78,6 +78,7 @@ fn to_type2(
 
             typ2
         }
+        SolvedType::EmptyTagUnion => Type2::EmptyTagUnion,
         rest => todo!("{:?}", rest),
     }
 }
@@ -110,8 +111,9 @@ impl Scope {
             let BuiltinAlias { vars, typ, .. } = builtin_alias;
 
             let mut free_vars = FreeVars::default();
-            let typ = solved_type_to_type_id(pool, &typ, &mut free_vars, var_store);
+
             // roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+            let actual = solved_type_to_type_id(pool, &typ, &mut free_vars, var_store);
 
             // make sure to sort these variables to make them line up with the type arguments
             let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
@@ -131,7 +133,7 @@ impl Scope {
             }
 
             let alias = Alias {
-                actual: typ,
+                actual,
                 /// We know that builtin aliases have no hiddden variables (e.g. in closures)
                 hidden_variables: PoolVec::empty(pool),
                 targs: variables,
