@@ -39,6 +39,7 @@ pub enum LowLevel {
     DictUnion,
     DictIntersection,
     DictDifference,
+    DictWalk,
     NumAdd,
     NumAddWrap,
     NumAddChecked,

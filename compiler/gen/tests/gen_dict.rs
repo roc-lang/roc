@@ -497,4 +497,26 @@ mod gen_dict {
             &[i64]
         );
     }
+
+    #[test]
+    fn walk_sum_keys() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 I64
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 1
+                        |> Dict.insert 2 2
+                        |> Dict.insert 3 3
+                        |> Dict.insert 4 4
+                        |> Dict.insert 5 5
+
+                Dict.walk dict1 (\k, _, a -> k + a) 0 
+                "#
+            ),
+            15,
+            i64
+        );
+    }
 }

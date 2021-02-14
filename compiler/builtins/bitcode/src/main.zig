@@ -19,6 +19,7 @@ comptime {
     exportDictFn(dict.dictUnion, "union");
     exportDictFn(dict.dictIntersection, "intersection");
     exportDictFn(dict.dictDifference, "difference");
+    exportDictFn(dict.dictWalk, "walk");
 
     exportDictFn(hash.wyhash, "hash");
     exportDictFn(hash.wyhash_rocstr, "hash_str");

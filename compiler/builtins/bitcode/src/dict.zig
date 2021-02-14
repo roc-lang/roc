@@ -708,6 +708,28 @@ pub fn dictDifference(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_
     }
 }
 
+const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
+    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+
+    var i: usize = 0;
+    const size = dict.capacity();
+    while (i < size) : (i += 1) {
+        switch (dict.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict.getKey(i, alignment, key_width, value_width);
+                const value = dict.getValue(i, alignment, key_width, value_width);
+
+                stepper_caller(stepper, key, value, output);
+            },
+            else => {},
+        }
+    }
+
+    const data_bytes = dict.capacity() * slotSize(key_width, value_width);
+    decref(std.heap.c_allocator, alignment, dict.dict_bytes, data_bytes);
+}
+
 fn decref(
     allocator: *Allocator,
     alignment: Alignment,

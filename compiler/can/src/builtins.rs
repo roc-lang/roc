@@ -92,6 +92,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_UNION=> dict_union,
         DICT_INTERSECTION=> dict_intersection,
         DICT_DIFFERENCE=> dict_difference,
+        DICT_WALK=> dict_walk,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -200,6 +201,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_UNION=> dict_union,
         Symbol::DICT_INTERSECTION=> dict_intersection,
         Symbol::DICT_DIFFERENCE=> dict_difference,
+        Symbol::DICT_WALK=> dict_walk,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -2179,6 +2181,35 @@ fn dict_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Dict.intersection : Dict k v, Dict k v -> Dict k v
 fn dict_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
     dict_dict_dict(symbol, LowLevel::DictIntersection, var_store)
+}
+
+/// Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+fn dict_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let accum_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictWalk,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (func_var, Var(Symbol::ARG_2)),
+            (accum_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: accum_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (dict_var, Symbol::ARG_1),
+            (func_var, Symbol::ARG_2),
+            (accum_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        accum_var,
+    )
 }
 
 /// Num.rem : Int, Int -> Result Int [ DivByZero ]*

@@ -1,7 +1,7 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout,
-    set_name, Env, Scope,
+    set_name, Env, Scope, FAST_CALL_CONV,
 };
 use crate::llvm::convert::{self, as_const_zero, basic_type_from_layout, collection};
 use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout, Mode};
@@ -686,6 +686,73 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn dict_walk<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _layout_ids: &mut LayoutIds<'a>,
+    dict: BasicValueEnum<'ctx>,
+    stepper: BasicValueEnum<'ctx>,
+    accum: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    accum_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+
+    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    env.builder
+        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+
+    let stepper_ptr = stepper.into_pointer_value();
+    dbg!(stepper_ptr);
+
+    let stepper_caller = build_stepper_caller(env, key_layout, value_layout, accum_layout)
+        .as_global_value()
+        .as_pointer_value();
+
+    let accum_bt = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes);
+    let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
+    env.builder.build_store(accum_ptr, accum);
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let accum_width = env
+        .ptr_int()
+        .const_int(accum_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let output_ptr = builder.build_alloca(accum_bt, "output_ptr");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            dict_ptr.into(),
+            env.builder.build_bitcast(stepper_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            env.builder.build_bitcast(accum_ptr, u8_ptr, "to_opaque"),
+            alignment_iv.into(),
+            key_width.into(),
+            value_width.into(),
+            accum_width.into(),
+            env.builder.build_bitcast(output_ptr, u8_ptr, "to_opaque"),
+        ],
+        &bitcode::DICT_WALK,
+    );
+
+    env.builder.build_load(output_ptr, "load_output_ptr")
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn dict_values<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -955,6 +1022,117 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             function_value
         }
     };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    function_value
+}
+
+fn build_stepper_caller<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    accum_layout: &Layout<'a>,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let fn_name = "dict_stepper_caller";
+
+    let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let function_value = crate::llvm::refcounting::build_header_help(
+        env,
+        &fn_name,
+        env.context.void_type().into(),
+        &[
+            arg_type.into(),
+            arg_type.into(),
+            arg_type.into(),
+            arg_type.into(),
+        ],
+    );
+
+    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    debug_assert!(kind_id > 0);
+    let attr = env.context.create_enum_attribute(kind_id, 1);
+    // function_value.add_attribute(AttributeLoc::Function, attr);
+
+    let entry = env.context.append_basic_block(function_value, "entry");
+    env.builder.position_at_end(entry);
+
+    debug_info_init!(env, function_value);
+
+    let mut it = function_value.get_param_iter();
+    let closure_ptr = it.next().unwrap().into_pointer_value();
+    let key_ptr = it.next().unwrap().into_pointer_value();
+    let value_ptr = it.next().unwrap().into_pointer_value();
+    let accum_ptr = it.next().unwrap().into_pointer_value();
+
+    set_name(closure_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
+    set_name(key_ptr.into(), Symbol::ARG_2.ident_string(&env.interns));
+    set_name(value_ptr.into(), Symbol::ARG_3.ident_string(&env.interns));
+    set_name(accum_ptr.into(), Symbol::ARG_4.ident_string(&env.interns));
+
+    let closure_layout = Layout::FunctionPointer(
+        env.arena.alloc([
+            key_layout.clone(),
+            value_layout.clone(),
+            accum_layout.clone(),
+        ]),
+        accum_layout,
+    );
+
+    let closure_type =
+        basic_type_from_layout(env.arena, env.context, &closure_layout, env.ptr_bytes);
+
+    let key_type = basic_type_from_layout(env.arena, env.context, key_layout, env.ptr_bytes)
+        .ptr_type(AddressSpace::Generic);
+
+    let value_type = basic_type_from_layout(env.arena, env.context, value_layout, env.ptr_bytes)
+        .ptr_type(AddressSpace::Generic);
+
+    let accum_type = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes)
+        .ptr_type(AddressSpace::Generic);
+
+    let fpointer = env
+        .builder
+        .build_bitcast(closure_ptr, closure_type, "load_opaque")
+        .into_pointer_value();
+
+    let key_cast = env
+        .builder
+        .build_bitcast(key_ptr, key_type, "load_opaque")
+        .into_pointer_value();
+
+    let value_cast = env
+        .builder
+        .build_bitcast(value_ptr, value_type, "load_opaque")
+        .into_pointer_value();
+
+    let accum_cast = env
+        .builder
+        .build_bitcast(accum_ptr, accum_type, "load_opaque")
+        .into_pointer_value();
+
+    let key = env.builder.build_load(key_cast, "load_opaque");
+    let value = env.builder.build_load(value_cast, "load_opaque");
+    let accum = env.builder.build_load(accum_cast, "load_opaque");
+
+    let call = env
+        .builder
+        .build_call(fpointer, &[key, value, accum], "tmp");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    let result = call
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
+    env.builder.build_store(accum_cast, result);
+    env.builder.build_return(None);
 
     env.builder.position_at_end(block);
     env.builder

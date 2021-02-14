@@ -612,5 +612,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         DictGetUnsafe => arena.alloc_slice_copy(&[borrowed, borrowed]),
         DictKeys | DictValues => arena.alloc_slice_copy(&[borrowed]),
         DictUnion | DictDifference | DictIntersection => arena.alloc_slice_copy(&[owned, borrowed]),
+
+        // borrow function argument so we don't have to worry about RC of the closure
+        DictWalk => arena.alloc_slice_copy(&[owned, borrowed, owned]),
     }
 }

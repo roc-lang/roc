@@ -1,6 +1,6 @@
 use crate::llvm::build_dict::{
     dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
-    dict_keys, dict_len, dict_remove, dict_union, dict_values,
+    dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk,
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
@@ -4122,6 +4122,31 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
                 }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictWalk => {
+            debug_assert_eq!(args.len(), 3);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (stepper, _) = load_symbol_and_layout(scope, &args[1]);
+            let (accum, accum_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => dict_walk(
+                    env,
+                    layout_ids,
+                    dict,
+                    stepper,
+                    accum,
+                    key_layout,
+                    value_layout,
+                    accum_layout,
+                ),
                 _ => unreachable!("invalid dict layout"),
             }
         }

@@ -855,6 +855,23 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+    add_type(
+        Symbol::DICT_WALK,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                closure(
+                    vec![flex(TVAR1), flex(TVAR2), flex(TVAR3)],
+                    TVAR4,
+                    Box::new(flex(TVAR3)),
+                ),
+                flex(TVAR3),
+            ],
+            Box::new(flex(TVAR3)),
+        ),
+    );
+
     // Set module
 
     // empty : Set a
