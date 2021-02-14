@@ -5,8 +5,6 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
-const level_size = 32;
-
 const INITIAL_SEED = 0xc70f6907;
 const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
 const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
@@ -31,10 +29,11 @@ const MaybeIndex = union(MaybeIndexTag) {
 };
 
 fn nextSeed(seed: u64) u64 {
+    // TODO is this a valid way to get a new seed? are there better ways?
     return seed + 1;
 }
 
-fn total_slots_at_level(input: usize) usize {
+fn totalCapacityAtLevel(input: usize) usize {
     if (input == 0) {
         return 0;
     }
@@ -106,17 +105,6 @@ pub const RocDict = extern struct {
         };
     }
 
-    pub fn deinit(self: RocDict, allocator: *Allocator, key_size: usize, value_size: usize) void {
-        if (!self.isEmpty()) {
-            const slot_size = slotSize(key_size, value_size);
-
-            const dict_bytes_ptr: [*]u8 = self.dict_bytes orelse unreachable;
-
-            const dict_bytes: []u8 = dict_bytes_ptr[0..(self.number_of_levels)];
-            allocator.free(dict_bytes);
-        }
-    }
-
     pub fn allocate(
         allocator: *Allocator,
         number_of_levels: usize,
@@ -125,7 +113,7 @@ pub const RocDict = extern struct {
         key_size: usize,
         value_size: usize,
     ) RocDict {
-        const number_of_slots = total_slots_at_level(number_of_levels);
+        const number_of_slots = totalCapacityAtLevel(number_of_levels);
         const slot_size = slotSize(key_size, value_size);
         const data_bytes = number_of_slots * slot_size;
 
@@ -147,7 +135,7 @@ pub const RocDict = extern struct {
         const slot_size = slotSize(key_width, value_width);
 
         const old_capacity = self.capacity();
-        const new_capacity = total_slots_at_level(new_level);
+        const new_capacity = totalCapacityAtLevel(new_level);
         const delta_capacity = new_capacity - old_capacity;
 
         const data_bytes = new_capacity * slot_size;
@@ -155,8 +143,7 @@ pub const RocDict = extern struct {
 
         // transfer the memory
 
-        if (old_capacity > 0) {
-            const source_ptr = self.dict_bytes orelse unreachable;
+        if (self.dict_bytes) |source_ptr| {
             const dest_ptr = first_slot;
 
             var source_offset: usize = 0;
@@ -208,10 +195,6 @@ pub const RocDict = extern struct {
         return @ptrCast([*]u8, self.dict_bytes);
     }
 
-    pub fn contains(self: RocDict, key_size: usize, key_ptr: *const c_void, hash_code: u64) bool {
-        return false;
-    }
-
     pub fn len(self: RocDict) usize {
         return self.dict_entries_len;
     }
@@ -221,17 +204,18 @@ pub const RocDict = extern struct {
     }
 
     pub fn isUnique(self: RocDict) bool {
+        // the empty dict is unique (in the sense that copying it will not leak memory)
         if (self.isEmpty()) {
             return true;
         }
 
+        // otherwise, check if the refcount is one
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.dict_bytes));
-
         return (ptr - 1)[0] == REFCOUNT_ONE;
     }
 
     pub fn capacity(self: RocDict) usize {
-        return total_slots_at_level(self.number_of_levels);
+        return totalCapacityAtLevel(self.number_of_levels);
     }
 
     pub fn makeUnique(self: RocDict, allocator: *Allocator, alignment: Alignment, key_width: usize, value_width: usize) RocDict {
@@ -264,21 +248,15 @@ pub const RocDict = extern struct {
     fn getSlot(self: *const RocDict, index: usize, key_width: usize, value_width: usize) Slot {
         const offset = self.capacity() * (key_width + value_width) + index * @sizeOf(Slot);
 
-        if (self.dict_bytes) |u8_ptr| {
-            return @intToEnum(Slot, u8_ptr[offset]);
-        } else {
-            unreachable;
-        }
+        const ptr = self.dict_bytes orelse unreachable;
+        return @intToEnum(Slot, ptr[offset]);
     }
 
     fn setSlot(self: *RocDict, index: usize, key_width: usize, value_width: usize, slot: Slot) void {
         const offset = self.capacity() * (key_width + value_width) + index * @sizeOf(Slot);
 
-        if (self.dict_bytes) |u8_ptr| {
-            u8_ptr[offset] = @enumToInt(slot);
-        } else {
-            unreachable;
-        }
+        const ptr = self.dict_bytes orelse unreachable;
+        ptr[offset] = @enumToInt(slot);
     }
 
     fn setKey(self: *RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize, data: Opaque) void {
@@ -290,12 +268,11 @@ pub const RocDict = extern struct {
             }
         };
 
-        if (self.dict_bytes) |u8_ptr| {
-            const source = data orelse unreachable;
-            @memcpy(u8_ptr + offset, source, key_width);
-        } else {
-            unreachable;
-        }
+        const ptr = self.dict_bytes orelse unreachable;
+
+        const source = data orelse unreachable;
+        const dest = ptr + offset;
+        @memcpy(dest, source, key_width);
     }
 
     fn getKey(self: *const RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
@@ -307,11 +284,8 @@ pub const RocDict = extern struct {
             }
         };
 
-        if (self.dict_bytes) |u8_ptr| {
-            return u8_ptr + offset;
-        } else {
-            unreachable;
-        }
+        const ptr = self.dict_bytes orelse unreachable;
+        return ptr + offset;
     }
 
     fn setValue(self: *RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize, data: Opaque) void {
@@ -323,12 +297,11 @@ pub const RocDict = extern struct {
             }
         };
 
-        if (self.dict_bytes) |u8_ptr| {
-            const source = data orelse unreachable;
-            @memcpy(u8_ptr + offset, source, key_width);
-        } else {
-            unreachable;
-        }
+        const ptr = self.dict_bytes orelse unreachable;
+
+        const source = data orelse unreachable;
+        const dest = ptr + offset;
+        @memcpy(dest, source, value_width);
     }
 
     fn getValue(self: *const RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
@@ -340,11 +313,8 @@ pub const RocDict = extern struct {
             }
         };
 
-        if (self.dict_bytes) |u8_ptr| {
-            return u8_ptr + offset;
-        } else {
-            unreachable;
-        }
+        const ptr = self.dict_bytes orelse unreachable;
+        return ptr + offset;
     }
 
     fn findIndex(self: *const RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn) MaybeIndex {

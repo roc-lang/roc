@@ -13,6 +13,8 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_dict {
+    use roc_std::RocStr;
+
     #[test]
     fn dict_empty_len() {
         assert_evals_to!(
@@ -156,7 +158,7 @@ mod gen_dict {
             indoc!(
                 r#"
                 myDict : Dict I64 I64
-                myDict = 
+                myDict =
                     Dict.empty
                         |> Dict.insert 0 100
                         |> Dict.insert 1 100
@@ -177,7 +179,7 @@ mod gen_dict {
             indoc!(
                 r#"
                 myDict : Dict I64 I64
-                myDict = 
+                myDict =
                     Dict.empty
                         |> Dict.insert 0 100
                         |> Dict.insert 1 200
@@ -198,9 +200,9 @@ mod gen_dict {
             indoc!(
                 r#"
                 myDict : Dict I64 I64
-                myDict = 
+                myDict =
                     [1,2,3]
-                        |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty 
+                        |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty
 
                 Dict.values myDict
                 "#
@@ -220,10 +222,10 @@ mod gen_dict {
                         accum
 
                 myDict : Dict I64 I64
-                myDict = 
+                myDict =
                     # 25 elements (8 + 16 + 1) is guaranteed to overflow/reallocate at least twice
                     range 0 25 []
-                        |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty 
+                        |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty
 
                 Dict.values myDict
                     |> List.len
@@ -231,6 +233,80 @@ mod gen_dict {
             ),
             25,
             i64
+        );
+    }
+
+    #[test]
+    fn small_str_keys() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict Str I64
+                myDict =
+                    Dict.empty
+                        |> Dict.insert "a" 100
+                        |> Dict.insert "b" 100
+                        |> Dict.insert "c" 100
+
+
+                Dict.keys myDict
+                "#
+            ),
+            &[
+                RocStr::from_str("c"),
+                RocStr::from_str("a"),
+                RocStr::from_str("b"),
+            ],
+            &[RocStr]
+        );
+    }
+
+    #[test]
+    fn big_str_keys() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict Str I64
+                myDict =
+                    Dict.empty
+                        |> Dict.insert "Leverage agile frameworks to provide a robust" 100
+                        |> Dict.insert "synopsis for high level overviews. Iterative approaches" 200
+                        |> Dict.insert "to corporate strategy foster collaborative thinking to" 300
+
+
+                Dict.keys myDict
+                "#
+            ),
+            &[
+                RocStr::from_str("Leverage agile frameworks to provide a robust"),
+                RocStr::from_str("to corporate strategy foster collaborative thinking to"),
+                RocStr::from_str("synopsis for high level overviews. Iterative approaches"),
+            ],
+            &[RocStr]
+        );
+    }
+
+    #[test]
+    fn big_str_values() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict I64 Str
+                myDict =
+                    Dict.empty
+                        |> Dict.insert 100 "Leverage agile frameworks to provide a robust"
+                        |> Dict.insert 200 "synopsis for high level overviews. Iterative approaches"
+                        |> Dict.insert 300 "to corporate strategy foster collaborative thinking to"
+
+                Dict.values myDict
+                "#
+            ),
+            &[
+                RocStr::from_str("Leverage agile frameworks to provide a robust"),
+                RocStr::from_str("to corporate strategy foster collaborative thinking to"),
+                RocStr::from_str("synopsis for high level overviews. Iterative approaches"),
+            ],
+            &[RocStr]
         );
     }
 }
