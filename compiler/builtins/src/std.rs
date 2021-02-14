@@ -819,6 +819,42 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // Dict.union : Dict k v, Dict k v -> Dict k v
+    add_type(
+        Symbol::DICT_UNION,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                dict_type(flex(TVAR1), flex(TVAR2)),
+            ],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.intersection : Dict k v, Dict k v -> Dict k v
+    add_type(
+        Symbol::DICT_INTERSECTION,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                dict_type(flex(TVAR1), flex(TVAR2)),
+            ],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.difference : Dict k v, Dict k v -> Dict k v
+    add_type(
+        Symbol::DICT_DIFFERENCE,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                dict_type(flex(TVAR1), flex(TVAR2)),
+            ],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
     // Set module
 
     // empty : Set a

@@ -5,6 +5,7 @@ use crate::pattern::Pattern;
 use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
+use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -82,12 +83,16 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_TEST_HASH => dict_hash_test_only,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
+        DICT_SINGLETON => dict_singleton,
         DICT_INSERT => dict_insert,
         DICT_REMOVE => dict_remove,
         DICT_GET => dict_get,
         DICT_CONTAINS => dict_contains,
         DICT_KEYS => dict_keys,
         DICT_VALUES => dict_values,
+        DICT_UNION=> dict_union,
+        DICT_INTERSECTION=> dict_intersection,
+        DICT_DIFFERENCE=> dict_difference,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -186,12 +191,16 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_TEST_HASH => dict_hash_test_only,
         Symbol::DICT_LEN => dict_len,
         Symbol::DICT_EMPTY => dict_empty,
+        Symbol::DICT_SINGLETON => dict_singleton,
         Symbol::DICT_INSERT => dict_insert,
         Symbol::DICT_REMOVE => dict_remove,
         Symbol::DICT_GET => dict_get,
         Symbol::DICT_CONTAINS => dict_contains,
         Symbol::DICT_KEYS => dict_keys,
         Symbol::DICT_VALUES => dict_values,
+        Symbol::DICT_UNION=> dict_union,
+        Symbol::DICT_INTERSECTION=> dict_intersection,
+        Symbol::DICT_DIFFERENCE=> dict_difference,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -1908,6 +1917,37 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     }
 }
 
+/// Dict.singleton : k, v -> Dict k v
+fn dict_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let key_var = var_store.fresh();
+    let value_var = var_store.fresh();
+    let dict_var = var_store.fresh();
+
+    let empty = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: dict_var,
+    };
+
+    let body = RunLowLevel {
+        op: LowLevel::DictInsert,
+        args: vec![
+            (dict_var, empty),
+            (key_var, Var(Symbol::ARG_1)),
+            (value_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![(key_var, Symbol::ARG_1), (value_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        dict_var,
+    )
+}
+
 /// Dict.insert : Dict k v, k, v -> Dict k v
 fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let dict_var = var_store.fresh();
@@ -2102,6 +2142,47 @@ fn dict_values(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+///  Dict k v, Dict k v -> Dict k v
+fn dict_dict_dict(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (dict_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (dict_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        dict_var,
+    )
+}
+
+/// Dict.union : Dict k v, Dict k v -> Dict k v
+fn dict_union(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_dict_dict(Symbol::DICT_UNION, LowLevel::DictUnion, var_store)
+}
+
+/// Dict.difference : Dict k v, Dict k v -> Dict k v
+fn dict_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_dict_dict(Symbol::DICT_DIFFERENCE, LowLevel::DictDifference, var_store)
+}
+
+/// Dict.intersection : Dict k v, Dict k v -> Dict k v
+fn dict_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_dict_dict(
+        Symbol::DICT_INTERSECTION,
+        LowLevel::DictIntersection,
+        var_store,
     )
 }
 

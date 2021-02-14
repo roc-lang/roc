@@ -46,3 +46,6 @@ pub const DICT_GET: &str = "roc_builtins.dict.get";
 pub const DICT_ELEMENTS_RC: &str = "roc_builtins.dict.elementsRc";
 pub const DICT_KEYS: &str = "roc_builtins.dict.keys";
 pub const DICT_VALUES: &str = "roc_builtins.dict.values";
+pub const DICT_UNION: &str = "roc_builtins.dict.union";
+pub const DICT_DIFFERENCE: &str = "roc_builtins.dict.difference";
+pub const DICT_INTERSECTION: &str = "roc_builtins.dict.intersection";

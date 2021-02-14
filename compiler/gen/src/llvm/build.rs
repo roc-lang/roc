@@ -1,5 +1,6 @@
 use crate::llvm::build_dict::{
-    dict_contains, dict_empty, dict_get, dict_insert, dict_keys, dict_len, dict_remove, dict_values,
+    dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
+    dict_keys, dict_len, dict_remove, dict_union, dict_values,
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
@@ -4069,6 +4070,57 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_values(env, layout_ids, dict, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictUnion => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictDifference => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictIntersection => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
                 }
                 _ => unreachable!("invalid dict layout"),
             }

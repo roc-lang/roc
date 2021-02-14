@@ -910,6 +910,10 @@ define_builtins! {
         9 DICT_CONTAINS: "contains"
         10 DICT_KEYS: "keys"
         11 DICT_VALUES: "values"
+
+        12 DICT_UNION: "union"
+        13 DICT_INTERSECTION: "intersection"
+        14 DICT_DIFFERENCE: "difference"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias

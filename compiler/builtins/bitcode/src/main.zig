@@ -16,6 +16,9 @@ comptime {
     exportDictFn(dict.elementsRc, "elementsRc");
     exportDictFn(dict.dictKeys, "keys");
     exportDictFn(dict.dictValues, "values");
+    exportDictFn(dict.dictUnion, "union");
+    exportDictFn(dict.dictIntersection, "intersection");
+    // exportDictFn(dict.dictValues, "values");
 
     exportDictFn(hash.wyhash, "hash");
     exportDictFn(hash.wyhash_rocstr, "hash_str");

@@ -621,6 +621,68 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     output.* = RocList{ .bytes = ptr, .length = length };
 }
 
+fn doNothing(ptr: Opaque) callconv(.C) void {
+    return;
+}
+
+pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, inc_value: Inc, output: *RocDict) callconv(.C) void {
+    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+
+    var i: usize = 0;
+    while (i < dict2.capacity()) : (i += 1) {
+        switch (dict2.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict2.getKey(i, alignment, key_width, value_width);
+
+                switch (output.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
+                    MaybeIndex.not_found => {
+                        const value = dict2.getValue(i, alignment, key_width, value_width);
+                        inc_value(value);
+
+                        // we need an extra RC token for the key
+                        inc_key(key);
+
+                        const dec_key = doNothing;
+                        const dec_value = doNothing;
+
+                        dictInsert(output.*, alignment, key, key_width, value, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+                    },
+                    MaybeIndex.index => |_| {
+                        // the key is already in the output dict
+                        continue;
+                    },
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+pub fn dictIntersection(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Inc, dec_value: Inc, output: *RocDict) callconv(.C) void {
+    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+
+    var i: usize = 0;
+    const size = dict1.capacity();
+    while (i < size) : (i += 1) {
+        switch (output.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict1.getKey(i, alignment, key_width, value_width);
+
+                switch (dict2.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
+                    MaybeIndex.not_found => {
+                        dictRemove(output.*, alignment, key, key_width, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+                    },
+                    MaybeIndex.index => |_| {
+                        // keep this key/value
+                        continue;
+                    },
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 fn decref(
     allocator: *Allocator,
     alignment: Alignment,
