@@ -437,4 +437,64 @@ mod gen_dict {
             &[i64]
         );
     }
+
+    #[test]
+    fn difference() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 {}
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 3 {}
+                        |> Dict.insert 4 {}
+                        |> Dict.insert 5 {}
+
+                dict2 : Dict I64 {}
+                dict2 = 
+                    Dict.empty
+                        |> Dict.insert 0 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 4 {}
+
+                Dict.difference dict1 dict2 
+                    |> Dict.len 
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn difference_prefer_first() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 I64
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 1
+                        |> Dict.insert 2 2
+                        |> Dict.insert 3 3
+                        |> Dict.insert 4 4
+                        |> Dict.insert 5 5
+
+                dict2 : Dict I64 I64
+                dict2 = 
+                    Dict.empty
+                        |> Dict.insert 0 100
+                        |> Dict.insert 2 200
+                        |> Dict.insert 4 300
+
+                Dict.difference dict1 dict2 
+                    |> Dict.values 
+                "#
+            ),
+            &[5, 3, 1],
+            &[i64]
+        );
+    }
 }

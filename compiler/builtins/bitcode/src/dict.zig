@@ -683,6 +683,31 @@ pub fn dictIntersection(dict1: RocDict, dict2: RocDict, alignment: Alignment, ke
     }
 }
 
+pub fn dictDifference(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Inc, dec_value: Inc, output: *RocDict) callconv(.C) void {
+    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+
+    var i: usize = 0;
+    const size = dict1.capacity();
+    while (i < size) : (i += 1) {
+        switch (output.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict1.getKey(i, alignment, key_width, value_width);
+
+                switch (dict2.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
+                    MaybeIndex.not_found => {
+                        // keep this key/value
+                        continue;
+                    },
+                    MaybeIndex.index => |_| {
+                        dictRemove(output.*, alignment, key, key_width, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+                    },
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 fn decref(
     allocator: *Allocator,
     alignment: Alignment,

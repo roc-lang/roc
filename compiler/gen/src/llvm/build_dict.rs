@@ -571,80 +571,6 @@ pub fn dict_union<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn dict_intersection<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    dict1: BasicValueEnum<'ctx>,
-    dict2: BasicValueEnum<'ctx>,
-    key_layout: &Layout<'a>,
-    value_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
-    let dict1_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    let dict2_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-
-    env.builder.build_store(
-        dict1_ptr,
-        struct_to_zig_dict(env, dict1.into_struct_value()),
-    );
-
-    env.builder.build_store(
-        dict2_ptr,
-        struct_to_zig_dict(env, dict2.into_struct_value()),
-    );
-
-    let key_width = env
-        .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let value_width = env
-        .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
-
-    let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
-    let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
-
-    let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Dec);
-    let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Dec);
-
-    let output_ptr = builder.build_alloca(zig_dict_type, "output_ptr");
-
-    call_void_bitcode_fn(
-        env,
-        &[
-            dict1_ptr.into(),
-            dict2_ptr.into(),
-            alignment_iv.into(),
-            key_width.into(),
-            value_width.into(),
-            hash_fn.as_global_value().as_pointer_value().into(),
-            eq_fn.as_global_value().as_pointer_value().into(),
-            dec_key_fn.as_global_value().as_pointer_value().into(),
-            dec_value_fn.as_global_value().as_pointer_value().into(),
-            output_ptr.into(),
-        ],
-        &bitcode::DICT_INTERSECTION,
-    );
-
-    let output_ptr = env
-        .builder
-        .build_bitcast(
-            output_ptr,
-            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
-            "to_roc_dict",
-        )
-        .into_pointer_value();
-
-    env.builder.build_load(output_ptr, "load_output_ptr")
-}
-
-#[allow(clippy::too_many_arguments)]
 pub fn dict_difference<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -653,6 +579,47 @@ pub fn dict_difference<'a, 'ctx, 'env>(
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    dict_intersect_or_difference(
+        env,
+        layout_ids,
+        dict1,
+        dict2,
+        key_layout,
+        value_layout,
+        &bitcode::DICT_DIFFERENCE,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_intersection<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict1: BasicValueEnum<'ctx>,
+    dict2: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    dict_intersect_or_difference(
+        env,
+        layout_ids,
+        dict1,
+        dict2,
+        key_layout,
+        value_layout,
+        &bitcode::DICT_INTERSECTION,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dict_intersect_or_difference<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict1: BasicValueEnum<'ctx>,
+    dict2: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    op: &str,
+) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
@@ -703,7 +670,7 @@ pub fn dict_difference<'a, 'ctx, 'env>(
             dec_value_fn.as_global_value().as_pointer_value().into(),
             output_ptr.into(),
         ],
-        &bitcode::DICT_DIFFERENCE,
+        op,
     );
 
     let output_ptr = env

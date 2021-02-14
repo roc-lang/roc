@@ -18,7 +18,7 @@ comptime {
     exportDictFn(dict.dictValues, "values");
     exportDictFn(dict.dictUnion, "union");
     exportDictFn(dict.dictIntersection, "intersection");
-    // exportDictFn(dict.dictValues, "values");
+    exportDictFn(dict.dictDifference, "difference");
 
     exportDictFn(hash.wyhash, "hash");
     exportDictFn(hash.wyhash_rocstr, "hash_str");

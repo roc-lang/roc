@@ -5,7 +5,6 @@ use crate::pattern::Pattern;
 use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
-use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -2169,21 +2168,17 @@ fn dict_dict_dict(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def
 
 /// Dict.union : Dict k v, Dict k v -> Dict k v
 fn dict_union(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    dict_dict_dict(Symbol::DICT_UNION, LowLevel::DictUnion, var_store)
+    dict_dict_dict(symbol, LowLevel::DictUnion, var_store)
 }
 
 /// Dict.difference : Dict k v, Dict k v -> Dict k v
 fn dict_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    dict_dict_dict(Symbol::DICT_DIFFERENCE, LowLevel::DictDifference, var_store)
+    dict_dict_dict(symbol, LowLevel::DictDifference, var_store)
 }
 
 /// Dict.intersection : Dict k v, Dict k v -> Dict k v
 fn dict_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    dict_dict_dict(
-        Symbol::DICT_INTERSECTION,
-        LowLevel::DictIntersection,
-        var_store,
-    )
+    dict_dict_dict(symbol, LowLevel::DictIntersection, var_store)
 }
 
 /// Num.rem : Int, Int -> Result Int [ DivByZero ]*
