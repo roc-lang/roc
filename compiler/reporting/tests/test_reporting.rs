@@ -4703,4 +4703,38 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn dict_type_formatting() {
+        // TODO could do better by pointing out we're parsing a function type
+        report_problem_as(
+            indoc!(
+                r#"
+                myDict : Dict I64 Str
+                myDict = Dict.insert Dict.empty "foo" 42
+
+                myDict
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                Something is off with the body of the `myDict` definition:
+                
+                1│  myDict : Dict I64 Str
+                2│  myDict = Dict.insert Dict.empty "foo" 42
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                
+                This `insert` call produces:
+                
+                    Dict Str (Num a)
+                
+                But the type annotation on `myDict` says it should be:
+                
+                    Dict I64 Str
+            "#
+            ),
+        )
+    }
 }
