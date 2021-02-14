@@ -2049,7 +2049,7 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
         branches: vec![(
             // if-condition
             no_region(get_flag),
-            no_region(make_ok.clone()),
+            no_region(make_ok),
         )],
         final_else: Box::new(no_region(make_err)),
     };
