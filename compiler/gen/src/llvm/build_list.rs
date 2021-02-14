@@ -1,7 +1,7 @@
 use crate::llvm::build::{
     allocate_with_refcount_help, build_num_binop, cast_basic_basic, Env, InPlace,
 };
-use crate::llvm::compare::build_eq;
+use crate::llvm::compare::generic_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
@@ -1114,7 +1114,7 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 
     let current_elem = builder.build_load(current_elem_ptr, "load_elem");
 
-    let has_found = build_eq(
+    let has_found = generic_eq(
         env,
         layout_ids,
         current_elem,
