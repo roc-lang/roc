@@ -255,12 +255,9 @@ pub const RocDict = extern struct {
         const number_of_bytes = self.capacity() * (@sizeOf(Slot) + key_width + value_width);
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
-        // we copied potentially-refcounted values; make sure to increment
-        const size = new_dict.capacity();
-        var i: usize = 0;
-
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        decref(allocator, alignment, self.dict_bytes, self.capacity() * slotSize(key_width, value_width));
+        const data_bytes = self.capacity() * slotSize(key_width, value_width);
+        decref(allocator, alignment, self.dict_bytes, data_bytes);
 
         return new_dict;
     }
