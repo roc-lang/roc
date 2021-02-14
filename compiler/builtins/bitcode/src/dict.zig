@@ -155,10 +155,10 @@ pub const RocDict = extern struct {
 
         // transfer the memory
 
-        var source_ptr = self.dict_bytes orelse unreachable;
-        var dest_ptr = first_slot;
-
         if (old_capacity > 0) {
+            const source_ptr = self.dict_bytes orelse unreachable;
+            const dest_ptr = first_slot;
+
             var source_offset: usize = 0;
             var dest_offset: usize = 0;
 
@@ -187,7 +187,7 @@ pub const RocDict = extern struct {
         }
 
         var i: usize = 0;
-        const first_new_slot_value = dest_ptr + old_capacity * slot_size + delta_capacity * (key_width + value_width);
+        const first_new_slot_value = first_slot + old_capacity * slot_size + delta_capacity * (key_width + value_width);
         while (i < (new_capacity - old_capacity)) : (i += 1) {
             (first_new_slot_value)[i] = @enumToInt(Slot.Empty);
         }
@@ -220,10 +220,9 @@ pub const RocDict = extern struct {
         return self.len() == 0;
     }
 
-    pub fn refcountIsOne(self: RocDict) bool {
+    pub fn isUnique(self: RocDict) bool {
         if (self.isEmpty()) {
-            // empty dicts are not refcounted at all
-            return false;
+            return true;
         }
 
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.dict_bytes));
@@ -240,7 +239,7 @@ pub const RocDict = extern struct {
             return self;
         }
 
-        if (self.refcountIsOne()) {
+        if (self.isUnique()) {
             return self;
         }
 
@@ -485,14 +484,21 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
         MaybeIndex.index => |index| {
             var dict = input.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
 
+            assert(index < dict.capacity());
+
             dict.setSlot(index, key_width, value_width, Slot.PreviouslyFilled);
             const old_key = dict.getKey(index, alignment, key_width, value_width);
             const old_value = dict.getValue(index, alignment, key_width, value_width);
 
             dec_key(old_key);
             dec_value(old_value);
-
             dict.dict_entries_len -= 1;
+
+            // if the dict is now completely empty, free its allocation
+            if (dict.dict_entries_len == 0) {
+                const data_bytes = dict.capacity() * slotSize(key_width, value_width);
+                decref(std.heap.c_allocator, alignment, dict.dict_bytes, data_bytes);
+            }
 
             output.* = dict;
         },
