@@ -1053,7 +1053,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // diff : Attr * (Set * a)
     //      , Attr * (Set * a)
     //     -> Attr * (Set * a)
-    add_type(Symbol::SET_DIFF, set_combine);
+    add_type(Symbol::SET_DIFFERENCE, set_combine);
 
     // foldl : Attr (* | u) (Set (Attr u a))
     //       , Attr Shared (Attr u a -> b -> b)

@@ -93,6 +93,16 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_INTERSECTION=> dict_intersection,
         DICT_DIFFERENCE=> dict_difference,
         DICT_WALK=> dict_walk,
+        SET_EMPTY => set_empty,
+        SET_LEN => set_len,
+        SET_SINGLETON => set_singleton,
+        SET_UNION=> set_union,
+        SET_INTERSECTION => set_intersection,
+        SET_DIFFERENCE => set_difference,
+        SET_TO_LIST => set_to_list,
+        SET_FROM_LIST => set_from_list,
+        SET_INSERT => set_insert,
+        SET_REMOVE => set_remove,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -202,6 +212,16 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_INTERSECTION=> dict_intersection,
         Symbol::DICT_DIFFERENCE=> dict_difference,
         Symbol::DICT_WALK=> dict_walk,
+        Symbol::SET_EMPTY => set_empty,
+        Symbol::SET_LEN => set_len,
+        Symbol::SET_SINGLETON => set_singleton,
+        Symbol::SET_UNION=> set_union,
+        Symbol::SET_INTERSECTION=> set_intersection,
+        Symbol::SET_DIFFERENCE=> set_difference,
+        Symbol::SET_TO_LIST => set_to_list,
+        Symbol::SET_FROM_LIST => set_from_list,
+        Symbol::SET_INSERT => set_insert,
+        Symbol::SET_REMOVE => set_remove,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -2210,6 +2230,135 @@ fn dict_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         accum_var,
     )
+}
+
+/// Set.empty : Set *
+fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let set_var = var_store.fresh();
+    let body = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: set_var,
+    };
+
+    Def {
+        annotation: None,
+        expr_var: set_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Set.singleton : k -> Set k
+fn set_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let key_var = var_store.fresh();
+    let set_var = var_store.fresh();
+    let value_var = Variable::EMPTY_RECORD;
+
+    let empty = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: set_var,
+    };
+
+    let body = RunLowLevel {
+        op: LowLevel::DictInsert,
+        args: vec![
+            (set_var, empty),
+            (key_var, Var(Symbol::ARG_1)),
+            (value_var, EmptyRecord),
+        ],
+        ret_var: set_var,
+    };
+
+    defn(
+        symbol,
+        vec![(key_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        set_var,
+    )
+}
+
+/// Set.len : Set * -> Nat
+fn set_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let size_var = var_store.fresh();
+    let set_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictSize,
+        args: vec![(set_var, Var(Symbol::ARG_1))],
+        ret_var: size_var,
+    };
+
+    defn(
+        symbol,
+        vec![(set_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        size_var,
+    )
+}
+
+///  Set k, Set k -> Set k
+fn set_set_set(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    dict_dict_dict(symbol, op, var_store)
+}
+
+/// Dict.union : Dict k v, Dict k v -> Dict k v
+fn set_union(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    set_set_set(symbol, LowLevel::DictUnion, var_store)
+}
+
+/// Dict.difference : Dict k v, Dict k v -> Dict k v
+fn set_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    set_set_set(symbol, LowLevel::DictDifference, var_store)
+}
+
+/// Dict.intersection : Dict k v, Dict k v -> Dict k v
+fn set_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    set_set_set(symbol, LowLevel::DictIntersection, var_store)
+}
+
+/// Set.toList : Set k -> List k
+fn set_to_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_keys(symbol, var_store)
+}
+
+/// Set.fromList : List k -> Set k
+fn set_from_list(_symbol: Symbol, _var_store: &mut VarStore) -> Def {
+    todo!()
+}
+
+/// Set.insert : Set k, k -> Set k
+fn set_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let val_var = Variable::EMPTY_RECORD;
+
+    let body = RunLowLevel {
+        op: LowLevel::DictInsert,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+            (val_var, EmptyRecord),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        dict_var,
+    )
+}
+
+/// Set.remove : Set k, k -> Set k
+fn set_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_remove(symbol, var_store)
 }
 
 /// Num.rem : Int, Int -> Result Int [ DivByZero ]*

@@ -883,6 +883,30 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![flex(TVAR1)], Box::new(set_type(flex(TVAR1)))),
     );
 
+    // len : Set * -> Nat
+    add_type(
+        Symbol::SET_LEN,
+        top_level_function(vec![set_type(flex(TVAR1))], Box::new(nat_type())),
+    );
+
+    // toList : Set a -> List a
+    add_type(
+        Symbol::SET_TO_LIST,
+        top_level_function(
+            vec![set_type(flex(TVAR1))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // fromList : Set a -> List a
+    add_type(
+        Symbol::SET_FROM_LIST,
+        top_level_function(
+            vec![list_type(flex(TVAR1))],
+            Box::new(set_type(flex(TVAR1))),
+        ),
+    );
+
     // union : Set a, Set a -> Set a
     add_type(
         Symbol::SET_UNION,
@@ -892,9 +916,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // diff : Set a, Set a -> Set a
+    // difference : Set a, Set a -> Set a
     add_type(
-        Symbol::SET_DIFF,
+        Symbol::SET_DIFFERENCE,
+        top_level_function(
+            vec![set_type(flex(TVAR1)), set_type(flex(TVAR1))],
+            Box::new(set_type(flex(TVAR1))),
+        ),
+    );
+
+    // intersection : Set a, Set a -> Set a
+    add_type(
+        Symbol::SET_INTERSECTION,
         top_level_function(
             vec![set_type(flex(TVAR1)), set_type(flex(TVAR1))],
             Box::new(set_type(flex(TVAR1))),

@@ -227,6 +227,10 @@ pub const RocDict = extern struct {
             return self;
         }
 
+        if (true) {
+            return self;
+        }
+
         // unfortunately, we have to clone
 
         const in_place = InPlace.Clone;

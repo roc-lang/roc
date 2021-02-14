@@ -923,11 +923,15 @@ define_builtins! {
         1 SET_AT_SET: "@Set" // the Set.@Set private tag
         2 SET_EMPTY: "empty"
         3 SET_SINGLETON: "singleton"
-        4 SET_UNION: "union"
-        5 SET_FOLDL: "foldl"
-        6 SET_INSERT: "insert"
-        7 SET_REMOVE: "remove"
-        8 SET_DIFF: "diff"
+        4 SET_LEN: "len"
+        5 SET_INSERT: "insert"
+        6 SET_REMOVE: "remove"
+        7 SET_UNION: "union"
+        8 SET_DIFFERENCE: "difference"
+        9 SET_INTERSECTION: "intersection"
+        10 SET_TO_LIST: "toList"
+        11 SET_FROM_LIST: "fromList"
+        12 SET_FOLDL: "walk"
     }
 
     num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
