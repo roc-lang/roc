@@ -949,8 +949,7 @@ mod test_mono {
                     let Test.5 = 3.14f64;
                     let Test.3 = Struct {Test.4, Test.5};
                     let Test.1 = Index 0 Test.3;
-                    inc Test.1;
-                    dec Test.3;
+                    decref Test.3;
                     ret Test.1;
                 "#
             ),

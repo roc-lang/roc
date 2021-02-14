@@ -4697,7 +4697,7 @@ mod test_reporting {
                 
                 I was expecting to see a private tag name.
                 
-                Hint: Private tag names start with a `@` symbol followed by an
+                Hint: Private tag names start with an `@` symbol followed by an
                 uppercase letter, like @UID or @SecretKey.
             "#
             ),
