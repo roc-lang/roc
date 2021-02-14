@@ -252,11 +252,7 @@ mod gen_dict {
                 Dict.keys myDict
                 "#
             ),
-            &[
-                RocStr::from_str("c"),
-                RocStr::from_str("a"),
-                RocStr::from_str("b"),
-            ],
+            &[RocStr::from("c"), RocStr::from("a"), RocStr::from("b"),],
             &[RocStr]
         );
     }
@@ -278,9 +274,9 @@ mod gen_dict {
                 "#
             ),
             &[
-                RocStr::from_str("Leverage agile frameworks to provide a robust"),
-                RocStr::from_str("to corporate strategy foster collaborative thinking to"),
-                RocStr::from_str("synopsis for high level overviews. Iterative approaches"),
+                RocStr::from("Leverage agile frameworks to provide a robust"),
+                RocStr::from("to corporate strategy foster collaborative thinking to"),
+                RocStr::from("synopsis for high level overviews. Iterative approaches"),
             ],
             &[RocStr]
         );
@@ -302,9 +298,9 @@ mod gen_dict {
                 "#
             ),
             &[
-                RocStr::from_str("Leverage agile frameworks to provide a robust"),
-                RocStr::from_str("to corporate strategy foster collaborative thinking to"),
-                RocStr::from_str("synopsis for high level overviews. Iterative approaches"),
+                RocStr::from("Leverage agile frameworks to provide a robust"),
+                RocStr::from("to corporate strategy foster collaborative thinking to"),
+                RocStr::from("synopsis for high level overviews. Iterative approaches"),
             ],
             &[RocStr]
         );

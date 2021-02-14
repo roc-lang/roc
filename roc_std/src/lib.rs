@@ -401,10 +401,6 @@ impl RocStr {
         Self::from_slice_with_capacity_str(slice, slice.len())
     }
 
-    pub fn from_str(slice: &str) -> RocStr {
-        Self::from_slice_with_capacity_str(slice.as_bytes(), slice.len())
-    }
-
     pub fn as_slice(&self) -> &[u8] {
         if self.is_small_str() {
             unsafe { core::slice::from_raw_parts(self.get_small_str_ptr(), self.len()) }
