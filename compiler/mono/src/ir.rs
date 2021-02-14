@@ -205,7 +205,11 @@ impl<'a> Proc<'a> {
         };
 
         for (_, proc) in procs.iter_mut() {
-            let b = expand_rc::expand_and_cancel(&mut env, arena.alloc(proc.body.clone()));
+            let b = expand_rc::expand_and_cancel_proc(
+                &mut env,
+                arena.alloc(proc.body.clone()),
+                proc.args,
+            );
             proc.body = b.clone();
         }
     }
