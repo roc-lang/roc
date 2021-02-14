@@ -700,12 +700,3 @@ fn allocateWithRefcount(
         else => unreachable,
     }
 }
-
-test "RocDict.init() contains nothing" {
-    const key_size = @sizeOf(usize);
-    const value_size = @sizeOf(usize);
-
-    const dict = dictEmpty();
-
-    expectEqual(false, dict.contains(4, @ptrCast(*const c_void, &""), 9));
-}
