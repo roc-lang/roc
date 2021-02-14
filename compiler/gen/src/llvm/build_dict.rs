@@ -3,7 +3,7 @@ use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout,
     set_name, Env, Scope,
 };
-use crate::llvm::convert::{as_const_zero, basic_type_from_layout, collection};
+use crate::llvm::convert::{self, as_const_zero, basic_type_from_layout, collection};
 use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout, Mode};
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
@@ -149,13 +149,16 @@ pub fn dict_insert<'a, 'ctx, 'env>(
         &bitcode::DICT_INSERT,
     );
 
-    zig_dict_to_struct(
-        env,
-        builder
-            .build_load(result_ptr, "load_result")
-            .into_struct_value(),
-    )
-    .into()
+    let result_ptr = env
+        .builder
+        .build_bitcast(
+            result_ptr,
+            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            "to_roc_dict",
+        )
+        .into_pointer_value();
+
+    env.builder.build_load(result_ptr, "load_result")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -215,13 +218,16 @@ pub fn dict_remove<'a, 'ctx, 'env>(
         &bitcode::DICT_REMOVE,
     );
 
-    zig_dict_to_struct(
-        env,
-        builder
-            .build_load(result_ptr, "load_result")
-            .into_struct_value(),
-    )
-    .into()
+    let result_ptr = env
+        .builder
+        .build_bitcast(
+            result_ptr,
+            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            "to_roc_dict",
+        )
+        .into_pointer_value();
+
+    env.builder.build_load(result_ptr, "load_result")
 }
 
 #[allow(clippy::too_many_arguments)]

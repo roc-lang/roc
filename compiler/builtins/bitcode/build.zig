@@ -28,6 +28,7 @@ pub fn build(b: *Builder) void {
     obj.strip = true;
     obj.emit_llvm_ir = true;
     obj.emit_bin = false;
+    obj.bundle_compiler_rt = true;
     const ir = b.step("ir", "Build LLVM ir");
     ir.dependOn(&obj.step);
 
