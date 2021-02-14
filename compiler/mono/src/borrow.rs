@@ -578,7 +578,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListSingle => arena.alloc_slice_copy(&[irrelevant]),
         ListRepeat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListReverse => arena.alloc_slice_copy(&[owned]),
-        ListAppend => arena.alloc_slice_copy(&[owned, owned]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListJoin => arena.alloc_slice_copy(&[irrelevant]),
@@ -588,6 +587,10 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListWalk => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
         ListWalkBackwards => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
         ListSum => arena.alloc_slice_copy(&[borrowed]),
+
+        // TODO when we have lists with capacity (if ever)
+        // List.append should own its first argument
+        ListAppend => arena.alloc_slice_copy(&[borrowed, owned]),
 
         Eq | NotEq | And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap
         | NumSubChecked | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte

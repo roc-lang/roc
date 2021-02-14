@@ -3,7 +3,7 @@ use crate::llvm::build::{
     call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout,
     set_name, Env, Scope,
 };
-use crate::llvm::convert::{as_const_zero, basic_type_from_layout};
+use crate::llvm::convert::{as_const_zero, basic_type_from_layout, collection};
 use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout, Mode};
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
@@ -128,10 +128,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
 
-    let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Inc(1));
     let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Dec);
-
-    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Inc(1));
     let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Dec);
 
     call_void_bitcode_fn(
@@ -145,9 +142,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
             value_width.into(),
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
-            inc_key_fn.as_global_value().as_pointer_value().into(),
             dec_key_fn.as_global_value().as_pointer_value().into(),
-            inc_value_fn.as_global_value().as_pointer_value().into(),
             dec_value_fn.as_global_value().as_pointer_value().into(),
             result_ptr.into(),
         ],
@@ -200,10 +195,7 @@ pub fn dict_remove<'a, 'ctx, 'env>(
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
 
-    let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Inc(1));
     let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Dec);
-
-    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Inc(1));
     let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Dec);
 
     call_void_bitcode_fn(
@@ -216,9 +208,7 @@ pub fn dict_remove<'a, 'ctx, 'env>(
             value_width.into(),
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
-            inc_key_fn.as_global_value().as_pointer_value().into(),
             dec_key_fn.as_global_value().as_pointer_value().into(),
-            inc_value_fn.as_global_value().as_pointer_value().into(),
             dec_value_fn.as_global_value().as_pointer_value().into(),
             result_ptr.into(),
         ],
@@ -451,7 +441,53 @@ pub fn dict_keys<'a, 'ctx, 'env>(
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    todo!()
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+    let zig_list_type = env.module.get_struct_type("dict.RocList").unwrap();
+
+    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    env.builder
+        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Inc(1));
+
+    let list_ptr = builder.build_alloca(zig_list_type, "list_ptr");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            dict_ptr.into(),
+            alignment_iv.into(),
+            key_width.into(),
+            value_width.into(),
+            inc_key_fn.as_global_value().as_pointer_value().into(),
+            list_ptr.into(),
+        ],
+        &bitcode::DICT_KEYS,
+    );
+
+    let list_ptr = env
+        .builder
+        .build_bitcast(
+            list_ptr,
+            collection(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            "to_roc_list",
+        )
+        .into_pointer_value();
+
+    env.builder.build_load(list_ptr, "load_keys_list")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -462,7 +498,53 @@ pub fn dict_values<'a, 'ctx, 'env>(
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    todo!()
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+    let zig_list_type = env.module.get_struct_type("dict.RocList").unwrap();
+
+    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    env.builder
+        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Inc(1));
+
+    let list_ptr = builder.build_alloca(zig_list_type, "list_ptr");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            dict_ptr.into(),
+            alignment_iv.into(),
+            key_width.into(),
+            value_width.into(),
+            inc_value_fn.as_global_value().as_pointer_value().into(),
+            list_ptr.into(),
+        ],
+        &bitcode::DICT_VALUES,
+    );
+
+    let list_ptr = env
+        .builder
+        .build_bitcast(
+            list_ptr,
+            collection(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            "to_roc_list",
+        )
+        .into_pointer_value();
+
+    env.builder.build_load(list_ptr, "load_keys_list")
 }
 
 fn build_hash_wrapper<'a, 'ctx, 'env>(

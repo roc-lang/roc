@@ -3,6 +3,7 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const assert = std.debug.assert;
 
 const level_size = 32;
 
@@ -48,7 +49,7 @@ fn total_slots_at_level(input: usize) usize {
     return slots;
 }
 
-fn slots_at_level(input: usize) usize {
+fn capacityOfLevel(input: usize) usize {
     if (input == 0) {
         return 0;
     }
@@ -118,60 +119,18 @@ pub const RocDict = extern struct {
 
     pub fn allocate(
         allocator: *Allocator,
-        result_in_place: InPlace,
         number_of_levels: usize,
         number_of_entries: usize,
-        alignment: usize,
+        alignment: Alignment,
         key_size: usize,
         value_size: usize,
     ) RocDict {
         const number_of_slots = total_slots_at_level(number_of_levels);
-        const first_slot = switch (alignment) {
-            8 => blk: {
-                const slot_size = slotSize(key_size, value_size);
-
-                const length = @sizeOf(usize) + (number_of_slots * slot_size);
-
-                var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
-
-                var as_usize_array = @ptrCast([*]usize, new_bytes);
-                if (result_in_place == InPlace.InPlace) {
-                    as_usize_array[0] = @intCast(usize, number_of_slots);
-                } else {
-                    as_usize_array[0] = REFCOUNT_ONE;
-                }
-
-                var as_u8_array = @ptrCast([*]u8, new_bytes);
-                const first_slot = as_u8_array + @sizeOf(usize);
-
-                break :blk first_slot;
-            },
-            16 => blk: {
-                const slot_size = slotSize(key_size, value_size);
-
-                const length = 2 * @sizeOf(usize) + (number_of_slots * slot_size);
-
-                var new_bytes: []align(16) u8 = allocator.alignedAlloc(u8, 16, length) catch unreachable;
-
-                var as_usize_array = @ptrCast([*]usize, new_bytes);
-                if (result_in_place == InPlace.InPlace) {
-                    as_usize_array[0] = 0;
-                    as_usize_array[1] = @intCast(usize, number_of_slots);
-                } else {
-                    as_usize_array[0] = 0;
-                    as_usize_array[1] = REFCOUNT_ONE;
-                }
-
-                var as_u8_array = @ptrCast([*]u8, new_bytes);
-                const first_slot = as_u8_array + 2 * @sizeOf(usize);
-
-                break :blk first_slot;
-            },
-            else => unreachable,
-        };
+        const slot_size = slotSize(key_size, value_size);
+        const data_bytes = number_of_slots * slot_size;
 
         return RocDict{
-            .dict_bytes = first_slot,
+            .dict_bytes = allocateWithRefcount(allocator, alignment, data_bytes),
             .number_of_levels = number_of_levels,
             .dict_entries_len = number_of_entries,
         };
@@ -180,7 +139,7 @@ pub const RocDict = extern struct {
     pub fn reallocate(
         self: RocDict,
         allocator: *Allocator,
-        alignment: usize,
+        alignment: Alignment,
         key_width: usize,
         value_width: usize,
     ) RocDict {
@@ -189,23 +148,10 @@ pub const RocDict = extern struct {
 
         const old_capacity = self.capacity();
         const new_capacity = total_slots_at_level(new_level);
+        const delta_capacity = new_capacity - old_capacity;
 
-        const first_slot = switch (alignment) {
-            8 => blk: {
-                const length = @sizeOf(usize) + (new_capacity * slot_size);
-
-                var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
-
-                var as_usize_array = @ptrCast([*]usize, new_bytes);
-                as_usize_array[0] = REFCOUNT_ONE;
-
-                var as_u8_array = @ptrCast([*]u8, new_bytes);
-                const first_slot = as_u8_array + @sizeOf(usize);
-
-                break :blk first_slot;
-            },
-            else => unreachable,
-        };
+        const data_bytes = new_capacity * slot_size;
+        const first_slot = allocateWithRefcount(allocator, alignment, data_bytes);
 
         // transfer the memory
 
@@ -215,28 +161,47 @@ pub const RocDict = extern struct {
         if (old_capacity > 0) {
             var source_offset: usize = 0;
             var dest_offset: usize = 0;
-            @memcpy(dest_ptr + dest_offset, source_ptr + source_offset, old_capacity * key_width);
 
-            source_offset += old_capacity * key_width;
-            dest_offset += old_capacity * key_width + (new_capacity * key_width);
-            @memcpy(dest_ptr + dest_offset, source_ptr + source_offset, old_capacity * value_width);
+            if (alignment.keyFirst()) {
+                // copy keys
+                @memcpy(dest_ptr + dest_offset, source_ptr + source_offset, old_capacity * key_width);
 
-            source_offset += old_capacity * value_width;
-            dest_offset += old_capacity * value_width + (new_capacity * value_width);
+                // copy values
+                source_offset = old_capacity * key_width;
+                dest_offset = new_capacity * key_width;
+                @memcpy(dest_ptr + dest_offset, source_ptr + source_offset, old_capacity * value_width);
+            } else {
+                // copy values
+                @memcpy(dest_ptr + dest_offset, source_ptr + source_offset, old_capacity * value_width);
+
+                // copy keys
+                source_offset = old_capacity * value_width;
+                dest_offset = new_capacity * value_width;
+                @memcpy(dest_ptr + dest_offset, source_ptr + source_offset, old_capacity * key_width);
+            }
+
+            // copy slots
+            source_offset = old_capacity * (key_width + value_width);
+            dest_offset = new_capacity * (key_width + value_width);
             @memcpy(dest_ptr + dest_offset, source_ptr + source_offset, old_capacity * @sizeOf(Slot));
         }
 
         var i: usize = 0;
-        const first_new_slot_value = dest_ptr + old_capacity * slot_size + new_capacity * (key_width + value_width);
+        const first_new_slot_value = dest_ptr + old_capacity * slot_size + delta_capacity * (key_width + value_width);
         while (i < (new_capacity - old_capacity)) : (i += 1) {
             (first_new_slot_value)[i] = @enumToInt(Slot.Empty);
         }
 
-        return RocDict{
+        const result = RocDict{
             .dict_bytes = first_slot,
             .number_of_levels = self.number_of_levels + 1,
             .dict_entries_len = self.dict_entries_len,
         };
+
+        // NOTE we fuse an increment of all keys/values with a decrement of the input dict
+        decref(allocator, alignment, self.dict_bytes, self.capacity() * slotSize(key_width, value_width));
+
+        return result;
     }
 
     pub fn asU8ptr(self: RocDict) [*]u8 {
@@ -270,7 +235,7 @@ pub const RocDict = extern struct {
         return total_slots_at_level(self.number_of_levels);
     }
 
-    pub fn makeUnique(self: RocDict, allocator: *Allocator, in_place: InPlace, alignment: Alignment, key_width: usize, value_width: usize, inc_key: Inc, inc_value: Inc) RocDict {
+    pub fn makeUnique(self: RocDict, allocator: *Allocator, alignment: Alignment, key_width: usize, value_width: usize) RocDict {
         if (self.isEmpty()) {
             return self;
         }
@@ -281,28 +246,21 @@ pub const RocDict = extern struct {
 
         // unfortunately, we have to clone
 
-        var new_dict = RocDict.allocate(allocator, in_place, 8, self.dict_entries_len, alignment.toUsize(), key_width, value_width);
+        const in_place = InPlace.Clone;
+        var new_dict = RocDict.allocate(allocator, self.number_of_levels, self.dict_entries_len, alignment, key_width, value_width);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, self.dict_bytes);
         var new_bytes: [*]u8 = @ptrCast([*]u8, new_dict.dict_bytes);
 
-        const number_of_bytes = 8 * (@sizeOf(Slot) + key_width + value_width);
+        const number_of_bytes = self.capacity() * (@sizeOf(Slot) + key_width + value_width);
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
         // we copied potentially-refcounted values; make sure to increment
         const size = new_dict.capacity();
         var i: usize = 0;
 
-        i = 0;
-        while (i < size) : (i += 1) {
-            switch (new_dict.getSlot(i, key_width, value_width)) {
-                Slot.Filled => {
-                    inc_key(new_dict.getKey(i, alignment, key_width, value_width));
-                    inc_value(new_dict.getValue(i, alignment, key_width, value_width));
-                },
-                else => {},
-            }
-        }
+        // NOTE we fuse an increment of all keys/values with a decrement of the input dict
+        decref(allocator, alignment, self.dict_bytes, self.capacity() * slotSize(key_width, value_width));
 
         return new_dict;
     }
@@ -412,7 +370,7 @@ pub const RocDict = extern struct {
             // hash the key, and modulo by the maximum size
             // (so we get an in-bounds index)
             const hash = hash_fn(seed, key);
-            const index = hash % current_level_size;
+            const index = capacityOfLevel(current_level - 1) + (hash % current_level_size);
 
             switch (self.getSlot(index, key_width, value_width)) {
                 Slot.Empty, Slot.PreviouslyFilled => {
@@ -461,20 +419,10 @@ const Inc = fn (?[*]u8) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
 
 // Dict.insert : Dict k v, k, v -> Dict k v
-pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, dec_key: Dec, inc_value: Inc, dec_value: Dec, output: *RocDict) callconv(.C) void {
+pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
     var seed: u64 = INITIAL_SEED;
 
-    var result: RocDict = blk: {
-        if (input.isEmpty()) {
-            break :blk input;
-        } else {
-            const in_place = InPlace.Clone;
-
-            var temp = input.makeUnique(std.heap.c_allocator, in_place, alignment, key_width, value_width, inc_key, inc_value);
-
-            break :blk temp;
-        }
-    };
+    var result = input.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
 
     var current_level: usize = 1;
     var current_level_size: usize = 8;
@@ -482,11 +430,12 @@ pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
 
     while (true) {
         if (current_level > result.number_of_levels) {
-            result = result.reallocate(std.heap.c_allocator, alignment.toUsize(), key_width, value_width);
+            result = result.reallocate(std.heap.c_allocator, alignment, key_width, value_width);
         }
 
         const hash = hash_fn(seed, key);
-        const index = hash % current_level_size;
+        const index = capacityOfLevel(current_level - 1) + (hash % current_level_size);
+        assert(index < result.capacity());
 
         switch (result.getSlot(index, key_width, value_width)) {
             Slot.Empty, Slot.PreviouslyFilled => {
@@ -528,11 +477,8 @@ pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
     output.* = result;
 }
 
-// { ptr, length, level: u8 }
-// [ key1 .. key8, value1, ...
-
 // Dict.remove : Dict k v, k -> Dict k v
-pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, dec_key: Dec, inc_value: Inc, dec_value: Dec, output: *RocDict) callconv(.C) void {
+pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
     switch (input.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
         MaybeIndex.not_found => {
             // the key was not found; we're done
@@ -540,8 +486,7 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
             return;
         },
         MaybeIndex.index => |index| {
-            // TODO make sure input is unique (or duplicate otherwise)
-            var dict = input;
+            var dict = input.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
 
             dict.setSlot(index, key_width, value_width, Slot.PreviouslyFilled);
             const old_key = dict.getKey(index, alignment, key_width, value_width);
@@ -597,6 +542,189 @@ pub fn elementsRc(dict: RocDict, alignment: Alignment, key_width: usize, value_w
             },
             else => {},
         }
+    }
+}
+
+pub const RocList = extern struct {
+    bytes: ?[*]u8,
+    length: usize,
+};
+
+pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_key: Inc, output: *RocList) callconv(.C) void {
+    const size = dict.capacity();
+
+    var length: usize = 0;
+    var i: usize = 0;
+    while (i < size) : (i += 1) {
+        switch (dict.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                length += 1;
+            },
+            else => {},
+        }
+    }
+
+    if (length == 0) {
+        output.* = RocList{ .bytes = null, .length = 0 };
+        return;
+    }
+
+    const data_bytes = length * key_width;
+    var ptr = allocateWithRefcount(std.heap.c_allocator, alignment, data_bytes);
+
+    var offset = blk: {
+        if (alignment.keyFirst()) {
+            break :blk 0;
+        } else {
+            break :blk (dict.capacity() * value_width);
+        }
+    };
+
+    i = 0;
+    var copied: usize = 0;
+    while (i < size) : (i += 1) {
+        switch (dict.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict.getKey(i, alignment, key_width, value_width);
+                inc_key(key);
+
+                const key_cast = @ptrCast([*]const u8, key);
+                @memcpy(ptr + (copied * key_width), key_cast, key_width);
+                copied += 1;
+            },
+            else => {},
+        }
+    }
+
+    output.* = RocList{ .bytes = ptr, .length = length };
+}
+
+pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_value: Inc, output: *RocList) callconv(.C) void {
+    const size = dict.capacity();
+
+    var length: usize = 0;
+    var i: usize = 0;
+    while (i < size) : (i += 1) {
+        switch (dict.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                length += 1;
+            },
+            else => {},
+        }
+    }
+
+    if (length == 0) {
+        output.* = RocList{ .bytes = null, .length = 0 };
+        return;
+    }
+
+    const data_bytes = length * value_width;
+    var ptr = allocateWithRefcount(std.heap.c_allocator, alignment, data_bytes);
+
+    var offset = blk: {
+        if (alignment.keyFirst()) {
+            break :blk (dict.capacity() * key_width);
+        } else {
+            break :blk 0;
+        }
+    };
+
+    i = 0;
+    var copied: usize = 0;
+    while (i < size) : (i += 1) {
+        switch (dict.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const value = dict.getValue(i, alignment, key_width, value_width);
+                inc_value(value);
+
+                const value_cast = @ptrCast([*]const u8, value);
+                @memcpy(ptr + (copied * value_width), value_cast, value_width);
+                copied += 1;
+            },
+            else => {},
+        }
+    }
+
+    output.* = RocList{ .bytes = ptr, .length = length };
+}
+
+fn decref(
+    allocator: *Allocator,
+    alignment: Alignment,
+    bytes_or_null: ?[*]u8,
+    data_bytes: usize,
+) void {
+    var bytes = bytes_or_null orelse return;
+
+    const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));
+
+    const refcount = (usizes - 1)[0];
+    const refcount_isize = @bitCast(isize, refcount);
+
+    switch (alignment.toUsize()) {
+        8 => {
+            if (refcount == REFCOUNT_ONE) {
+                allocator.free((bytes - 8)[0 .. 8 + data_bytes]);
+            } else if (refcount_isize < 0) {
+                (usizes - 1)[0] = refcount + 1;
+            }
+        },
+        16 => {
+            if (refcount == REFCOUNT_ONE) {
+                allocator.free((bytes - 16)[0 .. 16 + data_bytes]);
+            } else if (refcount_isize < 0) {
+                (usizes - 1)[0] = refcount + 1;
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn allocateWithRefcount(
+    allocator: *Allocator,
+    alignment: Alignment,
+    data_bytes: usize,
+) [*]u8 {
+    comptime const result_in_place = InPlace.Clone;
+
+    switch (alignment.toUsize()) {
+        8 => {
+            const length = @sizeOf(usize) + data_bytes;
+
+            var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
+
+            var as_usize_array = @ptrCast([*]usize, new_bytes);
+            if (result_in_place == InPlace.InPlace) {
+                as_usize_array[0] = @intCast(usize, number_of_slots);
+            } else {
+                as_usize_array[0] = REFCOUNT_ONE;
+            }
+
+            var as_u8_array = @ptrCast([*]u8, new_bytes);
+            const first_slot = as_u8_array + @sizeOf(usize);
+
+            return first_slot;
+        },
+        16 => {
+            const length = 2 * @sizeOf(usize) + data_bytes;
+
+            var new_bytes: []align(16) u8 = allocator.alignedAlloc(u8, 16, length) catch unreachable;
+
+            var as_usize_array = @ptrCast([*]usize, new_bytes);
+            if (result_in_place == InPlace.InPlace) {
+                as_usize_array[0] = 0;
+                as_usize_array[1] = @intCast(usize, number_of_slots);
+            } else {
+                as_usize_array[0] = 0;
+                as_usize_array[1] = REFCOUNT_ONE;
+            }
+
+            var as_u8_array = @ptrCast([*]u8, new_bytes);
+            const first_slot = as_u8_array + 2 * @sizeOf(usize);
+
+            return first_slot;
+        },
+        else => unreachable,
     }
 }
 

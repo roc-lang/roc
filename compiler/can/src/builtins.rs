@@ -1990,7 +1990,6 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_key = Symbol::ARG_2;
 
     let temp_record = Symbol::ARG_3;
-    let temp_flag = Symbol::ARG_4;
 
     let bool_var = var_store.fresh();
     let flag_var = var_store.fresh();
