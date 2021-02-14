@@ -305,4 +305,25 @@ mod gen_dict {
             &[RocStr]
         );
     }
+
+    #[test]
+    fn unit_values() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict I64 {}
+                myDict =
+                    Dict.empty
+                        |> Dict.insert 0 {}
+                        |> Dict.insert 1 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 3 {}
+
+                Dict.len myDict
+                "#
+            ),
+            4,
+            i64
+        );
+    }
 }
