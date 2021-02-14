@@ -94,7 +94,7 @@ pub fn gen_from_mono_module(
             function.set_linkage(Linkage::Internal);
         }
 
-        if name.starts_with("roc_builtins.dict") {
+        if name.starts_with("roc_builtins.dict") || name.starts_with("dict.RocDict") {
             function.add_attribute(AttributeLoc::Function, attr);
         }
     }
