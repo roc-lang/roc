@@ -1,6 +1,9 @@
-use crate::generic64::{Assembler, CallConv, RegTrait};
+use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
 use crate::Relocation;
 use bumpalo::collections::Vec;
+use roc_collections::all::MutMap;
+use roc_module::symbol::Symbol;
+use roc_mono::layout::Layout;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -136,29 +139,33 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     #[inline(always)]
     fn setup_stack(
         buf: &mut Vec<'_, u8>,
-        leaf_function: bool,
         saved_regs: &[AArch64GeneralReg],
         requested_stack_size: i32,
+        fn_call_stack_size: i32,
     ) -> Result<i32, String> {
-        // full size is upcast to i64 to make sure we don't overflow here.
-        let mut full_size = 8 * saved_regs.len() as i64 + requested_stack_size as i64;
-        if !leaf_function {
-            full_size += 8;
-        }
-        let alignment = if full_size <= 0 {
+        // Full size is upcast to i64 to make sure we don't overflow here.
+        let full_stack_size = requested_stack_size
+            .checked_add(8 * saved_regs.len() as i32 + 8) // The extra 8 is space to store the frame pointer.
+            .ok_or("Ran out of stack space")?
+            .checked_add(fn_call_stack_size)
+            .ok_or("Ran out of stack space")?;
+        let alignment = if full_stack_size <= 0 {
             0
         } else {
-            full_size % STACK_ALIGNMENT as i64
+            full_stack_size % STACK_ALIGNMENT as i32
         };
         let offset = if alignment == 0 {
             0
         } else {
             STACK_ALIGNMENT - alignment as u8
         };
-        if let Some(aligned_stack_size) =
-            requested_stack_size.checked_add(8 * saved_regs.len() as i32 + offset as i32)
-        {
+        if let Some(aligned_stack_size) = full_stack_size.checked_add(offset as i32) {
             if aligned_stack_size > 0 {
+                AArch64Assembler::mov_reg64_reg64(
+                    buf,
+                    AArch64GeneralReg::FP,
+                    AArch64GeneralReg::ZRSP,
+                );
                 AArch64Assembler::sub_reg64_reg64_imm32(
                     buf,
                     AArch64GeneralReg::ZRSP,
@@ -168,15 +175,15 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
 
                 // All the following stores could be optimized by using `STP` to store pairs.
                 let mut offset = aligned_stack_size;
-                if !leaf_function {
-                    offset -= 8;
-                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::LR);
-                    offset -= 8;
-                    AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
-                }
+                offset -= 8;
+                AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::LR);
+                offset -= 8;
+                AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
+
+                offset = aligned_stack_size - fn_call_stack_size;
                 for reg in saved_regs {
                     offset -= 8;
-                    AArch64Assembler::mov_stack32_reg64(buf, offset, *reg);
+                    AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
                 }
                 Ok(aligned_stack_size)
             } else {
@@ -190,22 +197,22 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     #[inline(always)]
     fn cleanup_stack(
         buf: &mut Vec<'_, u8>,
-        leaf_function: bool,
         saved_regs: &[AArch64GeneralReg],
         aligned_stack_size: i32,
+        fn_call_stack_size: i32,
     ) -> Result<(), String> {
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
             let mut offset = aligned_stack_size;
-            if !leaf_function {
-                offset -= 8;
-                AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, offset);
-                offset -= 8;
-                AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
-            }
+            offset -= 8;
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, offset);
+            offset -= 8;
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
+
+            offset = aligned_stack_size - fn_call_stack_size;
             for reg in saved_regs {
                 offset -= 8;
-                AArch64Assembler::mov_reg64_stack32(buf, *reg, offset);
+                AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
             }
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
@@ -215,6 +222,25 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
             );
         }
         Ok(())
+    }
+
+    #[inline(always)]
+    fn load_args<'a>(
+        _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _args: &'a [(Layout<'a>, Symbol)],
+    ) -> Result<(), String> {
+        Err("Loading args not yet implemented for AArch64".to_string())
+    }
+
+    #[inline(always)]
+    fn store_args<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _symbol_map: &MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _args: &'a [Symbol],
+        _arg_layouts: &[Layout<'a>],
+        _ret_layout: &Layout<'a>,
+    ) -> Result<u32, String> {
+        Err("Storing args not yet implemented for AArch64".to_string())
     }
 }
 
@@ -263,6 +289,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn call(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>, _fn_name: String) {
+        unimplemented!("calling functions literal not yet implemented for AArch64");
+    }
+
+    #[inline(always)]
     fn mov_freg64_imm64(
         _buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
@@ -301,6 +332,43 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
+        unimplemented!(
+            "loading floating point reg from base offset not yet implemented for AArch64"
+        );
+    }
+    #[inline(always)]
+    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
+        if offset < 0 {
+            unimplemented!("negative base offsets are not yet implement for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
+        } else {
+            unimplemented!("base offsets over 32k are not yet implement for AArch64");
+        }
+    }
+    #[inline(always)]
+    fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
+        unimplemented!("saving floating point reg to base offset not yet implemented for AArch64");
+    }
+    #[inline(always)]
+    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
+        if offset < 0 {
+            unimplemented!("negative base offsets are not yet implement for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            str_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
+        } else {
+            unimplemented!("base offsets over 32k are not yet implement for AArch64");
+        }
+    }
+
+    #[inline(always)]
+    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
+        unimplemented!("loading floating point reg from stack not yet implemented for AArch64");
+    }
+    #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
             unimplemented!("negative stack offsets are not yet implement for AArch64");
@@ -311,16 +379,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             unimplemented!("stack offsets over 32k are not yet implement for AArch64");
         }
     }
-
-    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        unimplemented!("loading floating point reg from stack not yet implemented for AArch64");
-    }
-
     #[inline(always)]
     fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
         unimplemented!("saving floating point reg to stack not yet implemented for AArch64");
     }
-
     #[inline(always)]
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
