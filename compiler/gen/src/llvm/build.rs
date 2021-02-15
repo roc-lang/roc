@@ -9,7 +9,7 @@ use crate::llvm::build_list::{
     list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_int, str_join_with,
+    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_join_with,
     str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
@@ -2245,9 +2245,11 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     if layout.is_refcounted() {
-                        let value_ptr = value.into_pointer_value();
-                        let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-                        refcount_ptr.decrement(env, layout);
+                        if value.is_pointer_value() {
+                            let value_ptr = value.into_pointer_value();
+                            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                            refcount_ptr.decrement(env, layout);
+                        }
                     }
 
                     build_exp_stmt(env, layout_ids, scope, parent, cont)
@@ -3531,6 +3533,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             str_from_int(env, scope, args[0])
+        }
+        StrFromFloat => {
+            // Str.fromFloat : Float * -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            str_from_float(env, scope, args[0])
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str

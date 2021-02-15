@@ -539,6 +539,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![int_type(flex(TVAR1))], Box::new(str_type())),
     );
 
+    // fromFloat : Float a -> Str
+    add_type(
+        Symbol::STR_FROM_FLOAT,
+        top_level_function(vec![float_type(flex(TVAR1))], Box::new(str_type())),
+    );
+
     // List module
 
     // get : List elem, Nat -> Result elem [ OutOfBounds ]*
@@ -986,6 +992,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 closure(vec![flex(TVAR3)], TVAR4, Box::new(flex(TVAR2))),
             ],
             Box::new(result_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // withDefault : Result a x, a -> a
+    add_type(
+        Symbol::RESULT_WITH_DEFAULT,
+        top_level_function(
+            vec![result_type(flex(TVAR1), flex(TVAR3)), flex(TVAR1)],
+            Box::new(flex(TVAR1)),
         ),
     );
 

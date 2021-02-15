@@ -1897,8 +1897,6 @@ fn specialize_external<'a>(
 
                     let internal_layout = closure_layout.internal_layout();
 
-                    dbg!(&internal_layout, proc_name);
-
                     match internal_layout {
                         Layout::Union(_) => {
                             // here we rely on the fact that a union in a closure would be stored in a one-element record
@@ -1984,8 +1982,6 @@ fn specialize_external<'a>(
                             );
 
                             let symbol = captured[0].0;
-
-                            dbg!(_other, symbol);
 
                             substitute_in_exprs(
                                 env.arena,

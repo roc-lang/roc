@@ -869,6 +869,7 @@ define_builtins! {
         8 STR_STARTS_WITH: "startsWith"
         9 STR_ENDS_WITH: "endsWith"
         10 STR_FROM_INT: "fromInt"
+        11 STR_FROM_FLOAT: "fromFloat"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -897,6 +898,7 @@ define_builtins! {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
         2 RESULT_MAP_ERR: "mapErr"
+        3 RESULT_WITH_DEFAULT: "withDefault"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias

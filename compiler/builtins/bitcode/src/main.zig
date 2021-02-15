@@ -47,6 +47,7 @@ comptime {
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strFromIntC, "from_int");
+    exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
 }
 

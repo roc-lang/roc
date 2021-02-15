@@ -209,16 +209,18 @@ mod cli_run {
         );
     }
 
-    //    #[test]
-    //    #[serial(effect)]
-    //    fn run_effect_unoptimized() {
-    //        check_output(
-    //            &example_file("effect", "Main.roc"),
-    //            &[],
-    //            "I am Dep2.str2\n",
-    //            true,
-    //        );
-    //    }
+    #[test]
+    #[serial(astar)]
+    fn run_astar_optimized_1() {
+        check_output_with_stdin(
+            &example_file("benchmarks", "AStarTests.roc"),
+            "1",
+            "astar-tests",
+            &[],
+            "True\n",
+            false,
+        );
+    }
 
     #[test]
     #[serial(multi_dep_str)]

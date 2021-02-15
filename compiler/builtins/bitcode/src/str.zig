@@ -302,6 +302,26 @@ fn strFromIntHelp(allocator: *Allocator, comptime T: type, int: T) RocStr {
     return RocStr.init(allocator, &buf, result.len);
 }
 
+const c = @cImport({
+    // See https://github.com/ziglang/zig/issues/515
+    @cDefine("_NO_CRT_STDIO_INLINE", "1");
+    @cInclude("stdio.h");
+});
+
+// Str.fromFloat
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
+pub fn strFromFloatC(int: i64) callconv(.C) RocStr {
+    // const foobar = @bitCast(f32, @intCast(i32, float));
+    // const result = std.fmt.allocPrint(std.heap.c_allocator, "{}", .{@as(f32, foobar)}) catch unreachable;
+    const float = @bitCast(f64, int);
+
+    var buf: [100]u8 = undefined;
+
+    const result = c.snprintf(&buf, 100, "%f", float);
+
+    return RocStr.init(std.heap.c_allocator, &buf, @intCast(usize, result));
+}
+
 // Str.split
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
 pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {

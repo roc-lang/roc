@@ -274,6 +274,22 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     zig_str_to_struct(env, zig_result).into()
 }
 
+/// Str.fromInt : Int -> Str
+pub fn str_from_float<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    int_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let float = load_symbol(scope, &int_symbol);
+    let int = env
+        .builder
+        .build_bitcast(float, env.context.i64_type(), "to_bits");
+
+    let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_FLOAT).into_struct_value();
+
+    zig_str_to_struct(env, zig_result).into()
+}
+
 /// Str.equal : Str, Str -> Bool
 pub fn str_equal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

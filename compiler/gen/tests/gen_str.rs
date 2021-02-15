@@ -592,4 +592,9 @@ mod gen_str {
     fn str_join_comma_single() {
         assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
     }
+
+    #[test]
+    fn str_from_float() {
+        assert_evals_to!(r#"Str.fromFloat 3.14"#, RocStr::from("3.140000"), RocStr);
+    }
 }

@@ -1,31 +1,7 @@
-app "astar"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+interface AStar exposes [ findPath, Model, initialModel ] imports [Quicksort]
 
-# astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {}
-
-fromList : List a -> Set a
-fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
-
-main : Task.Task {} []
-main =
-
-    step = \n ->
-        when n is
-            1 -> fromList [ 2, 3 ]
-            2 -> fromList [ 4 ]
-            3 -> fromList [ 4 ]
-            4 -> fromList []
-            _ -> fromList []
-
-    cost = \_, _ -> 1
-
-    when astar cost step 4 (initialModel 1) is
-        Ok _path -> 
-            Task.putLine "yay"
-        Err _ -> 
-            Task.putLine "nay"
+findPath = \costFn, moveFn, start, end -> 
+    astar costFn moveFn end (initialModel start)
 
 Model position :
     {
@@ -44,8 +20,6 @@ initialModel = \start ->
         cameFrom : Dict.empty
     }
 
-sortBy : List a, (a -> b) -> List a
-sortBy = \list, _toCmp -> list
 
 filterMap : List a, (a -> Result b *) -> List b
 filterMap = \list, toResult ->
@@ -69,9 +43,9 @@ cheapestOpen = \costFn, model ->
                     Err {}
 
                 Ok cost ->
-                    Ok { position, cost: cost + costFn position }
+                    Ok { cost: cost + costFn position, position }
                     )
-        |> sortBy .cost
+        |> Quicksort.sortBy .cost
         |> List.first
         |> Result.map .position
         |> Result.mapErr (\_ -> {})
@@ -86,31 +60,46 @@ reconstructPath = \cameFrom, goal ->
         Ok next ->
             List.append (reconstructPath cameFrom next) goal
 
-# TODO shuffle things around so we get reuse
 updateCost : position, position, Model position -> Model position
 updateCost = \current, neighbor, model ->
-    newCameFrom =
-        Dict.insert model.cameFrom neighbor current
-
-    newCosts =
-        Dict.insert model.costs neighbor distanceTo
-
-    distanceTo =
-        reconstructPath newCameFrom neighbor
-            |> List.len
-            |> Num.toFloat
-
-    newModel =
-        { model & 
-            costs: newCosts,
-            cameFrom: newCameFrom
-        }
-
     when Dict.get model.costs neighbor is
         Err _ ->
-            newModel
+            newCameFrom =
+                Dict.insert model.cameFrom neighbor current
+
+            newCosts =
+                Dict.insert model.costs neighbor distanceTo
+
+            distanceTo =
+                reconstructPath newCameFrom neighbor
+                    |> List.len
+                    |> Num.toFloat
+
+            { model & 
+                costs: newCosts,
+                cameFrom: newCameFrom
+            }
 
         Ok previousDistance ->
+
+            newCameFrom =
+                Dict.insert model.cameFrom neighbor current
+
+            newCosts =
+                Dict.insert model.costs neighbor distanceTo
+
+            distanceTo =
+                reconstructPath newCameFrom neighbor
+                    |> List.len
+                    |> Num.toFloat
+
+            newModel =
+                { model & 
+                    costs: newCosts,
+                    cameFrom: newCameFrom
+                }
+
+
             if distanceTo < previousDistance then
                 newModel
 
@@ -138,7 +127,7 @@ astar = \costFn, moveFn, goal, model ->
                     moveFn current
 
                 newNeighbors =
-                    Set.difference modelPopped.evaluated neighbors
+                    Set.difference neighbors modelPopped.evaluated
 
                 modelWithNeighbors =
                     { modelPopped &
@@ -149,5 +138,3 @@ astar = \costFn, moveFn, goal, model ->
                     Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
 
                 astar costFn moveFn goal modelWithCosts
-
-      
