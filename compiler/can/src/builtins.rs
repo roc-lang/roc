@@ -105,6 +105,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         SET_FROM_LIST => set_from_list,
         SET_INSERT => set_insert,
         SET_REMOVE => set_remove,
+        SET_CONTAINS => set_contains,
         SET_WALK=> set_walk,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
@@ -229,6 +230,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::SET_FROM_LIST => set_from_list,
         Symbol::SET_INSERT => set_insert,
         Symbol::SET_REMOVE => set_remove,
+        Symbol::SET_CONTAINS => set_contains,
         Symbol::SET_WALK => set_walk,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
@@ -2270,6 +2272,11 @@ fn set_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Set.remove : Set k, k -> Set k
 fn set_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
     dict_remove(symbol, var_store)
+}
+
+/// Set.remove : Set k, k -> Set k
+fn set_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_contains(symbol, var_store)
 }
 
 /// Set.walk : Set k,  (k, accum -> accum), accum -> accum

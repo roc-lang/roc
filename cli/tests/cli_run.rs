@@ -210,6 +210,7 @@ mod cli_run {
     }
 
     #[test]
+    #[ignore]
     #[serial(astar)]
     fn run_astar_optimized_1() {
         check_output_with_stdin(

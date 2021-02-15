@@ -196,6 +196,37 @@ mod gen_set {
     }
 
     #[test]
+    fn contains() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                fromList : List a -> Set a
+                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
+
+
+                Set.contains (fromList [1,3,4]) 4
+                "#
+            ),
+            true,
+            bool
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                fromList : List a -> Set a
+                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
+
+
+                Set.contains (fromList [1,3,4]) 2
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
     fn with_default() {
         assert_evals_to!(
             indoc!(

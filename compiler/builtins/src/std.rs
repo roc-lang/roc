@@ -969,6 +969,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    add_type(
+        Symbol::SET_CONTAINS,
+        top_level_function(
+            vec![set_type(flex(TVAR1)), flex(TVAR1)],
+            Box::new(bool_type()),
+        ),
+    );
+
     // Result module
 
     // map : Result a err, (a -> b) -> Result b err

@@ -940,6 +940,7 @@ define_builtins! {
         11 SET_FROM_LIST: "fromList"
         12 SET_WALK: "walk"
         13 SET_WALK_USER_FUNCTION: "#walk_user_function"
+        14 SET_CONTAINS: "contains"
     }
 
     num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
