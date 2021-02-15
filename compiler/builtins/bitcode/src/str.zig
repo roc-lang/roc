@@ -276,7 +276,7 @@ pub const RocStr = extern struct {
 };
 
 pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, RocStr.init, .{ std.heap.c_allocator, bytes_ptr, length});
+    return @call(.{ .modifier = always_inline }, RocStr.init, .{ std.heap.c_allocator, bytes_ptr, length });
 }
 
 // Str.equal
@@ -956,7 +956,7 @@ test "RocStr.joinWith: result is big" {
 
 pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
     const bytes: []u8 = ptr[0..len];
-    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{ bytes });
+    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{bytes});
 }
 
 const Utf8DecodeError = error{
@@ -990,7 +990,6 @@ pub const Utf8ByteProblem = packed enum(u8) {
     InvalidStartByte = 3,
     OverlongEncoding = 4,
     UnexpectedEndOfSequence = 5,
-
 };
 pub const ValidateUtf8BytesResult = extern struct {
     is_ok: bool, byte_index: usize, problem_code: Utf8ByteProblem
