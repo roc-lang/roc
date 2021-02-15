@@ -11,7 +11,7 @@ use roc_region::all::{Located, Region};
 use roc_types::{
     builtin_aliases,
     solved_types::{BuiltinAlias, FreeVars, SolvedType},
-    subs::{VarStore, Variable},
+    subs::{VarId, VarStore, Variable},
 };
 
 fn solved_type_to_type_id(
@@ -78,8 +78,26 @@ fn to_type2(
 
             typ2
         }
+        SolvedType::Flex(var_id) => {
+            Type2::Variable(var_id_to_flex_var(*var_id, free_vars, var_store))
+        }
         SolvedType::EmptyTagUnion => Type2::EmptyTagUnion,
         rest => todo!("{:?}", rest),
+    }
+}
+
+fn var_id_to_flex_var(
+    var_id: VarId,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Variable {
+    if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
+        *var
+    } else {
+        let var = var_store.fresh();
+        free_vars.unnamed_vars.insert(var_id, var);
+
+        var
     }
 }
 

@@ -292,7 +292,7 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     }
 
     pub fn with_capacity(len: u32, pool: &mut Pool) -> Self {
-        debug_assert!(size_of::<T>() <= NODE_BYTES);
+        debug_assert!(size_of::<T>() <= NODE_BYTES, "{}", size_of::<T>());
 
         if len == 0 {
             Self::empty(pool)

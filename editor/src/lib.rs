@@ -280,7 +280,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 } else {
                     // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
 
-                    let mut pool = Pool::with_capacity(42);
+                    let mut pool = Pool::with_capacity(1024);
                     let mut var_store = VarStore::default();
                     let dep_idents = MutMap::default();
                     let mut module_ids = ModuleIds::default();
