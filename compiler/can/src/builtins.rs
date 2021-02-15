@@ -1980,46 +1980,12 @@ fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Dict.hashTestOnly : k, v -> Nat
 pub fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let key_var = var_store.fresh();
-    let value_var = var_store.fresh();
-    let nat_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::Hash,
-        args: vec![
-            (key_var, Var(Symbol::ARG_1)),
-            (value_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: nat_var,
-    };
-
-    defn(
-        symbol,
-        vec![(key_var, Symbol::ARG_1), (value_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        nat_var,
-    )
+    lowlevel_2(symbol, LowLevel::Hash, var_store)
 }
 
 /// Dict.len : Dict * * -> Nat
 fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let size_var = var_store.fresh();
-    let dict_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictSize,
-        args: vec![(dict_var, Var(Symbol::ARG_1))],
-        ret_var: size_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        size_var,
-    )
+    lowlevel_1(symbol, LowLevel::DictSize, var_store)
 }
 
 /// Dict.empty : Dict * *
@@ -2073,78 +2039,17 @@ fn dict_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Dict.insert : Dict k v, k, v -> Dict k v
 fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let key_var = var_store.fresh();
-    let val_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictInsert,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (key_var, Var(Symbol::ARG_2)),
-            (val_var, Var(Symbol::ARG_3)),
-        ],
-        ret_var: dict_var,
-    };
-
-    defn(
-        symbol,
-        vec![
-            (dict_var, Symbol::ARG_1),
-            (key_var, Symbol::ARG_2),
-            (val_var, Symbol::ARG_3),
-        ],
-        var_store,
-        body,
-        dict_var,
-    )
+    lowlevel_3(symbol, LowLevel::DictInsert, var_store)
 }
 
 /// Dict.remove : Dict k v, k -> Dict k v
 fn dict_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let key_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictRemove,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (key_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: dict_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        dict_var,
-    )
+    lowlevel_2(symbol, LowLevel::DictRemove, var_store)
 }
 
 /// Dict.contains : Dict k v, k -> Bool
 fn dict_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let key_var = var_store.fresh();
-    let bool_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictContains,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (key_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: bool_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        bool_var,
-    )
+    lowlevel_2(symbol, LowLevel::DictContains, var_store)
 }
 
 /// Dict.get : Dict k v, k -> Result v [ KeyNotFound ]*
@@ -2230,108 +2135,32 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Dict.keys : Dict k v -> List k
 fn dict_keys(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictKeys,
-        args: vec![(dict_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_var,
-    )
+    lowlevel_1(symbol, LowLevel::DictKeys, var_store)
 }
 
 /// Dict.values : Dict k v -> List v
 fn dict_values(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictValues,
-        args: vec![(dict_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
-///  Dict k v, Dict k v -> Dict k v
-fn dict_dict_dict(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (dict_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: dict_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1), (dict_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        dict_var,
-    )
+    lowlevel_1(symbol, LowLevel::DictValues, var_store)
 }
 
 /// Dict.union : Dict k v, Dict k v -> Dict k v
 fn dict_union(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    dict_dict_dict(symbol, LowLevel::DictUnion, var_store)
+    lowlevel_2(symbol, LowLevel::DictUnion, var_store)
 }
 
 /// Dict.difference : Dict k v, Dict k v -> Dict k v
 fn dict_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    dict_dict_dict(symbol, LowLevel::DictDifference, var_store)
+    lowlevel_2(symbol, LowLevel::DictDifference, var_store)
 }
 
 /// Dict.intersection : Dict k v, Dict k v -> Dict k v
 fn dict_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    dict_dict_dict(symbol, LowLevel::DictIntersection, var_store)
+    lowlevel_2(symbol, LowLevel::DictIntersection, var_store)
 }
 
 /// Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
 fn dict_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let func_var = var_store.fresh();
-    let accum_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictWalk,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (func_var, Var(Symbol::ARG_2)),
-            (accum_var, Var(Symbol::ARG_3)),
-        ],
-        ret_var: accum_var,
-    };
-
-    defn(
-        symbol,
-        vec![
-            (dict_var, Symbol::ARG_1),
-            (func_var, Symbol::ARG_2),
-            (accum_var, Symbol::ARG_3),
-        ],
-        var_store,
-        body,
-        accum_var,
-    )
+    lowlevel_3(symbol, LowLevel::DictWalk, var_store)
 }
 
 /// Set.empty : Set *
@@ -2385,42 +2214,22 @@ fn set_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Set.len : Set * -> Nat
 fn set_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let size_var = var_store.fresh();
-    let set_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictSize,
-        args: vec![(set_var, Var(Symbol::ARG_1))],
-        ret_var: size_var,
-    };
-
-    defn(
-        symbol,
-        vec![(set_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        size_var,
-    )
-}
-
-///  Set k, Set k -> Set k
-fn set_set_set(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
-    dict_dict_dict(symbol, op, var_store)
+    lowlevel_1(symbol, LowLevel::DictSize, var_store)
 }
 
 /// Dict.union : Dict k v, Dict k v -> Dict k v
 fn set_union(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    set_set_set(symbol, LowLevel::DictUnion, var_store)
+    lowlevel_2(symbol, LowLevel::DictUnion, var_store)
 }
 
 /// Dict.difference : Dict k v, Dict k v -> Dict k v
 fn set_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    set_set_set(symbol, LowLevel::DictDifference, var_store)
+    lowlevel_2(symbol, LowLevel::DictDifference, var_store)
 }
 
 /// Dict.intersection : Dict k v, Dict k v -> Dict k v
 fn set_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    set_set_set(symbol, LowLevel::DictIntersection, var_store)
+    lowlevel_2(symbol, LowLevel::DictIntersection, var_store)
 }
 
 /// Set.toList : Set k -> List k

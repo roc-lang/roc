@@ -2245,29 +2245,11 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     if layout.is_refcounted() {
-                        match value {
-                            BasicValueEnum::PointerValue(value_ptr) => {
-                                let refcount_ptr =
-                                    PointerToRefcount::from_ptr_to_data(env, value_ptr);
-                                refcount_ptr.decrement(env, layout);
-                            }
-                            BasicValueEnum::StructValue(_value_struct) => {
-                                match layout {
-                                    Layout::Builtin(Builtin::Str)
-                                    | Layout::Builtin(Builtin::List(_, _))
-                                    | Layout::Builtin(Builtin::Dict(_, _))
-                                    | Layout::Builtin(Builtin::Set(_)) => {
-                                        // let refcount_ptr = PointerToRefcount::from_list_wrapper(env, value_struct);
-                                        // refcount_ptr.decrement(env, layout);
-                                        eprintln!("we are likely leaking some memory, see #985 for details");
-                                    }
-                                    _ => unreachable!(
-                                        "decref on weird type, likely a closure? {:?}",
-                                        layout
-                                    ),
-                                }
-                            }
-                            _ => unreachable!("cannot be decref'd"),
+                        if value.is_pointer_value() {
+                            // BasicValueEnum::PointerValue(value_ptr) => {
+                            let value_ptr = value.into_pointer_value();
+                            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                            refcount_ptr.decrement(env, layout);
                         }
                     }
 
