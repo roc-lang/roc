@@ -142,7 +142,7 @@ impl Pool {
         }
     }
 
-    pub fn get<T>(&self, node_id: NodeId<T>) -> &T {
+    pub fn get<'a, 'b, T>(&'a self, node_id: NodeId<T>) -> &'b T {
         unsafe {
             let node_ptr = self.nodes.offset(node_id.index as isize) as *const T;
 

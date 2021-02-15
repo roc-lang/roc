@@ -107,7 +107,7 @@ impl<'a> Env<'a> {
     }
 
     pub fn set_region<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
-        todo!();
+        dbg!("Don't Forget to set the region eventually");
     }
 
     pub fn register_closure(&mut self, symbol: Symbol, references: References) {
@@ -808,11 +808,7 @@ pub fn to_expr2<'a>(
             todo!()
         }
         Nested(sub_expr) => to_expr2(env, scope, sub_expr, region),
-        Var { module_name, ident } => {
-            dbg!("module_name: {}, ident: {}", module_name, ident);
-
-            canonicalize_lookup(env, scope, module_name, ident, region)
-        }
+        Var { module_name, ident } => canonicalize_lookup(env, scope, module_name, ident, region),
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
@@ -1228,7 +1224,7 @@ fn canonicalize_lookup(
                 // env.problem(Problem::RuntimeError(problem.clone()));
 
                 // RuntimeError(problem)
-                dbg!(scope);
+
                 todo!()
             }
         }
