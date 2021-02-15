@@ -5933,12 +5933,6 @@ fn call_by_name<'a>(
                             None if assigned.module_id() != proc_name.module_id() => {
                                 add_needed_external(procs, env, original_fn_var, proc_name);
 
-                                debug_assert_eq!(
-                                    arg_layouts.len(),
-                                    field_symbols.len(),
-                                    "scroll up a bit for background"
-                                );
-
                                 let call = if proc_name.module_id() == ModuleId::ATTR {
                                     // the callable is one of the ATTR::ARG_n symbols
                                     // we must call those by-pointer
@@ -5952,6 +5946,12 @@ fn call_by_name<'a>(
                                         arguments: field_symbols,
                                     }
                                 } else {
+                                    debug_assert_eq!(
+                                        arg_layouts.len(),
+                                        field_symbols.len(),
+                                        "scroll up a bit for background {:?}",
+                                        proc_name
+                                    );
                                     self::Call {
                                         call_type: CallType::ByName {
                                             name: proc_name,

@@ -1850,6 +1850,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     layout: Layout<'a>,
     function_value: Either<FunctionValue<'ctx>, PointerValue<'ctx>>,
     arguments: &[Symbol],
+    closure_argument: Option<BasicValueEnum<'ctx>>,
     pass: &'a roc_mono::ir::Stmt<'a>,
     fail: &'a roc_mono::ir::Stmt<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -1860,6 +1861,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     for arg in arguments.iter() {
         arg_vals.push(load_symbol(scope, arg));
     }
+    arg_vals.extend(closure_argument);
 
     let pass_block = context.append_basic_block(parent, "invoke_pass");
     let fail_block = context.append_basic_block(parent, "invoke_fail");
@@ -2019,6 +2021,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     layout.clone(),
                     function_value.into(),
                     call.arguments,
+                    None,
                     pass,
                     fail,
                 )
@@ -2026,28 +2029,57 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             CallType::ByPointer { name, .. } => {
                 let sub_expr = load_symbol(scope, &name);
 
-                let function_ptr = match sub_expr {
-                    BasicValueEnum::PointerValue(ptr) => ptr,
+                match sub_expr {
+                    BasicValueEnum::PointerValue(function_ptr) => {
+                        // basic call by pointer
+                        invoke_roc_function(
+                            env,
+                            layout_ids,
+                            scope,
+                            parent,
+                            *symbol,
+                            layout.clone(),
+                            function_ptr.into(),
+                            call.arguments,
+                            None,
+                            pass,
+                            fail,
+                        )
+                    }
+                    BasicValueEnum::StructValue(ptr_and_data) => {
+                        // this is a closure
+                        let builder = env.builder;
+
+                        let function_ptr = builder
+                            .build_extract_value(ptr_and_data, 0, "function_ptr")
+                            .unwrap()
+                            .into_pointer_value();
+
+                        let closure_data = builder
+                            .build_extract_value(ptr_and_data, 1, "closure_data")
+                            .unwrap();
+
+                        invoke_roc_function(
+                            env,
+                            layout_ids,
+                            scope,
+                            parent,
+                            *symbol,
+                            layout.clone(),
+                            function_ptr.into(),
+                            call.arguments,
+                            Some(closure_data),
+                            pass,
+                            fail,
+                        )
+                    }
                     non_ptr => {
                         panic!(
                             "Tried to call by pointer, but encountered a non-pointer: {:?}",
                             non_ptr
                         );
                     }
-                };
-
-                invoke_roc_function(
-                    env,
-                    layout_ids,
-                    scope,
-                    parent,
-                    *symbol,
-                    layout.clone(),
-                    function_ptr.into(),
-                    call.arguments,
-                    pass,
-                    fail,
-                )
+                }
             }
             CallType::Foreign {
                 ref foreign_symbol,
