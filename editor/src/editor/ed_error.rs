@@ -1,5 +1,6 @@
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, Snafu};
+use crate::ui::ui_error::UIError;
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -54,6 +55,14 @@ pub fn print_err(err: &EdError) {
     }
 }
 
+pub fn print_ui_err(err: &UIError) {
+    eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
+
+    if let Some(backtrace) = ErrorCompat::backtrace(err) {
+        eprintln!("{}", color_backtrace(backtrace));
+    }
+}
+
 fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
     let backtrace_str = format!("{}", backtrace);
     let backtrace_split = backtrace_str.split('\n');
@@ -98,5 +107,11 @@ fn contains_one_of(main_str: &str, contain_slice: &[&str]) -> bool {
 impl From<EdError> for String {
     fn from(ed_error: EdError) -> Self {
         format!("{}", ed_error)
+    }
+}
+
+impl From<UIError> for EdError {
+    fn from(ui_error: UIError) -> Self {
+        //TODO
     }
 }

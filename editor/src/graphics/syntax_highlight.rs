@@ -1,6 +1,6 @@
-use crate::graphics::colors;
-use crate::graphics::primitives;
+use crate::ui::colors;
 use colors::ColorTup;
+use crate::graphics::primitives;
 
 //TODO optimize memory allocation
 //TODO this is a demo function, the AST should be used for highlighting, see #904.

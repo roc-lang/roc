@@ -1,5 +1,10 @@
 use snafu::{Backtrace, ErrorCompat, Snafu};
 
+//import errors as follows:
+// `use crate::error::OutOfBounds;`
+// *not* `use crate::error::EdError::OutOfBounds;`
+// see https://github.com/shepmaster/snafu/issues/211
+
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum UIError {
@@ -34,3 +39,9 @@ pub enum UIError {
 }
 
 pub type UIResult<T, E = UIError> = std::result::Result<T, E>;
+
+impl From<UIError> for String {
+    fn from(ui_error: UIError) -> Self {
+        format!("{}", ui_error)
+    }
+}

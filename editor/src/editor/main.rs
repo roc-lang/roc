@@ -1,37 +1,51 @@
 
-use crate::error::{print_err, EdResult};
-use crate::graphics::colors::{CODE_COLOR, TXT_COLOR};
-use crate::graphics::lowlevel::buffer::create_rect_buffers;
-use crate::graphics::lowlevel::ortho::update_ortho_buffer;
-use crate::graphics::lowlevel::pipelines;
-use crate::graphics::primitives::text::{
-    build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw, Text,
+use crate::editor::ed_error::{print_err, print_ui_err};
+use crate::ui::{
+    ui_error::UIResult,
+    text::text_pos::{TextPos},
+    text::lines::{Lines, SelectableLines},
+    colors::{CODE_COLOR, TXT_COLOR},
 };
-use crate::graphics::style::CODE_FONT_SIZE;
-use crate::graphics::style::CODE_TXT_XY;
-use crate::mvc::app_model::AppModel;
-use crate::mvc::ed_model::EdModel;
-use crate::mvc::{app_update, ed_model, ed_view};
+use crate::graphics::{
+    lowlevel::buffer::create_rect_buffers,
+    lowlevel::ortho::update_ortho_buffer,
+    lowlevel::pipelines,
+    style::CODE_FONT_SIZE,
+    style::CODE_TXT_XY,
+};
+use crate::graphics::primitives::text::{
+    build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw,
+    Text,
+};
+use crate::editor::mvc::{
+    app_update, ed_model, ed_view,
+    app_model::AppModel,
+    ed_model::EdModel,
+};
+use super::keyboard_input;
 //use crate::resources::strings::NOTHING_OPENED;
-use crate::vec_result::get_res;
-use bumpalo::Bump;
-use cgmath::Vector2;
-use ed_model::Position;
-use lang::{pool::Pool, scope::Scope};
+use super::util::slice_get;
+use crate::lang::{pool::Pool, scope::Scope};
 use pipelines::RectResources;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
-use std::error::Error;
-use std::io;
-use std::path::Path;
+use bumpalo::Bump;
+use cgmath::Vector2;
+use std::{
+    io,
+    error::Error,
+    path::Path,
+};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
-use winit::dpi::PhysicalSize;
-use winit::event;
-use winit::event::{Event, ModifiersState};
-use winit::event_loop::ControlFlow;
+use winit::{
+    dpi::PhysicalSize,
+    event,
+    event::{Event, ModifiersState},
+    event_loop::ControlFlow,
+};
 
 // Inspired by:
 // https://github.com/sotrh/learn-wgpu by Benjamin Hansen, licensed under the MIT license
@@ -44,7 +58,7 @@ use winit::event_loop::ControlFlow;
 pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
     //TODO support using multiple filepaths
     let first_path_opt = if !filepaths.is_empty() {
-        match get_res(0, filepaths) {
+        match slice_get(0, filepaths) {
             Ok(path_ref_ref) => Some(*path_ref_ref),
             Err(e) => {
                 eprintln!("{}", e);
@@ -133,7 +147,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 Some(ed_model)
             }
             Err(e) => {
-                print_err(&e);
+                print_ui_err(&e);
                 None
             }
         }
@@ -250,8 +264,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     //TODO don't pass invisible lines
                     queue_editor_text(
                         &size,
-                        &ed_model.text_buf.all_lines(&arena),
-                        ed_model.caret_pos,
+                        &ed_model.text.all_lines(&arena),
+                        ed_model.text.get_caret(),
                         CODE_TXT_XY.into(),
                         &mut glyph_brush,
                     );
@@ -285,7 +299,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     )
                     .unwrap();
 
-                    render::render_expr2(
+                    super::render::render_expr2(
                         &mut env,
                         &size,
                         &expr2,
@@ -306,7 +320,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 ) {
                     Ok(()) => (),
                     Err(e) => {
-                        print_err(&e);
+                        print_ui_err(&e);
                         begin_render_pass(&mut encoder, &frame.view);
                     }
                 }
@@ -349,7 +363,7 @@ fn draw_all_rects(
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
-) -> EdResult<()> {
+) -> UIResult<()> {
     if let Some(ed_model) = ed_model_opt {
         let all_rects = ed_view::create_ed_rects(ed_model, arena)?;
 
@@ -396,7 +410,7 @@ fn begin_render_pass<'a>(
 fn queue_editor_text(
     size: &PhysicalSize<u32>,
     editor_lines: &str,
-    caret_pos: Position,
+    caret_pos: TextPos,
     code_coords: Vector2<f32>,
     glyph_brush: &mut GlyphBrush<()>,
 ) {

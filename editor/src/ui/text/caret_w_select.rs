@@ -1,7 +1,7 @@
 
 use crate::ui::ui_error::UIResult;
 use super::text_pos::TextPos;
-use super::selection::{ValidSelection};
+use super::selection::{Selection};
 use winit::event::{ModifiersState};
 use super::selection::validate_selection;
 
@@ -9,11 +9,11 @@ use super::selection::validate_selection;
 #[derive(Debug)]
 pub struct CaretWSelect {
     pub caret_pos: TextPos,
-    pub selection_opt: Option<ValidSelection>,
+    pub selection_opt: Option<Selection>,
 }
 
 
-fn mk_some_sel(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<ValidSelection>> {
+fn mk_some_sel(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
     Ok(
         Some(
             validate_selection(start_pos, end_pos)?

@@ -1,10 +1,9 @@
 use cgmath::Vector2;
 use wgpu_glyph::GlyphBrush;
 use winit::dpi::PhysicalSize;
-
+use crate::ui::colors::CODE_COLOR;
 use crate::{
     graphics::{
-        colors::CODE_COLOR,
         primitives::text::{queue_code_text_draw, Text},
         style::CODE_FONT_SIZE,
     },

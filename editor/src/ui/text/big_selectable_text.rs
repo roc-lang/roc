@@ -1,26 +1,32 @@
 // Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
 
-use crate::ui::ui_error::UIError::{FileOpenFailed, TextBufReadFailed};
-use crate::ui::ui_error::UIResult;
-use crate::ui::ui_error::OutOfBounds;
-use crate::ui::text::text_pos::{TextPos};
-use crate::ui::text::selection::{ValidSelection};
-use crate::ui::text::caret_w_select::{CaretWSelect};
-use crate::ui::text::lines::{Lines, SelectableLines, MutSelectableLines};
+use crate::ui::ui_error::{
+    UIError::{FileOpenFailed, TextBufReadFailed},
+    UIResult,
+    OutOfBounds,
+};
+use crate::ui::text::{
+    text_pos::{TextPos},
+    selection::{Selection, RawSelection, validate_raw_sel},
+    caret_w_select::{CaretWSelect},
+    lines::{Lines, SelectableLines, MutSelectableLines},
+};
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use ropey::Rope;
 use snafu::{ensure};
-use std::fmt;
-use std::fs::File;
-use std::io;
-use std::path::Path;
+use std::{
+    fmt,
+    fs::File,
+    io,
+    path::Path
+};
 
 pub struct BigSelectableText {
-    pub caret_w_select: CaretWSelect,
-    pub text_rope: Rope,
+    caret_w_select: CaretWSelect,
+    text_rope: Rope,
     pub path_str: String,
-    pub arena: Bump,
+    arena: Bump,
 }
 
 impl BigSelectableText {
@@ -52,7 +58,7 @@ impl BigSelectableText {
         TextPos { line, column }
     }
 
-    fn sel_to_tup(&self, val_sel: ValidSelection) -> UIResult<(usize, usize)> {
+    fn sel_to_tup(&self, val_sel: Selection) -> UIResult<(usize, usize)> {
         let start_char_indx = self.pos_to_char_indx(val_sel.start_pos);
         let end_char_indx = self.pos_to_char_indx(val_sel.end_pos);
 
@@ -111,7 +117,19 @@ impl Lines for BigSelectableText {
 }
 
 impl SelectableLines for BigSelectableText {
-    fn get_selection(&self) -> UIResult<Option<&str>> {
+    fn get_caret(self) -> TextPos {
+        self.caret_w_select.caret_pos
+    }
+
+    fn set_caret(&mut self, caret_pos: TextPos) {
+        self.caret_w_select.caret_pos = caret_pos;
+    }
+
+    fn get_selection(&self) -> Option<Selection> {
+        self.caret_w_select.selection_opt
+    }
+
+    fn get_selected_str(&self) -> UIResult<Option<&str>> {
         if let Some(val_sel) = self.caret_w_select.selection_opt {
             let (start_char_indx, end_char_indx) = self.sel_to_tup(val_sel)?;
 
@@ -130,6 +148,12 @@ impl SelectableLines for BigSelectableText {
         } else {
             Ok(None)
         }
+    }
+
+    fn set_raw_sel(&mut self, raw_sel: RawSelection) -> UIResult<()> {
+        self.caret_w_select.selection_opt = Some(validate_raw_sel(raw_sel)?);
+
+        Ok(())
     }
 
     fn last_text_pos(&self) -> TextPos {
@@ -161,14 +185,14 @@ impl MutSelectableLines for BigSelectableText {
     }
 
     fn del_selection(&mut self) -> UIResult<()> {
-        if let Some(valid_sel) = self.caret_w_select.selection_opt {
-            let (start_char_indx, end_char_indx) = self.sel_to_tup(valid_sel)?;
+        if let Some(selection) = self.caret_w_select.selection_opt {
+            let (start_char_indx, end_char_indx) = self.sel_to_tup(selection)?;
 
             self.check_bounds(end_char_indx)?;
     
             self.text_rope.remove(start_char_indx..end_char_indx);
 
-            // TODO adjust caret pos aftere delete
+            self.set_caret(selection.start_pos);
         }
 
         Ok(())

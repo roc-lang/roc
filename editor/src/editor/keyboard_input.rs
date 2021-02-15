@@ -1,6 +1,6 @@
-use crate::error::EdResult;
-use crate::mvc::app_model::AppModel;
-use crate::mvc::app_update::{handle_copy, handle_cut, handle_paste, pass_keydown_to_focused};
+use crate::editor::ed_error::EdResult;
+use crate::editor::mvc::app_model::AppModel;
+use crate::editor::mvc::app_update::{handle_copy, handle_cut, handle_paste, pass_keydown_to_focused};
 use winit::event::VirtualKeyCode::*;
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 

@@ -2,7 +2,7 @@
 // by Benjamin Hansen, licensed under the MIT license
 
 use super::rect::Rect;
-use crate::graphics::colors;
+use crate::ui::colors;
 use crate::graphics::style::{CODE_FONT_SIZE, CODE_TXT_XY};
 use crate::graphics::syntax_highlight;
 use ab_glyph::{FontArc, Glyph, InvalidFont};

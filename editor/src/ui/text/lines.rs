@@ -1,18 +1,14 @@
 // Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
 
-use crate::ui::ui_error::UIError::{FileOpenFailed, TextBufReadFailed};
-use crate::ui::ui_error::UIResult;
-use crate::ui::ui_error::OutOfBounds;
-use crate::ui::text::text_pos::{TextPos};
-use crate::ui::text::selection::{ValidSelection};
+use crate::ui::ui_error::{
+    UIResult,
+};
+use crate::ui::text::{
+    text_pos::{TextPos},
+    selection::{Selection, RawSelection},
+};
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
-use ropey::Rope;
-use snafu::{ensure, OptionExt};
-use std::fmt;
-use std::fs::File;
-use std::io;
-use std::path::Path;
 
 pub trait Lines {
     fn get_line(&self, line_nr: usize) -> UIResult<&str>;
@@ -28,7 +24,15 @@ pub trait Lines {
 }
 
 pub trait SelectableLines {
-    fn get_selection(&self) -> UIResult<Option<&str>>;
+    fn get_caret(self) -> TextPos;
+
+    fn set_caret(&mut self, caret_pos: TextPos);
+
+    fn get_selection(&self) -> Option<Selection>;
+
+    fn get_selected_str(&self) -> UIResult<Option<&str>>;
+
+    fn set_raw_sel(&mut self, raw_sel: RawSelection) -> UIResult<()>;
 
     fn last_text_pos(&self) -> TextPos;
 }

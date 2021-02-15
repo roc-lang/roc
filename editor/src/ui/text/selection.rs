@@ -32,17 +32,19 @@ impl std::fmt::Display for RawSelection {
 }
 
 //using the "parse don't validate" pattern
+pub type Selection = ValidSelection;
+
 #[derive(Debug)]
-pub struct ValidSelection {
+struct ValidSelection {
     pub start_pos: TextPos,
     pub end_pos: TextPos,
 }
 
-pub fn validate_raw_sel(raw_sel: RawSelection) -> UIResult<ValidSelection> {
+pub fn validate_raw_sel(raw_sel: RawSelection) -> UIResult<Selection> {
     validate_selection(raw_sel.start_pos, raw_sel.end_pos)
 }
 
-pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<ValidSelection> {
+pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<Selection> {
 
     ensure!(
         start_pos.line <= end_pos.line,
@@ -65,7 +67,7 @@ pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<Vali
         }
     );
 
-    Ok(ValidSelection {
+    Ok(Selection {
         start_pos, end_pos,
     })
 }
@@ -73,15 +75,14 @@ pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<Vali
 
 use bumpalo::Bump;
 use crate::graphics::primitives::rect::Rect;
-use crate::ui::text::lines::Lines;
 
 pub fn create_selection_rects<'a>(
-    valid_sel: ValidSelection,
+    valid_sel: Selection,
     lines: &dyn Lines,
     glyph_dim_rect: &Rect,
     arena: &'a Bump,
 ) -> UIResult<BumpVec<'a, Rect>> {
-    let ValidSelection { start_pos, end_pos } = valid_sel;
+    let Selection { start_pos, end_pos } = valid_sel;
 
     let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
 
@@ -158,12 +159,16 @@ pub fn create_selection_rects<'a>(
 #[cfg(test)]
 pub mod test_selection {
     use crate::ui::ui_error::{UIResult, OutOfBounds};
-    use crate::ui::text::text_pos::TextPos;
-    use crate::ui::text::selection::{ValidSelection, validate_selection};
+    use crate::ui::text::{
+        text_pos::TextPos,
+        selection::{Selection, validate_selection},
+        big_selectable_text::BigSelectableText,
+        caret_w_select::CaretWSelect,
+        lines::Lines,
+    };
     use crate::editor::mvc::ed_update::{
         move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
     };
-    use crate::ui::text::big_selectable_text::BigSelectableText;
     use crate::ui::util::slice_get;
     use core::cmp::Ordering;
     use pest::Parser;
@@ -171,6 +176,7 @@ pub mod test_selection {
     use snafu::OptionExt;
     use std::collections::HashMap;
     use std::slice::SliceIndex;
+    use bumpalo::Bump;
 
     #[derive(Parser)]
     #[grammar = "../tests/selection.pest"]
@@ -178,7 +184,7 @@ pub mod test_selection {
 
     // show selection and caret position as symbols in lines for easy testing
     pub fn convert_selection_to_dsl(
-        selection_opt: Option<ValidSelection>,
+        selection_opt: Option<Selection>,
         caret_pos: TextPos,
         lines: &mut [String],
     ) -> UIResult<&[String]> {
@@ -203,7 +209,7 @@ pub mod test_selection {
 
             // insert symbols into text lines
             for i in 0..to_insert.len() {
-                let (pos, insert_char) = *get_res(i, &to_insert)?;
+                let (pos, insert_char) = *slice_get(i, &to_insert)?;
 
                 insert_at_pos(lines, pos, insert_char)?;
 
@@ -246,15 +252,16 @@ pub mod test_selection {
         Ok(elt_ref)
     }
 
-    fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
-        TextBuffer {
+    fn text_buffer_from_str(lines_str: &str) -> BigSelectableText {
+        BigSelectableText {
+            caret_w_select: CaretWSelect::default(),
             text_rope: Rope::from_str(lines_str),
             path_str: "".to_owned(),
             arena: bumpalo::Bump::new(),
         }
     }
 
-    pub fn text_buffer_from_dsl_str(lines: &[String]) -> TextBuffer {
+    pub fn text_buffer_from_dsl_str(lines: &[String]) -> BigSelectableText {
         text_buffer_from_str(
             &lines
                 .iter()
@@ -264,17 +271,16 @@ pub mod test_selection {
         )
     }
 
-    pub fn all_lines_vec(text_buf: &TextBuffer) -> Vec<String> {
+    pub fn all_lines_vec(big_sel_text: &BigSelectableText, arena: &Bump) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
 
-        for line in text_buf.text_rope.lines() {
+        for line in big_sel_text.all_lines(arena).split("\n") {
             lines.push(
                 line
-                .as_str()
-                .expect(
-                    "Failed to get str from RopeSlice. See https://docs.rs/ropey/1.2.0/ropey/struct.RopeSlice.html#method.as_str"
-                )
-                .to_owned()
+                    .expect(
+                        "Failed to get str from RopeSlice. See https://docs.rs/ropey/1.2.0/ropey/struct.RopeSlice.html#method.as_str"
+                    )
+                    .to_owned()
             );
         }
 
@@ -284,7 +290,7 @@ pub mod test_selection {
     // Retrieve selection and position from formatted string
     pub fn convert_dsl_to_selection(
         lines: &[String],
-    ) -> Result<(Option<ValidSelection>, TextPos), String> {
+    ) -> Result<(Option<Selection>, TextPos), String> {
         let lines_str: String = lines.join("");
 
         let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str)
@@ -390,6 +396,7 @@ pub mod test_selection {
         expected_post_lines_str: &[&str],
         shift_pressed: bool,
         move_fun: MoveCaretFun,
+        arena: &Bump,
     ) -> Result<(), String> {
         let pre_lines: Vec<String> = pre_lines_str.iter().map(|l| l.to_string()).collect();
         let expected_post_lines: Vec<String> = expected_post_lines_str
@@ -402,9 +409,9 @@ pub mod test_selection {
         let clean_text_buf = text_buffer_from_dsl_str(&pre_lines);
 
         let (new_caret_pos, new_sel_opt) =
-            move_fun(caret_pos, sel_opt, shift_pressed, &clean_text_buf);
+            move_fun(caret_pos, sel_opt, shift_pressed, &clean_text_buf)?;
 
-        let mut lines_vec = all_lines_vec(&clean_text_buf);
+        let mut lines_vec = all_lines_vec(&clean_text_buf, arena);
         let post_lines_res = convert_selection_to_dsl(new_sel_opt, new_caret_pos, &mut lines_vec);
 
         match post_lines_res {
@@ -418,57 +425,66 @@ pub mod test_selection {
 
     #[test]
     fn move_right() -> Result<(), String> {
-        assert_move(&["|"], &["|"], false, move_caret_right)?;
-        assert_move(&["a|"], &["a|"], false, move_caret_right)?;
-        assert_move(&["|A"], &["A|"], false, move_caret_right)?;
-        assert_move(&["|abc"], &["a|bc"], false, move_caret_right)?;
-        assert_move(&["a|bc"], &["ab|c"], false, move_caret_right)?;
-        assert_move(&["abc|"], &["abc|"], false, move_caret_right)?;
-        assert_move(&["| abc"], &[" |abc"], false, move_caret_right)?;
-        assert_move(&["abc| "], &["abc |"], false, move_caret_right)?;
-        assert_move(&["abc|\n", "d"], &["abc\n", "|d"], false, move_caret_right)?;
-        assert_move(&["abc|\n", ""], &["abc\n", "|"], false, move_caret_right)?;
+        let arena = &Bump::new();
+
+        assert_move(&["|"], &["|"], false, move_caret_right, arena)?;
+        assert_move(&["a|"], &["a|"], false, move_caret_right, arena)?;
+        assert_move(&["|A"], &["A|"], false, move_caret_right, arena)?;
+        assert_move(&["|abc"], &["a|bc"], false, move_caret_right, arena)?;
+        assert_move(&["a|bc"], &["ab|c"], false, move_caret_right, arena)?;
+        assert_move(&["abc|"], &["abc|"], false, move_caret_right, arena)?;
+        assert_move(&["| abc"], &[" |abc"], false, move_caret_right, arena)?;
+        assert_move(&["abc| "], &["abc |"], false, move_caret_right, arena)?;
+        assert_move(&["abc|\n", "d"], &["abc\n", "|d"], false, move_caret_right, arena)?;
+        assert_move(&["abc|\n", ""], &["abc\n", "|"], false, move_caret_right, arena)?;
         assert_move(
             &["abc\n", "|def"],
             &["abc\n", "d|ef"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def| "],
             &["abc\n", "def |"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def |\n", "ghi"],
             &["abc\n", "def \n", "|ghi"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def|\n", ""],
             &["abc\n", "def\n", "|"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             &["abc\n", "def\n", "ghi\n", "|jkl"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "|ghi\n", "jkl"],
             &["abc\n", "def\n", "g|hi\n", "jkl"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "g|hi\n", "jkl"],
             &["abc\n", "def\n", "gh|i\n", "jkl"],
             false,
             move_caret_right,
+            arena,
         )?;
 
         Ok(())
@@ -476,57 +492,66 @@ pub mod test_selection {
 
     #[test]
     fn move_left() -> Result<(), String> {
-        assert_move(&["|"], &["|"], false, move_caret_left)?;
-        assert_move(&["|a"], &["|a"], false, move_caret_left)?;
-        assert_move(&["|A"], &["|A"], false, move_caret_left)?;
-        assert_move(&["a|bc"], &["|abc"], false, move_caret_left)?;
-        assert_move(&["ab|c"], &["a|bc"], false, move_caret_left)?;
-        assert_move(&["abc|"], &["ab|c"], false, move_caret_left)?;
-        assert_move(&[" |abc"], &["| abc"], false, move_caret_left)?;
-        assert_move(&["abc |"], &["abc| "], false, move_caret_left)?;
-        assert_move(&["abc\n", "|d"], &["abc|\n", "d"], false, move_caret_left)?;
-        assert_move(&["abc\n", "|"], &["abc|\n", ""], false, move_caret_left)?;
+        let arena = &Bump::new();
+
+        assert_move(&["|"], &["|"], false, move_caret_left, arena)?;
+        assert_move(&["|a"], &["|a"], false, move_caret_left, arena)?;
+        assert_move(&["|A"], &["|A"], false, move_caret_left, arena)?;
+        assert_move(&["a|bc"], &["|abc"], false, move_caret_left, arena)?;
+        assert_move(&["ab|c"], &["a|bc"], false, move_caret_left, arena)?;
+        assert_move(&["abc|"], &["ab|c"], false, move_caret_left, arena)?;
+        assert_move(&[" |abc"], &["| abc"], false, move_caret_left, arena)?;
+        assert_move(&["abc |"], &["abc| "], false, move_caret_left, arena)?;
+        assert_move(&["abc\n", "|d"], &["abc|\n", "d"], false, move_caret_left, arena)?;
+        assert_move(&["abc\n", "|"], &["abc|\n", ""], false, move_caret_left, arena)?;
         assert_move(
             &["abc\n", "d|ef"],
             &["abc\n", "|def"],
             false,
             move_caret_left,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def |"],
             &["abc\n", "def| "],
             false,
             move_caret_left,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "|ghi"],
             &["abc\n", "def |\n", "ghi"],
             false,
             move_caret_left,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "|"],
             &["abc\n", "def|\n", ""],
             false,
             move_caret_left,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi\n", "|jkl"],
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             false,
             move_caret_left,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "g|hi\n", "jkl"],
             &["abc\n", "def\n", "|ghi\n", "jkl"],
             false,
             move_caret_left,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "gh|i\n", "jkl"],
             &["abc\n", "def\n", "g|hi\n", "jkl"],
             false,
             move_caret_left,
+            arena,
         )?;
 
         Ok(())
@@ -534,314 +559,360 @@ pub mod test_selection {
 
     #[test]
     fn move_up() -> Result<(), String> {
-        assert_move(&["|"], &["|"], false, move_caret_up)?;
-        assert_move(&["|a"], &["|a"], false, move_caret_up)?;
-        assert_move(&["A|"], &["|A"], false, move_caret_up)?;
-        assert_move(&["a|bc"], &["|abc"], false, move_caret_up)?;
-        assert_move(&["ab|c"], &["|abc"], false, move_caret_up)?;
-        assert_move(&["abc|"], &["|abc"], false, move_caret_up)?;
-        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], false, move_caret_up)?;
-        assert_move(&["abc\n", "|def"], &["|abc\n", "def"], false, move_caret_up)?;
-        assert_move(&["abc\n", "d|ef"], &["a|bc\n", "def"], false, move_caret_up)?;
-        assert_move(&["abc\n", "de|f"], &["ab|c\n", "def"], false, move_caret_up)?;
-        assert_move(&["abc\n", "def|"], &["abc|\n", "def"], false, move_caret_up)?;
+        let arena = &Bump::new();
+
+        assert_move(&["|"], &["|"], false, move_caret_up, arena)?;
+        assert_move(&["|a"], &["|a"], false, move_caret_up, arena)?;
+        assert_move(&["A|"], &["|A"], false, move_caret_up, arena)?;
+        assert_move(&["a|bc"], &["|abc"], false, move_caret_up, arena)?;
+        assert_move(&["ab|c"], &["|abc"], false, move_caret_up, arena)?;
+        assert_move(&["abc|"], &["|abc"], false, move_caret_up, arena)?;
+        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], false, move_caret_up, arena)?;
+        assert_move(&["abc\n", "|def"], &["|abc\n", "def"], false, move_caret_up, arena)?;
+        assert_move(&["abc\n", "d|ef"], &["a|bc\n", "def"], false, move_caret_up, arena)?;
+        assert_move(&["abc\n", "de|f"], &["ab|c\n", "def"], false, move_caret_up, arena)?;
+        assert_move(&["abc\n", "def|"], &["abc|\n", "def"], false, move_caret_up, arena)?;
         assert_move(
             &["abc\n", "def \n", "|ghi"],
             &["abc\n", "|def \n", "ghi"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "g|hi"],
             &["abc\n", "d|ef \n", "ghi"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "gh|i"],
             &["abc\n", "de|f \n", "ghi"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "ghi|"],
             &["abc\n", "def| \n", "ghi"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de\n", "ghi|"],
             &["abc\n", "de|\n", "ghi"],
             false,
             move_caret_up,
+            arena,
         )?;
-        assert_move(&["abc\n", "de|"], &["ab|c\n", "de"], false, move_caret_up)?;
-        assert_move(&["abc\n", "d|e"], &["a|bc\n", "de"], false, move_caret_up)?;
-        assert_move(&["abc\n", "|de"], &["|abc\n", "de"], false, move_caret_up)?;
+        assert_move(&["abc\n", "de|"], &["ab|c\n", "de"], false, move_caret_up, arena)?;
+        assert_move(&["abc\n", "d|e"], &["a|bc\n", "de"], false, move_caret_up, arena)?;
+        assert_move(&["abc\n", "|de"], &["|abc\n", "de"], false, move_caret_up, arena)?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
             &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
             &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
             &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cde|f\n", "ghijkl\n", "mnopqrst"],
             &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
             &["abcdefgh\n", "ijklmn\n", "op|qr\n", "st"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
             &["abcdefgh\n", "ijkl|mn\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
             &["abcdef|gh\n", "ijklmn\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
             &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefg|h\n", "ijklmn\n", "opqr\n", "st"],
             &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["a|bcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena,
         )?;
-        assert_move(&["abc def gh |"], &["|abc def gh "], false, move_caret_up)?;
-        assert_move(&["abc de|f gh "], &["|abc def gh "], false, move_caret_up)?;
-        assert_move(&["ab|c def gh "], &["|abc def gh "], false, move_caret_up)?;
-        assert_move(&["a|bc def gh "], &["|abc def gh "], false, move_caret_up)?;
+        assert_move(&["abc def gh |"], &["|abc def gh "], false, move_caret_up, arena)?;
+        assert_move(&["abc de|f gh "], &["|abc def gh "], false, move_caret_up, arena)?;
+        assert_move(&["ab|c def gh "], &["|abc def gh "], false, move_caret_up, arena)?;
+        assert_move(&["a|bc def gh "], &["|abc def gh "], false, move_caret_up, arena)?;
 
         Ok(())
     }
 
     #[test]
     fn move_down() -> Result<(), String> {
-        assert_move(&["|"], &["|"], false, move_caret_down)?;
-        assert_move(&["|a"], &["a|"], false, move_caret_down)?;
-        assert_move(&["A|"], &["A|"], false, move_caret_down)?;
-        assert_move(&["a|bc"], &["abc|"], false, move_caret_down)?;
-        assert_move(&["ab|c"], &["abc|"], false, move_caret_down)?;
-        assert_move(&["abc|"], &["abc|"], false, move_caret_down)?;
-        assert_move(&["abc| "], &["abc |"], false, move_caret_down)?;
+        let arena = &Bump::new();
+        
+        assert_move(&["|"], &["|"], false, move_caret_down, arena)?;
+        assert_move(&["|a"], &["a|"], false, move_caret_down, arena)?;
+        assert_move(&["A|"], &["A|"], false, move_caret_down, arena)?;
+        assert_move(&["a|bc"], &["abc|"], false, move_caret_down, arena)?;
+        assert_move(&["ab|c"], &["abc|"], false, move_caret_down, arena)?;
+        assert_move(&["abc|"], &["abc|"], false, move_caret_down, arena)?;
+        assert_move(&["abc| "], &["abc |"], false, move_caret_down, arena)?;
         assert_move(
             &["abc\n", "|def"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "d|ef"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de|f"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def|"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["|abc\n", "def"],
             &["abc\n", "|def"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["a|bc\n", "def"],
             &["abc\n", "d|ef"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab|c\n", "def"],
             &["abc\n", "de|f"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc|\n", "def"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "|def \n", "ghi"],
             &["abc\n", "def \n", "|ghi"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "d|ef \n", "ghi"],
             &["abc\n", "def \n", "g|hi"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de|f \n", "ghi"],
             &["abc\n", "def \n", "gh|i"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def| \n", "ghi"],
             &["abc\n", "def \n", "ghi|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def |\n", "ghi"],
             &["abc\n", "def \n", "ghi|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de|\n", "ghi"],
             &["abc\n", "de\n", "gh|i"],
             false,
             move_caret_down,
+            arena,
         )?;
-        assert_move(&["abc|\n", "de"], &["abc\n", "de|"], false, move_caret_down)?;
-        assert_move(&["ab|c\n", "de"], &["abc\n", "de|"], false, move_caret_down)?;
-        assert_move(&["a|bc\n", "de"], &["abc\n", "d|e"], false, move_caret_down)?;
-        assert_move(&["|abc\n", "de"], &["abc\n", "|de"], false, move_caret_down)?;
+        assert_move(&["abc|\n", "de"], &["abc\n", "de|"], false, move_caret_down, arena)?;
+        assert_move(&["ab|c\n", "de"], &["abc\n", "de|"], false, move_caret_down, arena)?;
+        assert_move(&["a|bc\n", "de"], &["abc\n", "d|e"], false, move_caret_down, arena)?;
+        assert_move(&["|abc\n", "de"], &["abc\n", "|de"], false, move_caret_down, arena)?;
         assert_move(
             &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
             &["ab\n", "cd|ef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
             &["ab\n", "cdef\n", "ghij|kl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
             &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "|cdef\n", "ghijkl\n", "mnopqrst"],
             &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
             &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
             &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
             &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
             false,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "|st"],
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
             false,
             move_caret_down,
+            arena,
         )?;
-        assert_move(&["abc def gh |"], &["abc def gh |"], false, move_caret_down)?;
-        assert_move(&["abc de|f gh "], &["abc def gh |"], false, move_caret_down)?;
-        assert_move(&["ab|c def gh "], &["abc def gh |"], false, move_caret_down)?;
-        assert_move(&["a|bc def gh "], &["abc def gh |"], false, move_caret_down)?;
-        assert_move(&["|abc def gh "], &["abc def gh |"], false, move_caret_down)?;
+        assert_move(&["abc def gh |"], &["abc def gh |"], false, move_caret_down, arena)?;
+        assert_move(&["abc de|f gh "], &["abc def gh |"], false, move_caret_down, arena)?;
+        assert_move(&["ab|c def gh "], &["abc def gh |"], false, move_caret_down, arena)?;
+        assert_move(&["a|bc def gh "], &["abc def gh |"], false, move_caret_down, arena)?;
+        assert_move(&["|abc def gh "], &["abc def gh |"], false, move_caret_down, arena)?;
 
         Ok(())
     }
 
     #[test]
     fn start_selection_right() -> Result<(), String> {
-        assert_move(&["|"], &["|"], true, move_caret_right)?;
-        assert_move(&["a|"], &["a|"], true, move_caret_right)?;
-        assert_move(&["|A"], &["[A]|"], true, move_caret_right)?;
-        assert_move(&["|abc"], &["[a]|bc"], true, move_caret_right)?;
-        assert_move(&["a|bc"], &["a[b]|c"], true, move_caret_right)?;
-        assert_move(&["abc|"], &["abc|"], true, move_caret_right)?;
-        assert_move(&["| abc"], &["[ ]|abc"], true, move_caret_right)?;
-        assert_move(&["abc| "], &["abc[ ]|"], true, move_caret_right)?;
-        assert_move(&["abc|\n", "d"], &["abc[\n", "]|d"], true, move_caret_right)?;
-        assert_move(&["abc|\n", ""], &["abc[\n", "]|"], true, move_caret_right)?;
+        assert_move(&["|"], &["|"], true, move_caret_right, arena)?;
+        assert_move(&["a|"], &["a|"], true, move_caret_right, arena)?;
+        assert_move(&["|A"], &["[A]|"], true, move_caret_right, arena)?;
+        assert_move(&["|abc"], &["[a]|bc"], true, move_caret_right, arena)?;
+        assert_move(&["a|bc"], &["a[b]|c"], true, move_caret_right, arena)?;
+        assert_move(&["abc|"], &["abc|"], true, move_caret_right, arena)?;
+        assert_move(&["| abc"], &["[ ]|abc"], true, move_caret_right, arena)?;
+        assert_move(&["abc| "], &["abc[ ]|"], true, move_caret_right, arena)?;
+        assert_move(&["abc|\n", "d"], &["abc[\n", "]|d"], true, move_caret_right, arena)?;
+        assert_move(&["abc|\n", ""], &["abc[\n", "]|"], true, move_caret_right, arena)?;
         assert_move(
             &["abc\n", "|def"],
             &["abc\n", "[d]|ef"],
@@ -890,17 +961,17 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_left() -> Result<(), String> {
-        assert_move(&["|"], &["|"], true, move_caret_left)?;
-        assert_move(&["a|"], &["|[a]"], true, move_caret_left)?;
-        assert_move(&["|A"], &["|A"], true, move_caret_left)?;
-        assert_move(&["|abc"], &["|abc"], true, move_caret_left)?;
-        assert_move(&["a|bc"], &["|[a]bc"], true, move_caret_left)?;
-        assert_move(&["abc|"], &["ab|[c]"], true, move_caret_left)?;
-        assert_move(&[" |abc"], &["|[ ]abc"], true, move_caret_left)?;
-        assert_move(&["abc |"], &["abc|[ ]"], true, move_caret_left)?;
-        assert_move(&["abc|\n", "d"], &["ab|[c]\n", "d"], true, move_caret_left)?;
-        assert_move(&["abc\n", "|d"], &["abc|[\n", "]d"], true, move_caret_left)?;
-        assert_move(&["abc\n", "|"], &["abc|[\n", "]"], true, move_caret_left)?;
+        assert_move(&["|"], &["|"], true, move_caret_left, arena)?;
+        assert_move(&["a|"], &["|[a]"], true, move_caret_left, arena)?;
+        assert_move(&["|A"], &["|A"], true, move_caret_left, arena)?;
+        assert_move(&["|abc"], &["|abc"], true, move_caret_left, arena)?;
+        assert_move(&["a|bc"], &["|[a]bc"], true, move_caret_left, arena)?;
+        assert_move(&["abc|"], &["ab|[c]"], true, move_caret_left, arena)?;
+        assert_move(&[" |abc"], &["|[ ]abc"], true, move_caret_left, arena)?;
+        assert_move(&["abc |"], &["abc|[ ]"], true, move_caret_left, arena)?;
+        assert_move(&["abc|\n", "d"], &["ab|[c]\n", "d"], true, move_caret_left, arena)?;
+        assert_move(&["abc\n", "|d"], &["abc|[\n", "]d"], true, move_caret_left, arena)?;
+        assert_move(&["abc\n", "|"], &["abc|[\n", "]"], true, move_caret_left, arena)?;
         assert_move(
             &["abc\n", " |def"],
             &["abc\n", "|[ ]def"],
@@ -955,205 +1026,239 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_down() -> Result<(), String> {
-        assert_move(&["|"], &["|"], true, move_caret_down)?;
-        assert_move(&["|a"], &["[a]|"], true, move_caret_down)?;
-        assert_move(&["A|"], &["A|"], true, move_caret_down)?;
-        assert_move(&["a|bc"], &["a[bc]|"], true, move_caret_down)?;
-        assert_move(&["ab|c"], &["ab[c]|"], true, move_caret_down)?;
-        assert_move(&["abc|"], &["abc|"], true, move_caret_down)?;
-        assert_move(&["abc| "], &["abc[ ]|"], true, move_caret_down)?;
+        let arena = &Bump::new();
+
+        assert_move(&["|"], &["|"], true, move_caret_down, arena)?;
+        assert_move(&["|a"], &["[a]|"], true, move_caret_down, arena)?;
+        assert_move(&["A|"], &["A|"], true, move_caret_down, arena)?;
+        assert_move(&["a|bc"], &["a[bc]|"], true, move_caret_down, arena)?;
+        assert_move(&["ab|c"], &["ab[c]|"], true, move_caret_down, arena)?;
+        assert_move(&["abc|"], &["abc|"], true, move_caret_down, arena)?;
+        assert_move(&["abc| "], &["abc[ ]|"], true, move_caret_down, arena)?;
         assert_move(
             &["abc\n", "|def"],
             &["abc\n", "[def]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "d|ef"],
             &["abc\n", "d[ef]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de|f"],
             &["abc\n", "de[f]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def|"],
             &["abc\n", "def|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["|abc\n", "def"],
             &["[abc\n", "]|def"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["a|bc\n", "def"],
             &["a[bc\n", "d]|ef"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab|c\n", "def"],
             &["ab[c\n", "de]|f"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc|\n", "def"],
             &["abc[\n", "def]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "|def \n", "ghi"],
             &["abc\n", "[def \n", "]|ghi"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "d|ef \n", "ghi"],
             &["abc\n", "d[ef \n", "g]|hi"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de|f \n", "ghi"],
             &["abc\n", "de[f \n", "gh]|i"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def| \n", "ghi"],
             &["abc\n", "def[ \n", "ghi]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def |\n", "ghi"],
             &["abc\n", "def [\n", "ghi]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de|\n", "ghi"],
             &["abc\n", "de[\n", "gh]|i"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abc|\n", "de"],
             &["abc[\n", "de]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab|c\n", "de"],
             &["ab[c\n", "de]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["a|bc\n", "de"],
             &["a[bc\n", "d]|e"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["|abc\n", "de"],
             &["[abc\n", "]|de"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
             &["ab[\n", "cd]|ef\n", "ghijkl\n", "mnopqrst"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
             &["ab\n", "cdef[\n", "ghij]|kl\n", "mnopqrst"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
             &["ab\n", "cdef\n", "ghijkl[\n", "mnopqr]|st"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
             &[" [ab\n", " ]|cdef\n", "ghijkl\n", "mnopqrst"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "|cdef\n", "ghijkl\n", "mnopqrst"],
             &["ab\n", "[cdef\n", "]|ghijkl\n", "mnopqrst"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
             &["ab\n", "cdef\n", "[ghijkl\n", "]|mnopqrst"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
             &["abcdefgh[\n", "ijklmn]|\n", "opqr\n", "st"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
             &["abcdefgh\n", "ijklmn[\n", "opqr]|\n", "st"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
             &["abcdefgh\n", "ijklmn\n", "opqr[\n", "st]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "|st"],
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "[st]|"],
             true,
             move_caret_down,
+            arena,
         )?;
-        assert_move(&["abc def gh |"], &["abc def gh |"], true, move_caret_down)?;
+        assert_move(&["abc def gh |"], &["abc def gh |"], true, move_caret_down, arena)?;
         assert_move(
             &["abc de|f gh "],
             &["abc de[f gh ]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["ab|c def gh "],
             &["ab[c def gh ]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["a|bc def gh "],
             &["a[bc def gh ]|"],
             true,
             move_caret_down,
+            arena,
         )?;
         assert_move(
             &["|abc def gh "],
             &["[abc def gh ]|"],
             true,
             move_caret_down,
+            arena,
         )?;
 
         Ok(())
@@ -1161,251 +1266,291 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_up() -> Result<(), String> {
-        assert_move(&["|"], &["|"], true, move_caret_up)?;
-        assert_move(&["|a"], &["|a"], true, move_caret_up)?;
-        assert_move(&["A|"], &["|[A]"], true, move_caret_up)?;
-        assert_move(&["a|bc"], &["|[a]bc"], true, move_caret_up)?;
-        assert_move(&["ab|c"], &["|[ab]c"], true, move_caret_up)?;
-        assert_move(&["abc|"], &["|[abc]"], true, move_caret_up)?;
-        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], true, move_caret_up)?;
+        let arena = &Bump::new();
+
+        assert_move(&["|"], &["|"], true, move_caret_up, arena)?;
+        assert_move(&["|a"], &["|a"], true, move_caret_up, arena)?;
+        assert_move(&["A|"], &["|[A]"], true, move_caret_up, arena)?;
+        assert_move(&["a|bc"], &["|[a]bc"], true, move_caret_up, arena)?;
+        assert_move(&["ab|c"], &["|[ab]c"], true, move_caret_up, arena)?;
+        assert_move(&["abc|"], &["|[abc]"], true, move_caret_up, arena)?;
+        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], true, move_caret_up, arena)?;
         assert_move(
             &["abc\n", "|def"],
             &["|[abc\n", "]def"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "d|ef"],
             &["a|[bc\n", "d]ef"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de|f"],
             &["ab|[c\n", "de]f"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def|"],
             &["abc|[\n", "def]"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "|ghi"],
             &["abc\n", "|[def \n", "]ghi"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "g|hi"],
             &["abc\n", "d|[ef \n", "g]hi"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "gh|i"],
             &["abc\n", "de|[f \n", "gh]i"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def \n", "ghi|"],
             &["abc\n", "def|[ \n", "ghi]"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abc\n", "de\n", "ghi|"],
             &["abc\n", "de|[\n", "ghi]"],
             true,
             move_caret_up,
+            arena,
         )?;
-        assert_move(&["abc\n", "de|"], &["ab|[c\n", "de]"], true, move_caret_up)?;
-        assert_move(&["abc\n", "d|e"], &["a|[bc\n", "d]e"], true, move_caret_up)?;
-        assert_move(&["abc\n", "|de"], &["|[abc\n", "]de"], true, move_caret_up)?;
+        assert_move(&["abc\n", "de|"], &["ab|[c\n", "de]"], true, move_caret_up, arena)?;
+        assert_move(&["abc\n", "d|e"], &["a|[bc\n", "d]e"], true, move_caret_up, arena)?;
+        assert_move(&["abc\n", "|de"], &["|[abc\n", "]de"], true, move_caret_up, arena)?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
             &["ab\n", "cdef\n", "ghijkl|[\n", "mnopqrst]"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
             &["ab\n", "cdef|[\n", "ghijkl]\n", "mnopqrst"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
             &["ab\n", "cdef\n", "|[ghijkl\n", "]mnopqrst"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
             &[" |[ab\n", " ]cdef\n", "ghijkl\n", "mnopqrst"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
             &["ab\n", "cdef\n", "ghijkl|[\n", "mnopqr]st"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["ab\n", "cde|f\n", "ghijkl\n", "mnopqrst"],
             &["ab|[\n", "cde]f\n", "ghijkl\n", "mnopqrst"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
             &["abcdefgh\n", "ijklmn\n", "op|[qr\n", "st]"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
             &["abcdefgh\n", "ijkl|[mn\n", "opqr]\n", "st"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
             &["abcdef|[gh\n", "ijklmn]\n", "opqr\n", "st"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
             &["|[abcdefgh]\n", "ijklmn\n", "opqr\n", "st"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["abcdefg|h\n", "ijklmn\n", "opqr\n", "st"],
             &["|[abcdefg]h\n", "ijklmn\n", "opqr\n", "st"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["a|bcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             &["|[a]bcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             true,
             move_caret_up,
+            arena,
         )?;
         assert_move(
             &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
             true,
             move_caret_up,
+            arena,
         )?;
-        assert_move(&["abc def gh |"], &["|[abc def gh ]"], true, move_caret_up)?;
-        assert_move(&["abc de|f gh "], &["|[abc de]f gh "], true, move_caret_up)?;
-        assert_move(&["ab|c def gh "], &["|[ab]c def gh "], true, move_caret_up)?;
-        assert_move(&["a|bc def gh "], &["|[a]bc def gh "], true, move_caret_up)?;
+        assert_move(&["abc def gh |"], &["|[abc def gh ]"], true, move_caret_up, arena)?;
+        assert_move(&["abc de|f gh "], &["|[abc de]f gh "], true, move_caret_up, arena)?;
+        assert_move(&["ab|c def gh "], &["|[ab]c def gh "], true, move_caret_up, arena)?;
+        assert_move(&["a|bc def gh "], &["|[a]bc def gh "], true, move_caret_up, arena)?;
 
         Ok(())
     }
 
     #[test]
     fn end_selection_right() -> Result<(), String> {
-        assert_move(&["[A]|"], &["A|"], false, move_caret_right)?;
-        assert_move(&["[a]|bc"], &["a|bc"], false, move_caret_right)?;
-        assert_move(&["a[b]|c"], &["ab|c"], false, move_caret_right)?;
-        assert_move(&["ab[c]|"], &["abc|"], false, move_caret_right)?;
-        assert_move(&["[ ]|abc"], &[" |abc"], false, move_caret_right)?;
-        assert_move(&["|[ ]abc"], &[" |abc"], false, move_caret_right)?;
-        assert_move(&["a|[b]c"], &["ab|c"], false, move_caret_right)?;
+        let arena = &Bump::new();
+
+        assert_move(&["[A]|"], &["A|"], false, move_caret_right, arena)?;
+        assert_move(&["[a]|bc"], &["a|bc"], false, move_caret_right, arena)?;
+        assert_move(&["a[b]|c"], &["ab|c"], false, move_caret_right, arena)?;
+        assert_move(&["ab[c]|"], &["abc|"], false, move_caret_right, arena)?;
+        assert_move(&["[ ]|abc"], &[" |abc"], false, move_caret_right, arena)?;
+        assert_move(&["|[ ]abc"], &[" |abc"], false, move_caret_right, arena)?;
+        assert_move(&["a|[b]c"], &["ab|c"], false, move_caret_right, arena)?;
         assert_move(
             &["abc[\n", "]|d"],
             &["abc\n", "|d"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc|[\n", "]d"],
             &["abc\n", "|d"],
             false,
             move_caret_right,
+            arena,
         )?;
-        assert_move(&["abc|[\n", "]"], &["abc\n", "|"], false, move_caret_right)?;
+        assert_move(&["abc|[\n", "]"], &["abc\n", "|"], false, move_caret_right, arena)?;
         assert_move(
             &["abc\n", "[d]|ef"],
             &["abc\n", "d|ef"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi[\n", "]|jkl"],
             &["abc\n", "def\n", "ghi\n", "|jkl"],
             false,
             move_caret_right,
+            arena,
         )?;
-        assert_move(&["[ab]|c"], &["ab|c"], false, move_caret_right)?;
-        assert_move(&["[abc]|"], &["abc|"], false, move_caret_right)?;
+        assert_move(&["[ab]|c"], &["ab|c"], false, move_caret_right, arena)?;
+        assert_move(&["[abc]|"], &["abc|"], false, move_caret_right, arena)?;
         assert_move(
             &["ab|[c\n", "]def\n", "ghi"],
             &["abc\n", "|def\n", "ghi"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["ab[c\n", "]|def\n", "ghi"],
             &["abc\n", "|def\n", "ghi"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["a|[bc\n", "]def\n", "ghi"],
             &["abc\n", "|def\n", "ghi"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["|[abc\n", "]def\n", "ghi"],
             &["abc\n", "|def\n", "ghi"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["a|[bc\n", "d]ef\n", "ghi"],
             &["abc\n", "d|ef\n", "ghi"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["|[abc\n", "def]\n", "ghi"],
             &["abc\n", "def|\n", "ghi"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["|[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]"],
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["ab\n", "c[def\n", "ghijkl\n", "mno]|pqrst"],
             &["ab\n", "cdef\n", "ghijkl\n", "mno|pqrst"],
             false,
             move_caret_right,
+            arena,
         )?;
         assert_move(
             &["ab\n", "c|[def\n", "ghijkl\n", "mno]pqrst"],
             &["ab\n", "cdef\n", "ghijkl\n", "mno|pqrst"],
             false,
             move_caret_right,
+            arena,
         )?;
 
         Ok(())
@@ -1413,89 +1558,103 @@ pub mod test_selection {
 
     #[test]
     fn end_selection_left() -> Result<(), String> {
-        assert_move(&["[A]|"], &["|A"], false, move_caret_left)?;
-        assert_move(&["[a]|bc"], &["|abc"], false, move_caret_left)?;
-        assert_move(&["a[b]|c"], &["a|bc"], false, move_caret_left)?;
-        assert_move(&["ab[c]|"], &["ab|c"], false, move_caret_left)?;
-        assert_move(&["[ ]|abc"], &["| abc"], false, move_caret_left)?;
-        assert_move(&["|[ ]abc"], &["| abc"], false, move_caret_left)?;
-        assert_move(&["a|[b]c"], &["a|bc"], false, move_caret_left)?;
-        assert_move(&["abc[\n", "]|d"], &["abc|\n", "d"], false, move_caret_left)?;
-        assert_move(&["abc|[\n", "]d"], &["abc|\n", "d"], false, move_caret_left)?;
-        assert_move(&["abc|[\n", "]"], &["abc|\n", ""], false, move_caret_left)?;
+        let arena = &Bump::new();
+
+        assert_move(&["[A]|"], &["|A"], false, move_caret_left, arena)?;
+        assert_move(&["[a]|bc"], &["|abc"], false, move_caret_left, arena)?;
+        assert_move(&["a[b]|c"], &["a|bc"], false, move_caret_left, arena)?;
+        assert_move(&["ab[c]|"], &["ab|c"], false, move_caret_left, arena)?;
+        assert_move(&["[ ]|abc"], &["| abc"], false, move_caret_left, arena)?;
+        assert_move(&["|[ ]abc"], &["| abc"], false, move_caret_left, arena)?;
+        assert_move(&["a|[b]c"], &["a|bc"], false, move_caret_left, arena)?;
+        assert_move(&["abc[\n", "]|d"], &["abc|\n", "d"], false, move_caret_left, arena)?;
+        assert_move(&["abc|[\n", "]d"], &["abc|\n", "d"], false, move_caret_left, arena)?;
+        assert_move(&["abc|[\n", "]"], &["abc|\n", ""], false, move_caret_left, arena)?;
         assert_move(
             &["abc\n", "[d]|ef"],
             &["abc\n", "|def"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi[\n", "]|jkl"],
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             false,
             move_caret_left,
+            arena
         )?;
-        assert_move(&["[ab]|c"], &["|abc"], false, move_caret_left)?;
-        assert_move(&["[abc]|"], &["|abc"], false, move_caret_left)?;
+        assert_move(&["[ab]|c"], &["|abc"], false, move_caret_left, arena)?;
+        assert_move(&["[abc]|"], &["|abc"], false, move_caret_left, arena)?;
         assert_move(
             &["ab|[c\n", "]def\n", "ghi"],
             &["ab|c\n", "def\n", "ghi"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["ab[c\n", "]|def\n", "ghi"],
             &["ab|c\n", "def\n", "ghi"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["a|[bc\n", "]def\n", "ghi"],
             &["a|bc\n", "def\n", "ghi"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["|[abc\n", "]def\n", "ghi"],
             &["|abc\n", "def\n", "ghi"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["a|[bc\n", "d]ef\n", "ghi"],
             &["a|bc\n", "def\n", "ghi"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["|[abc\n", "def]\n", "ghi"],
             &["|abc\n", "def\n", "ghi"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
             &["|ab\n", "cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["|[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]"],
             &["|ab\n", "cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["ab\n", "c[def\n", "ghijkl\n", "mno]|pqrst"],
             &["ab\n", "c|def\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["ab\n", "c|[def\n", "ghijkl\n", "mno]pqrst"],
             &["ab\n", "c|def\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_left,
+            arena
         )?;
 
         Ok(())
@@ -1503,196 +1662,229 @@ pub mod test_selection {
 
     #[test]
     fn end_selection_down() -> Result<(), String> {
-        assert_move(&["[a]|"], &["a|"], false, move_caret_down)?;
-        assert_move(&["|[a]"], &["a|"], false, move_caret_down)?;
-        assert_move(&["a|[bc]"], &["abc|"], false, move_caret_down)?;
-        assert_move(&["ab[c]|"], &["abc|"], false, move_caret_down)?;
-        assert_move(&["abc|[ ]"], &["abc |"], false, move_caret_down)?;
+        let arena = &Bump::new();
+
+        assert_move(&["[a]|"], &["a|"], false, move_caret_down, arena)?;
+        assert_move(&["|[a]"], &["a|"], false, move_caret_down, arena)?;
+        assert_move(&["a|[bc]"], &["abc|"], false, move_caret_down, arena)?;
+        assert_move(&["ab[c]|"], &["abc|"], false, move_caret_down, arena)?;
+        assert_move(&["abc|[ ]"], &["abc |"], false, move_caret_down, arena)?;
         assert_move(
             &["abc\n", "|[def]"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "d|[ef]"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "de|[f]"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["[abc\n", "]|def"],
             &["abc\n", "|def"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["a[bc\n", "d]|ef"],
             &["abc\n", "d|ef"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab|[c\n", "de]f"],
             &["abc\n", "de|f"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc[\n", "def]|"],
             &["abc\n", "def|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "|[def \n", "]ghi"],
             &["abc\n", "def \n", "|ghi"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "d[ef \n", "g]|hi"],
             &["abc\n", "def \n", "g|hi"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "de[f \n", "gh]|i"],
             &["abc\n", "def \n", "gh|i"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "def[ \n", "ghi]|"],
             &["abc\n", "def \n", "ghi|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "def [\n", "ghi]|"],
             &["abc\n", "def \n", "ghi|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "de[\n", "gh]|i"],
             &["abc\n", "de\n", "gh|i"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc|[\n", "de]"],
             &["abc\n", "de|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab[c\n", "de]|"],
             &["abc\n", "de|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["a|[bc\n", "d]e"],
             &["abc\n", "d|e"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["[abc\n", "]|de"],
             &["abc\n", "|de"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab[\n", "cd]|ef\n", "ghijkl\n", "mnopqrst"],
             &["ab\n", "cd|ef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef|[\n", "ghij]kl\n", "mnopqrst"],
             &["ab\n", "cdef\n", "ghij|kl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl[\n", "mnopqr]|st"],
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &[" [ab\n", " ]|cdef\n", "ghijkl\n", "mnopqrst"],
             &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab\n", "|[cdef\n", "]ghijkl\n", "mnopqrst"],
             &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef\n", "[ghijkl\n", "]|mnopqrst"],
             &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcdefgh[\n", "ijklmn]|\n", "opqr\n", "st"],
             &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn[\n", "opqr]|\n", "st"],
             &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr[\n", "st]|"],
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "[st]|"],
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc de[f gh ]|"],
             &["abc def gh |"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab|[c def gh ]"],
             &["abc def gh |"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["a[bc def gh ]|"],
             &["abc def gh |"],
             false,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["[abc def gh ]|"],
             &["abc def gh |"],
             false,
             move_caret_down,
+            arena
         )?;
 
         Ok(())
@@ -1700,212 +1892,246 @@ pub mod test_selection {
 
     #[test]
     fn end_selection_up() -> Result<(), String> {
-        assert_move(&["[a]|"], &["|a"], false, move_caret_up)?;
-        assert_move(&["|[a]"], &["|a"], false, move_caret_up)?;
-        assert_move(&["a|[bc]"], &["a|bc"], false, move_caret_up)?;
-        assert_move(&["ab[c]|"], &["ab|c"], false, move_caret_up)?;
-        assert_move(&["abc|[ ]"], &["abc| "], false, move_caret_up)?;
+        let arena = &Bump::new();
+
+        assert_move(&["[a]|"], &["|a"], false, move_caret_up, arena)?;
+        assert_move(&["|[a]"], &["|a"], false, move_caret_up, arena)?;
+        assert_move(&["a|[bc]"], &["a|bc"], false, move_caret_up, arena)?;
+        assert_move(&["ab[c]|"], &["ab|c"], false, move_caret_up, arena)?;
+        assert_move(&["abc|[ ]"], &["abc| "], false, move_caret_up, arena)?;
         assert_move(
             &["abc\n", "|[def]"],
             &["abc\n", "|def"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "d|[ef]"],
             &["abc\n", "d|ef"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "de|[f]"],
             &["abc\n", "de|f"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["[abc\n", "]|def"],
             &["|abc\n", "def"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["a[bc\n", "d]|ef"],
             &["a|bc\n", "def"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab|[c\n", "de]f"],
             &["ab|c\n", "def"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc[\n", "def]|"],
             &["abc|\n", "def"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "|[def \n", "]ghi"],
             &["abc\n", "|def \n", "ghi"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "d[ef \n", "g]|hi"],
             &["abc\n", "d|ef \n", "ghi"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "de|[f \n", "gh]i"],
             &["abc\n", "de|f \n", "ghi"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "def[ \n", "ghi]|"],
             &["abc\n", "def| \n", "ghi"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "def [\n", "ghi]|"],
             &["abc\n", "def |\n", "ghi"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "de[\n", "gh]|i"],
             &["abc\n", "de|\n", "ghi"],
             false,
             move_caret_up,
+            arena
         )?;
-        assert_move(&["abc|[\n", "de]"], &["abc|\n", "de"], false, move_caret_up)?;
-        assert_move(&["ab[c\n", "de]|"], &["ab|c\n", "de"], false, move_caret_up)?;
-        assert_move(&["a|[bc\n", "d]e"], &["a|bc\n", "de"], false, move_caret_up)?;
-        assert_move(&["[abc\n", "]|de"], &["|abc\n", "de"], false, move_caret_up)?;
+        assert_move(&["abc|[\n", "de]"], &["abc|\n", "de"], false, move_caret_up, arena)?;
+        assert_move(&["ab[c\n", "de]|"], &["ab|c\n", "de"], false, move_caret_up, arena)?;
+        assert_move(&["a|[bc\n", "d]e"], &["a|bc\n", "de"], false, move_caret_up, arena)?;
+        assert_move(&["[abc\n", "]|de"], &["|abc\n", "de"], false, move_caret_up, arena)?;
         assert_move(
             &["ab[\n", "cd]|ef\n", "ghijkl\n", "mnopqrst"],
             &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef|[\n", "ghij]kl\n", "mnopqrst"],
             &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl[\n", "mnopqr]|st"],
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &[" [ab\n", " ]|cdef\n", "ghijkl\n", "mnopqrst"],
             &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab\n", "|[cdef\n", "]ghijkl\n", "mnopqrst"],
             &["ab\n", "|cdef\n", "ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef\n", "[ghijkl\n", "]|mnopqrst"],
             &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abcdefgh[\n", "ijklmn]|\n", "opqr\n", "st"],
             &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn[\n", "opqr]|\n", "st"],
             &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr[\n", "st]|"],
             &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
             false,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "[st]|"],
             &["abcdefgh\n", "ijklmn\n", "opqr\n", "|st"],
             false,
             move_caret_up,
+            arena
         )?;
-        assert_move(&["abc de[f gh ]|"], &["abc de|f gh "], false, move_caret_up)?;
-        assert_move(&["ab|[c def gh ]"], &["ab|c def gh "], false, move_caret_up)?;
-        assert_move(&["a[bc def gh ]|"], &["a|bc def gh "], false, move_caret_up)?;
-        assert_move(&["[abc def gh ]|"], &["|abc def gh "], false, move_caret_up)?;
+        assert_move(&["abc de[f gh ]|"], &["abc de|f gh "], false, move_caret_up, arena)?;
+        assert_move(&["ab|[c def gh ]"], &["ab|c def gh "], false, move_caret_up, arena)?;
+        assert_move(&["a[bc def gh ]|"], &["a|bc def gh "], false, move_caret_up, arena)?;
+        assert_move(&["[abc def gh ]|"], &["|abc def gh "], false, move_caret_up, arena)?;
 
         Ok(())
     }
 
     #[test]
     fn extend_selection_right() -> Result<(), String> {
-        assert_move(&["[a]|bc"], &["[ab]|c"], true, move_caret_right)?;
-        assert_move(&["a[b]|c"], &["a[bc]|"], true, move_caret_right)?;
-        assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_right)?;
-        assert_move(&["[ ]|abc"], &["[ a]|bc"], true, move_caret_right)?;
-        assert_move(&["[abc]|"], &["[abc]|"], true, move_caret_right)?;
-        assert_move(&["a[bc]|"], &["a[bc]|"], true, move_caret_right)?;
-        assert_move(&["ab[c]|"], &["ab[c]|"], true, move_caret_right)?;
+        let arena = &Bump::new();
+
+        assert_move(&["[a]|bc"], &["[ab]|c"], true, move_caret_right, arena)?;
+        assert_move(&["a[b]|c"], &["a[bc]|"], true, move_caret_right, arena)?;
+        assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_right, arena)?;
+        assert_move(&["[ ]|abc"], &["[ a]|bc"], true, move_caret_right, arena)?;
+        assert_move(&["[abc]|"], &["[abc]|"], true, move_caret_right, arena)?;
+        assert_move(&["a[bc]|"], &["a[bc]|"], true, move_caret_right, arena)?;
+        assert_move(&["ab[c]|"], &["ab[c]|"], true, move_caret_right, arena)?;
         assert_move(
             &["abc[\n", "]|d"],
             &["abc[\n", "d]|"],
             true,
             move_caret_right,
+            arena
         )?;
-        assert_move(&["ab[c]|\n", ""], &["ab[c\n", "]|"], true, move_caret_right)?;
+        assert_move(&["ab[c]|\n", ""], &["ab[c\n", "]|"], true, move_caret_right, arena)?;
         assert_move(
             &["ab[c]|\n", "d"],
             &["ab[c\n", "]|d"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi[\n", "]|jkl"],
             &["abc\n", "def\n", "ghi[\n", "j]|kl"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["ab[c\n", "def\n", "ghi\n", "]|jkl"],
             &["ab[c\n", "def\n", "ghi\n", "j]|kl"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["ab[c\n", "def\n", "]|ghi\n", "jkl"],
             &["ab[c\n", "def\n", "g]|hi\n", "jkl"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["[abc\n", "def\n", "ghi\n", "jk]|l"],
             &["[abc\n", "def\n", "ghi\n", "jkl]|"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["[abc\n", "def\n", "ghi\n", "jkl]|"],
             &["[abc\n", "def\n", "ghi\n", "jkl]|"],
             true,
             move_caret_right,
+            arena
         )?;
 
         Ok(())
@@ -1913,42 +2139,49 @@ pub mod test_selection {
 
     #[test]
     fn extend_selection_left() -> Result<(), String> {
-        assert_move(&["ab|[c]"], &["a|[bc]"], true, move_caret_left)?;
-        assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_left)?;
-        assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_left)?;
-        assert_move(&["|[ab]c"], &["|[ab]c"], true, move_caret_left)?;
-        assert_move(&["|[a]bc"], &["|[a]bc"], true, move_caret_left)?;
-        assert_move(&[" |[a]bc"], &["|[ a]bc"], true, move_caret_left)?;
+        let arena = &Bump::new();
+
+        assert_move(&["ab|[c]"], &["a|[bc]"], true, move_caret_left, arena)?;
+        assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_left, arena)?;
+        assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_left, arena)?;
+        assert_move(&["|[ab]c"], &["|[ab]c"], true, move_caret_left, arena)?;
+        assert_move(&["|[a]bc"], &["|[a]bc"], true, move_caret_left, arena)?;
+        assert_move(&[" |[a]bc"], &["|[ a]bc"], true, move_caret_left, arena)?;
         assert_move(
             &["abc|[\n", "]d"],
             &["ab|[c\n", "]d"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "|[d]"],
             &["abc|[\n", "d]"],
             true,
             move_caret_left,
+            arena
         )?;
-        assert_move(&["ab|[c\n", "]"], &["a|[bc\n", "]"], true, move_caret_left)?;
+        assert_move(&["ab|[c\n", "]"], &["a|[bc\n", "]"], true, move_caret_left, arena)?;
         assert_move(
             &["abc\n", "def|[\n", "ghi\n", "j]kl"],
             &["abc\n", "de|[f\n", "ghi\n", "j]kl"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["a|[bc\n", "def\n", "ghi\n", "jkl]"],
             &["|[abc\n", "def\n", "ghi\n", "jkl]"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi\n", "|[jkl]"],
             &["abc\n", "def\n", "ghi|[\n", "jkl]"],
             true,
             move_caret_left,
+            arena
         )?;
 
         Ok(())
@@ -1956,51 +2189,59 @@ pub mod test_selection {
 
     #[test]
     fn extend_selection_up() -> Result<(), String> {
-        assert_move(&["ab|[c]"], &["|[abc]"], true, move_caret_up)?;
-        assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_up)?;
-        assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_up)?;
-        assert_move(&["|[ab]c"], &["|[ab]c"], true, move_caret_up)?;
-        assert_move(&["|[a]bc"], &["|[a]bc"], true, move_caret_up)?;
-        assert_move(&[" |[a]bc"], &["|[ a]bc"], true, move_caret_up)?;
-        assert_move(&["ab[c]|"], &["|[ab]c"], true, move_caret_up)?;
-        assert_move(&["[a]|"], &["|a"], true, move_caret_up)?;
-        assert_move(&["[a]|bc"], &["|abc"], true, move_caret_up)?;
-        assert_move(&["[a]|bc\n", "d"], &["|abc\n", "d"], true, move_caret_up)?;
+        let arena = &Bump::new();
+
+        assert_move(&["ab|[c]"], &["|[abc]"], true, move_caret_up, arena)?;
+        assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_up, arena)?;
+        assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_up, arena)?;
+        assert_move(&["|[ab]c"], &["|[ab]c"], true, move_caret_up, arena)?;
+        assert_move(&["|[a]bc"], &["|[a]bc"], true, move_caret_up, arena)?;
+        assert_move(&[" |[a]bc"], &["|[ a]bc"], true, move_caret_up, arena)?;
+        assert_move(&["ab[c]|"], &["|[ab]c"], true, move_caret_up, arena)?;
+        assert_move(&["[a]|"], &["|a"], true, move_caret_up, arena)?;
+        assert_move(&["[a]|bc"], &["|abc"], true, move_caret_up, arena)?;
+        assert_move(&["[a]|bc\n", "d"], &["|abc\n", "d"], true, move_caret_up, arena)?;
         assert_move(
             &["abc\n", "de[f]|"],
             &["abc|[\n", "de]f"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "de|[f]"],
             &["ab|[c\n", "def]"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab|[c\n", "def]"],
             &["|[abc\n", "def]"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "[mnopqr]|st"],
             &["ab\n", "cdef\n", "ghijkl|[\n", "]mnopqrst"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "[mnopqrs]|t"],
             &["ab\n", "cdef\n", "ghijkl|[\n", "]mnopqrst"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abcdefgh\n", "ijklmn\n", "|[o]pqr\n", "st"],
             &["abcdefgh\n", "|[ijklmn\n", "o]pqr\n", "st"],
             true,
             move_caret_up,
+            arena
         )?;
 
         Ok(())
@@ -2008,59 +2249,69 @@ pub mod test_selection {
 
     #[test]
     fn extend_selection_down() -> Result<(), String> {
-        assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_down)?;
-        assert_move(&["[a]|bc"], &["[abc]|"], true, move_caret_down)?;
-        assert_move(&["[abc]|"], &["[abc]|"], true, move_caret_down)?;
-        assert_move(&["|[ab]c"], &["ab[c]|"], true, move_caret_down)?;
-        assert_move(&["|[a]bc"], &["a[bc]|"], true, move_caret_down)?;
+        let arena = &Bump::new();
+
+        assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_down, arena)?;
+        assert_move(&["[a]|bc"], &["[abc]|"], true, move_caret_down, arena)?;
+        assert_move(&["[abc]|"], &["[abc]|"], true, move_caret_down, arena)?;
+        assert_move(&["|[ab]c"], &["ab[c]|"], true, move_caret_down, arena)?;
+        assert_move(&["|[a]bc"], &["a[bc]|"], true, move_caret_down, arena)?;
         assert_move(
             &["[a]|bc\n", "d"],
             &["[abc\n", "d]|"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["[a]|bc\n", "de"],
             &["[abc\n", "d]|e"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["[abc\n", "d]|e"],
             &["[abc\n", "de]|"],
             true,
             move_caret_down,
+            arena
         )?;
-        assert_move(&["[a]|bc\n", ""], &["[abc\n", "]|"], true, move_caret_down)?;
+        assert_move(&["[a]|bc\n", ""], &["[abc\n", "]|"], true, move_caret_down, arena)?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "[mnopqr]|st"],
             &["ab\n", "cdef\n", "ghijkl\n", "[mnopqrst]|"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["a[b\n", "cdef\n", "ghijkl\n", "mnopqr]|st"],
             &["a[b\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
             &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcd[efgh]|\n", "ijklmn\n", "opqr\n", "st"],
             &["abcd[efgh\n", "ijklmn]|\n", "opqr\n", "st"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcd[e]|fgh\n", "ijklmn\n", "opqr\n", "st"],
             &["abcd[efgh\n", "ijklm]|n\n", "opqr\n", "st"],
             true,
             move_caret_down,
+            arena
         )?;
 
         Ok(())
@@ -2068,26 +2319,31 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_right() -> Result<(), String> {
-        assert_move(&["ab|[c]"], &["abc|"], true, move_caret_right)?;
-        assert_move(&["a|[bc]"], &["ab|[c]"], true, move_caret_right)?;
-        assert_move(&["|[abc]"], &["a|[bc]"], true, move_caret_right)?;
+        let arena = &Bump::new();
+
+        assert_move(&["ab|[c]"], &["abc|"], true, move_caret_right, arena)?;
+        assert_move(&["a|[bc]"], &["ab|[c]"], true, move_caret_right, arena)?;
+        assert_move(&["|[abc]"], &["a|[bc]"], true, move_caret_right, arena)?;
         assert_move(
             &["|[abc\n", "def\n", "ghi\n", "jkl]"],
             &["a|[bc\n", "def\n", "ghi\n", "jkl]"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "d|[ef\n", "]ghi\n", "jkl"],
             &["abc\n", "de|[f\n", "]ghi\n", "jkl"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "de|[f]\n", "ghi\n", "jkl"],
             &["abc\n", "def|\n", "ghi\n", "jkl"],
             true,
             move_caret_right,
+            arena
         )?;
 
         Ok(())
@@ -2095,32 +2351,38 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_left() -> Result<(), String> {
-        assert_move(&["ab[c]|"], &["ab|c"], true, move_caret_left)?;
-        assert_move(&["a[bc]|"], &["a[b]|c"], true, move_caret_left)?;
-        assert_move(&["[abc]|"], &["[ab]|c"], true, move_caret_left)?;
+        let arena = &Bump::new();
+
+        assert_move(&["ab[c]|"], &["ab|c"], true, move_caret_left, arena)?;
+        assert_move(&["a[bc]|"], &["a[b]|c"], true, move_caret_left, arena)?;
+        assert_move(&["[abc]|"], &["[ab]|c"], true, move_caret_left, arena)?;
         assert_move(
             &["[abc\n", "def\n", "ghi\n", "jkl]|"],
             &["[abc\n", "def\n", "ghi\n", "jk]|l"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["|[abc\n", "def\n", "ghi\n", "jkl]"],
             &["|[abc\n", "def\n", "ghi\n", "jkl]"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def[\n", "]|ghi\n", "jkl"],
             &["abc\n", "def|\n", "ghi\n", "jkl"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "d[ef\n", "gh]|i\n", "jkl"],
             &["abc\n", "d[ef\n", "g]|hi\n", "jkl"],
             true,
             move_caret_left,
+            arena
         )?;
 
         Ok(())
@@ -2128,45 +2390,53 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_up() -> Result<(), String> {
-        assert_move(&["[abc]|"], &["|abc"], true, move_caret_up)?;
-        assert_move(&["[ab]|c"], &["|abc"], true, move_caret_up)?;
-        assert_move(&["[a]|bc"], &["|abc"], true, move_caret_up)?;
-        assert_move(&["|abc"], &["|abc"], true, move_caret_up)?;
+        let arena = &Bump::new();
+
+        assert_move(&["[abc]|"], &["|abc"], true, move_caret_up, arena)?;
+        assert_move(&["[ab]|c"], &["|abc"], true, move_caret_up, arena)?;
+        assert_move(&["[a]|bc"], &["|abc"], true, move_caret_up, arena)?;
+        assert_move(&["|abc"], &["|abc"], true, move_caret_up, arena)?;
         assert_move(
             &["[abc\n", "def]|"],
             &["[abc]|\n", "def"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["[abc\n", "de]|f"],
             &["[ab]|c\n", "def"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["[abc\n", "def\n", "ghi\n", "jkl]|"],
             &["[abc\n", "def\n", "ghi]|\n", "jkl"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi[\n", "jkl]|"],
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["abc\n", "d[ef\n", "ghi\n", "jk]|l"],
             &["abc\n", "d[ef\n", "gh]|i\n", "jkl"],
             true,
             move_caret_up,
+            arena
         )?;
         assert_move(
             &["[abc\n", "d]|ef\n", "ghi\n", "jkl"],
             &["[a]|bc\n", "def\n", "ghi\n", "jkl"],
             true,
             move_caret_up,
+            arena
         )?;
 
         Ok(())
@@ -2174,54 +2444,64 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_down() -> Result<(), String> {
-        assert_move(&["|[abc]"], &["abc|"], true, move_caret_down)?;
+        let arena = &Bump::new();
+
+        assert_move(&["|[abc]"], &["abc|"], true, move_caret_down, arena)?;
         assert_move(
             &["|[abc\n", "def]"],
             &["abc\n", "|[def]"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["a|[bc\n", "def]"],
             &["abc\n", "d|[ef]"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["|[abc\n", "def\n", "ghi]"],
             &["abc\n", "|[def\n", "ghi]"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab|[c\n", "def\n", "ghi]"],
             &["abc\n", "de|[f\n", "ghi]"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abc\n", "de|[f\n", "ghi]"],
             &["abc\n", "def\n", "gh|[i]"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcdef|[\n", "ghij\n", "kl]"],
             &["abcdef\n", "ghij|[\n", "kl]"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["abcde|[f\n", "ghij\n", "kl]"],
             &["abcdef\n", "ghij|[\n", "kl]"],
             true,
             move_caret_down,
+            arena
         )?;
         assert_move(
             &["ab|[cdef\n", "ghij\n", "kl]"],
             &["abcdef\n", "gh|[ij\n", "kl]"],
             true,
             move_caret_down,
+            arena
         )?;
 
         Ok(())

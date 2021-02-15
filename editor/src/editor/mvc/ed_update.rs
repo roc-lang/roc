@@ -1,21 +1,36 @@
 use super::ed_model::EdModel;
-use super::ed_model::{Position, RawSelection};
-use crate::error::EdResult;
-use crate::text_buffer::TextBuffer;
-use crate::util::is_newline;
+use crate::ui::text::{
+    text_pos::TextPos,
+    selection::{RawSelection, Selection, validate_selection},
+    big_selectable_text::BigSelectableText,
+    lines::Lines,
+    caret_w_select::CaretWSelect,
+};
+use crate::ui::ui_error::UIResult;
+use crate::editor::ed_error::EdResult;
+use crate::editor::util::is_newline;
 use std::cmp::{max, min};
 use winit::event::VirtualKeyCode::*;
 use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub type MoveCaretFun =
-    fn(Position, Option<RawSelection>, bool, &TextBuffer) -> (Position, Option<RawSelection>);
+    fn(TextPos, Option<Selection>, bool, &BigSelectableText) -> UIResult<CaretWSelect>;
 
+fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
+    Ok(
+        Some(
+            validate_selection(start_pos, end_pos)?
+        )
+    )
+}
+
+// TODO move to BigSelectableText or Lines
 pub fn move_caret_left(
-    old_caret_pos: Position,
-    old_selection_opt: Option<RawSelection>,
+    old_caret_pos: TextPos,
+    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
-    text_buf: &TextBuffer,
-) -> (Position, Option<RawSelection>) {
+    big_text: &BigSelectableText,
+) -> UIResult<CaretWSelect> {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -27,16 +42,16 @@ pub fn move_caret_left(
     } else if old_col_nr == 0 {
         if old_line_nr == 0 {
             (0, 0)
-        } else if let Some(curr_line_len) = text_buf.line_len(old_line_nr - 1) {
-            (old_line_nr - 1, curr_line_len - 1)
         } else {
-            unreachable!()
+            let curr_line_len = big_text.line_len(old_line_nr - 1)?;
+
+            (old_line_nr - 1, curr_line_len - 1)
         }
     } else {
         (old_line_nr, old_col_nr - 1)
     };
 
-    let new_caret_pos = Position {
+    let new_caret_pos = TextPos {
         line: line_nr,
         column: col_nr,
     };
@@ -47,31 +62,31 @@ pub fn move_caret_left(
                 if new_caret_pos == old_selection.start_pos {
                     None
                 } else {
-                    Some(RawSelection {
-                        start_pos: old_selection.start_pos,
-                        end_pos: new_caret_pos,
-                    })
+                    validate_sel_opt(
+                        old_selection.start_pos,
+                        new_caret_pos,
+                    )?
                 }
             } else {
-                Some(RawSelection {
-                    start_pos: Position {
+                validate_sel_opt(
+                    TextPos {
                         line: line_nr,
                         column: col_nr,
                     },
-                    end_pos: old_selection.end_pos,
-                })
+                    old_selection.end_pos,
+                )?
             }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-            Some(RawSelection {
-                start_pos: Position {
+            validate_sel_opt(
+                TextPos {
                     line: line_nr,
                     column: col_nr,
                 },
-                end_pos: Position {
+                TextPos {
                     line: old_line_nr,
                     column: old_col_nr,
                 },
-            })
+            )?
         } else {
             None
         }
@@ -79,15 +94,15 @@ pub fn move_caret_left(
         None
     };
 
-    (new_caret_pos, new_selection_opt)
+    Ok((new_caret_pos, new_selection_opt))
 }
 
 pub fn move_caret_right(
-    old_caret_pos: Position,
-    old_selection_opt: Option<RawSelection>,
+    old_caret_pos: TextPos,
+    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
-    text_buf: &TextBuffer,
-) -> (Position, Option<RawSelection>) {
+    big_text: &BigSelectableText,
+) -> UIResult<CaretWSelect> {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -96,7 +111,9 @@ pub fn move_caret_right(
             Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
             None => unreachable!(),
         }
-    } else if let Some(curr_line) = text_buf.line(old_line_nr) {
+    } else {
+        let curr_line = big_text.get_line(old_line_nr)?;
+
         if let Some(last_char) = curr_line.chars().last() {
             if is_newline(&last_char) {
                 if old_col_nr + 1 > curr_line.len() - 1 {
@@ -112,11 +129,9 @@ pub fn move_caret_right(
         } else {
             (old_line_nr, old_col_nr)
         }
-    } else {
-        unreachable!()
     };
 
-    let new_caret_pos = Position {
+    let new_caret_pos = TextPos {
         line: line_nr,
         column: col_nr,
     };
@@ -127,31 +142,31 @@ pub fn move_caret_right(
                 if new_caret_pos == old_selection.end_pos {
                     None
                 } else {
-                    Some(RawSelection {
-                        start_pos: new_caret_pos,
+                    validate_sel_opt(
+                        new_caret_pos,
                         end_pos: old_selection.end_pos,
-                    })
+                    )?
                 }
             } else {
-                Some(RawSelection {
-                    start_pos: old_selection.start_pos,
-                    end_pos: Position {
+                validate_sel_opt(
+                    old_selection.start_pos,
+                    TextPos {
                         line: line_nr,
                         column: col_nr,
                     },
-                })
+                )?
             }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-            Some(RawSelection {
-                start_pos: Position {
+            validate_sel_opt(
+                TextPos {
                     line: old_line_nr,
                     column: old_col_nr,
                 },
-                end_pos: Position {
+                TextPos {
                     line: line_nr,
                     column: col_nr,
                 },
-            })
+            )?
         } else {
             None
         }
@@ -159,15 +174,15 @@ pub fn move_caret_right(
         None
     };
 
-    (new_caret_pos, new_selection_opt)
+    Ok((new_caret_pos, new_selection_opt))
 }
 
 pub fn move_caret_up(
-    old_caret_pos: Position,
-    old_selection_opt: Option<RawSelection>,
+    old_caret_pos: TextPos,
+    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
-    text_buf: &TextBuffer,
-) -> (Position, Option<RawSelection>) {
+    big_text: &BigSelectableText,
+) -> UIResult<CaretWSelect> {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -178,7 +193,7 @@ pub fn move_caret_up(
         }
     } else if old_line_nr == 0 {
         (old_line_nr, 0)
-    } else if let Some(prev_line_len) = text_buf.line_len(old_line_nr - 1) {
+    } else if let Some(prev_line_len) = big_text.line_len(old_line_nr - 1) {
         if prev_line_len <= old_col_nr {
             (old_line_nr - 1, prev_line_len - 1)
         } else {
@@ -188,7 +203,7 @@ pub fn move_caret_up(
         unreachable!()
     };
 
-    let new_caret_pos = Position {
+    let new_caret_pos = TextPos {
         line: line_nr,
         column: col_nr,
     };
@@ -199,22 +214,22 @@ pub fn move_caret_up(
                 if new_caret_pos == old_selection.start_pos {
                     None
                 } else {
-                    Some(RawSelection {
-                        start_pos: min(old_selection.start_pos, new_caret_pos),
-                        end_pos: max(old_selection.start_pos, new_caret_pos),
-                    })
+                    validate_sel_opt(
+                        min(old_selection.start_pos, new_caret_pos),
+                        max(old_selection.start_pos, new_caret_pos),
+                    )?
                 }
             } else {
-                Some(RawSelection {
-                    start_pos: new_caret_pos,
-                    end_pos: old_selection.end_pos,
-                })
+                validate_sel_opt( {
+                    new_caret_pos,
+                    old_selection.end_pos,
+                )?
             }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-            Some(RawSelection {
-                start_pos: min(old_caret_pos, new_caret_pos),
-                end_pos: max(old_caret_pos, new_caret_pos),
-            })
+            validate_sel_opt(
+                min(old_caret_pos, new_caret_pos),
+                max(old_caret_pos, new_caret_pos),
+            )?
         } else {
             None
         }
@@ -222,15 +237,15 @@ pub fn move_caret_up(
         None
     };
 
-    (new_caret_pos, new_selection_opt)
+    Ok((new_caret_pos, new_selection_opt))
 }
 
 pub fn move_caret_down(
-    old_caret_pos: Position,
-    old_selection_opt: Option<RawSelection>,
+    old_caret_pos: TextPos,
+    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
-    text_buf: &TextBuffer,
-) -> (Position, Option<RawSelection>) {
+    big_text: &BigSelectableText,
+) -> UIResult<CaretWSelect> {
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -239,13 +254,13 @@ pub fn move_caret_down(
             Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
             None => unreachable!(),
         }
-    } else if old_line_nr + 1 >= text_buf.nr_of_lines() {
-        if let Some(curr_line_len) = text_buf.line_len(old_line_nr) {
-            (old_line_nr, curr_line_len)
-        } else {
-            unreachable!()
-        }
-    } else if let Some(next_line) = text_buf.line(old_line_nr + 1) {
+    } else if old_line_nr + 1 >= big_text.nr_of_lines() {
+        let curr_line_len = big_text.line_len(old_line_nr)?;
+        
+        (old_line_nr, curr_line_len)
+    } else {
+        let next_line = big_text.get_line(old_line_nr + 1)?;
+
         if next_line.len() <= old_col_nr {
             if let Some(last_char) = next_line.chars().last() {
                 if is_newline(&last_char) {
@@ -259,11 +274,9 @@ pub fn move_caret_down(
         } else {
             (old_line_nr + 1, old_col_nr)
         }
-    } else {
-        unreachable!()
     };
 
-    let new_caret_pos = Position {
+    let new_caret_pos = TextPos {
         line: line_nr,
         column: col_nr,
     };
@@ -274,22 +287,22 @@ pub fn move_caret_down(
                 if new_caret_pos == old_selection.end_pos {
                     None
                 } else {
-                    Some(RawSelection {
-                        start_pos: min(old_selection.end_pos, new_caret_pos),
-                        end_pos: max(old_selection.end_pos, new_caret_pos),
-                    })
+                    validate_sel_opt(
+                        min(old_selection.end_pos, new_caret_pos),
+                        max(old_selection.end_pos, new_caret_pos),
+                    )?
                 }
             } else {
-                Some(RawSelection {
-                    start_pos: old_selection.start_pos,
-                    end_pos: new_caret_pos,
-                })
+                validate_sel_opt(
+                    old_selection.start_pos,
+                    new_caret_pos,
+                )?
             }
         } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-            Some(RawSelection {
-                start_pos: min(old_caret_pos, new_caret_pos),
-                end_pos: max(old_caret_pos, new_caret_pos),
-            })
+            validate_sel_opt(
+                min(old_caret_pos, new_caret_pos),
+                max(old_caret_pos, new_caret_pos),
+            )?
         } else {
             None
         }
@@ -297,7 +310,7 @@ pub fn move_caret_down(
         None
     };
 
-    (new_caret_pos, new_selection_opt)
+    Ok((new_caret_pos, new_selection_opt))
 }
 
 fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) {
@@ -305,35 +318,35 @@ fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_mod
         ed_model.caret_pos,
         ed_model.selection_opt,
         modifiers.shift(),
-        &ed_model.text_buf,
+        &ed_model.big_text,
     );
-    ed_model.caret_pos = new_caret_pos;
-    ed_model.selection_opt = new_selection_opt;
+    ed_model.text.set_caret(new_caret_pos;
+    ed_model.text.set_selection(new_selection_opt);
 }
 
 fn del_selection(selection: RawSelection, ed_model: &mut EdModel) -> EdResult<()> {
-    ed_model.text_buf.del_selection(selection)?;
-    ed_model.caret_pos = selection.start_pos;
+    ed_model.text.del_selection(selection)?;
+    ed_model.text.set_caret(selection.start_pos);
 
     Ok(())
 }
 
 // TODO move this to impl EdModel
 pub fn handle_select_all(ed_model: &mut EdModel) {
-    if ed_model.text_buf.nr_of_chars() > 0 {
-        let last_pos = ed_model.text_buf.last_position();
+    if ed_model.text.nr_of_chars() > 0 {
+        let last_pos = ed_model.big_text.last_TextPos();
 
-        ed_model.selection_opt = Some(RawSelection {
-            start_pos: Position { line: 0, column: 0 },
-            end_pos: last_pos,
-        });
+        ed_model.selection_opt = validate_sel_opt(
+            TextPos { line: 0, column: 0 },
+            last_pos,
+        )?;
 
-        ed_model.caret_pos = last_pos;
+        ed_model.text.set_caret(last_pos);
     }
 }
 
 impl EdModel {
-    pub fn move_caret_w_mods(&mut self, new_pos: Position, mods: &ModifiersState) {
+    pub fn move_caret_w_mods(&mut self, new_pos: TextPos, mods: &ModifiersState) {
         let caret_pos = self.caret_pos;
 
         // one does not simply move the caret
@@ -394,7 +407,7 @@ impl EdModel {
         }
     }
 
-    pub fn set_selection(&mut self, start_pos: Position, end_pos: Position) {
+    pub fn set_selection(&mut self, start_pos: TextPos, end_pos: TextPos) {
         self.selection_opt =
             if start_pos != end_pos {
                 Some(
@@ -420,9 +433,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 del_selection(selection, ed_model)?;
             } else {
                 ed_model.caret_pos =
-                    move_caret_left(old_caret_pos, None, false, &ed_model.text_buf).0;
+                    move_caret_left(old_caret_pos, None, false, &ed_model.big_text).0;
 
-                ed_model.text_buf.pop_char(old_caret_pos);
+                ed_model.big_text.pop_char(old_caret_pos);
             }
 
             ed_model.selection_opt = None;
@@ -430,11 +443,11 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
         ch if is_newline(ch) => {
             if let Some(selection) = ed_model.selection_opt {
                 del_selection(selection, ed_model)?;
-                ed_model.text_buf.insert_char(ed_model.caret_pos, &'\n')?;
+                ed_model.big_text.insert_char(ed_model.caret_pos, &'\n')?;
             } else {
-                ed_model.text_buf.insert_char(old_caret_pos, &'\n')?;
+                ed_model.big_text.insert_char(old_caret_pos, &'\n')?;
 
-                ed_model.caret_pos = Position {
+                ed_model.caret_pos = TextPos {
                     line: old_caret_pos.line + 1,
                     column: 0,
                 };
@@ -456,17 +469,17 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
             if let Some(selection) = ed_model.selection_opt {
                 del_selection(selection, ed_model)?;
                 ed_model
-                    .text_buf
+                    .big_text
                     .insert_char(ed_model.caret_pos, received_char)?;
 
                 ed_model.caret_pos =
-                    move_caret_right(ed_model.caret_pos, None, false, &ed_model.text_buf).0;
+                    move_caret_right(ed_model.caret_pos, None, false, &ed_model.big_text).0;
             } else {
                 ed_model
-                    .text_buf
+                    .big_text
                     .insert_char(old_caret_pos, received_char)?;
 
-                ed_model.caret_pos = Position {
+                ed_model.caret_pos = TextPos {
                     line: old_caret_pos.line,
                     column: old_caret_pos.column + 1,
                 };
@@ -498,7 +511,7 @@ pub fn handle_key_down(
         Home => {
             let curr_line_nr = ed_model.caret_pos.line;
             // TODO no unwrap
-            let curr_line_str = ed_model.text_buf.line(curr_line_nr).unwrap();
+            let curr_line_str = ed_model.big_text.line(curr_line_nr).unwrap();
             let line_char_iter = curr_line_str.chars();
 
             let mut first_no_space_char_col = 0;
@@ -518,7 +531,7 @@ pub fn handle_key_down(
             }
 
             ed_model.move_caret_w_mods(
-                Position {
+                TextPos {
                     line: ed_model.caret_pos.line,
                     column: first_no_space_char_col
                 },
@@ -531,11 +544,11 @@ pub fn handle_key_down(
             let new_col = 
                 max(
                         0,
-                        ed_model.text_buf.line_len(curr_line).unwrap() - 1
+                        ed_model.big_text.line_len(curr_line).unwrap() - 1
                     );
 
             let new_pos =
-                Position {
+                TextPos {
                     line: curr_line,
                     column: new_col
                 };
@@ -548,22 +561,22 @@ pub fn handle_key_down(
 
 #[cfg(test)]
 pub mod test_ed_update {
-    use crate::mvc::app_update::test_app_update::mock_app_model;
-    use crate::mvc::ed_model::{Position, RawSelection};
-    use crate::mvc::ed_update::{handle_new_char, handle_select_all};
+    use crate::editor::mvc::app_update::test_app_update::mock_app_model;
+    use crate::editor::mvc::ed_model::{TextPos, RawSelection};
+    use crate::editor::mvc::ed_update::{handle_new_char, handle_select_all};
     use crate::selection::test_selection::{
-        all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, text_buffer_from_dsl_str,
+        all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, big_textfer_from_dsl_str,
     };
-    use crate::text_buffer::TextBuffer;
+    use crate::ui::text::big_selectable_text::BigSelectableText;
 
-    pub fn gen_caret_text_buf(
+    pub fn gen_caret_big_text(
         lines: &[&str],
-    ) -> Result<(Position, Option<RawSelection>, TextBuffer), String> {
+    ) -> Result<(TextPos, Option<Selection>, BigSelectableText), String> {
         let lines_string_slice: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         let (selection_opt, caret_pos) = convert_dsl_to_selection(&lines_string_slice)?;
-        let text_buf = text_buffer_from_dsl_str(&lines_string_slice);
+        let big_text = big_textfer_from_dsl_str(&lines_string_slice);
 
-        Ok((caret_pos, selection_opt, text_buf))
+        Ok((caret_pos, selection_opt, big_text))
     }
 
     fn assert_insert(
@@ -571,16 +584,16 @@ pub mod test_ed_update {
         expected_post_lines_str: &[&str],
         new_char: char,
     ) -> Result<(), String> {
-        let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
+        let (caret_pos, selection_opt, pre_big_text) = gen_caret_big_text(pre_lines_str)?;
 
-        let app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, None);
+        let app_model = mock_app_model(pre_big_text, caret_pos, selection_opt, None);
         let mut ed_model = app_model.ed_model_opt.unwrap();
 
         if let Err(e) = handle_new_char(&new_char, &mut ed_model) {
             return Err(e.to_string());
         }
 
-        let mut actual_lines = all_lines_vec(&ed_model.text_buf);
+        let mut actual_lines = all_lines_vec(&ed_model.big_text);
         let dsl_slice = convert_selection_to_dsl(
             ed_model.selection_opt,
             ed_model.caret_pos,
@@ -704,18 +717,18 @@ pub mod test_ed_update {
         pre_lines_str: &[&str],
         expected_post_lines_str: &[&str],
     ) -> Result<(), String> {
-        let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
+        let (caret_pos, selection_opt, pre_big_text) = gen_caret_big_text(pre_lines_str)?;
 
-        let app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, None);
+        let app_model = mock_app_model(pre_big_text, caret_pos, selection_opt, None);
         let mut ed_model = app_model.ed_model_opt.unwrap();
 
         handle_select_all(&mut ed_model);
 
-        let mut text_buf_lines = all_lines_vec(&ed_model.text_buf);
+        let mut big_text_lines = all_lines_vec(&ed_model.big_text);
         let post_lines_str = convert_selection_to_dsl(
             ed_model.selection_opt,
             ed_model.caret_pos,
-            &mut text_buf_lines,
+            &mut big_text_lines,
         )?;
 
         assert_eq!(post_lines_str, expected_post_lines_str);
