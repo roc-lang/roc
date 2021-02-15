@@ -921,10 +921,7 @@ pub fn list_walk<'a, 'ctx, 'env>(
             );
         }
 
-        (
-            BasicValueEnum::StructValue(ptr_and_data),
-            Layout::Closure(_, closure_layout, ret_elem_layout),
-        ) => {
+        (BasicValueEnum::StructValue(ptr_and_data), Layout::Closure(_, _, _)) => {
             let builder = env.builder;
 
             let func_ptr = builder
