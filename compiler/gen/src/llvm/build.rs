@@ -721,7 +721,9 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             )
         }
 
-        CallType::ByPointer { name, .. } => {
+        CallType::ByPointer {
+            name, full_layout, ..
+        } => {
             let sub_expr = load_symbol(scope, name);
 
             let mut arg_vals: Vec<BasicValueEnum> =
@@ -737,8 +739,8 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 }
                 non_ptr => {
                     panic!(
-                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                        non_ptr
+                        "Tried to call by pointer, but encountered a non-pointer: {:?} {:?} {:?}",
+                        name, non_ptr, full_layout
                     );
                 }
             };
@@ -2250,6 +2252,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             let value_ptr = value.into_pointer_value();
                             let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
                             refcount_ptr.decrement(env, layout);
+                        } else {
+                            eprint!("we're likely leaking memory; see issue #985 for details");
                         }
                     }
 
