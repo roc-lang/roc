@@ -310,11 +310,9 @@ const c = @cImport({
 
 // Str.fromFloat
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
-pub fn strFromFloatC(int: i64) callconv(.C) RocStr {
-    // const foobar = @bitCast(f32, @intCast(i32, float));
-    // const result = std.fmt.allocPrint(std.heap.c_allocator, "{}", .{@as(f32, foobar)}) catch unreachable;
-    const float = @bitCast(f64, int);
-
+pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
+    // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
+    // hopefully we can use zig instead of snprintf in the future when we upgrade
     var buf: [100]u8 = undefined;
 
     const result = c.snprintf(&buf, 100, "%f", float);

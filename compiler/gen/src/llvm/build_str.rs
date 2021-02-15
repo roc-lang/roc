@@ -281,11 +281,8 @@ pub fn str_from_float<'a, 'ctx, 'env>(
     int_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let float = load_symbol(scope, &int_symbol);
-    let int = env
-        .builder
-        .build_bitcast(float, env.context.i64_type(), "to_bits");
 
-    let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_FLOAT).into_struct_value();
+    let zig_result = call_bitcode_fn(env, &[float], &bitcode::STR_FROM_FLOAT).into_struct_value();
 
     zig_str_to_struct(env, zig_result).into()
 }
