@@ -749,6 +749,10 @@ define_builtins! {
         17 GENERIC_RC_REF: "#generic_rc_by_ref" // refcount of arbitrary layouts, passed as an opaque pointer
 
         18 GENERIC_EQ: "#generic_eq" // internal function that checks generic equality
+
+        // a user-defined function that we need to capture in a closure
+        // see e.g. Set.walk
+        19 USER_FUNCTION: "#user_function"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -892,6 +896,7 @@ define_builtins! {
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
+        2 RESULT_MAP_ERR: "mapErr"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
@@ -931,7 +936,8 @@ define_builtins! {
         9 SET_INTERSECTION: "intersection"
         10 SET_TO_LIST: "toList"
         11 SET_FROM_LIST: "fromList"
-        12 SET_FOLDL: "walk"
+        12 SET_WALK: "walk"
+        13 SET_WALK_USER_FUNCTION: "#walk_user_function"
     }
 
     num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)

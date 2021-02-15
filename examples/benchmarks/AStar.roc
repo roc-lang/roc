@@ -3,11 +3,29 @@ app "astar"
     imports [base.Task]
     provides [ main ] to base
 
+# astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {}
+
+fromList : List a -> Set a
+fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
+
 main : Task.Task {} []
 main =
-    6
-        |> Str.fromInt
-        |> Task.putLine
+
+    step = \n ->
+        when n is
+            1 -> fromList [ 2, 3 ]
+            2 -> fromList [ 4 ]
+            3 -> fromList [ 4 ]
+            4 -> fromList []
+            _ -> fromList []
+
+    cost = \_, _ -> 1
+
+    when astar cost step 4 (initialModel 1) is
+        Ok _path -> 
+            Task.putLine "yay"
+        Err _ -> 
+            Task.putLine "nay"
 
 Model position :
     {
@@ -26,20 +44,38 @@ initialModel = \start ->
         cameFrom : Dict.empty
     }
 
+sortBy : List a, (a -> b) -> List a
+sortBy = \list, _toCmp -> list
+
+filterMap : List a, (a -> Result b *) -> List b
+filterMap = \list, toResult ->
+    List.walk list (\element, accum ->
+        when toResult element is
+            Ok value ->
+                List.append accum value
+
+            Err _ ->
+                accum
+        )
+        []
+
 cheapestOpen : (position -> F64), Model position -> Result position {}
 cheapestOpen = \costFn, model ->
     model.openSet
         |> Set.toList
-        |> List.filterMap \position ->
+        |> filterMap (\position ->
             when Dict.get model.costs position is
                 Err _ ->
                     Err {}
 
                 Ok cost ->
                     Ok { position, cost: cost + costFn position }
-        |> List.sortBy .cost
+                    )
+        |> sortBy .cost
         |> List.first
         |> Result.map .position
+        |> Result.mapErr (\_ -> {})
+
 
 reconstructPath : Dict position position, position -> List position
 reconstructPath = \cameFrom, goal ->
@@ -110,7 +146,7 @@ astar = \costFn, moveFn, goal, model ->
                     }
 
                 modelWithCosts =
-                    Set.walk newNeighbors (updateCost current) modelWithNeighbors
+                    Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
 
                 astar costFn moveFn goal modelWithCosts
 

@@ -103,6 +103,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         SET_FROM_LIST => set_from_list,
         SET_INSERT => set_insert,
         SET_REMOVE => set_remove,
+        SET_WALK=> set_walk,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -222,6 +223,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::SET_FROM_LIST => set_from_list,
         Symbol::SET_INSERT => set_insert,
         Symbol::SET_REMOVE => set_remove,
+        Symbol::SET_WALK => set_walk,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -2359,6 +2361,72 @@ fn set_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Set.remove : Set k, k -> Set k
 fn set_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
     dict_remove(symbol, var_store)
+}
+
+/// Set.walk : Set k,  (k, accum -> accum), accum -> accum
+fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    use roc_module::operator::CalledVia;
+
+    let dict_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let accum_var = var_store.fresh();
+    let wrapper_var = var_store.fresh();
+
+    // let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
+    let user_function = Box::new((
+        func_var,
+        no_region(Var(Symbol::ARG_2)),
+        var_store.fresh(),
+        accum_var,
+    ));
+
+    let call_func = Call(
+        user_function,
+        vec![
+            (key_var, no_region(Var(Symbol::ARG_5))),
+            (accum_var, no_region(Var(Symbol::ARG_6))),
+        ],
+        CalledVia::Space,
+    );
+
+    let wrapper = Closure {
+        function_type: wrapper_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: accum_var,
+        name: Symbol::SET_WALK_USER_FUNCTION,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(Symbol::ARG_2, func_var)],
+        arguments: vec![
+            (key_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
+            (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
+            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
+        ],
+        loc_body: Box::new(no_region(call_func)),
+    };
+
+    let body = RunLowLevel {
+        op: LowLevel::DictWalk,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (wrapper_var, wrapper),
+            (accum_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: accum_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (dict_var, Symbol::ARG_1),
+            (func_var, Symbol::ARG_2),
+            (accum_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        accum_var,
+    )
 }
 
 /// Num.rem : Int, Int -> Result Int [ DivByZero ]*

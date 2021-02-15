@@ -1059,7 +1059,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //       , Attr Shared (Attr u a -> b -> b)
     //       , b
     //      -> b
-    add_type(Symbol::SET_FOLDL, {
+    add_type(Symbol::SET_WALK, {
         let_tvars! { star, u, a, b, closure };
 
         unique_function(

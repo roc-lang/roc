@@ -692,6 +692,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     dict: BasicValueEnum<'ctx>,
     stepper: BasicValueEnum<'ctx>,
     accum: BasicValueEnum<'ctx>,
+    stepper_layout: &Layout<'a>,
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
     accum_layout: &Layout<'a>,
@@ -705,12 +706,13 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     env.builder
         .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
 
-    let stepper_ptr = stepper.into_pointer_value();
-    dbg!(stepper_ptr);
+    let stepper_ptr = builder.build_alloca(stepper.get_type(), "stepper_ptr");
+    env.builder.build_store(stepper_ptr, stepper);
 
-    let stepper_caller = build_stepper_caller(env, key_layout, value_layout, accum_layout)
-        .as_global_value()
-        .as_pointer_value();
+    let stepper_caller =
+        build_stepper_caller(env, stepper_layout, key_layout, value_layout, accum_layout)
+            .as_global_value()
+            .as_pointer_value();
 
     let accum_bt = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes);
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
@@ -1032,6 +1034,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
 fn build_stepper_caller<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    stepper_layout: &Layout<'a>,
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
     accum_layout: &Layout<'a>,
@@ -1076,17 +1079,9 @@ fn build_stepper_caller<'a, 'ctx, 'env>(
     set_name(value_ptr.into(), Symbol::ARG_3.ident_string(&env.interns));
     set_name(accum_ptr.into(), Symbol::ARG_4.ident_string(&env.interns));
 
-    let closure_layout = Layout::FunctionPointer(
-        env.arena.alloc([
-            key_layout.clone(),
-            value_layout.clone(),
-            accum_layout.clone(),
-        ]),
-        accum_layout,
-    );
-
     let closure_type =
-        basic_type_from_layout(env.arena, env.context, &closure_layout, env.ptr_bytes);
+        basic_type_from_layout(env.arena, env.context, stepper_layout, env.ptr_bytes)
+            .ptr_type(AddressSpace::Generic);
 
     let key_type = basic_type_from_layout(env.arena, env.context, key_layout, env.ptr_bytes)
         .ptr_type(AddressSpace::Generic);
@@ -1097,7 +1092,7 @@ fn build_stepper_caller<'a, 'ctx, 'env>(
     let accum_type = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes)
         .ptr_type(AddressSpace::Generic);
 
-    let fpointer = env
+    let closure_cast = env
         .builder
         .build_bitcast(closure_ptr, closure_type, "load_opaque")
         .into_pointer_value();
@@ -1117,13 +1112,37 @@ fn build_stepper_caller<'a, 'ctx, 'env>(
         .build_bitcast(accum_ptr, accum_type, "load_opaque")
         .into_pointer_value();
 
+    let fpointer = env.builder.build_load(closure_cast, "load_opaque");
     let key = env.builder.build_load(key_cast, "load_opaque");
     let value = env.builder.build_load(value_cast, "load_opaque");
     let accum = env.builder.build_load(accum_cast, "load_opaque");
 
-    let call = env
-        .builder
-        .build_call(fpointer, &[key, value, accum], "tmp");
+    let call = match stepper_layout {
+        Layout::FunctionPointer(_, _) => {
+            env.builder
+                .build_call(fpointer.into_pointer_value(), &[key, value, accum], "tmp")
+        }
+        Layout::Closure(_, _, _) | Layout::Struct(_) => {
+            let pair = fpointer.into_struct_value();
+
+            let fpointer = env
+                .builder
+                .build_extract_value(pair, 0, "get_fpointer")
+                .unwrap();
+
+            let closure_data = env
+                .builder
+                .build_extract_value(pair, 1, "get_closure_data")
+                .unwrap();
+
+            env.builder.build_call(
+                fpointer.into_pointer_value(),
+                &[key, value, accum, closure_data],
+                "tmp",
+            )
+        }
+        _ => unreachable!("layout is not callable {:?}", stepper_layout),
+    };
     call.set_call_convention(FAST_CALL_CONV);
 
     let result = call

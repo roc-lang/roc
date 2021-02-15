@@ -157,4 +157,21 @@ mod gen_set {
             &[i64]
         );
     }
+
+    #[test]
+    fn walk_sum() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                fromList : List a -> Set a
+                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
+
+
+                Set.walk (fromList [1,2,3]) (\x, y -> x + y) 0
+                "#
+            ),
+            6,
+            i64
+        );
+    }
 }
