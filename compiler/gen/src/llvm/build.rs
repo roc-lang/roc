@@ -1,6 +1,6 @@
 use crate::llvm::build_dict::{
     dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
-    dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk,
+    dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
@@ -4095,7 +4095,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
                     // no elements, so `key` is not in here
-                    panic!("key type unknown")
+                    empty_list(env)
                 }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_keys(env, layout_ids, dict, key_layout, value_layout)
@@ -4111,7 +4111,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
                     // no elements, so `key` is not in here
-                    panic!("key type unknown")
+                    empty_list(env)
                 }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_values(env, layout_ids, dict, key_layout, value_layout)
@@ -4193,6 +4193,19 @@ fn run_low_level<'a, 'ctx, 'env>(
                     value_layout,
                     accum_layout,
                 ),
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        SetFromList => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => dict_empty(env, scope),
+                Layout::Builtin(Builtin::List(_, key_layout)) => {
+                    set_from_list(env, layout_ids, list, key_layout)
+                }
                 _ => unreachable!("invalid dict layout"),
             }
         }

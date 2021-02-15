@@ -21,6 +21,8 @@ comptime {
     exportDictFn(dict.dictDifference, "difference");
     exportDictFn(dict.dictWalk, "walk");
 
+    exportDictFn(dict.setFromList, "set_from_list");
+
     exportDictFn(hash.wyhash, "hash");
     exportDictFn(hash.wyhash_rocstr, "hash_str");
 }

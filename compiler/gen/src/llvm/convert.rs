@@ -283,6 +283,10 @@ pub fn dict(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
     )
 }
 
+pub fn dict_ptr(ctx: &Context, ptr_bytes: u32) -> PointerType<'_> {
+    dict(ctx, ptr_bytes).ptr_type(AddressSpace::Generic)
+}
+
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
     match ptr_bytes {
         1 => ctx.i8_type(),

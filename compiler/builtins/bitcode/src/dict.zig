@@ -712,6 +712,26 @@ pub fn dictDifference(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_
     }
 }
 
+pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, output: *RocDict) callconv(.C) void {
+    output.* = RocDict.empty();
+
+    var ptr = @ptrCast([*]u8, list.bytes);
+
+    const dec_value = doNothing;
+    const value = null;
+
+    const size = list.length;
+    var i: usize = 0;
+    while (i < size) : (i += 1) {
+        const key = ptr + i * key_width;
+        dictInsert(output.*, alignment, key, key_width, value, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+    }
+
+    // NOTE: decref checks for the empty case
+    const data_bytes = size * key_width;
+    decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+}
+
 const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
     @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
@@ -740,6 +760,10 @@ fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
 ) void {
+    if (data_bytes == 0) {
+        return;
+    }
+
     var bytes = bytes_or_null orelse return;
 
     const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));

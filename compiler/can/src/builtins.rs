@@ -2240,8 +2240,8 @@ fn set_to_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// Set.fromList : List k -> Set k
-fn set_from_list(_symbol: Symbol, _var_store: &mut VarStore) -> Def {
-    todo!()
+fn set_from_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::SetFromList, var_store)
 }
 
 /// Set.insert : Set k, k -> Set k

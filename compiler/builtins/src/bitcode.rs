@@ -51,3 +51,5 @@ pub const DICT_UNION: &str = "roc_builtins.dict.union";
 pub const DICT_DIFFERENCE: &str = "roc_builtins.dict.difference";
 pub const DICT_INTERSECTION: &str = "roc_builtins.dict.intersection";
 pub const DICT_WALK: &str = "roc_builtins.dict.walk";
+
+pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";

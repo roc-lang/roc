@@ -113,14 +113,11 @@ mod gen_set {
         assert_evals_to!(
             indoc!(
                 r#"
-                fromList : List a -> Set a
-                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
-
                 set1 : Set I64
-                set1 = fromList [1,2]
+                set1 = Set.fromList [1,2]
 
                 set2 : Set I64
-                set2 = fromList [1,3,4] 
+                set2 = Set.fromList [1,3,4] 
 
                 Set.union set1 set2
                     |> Set.toList
@@ -136,14 +133,11 @@ mod gen_set {
         assert_evals_to!(
             indoc!(
                 r#"
-                fromList : List a -> Set a
-                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
-
                 set1 : Set I64
-                set1 = fromList [1,2]
+                set1 = Set.fromList [1,2]
 
                 set2 : Set I64
-                set2 = fromList [1,3,4] 
+                set2 = Set.fromList [1,3,4] 
 
                 Set.difference set1 set2
                     |> Set.toList
@@ -159,14 +153,11 @@ mod gen_set {
         assert_evals_to!(
             indoc!(
                 r#"
-                fromList : List a -> Set a
-                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
-
                 set1 : Set I64
-                set1 = fromList [1,2]
+                set1 = Set.fromList [1,2]
 
                 set2 : Set I64
-                set2 = fromList [1,3,4] 
+                set2 = Set.fromList [1,3,4] 
 
                 Set.intersection set1 set2
                     |> Set.toList
@@ -182,11 +173,7 @@ mod gen_set {
         assert_evals_to!(
             indoc!(
                 r#"
-                fromList : List a -> Set a
-                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
-
-
-                Set.walk (fromList [1,2,3]) (\x, y -> x + y) 0
+                Set.walk (Set.fromList [1,2,3]) (\x, y -> x + y) 0
                 "#
             ),
             6,
@@ -199,11 +186,7 @@ mod gen_set {
         assert_evals_to!(
             indoc!(
                 r#"
-                fromList : List a -> Set a
-                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
-
-
-                Set.contains (fromList [1,3,4]) 4
+                Set.contains (Set.fromList [1,3,4]) 4
                 "#
             ),
             true,
@@ -213,15 +196,53 @@ mod gen_set {
         assert_evals_to!(
             indoc!(
                 r#"
-                fromList : List a -> Set a
-                fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
-
-
-                Set.contains (fromList [1,3,4]) 2
+                Set.contains (Set.fromList [1,3,4]) 2
                 "#
             ),
             false,
             bool
+        );
+    }
+
+    #[test]
+    fn from_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                [1,2,2,3,1,4]
+                    |> Set.fromList
+                    |> Set.toList
+                "#
+            ),
+            &[4, 2, 3, 1],
+            &[i64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                []
+                    |> Set.fromList
+                    |> Set.toList
+                "#
+            ),
+            &[],
+            &[i64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : List I64
+                empty = []
+
+                empty
+                    |> Set.fromList
+                    |> Set.toList
+                "#
+            ),
+            &[],
+            &[i64]
         );
     }
 }
