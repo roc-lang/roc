@@ -24,4 +24,4 @@ jobs:
         run: mkdir -p sccache_dir;
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release 
-        run: earthly +test-all
+        run: earthly --no-cache +test-all
