@@ -266,11 +266,24 @@ mod cli_run {
     }
 
     #[test]
+    #[ignore]
     #[serial(closure3)]
     fn closure3() {
         check_output(
             &example_file("benchmarks", "Closure3.roc"),
             "closure3",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure4)]
+    fn closure4() {
+        check_output(
+            &example_file("benchmarks", "Closure4.roc"),
+            "closure4",
             &[],
             "",
             true,
