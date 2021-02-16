@@ -8,4 +8,5 @@ benchmarks/nqueens
 benchmarks/deriv
 benchmarks/cfold
 benchmarks/rbtree-insert
+benchmarks/rbtree-del
 effect-example
