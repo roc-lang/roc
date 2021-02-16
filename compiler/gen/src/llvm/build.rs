@@ -1,4 +1,6 @@
-use crate::llvm::build_dict::{dict_empty, dict_insert, dict_len};
+use crate::llvm::build_dict::{
+    dict_contains, dict_empty, dict_get, dict_insert, dict_keys, dict_len, dict_remove, dict_values,
+};
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
@@ -54,6 +56,30 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
+
+#[macro_export]
+macro_rules! debug_info_init {
+    ($env:expr, $function_value:expr) => {{
+        use inkwell::debug_info::AsDIScope;
+
+        let func_scope = $function_value.get_subprogram().unwrap();
+        let lexical_block = $env.dibuilder.create_lexical_block(
+            /* scope */ func_scope.as_debug_info_scope(),
+            /* file */ $env.compile_unit.get_file(),
+            /* line_no */ 0,
+            /* column_no */ 0,
+        );
+
+        let loc = $env.dibuilder.create_debug_location(
+            $env.context,
+            /* line */ 0,
+            /* column */ 0,
+            /* current_scope */ lexical_block.as_debug_info_scope(),
+            /* inlined_at */ None,
+        );
+        $env.builder.set_current_debug_location(&$env.context, loc);
+    }};
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
@@ -402,12 +428,14 @@ pub fn construct_optimization_passes<'a>(
     let mpm = PassManager::create(());
     let fpm = PassManager::create(module);
 
+    // remove unused global values (e.g. those defined by zig, but unused in user code)
+    mpm.add_global_dce_pass();
+
+    mpm.add_always_inliner_pass();
+
     // tail-call elimination is always on
     fpm.add_instruction_combining_pass();
     fpm.add_tail_call_elimination_pass();
-
-    // remove unused global values (e.g. those defined by zig, but unused in user code)
-    mpm.add_global_dce_pass();
 
     let pmb = PassManagerBuilder::create();
     match opt_level {
@@ -2673,22 +2701,7 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = c_function.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        env.context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(env.context, loc);
+    debug_info_init!(env, c_function);
 
     // drop the final argument, which is the pointer we write the result into
     let args = c_function.get_params();
@@ -2730,22 +2743,7 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = size_function.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        env.context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(env.context, loc);
+    debug_info_init!(env, size_function);
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
@@ -2957,22 +2955,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let basic_block = context.append_basic_block(wrapper_function, "entry");
     builder.position_at_end(basic_block);
 
-    let func_scope = wrapper_function.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        env.context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(env.context, loc);
+    debug_info_init!(env, wrapper_function);
 
     let result = invoke_and_catch(
         env,
@@ -3372,23 +3355,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-
-    builder.set_current_debug_location(&context, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
@@ -4021,7 +3988,90 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict, _) = load_symbol_and_layout(scope, &args[0]);
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
             let (value, value_layout) = load_symbol_and_layout(scope, &args[2]);
-            dict_insert(env, scope, dict, key, key_layout, value, value_layout)
+            dict_insert(env, layout_ids, dict, key, key_layout, value, value_layout)
+        }
+        DictRemove => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so nothing to remove
+                    dict
+                }
+                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
+                    dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictContains => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    env.context.bool_type().const_zero().into()
+                }
+                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
+                    dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictGetUnsafe => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    unreachable!("we can't make up a layout for the return value");
+                    // in other words, make sure to check whether the dict is empty first
+                }
+                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
+                    dict_get(env, layout_ids, dict, key, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictKeys => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_keys(env, layout_ids, dict, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictValues => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_values(env, layout_ids, dict, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
         }
     }
 }
