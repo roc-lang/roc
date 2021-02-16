@@ -751,6 +751,7 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+        passed_by_pointer: MutMap<(Symbol, Layout<'a>), Symbol>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -781,6 +782,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    pub passed_by_pointer: MutMap<(Symbol, Layout<'a>), Symbol>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -1403,6 +1405,7 @@ where
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
+                passed_by_pointer: MutMap::default(),
                 exposed_to_host: MutMap::default(),
                 exposed_types,
                 headers_parsed,
@@ -1931,6 +1934,7 @@ fn update<'a>(
             mut ident_ids,
             subs,
             procedures,
+            passed_by_pointer,
             external_specializations_requested,
             problems,
             module_timing,
@@ -1945,12 +1949,17 @@ fn update<'a>(
                 .notify(module_id, Phase::MakeSpecializations);
 
             state.procedures.extend(procedures);
+            state.passed_by_pointer.extend(passed_by_pointer);
             state.timings.insert(module_id, module_timing);
 
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
+                Proc::insert_refcount_operations(
+                    arena,
+                    &mut state.procedures,
+                    &state.passed_by_pointer,
+                );
 
                 Proc::optimize_refcount_operations(
                     arena,
@@ -3621,7 +3630,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
+    let (procedures, passed_by_pointer) = procs.get_specialized_procs_without_rc(mono_env.arena);
 
     let make_specializations_end = SystemTime::now();
     module_timing.make_specializations = make_specializations_end
@@ -3633,6 +3642,7 @@ fn make_specializations<'a>(
         ident_ids,
         layout_cache,
         procedures,
+        passed_by_pointer,
         problems: mono_problems,
         subs,
         external_specializations_requested,
