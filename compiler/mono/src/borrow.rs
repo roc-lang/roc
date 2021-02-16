@@ -6,6 +6,13 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
+fn should_borrow_layout(layout: &Layout) -> bool {
+    match layout {
+        Layout::Closure(_, _, _) => false,
+        _ => false, //layout.is_refcounted(),
+    }
+}
+
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
@@ -126,7 +133,7 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: layout.is_refcounted(),
+                borrow: should_borrow_layout(layout),
                 layout: layout.clone(),
                 symbol: *symbol,
             }),
