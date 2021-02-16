@@ -80,7 +80,11 @@ mod cli_run {
 
                 if !memory_errors.is_empty() {
                     for error in memory_errors {
-                        let ValgrindError { kind, what, xwhat } = error;
+                        let ValgrindError {
+                            kind,
+                            what: _,
+                            xwhat,
+                        } = error;
                         println!("Valgrind Error: {}\n", kind);
 
                         if let Some(ValgrindErrorXWhat {

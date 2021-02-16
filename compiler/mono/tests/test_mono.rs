@@ -650,8 +650,12 @@ mod test_mono {
                     let Test.3 = lowlevel DictSize #Attr.2;
                     ret Test.3;
 
+                procedure Test.5 ():
+                    let Test.4 = lowlevel DictEmpty ;
+                    ret Test.4;
+
                 procedure Test.0 ():
-                    let Test.2 = FunctionPointer Dict.2;
+                    let Test.2 = FunctionPointer Test.5;
                     let Test.1 = CallByName Dict.6 Test.2;
                     ret Test.1;
                 "#
@@ -1774,11 +1778,11 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
-                    let Test.22 = lowlevel ListLen #Attr.2;
-                    let Test.20 = lowlevel NumLt #Attr.3 Test.22;
-                    if Test.20 then
-                        let Test.21 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
-                        ret Test.21;
+                    let Test.23 = lowlevel ListLen #Attr.2;
+                    let Test.21 = lowlevel NumLt #Attr.3 Test.23;
+                    if Test.21 then
+                        let Test.22 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
+                        ret Test.22;
                     else
                         ret #Attr.2;
 
@@ -1798,17 +1802,24 @@ mod test_mono {
                     ret Test.10;
 
                 procedure Test.2 (Test.3):
-                    let Test.17 = 0i64;
                     let Test.18 = 0i64;
-                    let Test.16 = CallByName List.4 Test.3 Test.17 Test.18;
-                    ret Test.16;
+                    let Test.19 = 0i64;
+                    let Test.17 = CallByName List.4 Test.3 Test.18 Test.19;
+                    ret Test.17;
+
+                procedure Test.24 ():
+                    let Test.11 = 1i64;
+                    let Test.12 = 2i64;
+                    let Test.13 = 3i64;
+                    let Test.10 = Array [Test.11, Test.12, Test.13];
+                    ret Test.10;
 
                 procedure Test.0 ():
-                    let Test.15 = FunctionPointer Test.1;
-                    let Test.14 = CallByName Test.2 Test.15;
-                    let Test.5 = CallByName List.7 Test.14;
-                    dec Test.14;
-                    let Test.8 = FunctionPointer Test.1;
+                    let Test.16 = FunctionPointer Test.24;
+                    let Test.15 = CallByName Test.2 Test.16;
+                    let Test.5 = CallByName List.7 Test.15;
+                    dec Test.15;
+                    let Test.8 = FunctionPointer Test.14;
                     let Test.6 = CallByName List.7 Test.8;
                     dec Test.8;
                     let Test.4 = CallByName Num.24 Test.5 Test.6;
@@ -2345,9 +2356,12 @@ mod test_mono {
                 r#"
                 procedure Test.1 (Test.5):
                     let Test.2 = 42i64;
-                    let Test.13 = FunctionPointer Test.3;
+                    let Test.13 = FunctionPointer Test.16;
                     let Test.3 = Struct {Test.13, Test.2};
                     ret Test.3;
+
+                procedure Test.16 (Test.11, #Attr.12):
+                    ret #Attr.12;
 
                 procedure Test.3 (Test.11, #Attr.12):
                     ret #Attr.12;
@@ -2393,10 +2407,13 @@ mod test_mono {
 
                 procedure Test.1 (Test.5):
                     let Test.2 = 41i64;
-                    let Test.12 = FunctionPointer Test.3;
+                    let Test.12 = FunctionPointer Test.15;
                     let Test.11 = Struct {Test.12, Test.2};
                     let Test.10 = Array [Test.11];
                     ret Test.10;
+
+                procedure Test.15 (Test.9, #Attr.12):
+                    ret #Attr.12;
 
                 procedure Test.3 (Test.9, #Attr.12):
                     ret #Attr.12;

@@ -9,7 +9,7 @@ use roc_module::symbol::Symbol;
 fn should_borrow_layout(layout: &Layout) -> bool {
     match layout {
         Layout::Closure(_, _, _) => false,
-        _ => false, //layout.is_refcounted(),
+        _ => layout.is_refcounted(),
     }
 }
 
