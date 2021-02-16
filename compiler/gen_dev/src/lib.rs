@@ -7,7 +7,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
+use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use target_lexicon::Triple;
 
@@ -107,9 +107,36 @@ where
                 let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
                 self.build_stmt(&stmt)
             }
+            Stmt::Switch {
+                cond_symbol,
+                cond_layout,
+                branches,
+                default_branch,
+                ret_layout,
+            } => {
+                self.load_literal_symbols(&[*cond_symbol])?;
+                self.build_switch(
+                    cond_symbol,
+                    cond_layout,
+                    branches,
+                    default_branch,
+                    ret_layout,
+                )?;
+                self.free_symbols(stmt);
+                Ok(())
+            }
             x => Err(format!("the statement, {:?}, is not yet implemented", x)),
         }
     }
+    // build_switch generates a instructions for a switch statement.
+    fn build_switch(
+        &mut self,
+        cond_symbol: &Symbol,
+        cond_layout: &Layout<'a>,
+        branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
+        default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be refered to later.

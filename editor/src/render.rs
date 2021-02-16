@@ -13,8 +13,8 @@ use crate::{
 
 pub fn render_expr2<'a>(
     env: &mut Env<'a>,
-    size: &PhysicalSize<u32>,
     expr2: &Expr2,
+    size: &PhysicalSize<u32>,
     position: Vector2<f32>,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
@@ -87,6 +87,25 @@ pub fn render_expr2<'a>(
                 area_bounds,
                 color: CODE_COLOR.into(),
                 text: env.pool.get_str(name),
+                size: CODE_FONT_SIZE,
+                ..Default::default()
+            };
+
+            queue_code_text_draw(&code_text, glyph_brush);
+        }
+        Expr2::Call { expr: expr_id, .. } => {
+            let expr = env.pool.get(*expr_id);
+
+            render_expr2(env, expr, size, position, glyph_brush);
+        }
+        Expr2::Var(symbol) => {
+            let text = format!("{:?}", symbol);
+
+            let code_text = Text {
+                position,
+                area_bounds,
+                color: CODE_COLOR.into(),
+                text: text.as_str(),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
             };

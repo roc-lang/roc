@@ -2,23 +2,103 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use crate::lang::pool::{Pool, PoolStr, PoolVec, ShallowClone};
-use crate::lang::types::{Alias, TypeId};
+use crate::lang::types::{Alias, Type2, TypeId};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::{
-    solved_types::{FreeVars, SolvedType},
-    subs::{VarStore, Variable},
+    builtin_aliases,
+    solved_types::{BuiltinAlias, FreeVars, SolvedType},
+    subs::{VarId, VarStore, Variable},
 };
 
 fn solved_type_to_type_id(
-    _solved_type: &SolvedType,
-    _free_vars: &mut FreeVars,
-    _var_store: &mut VarStore,
+    pool: &mut Pool,
+    solved_type: &SolvedType,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
 ) -> TypeId {
-    todo!()
+    let typ2 = to_type2(pool, solved_type, free_vars, var_store);
+
+    pool.add(typ2)
+}
+
+fn to_type2(
+    pool: &mut Pool,
+    solved_type: &SolvedType,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Type2 {
+    match solved_type {
+        SolvedType::Alias(symbol, solved_type_variables, solved_actual) => {
+            let type_variables = PoolVec::with_capacity(solved_type_variables.len() as u32, pool);
+
+            for (type_variable_node_id, (lowercase, solved_arg)) in type_variables
+                .iter_node_ids()
+                .zip(solved_type_variables.iter())
+            {
+                let typ2 = to_type2(pool, solved_arg, free_vars, var_store);
+
+                let node = pool.add(typ2);
+
+                pool[type_variable_node_id] = (PoolStr::new(lowercase.as_str(), pool), node);
+            }
+
+            let actual_typ2 = to_type2(pool, solved_actual, free_vars, var_store);
+
+            let actual = pool.add(actual_typ2);
+
+            let typ2 = Type2::Alias(*symbol, type_variables, actual);
+
+            typ2
+        }
+        SolvedType::TagUnion(tags, ext) => {
+            let new_tags = PoolVec::with_capacity(tags.len() as u32, pool);
+
+            for (tag_node_id, (_tag_name, args)) in new_tags.iter_node_ids().zip(tags.iter()) {
+                let new_args: PoolVec<Type2> = PoolVec::with_capacity(args.len() as u32, pool);
+
+                for (arg_node_id, arg) in new_args.iter_node_ids().zip(args.iter()) {
+                    let node = to_type2(pool, arg, free_vars, var_store);
+
+                    pool[arg_node_id] = node;
+                }
+
+                // tagname as PoolStr
+                pool[tag_node_id] = (PoolStr::new("", pool), new_args);
+            }
+
+            let actual_typ2 = to_type2(pool, ext, free_vars, var_store);
+
+            let actual = pool.add(actual_typ2);
+
+            let typ2 = Type2::TagUnion(new_tags, actual);
+
+            typ2
+        }
+        SolvedType::Flex(var_id) => {
+            Type2::Variable(var_id_to_flex_var(*var_id, free_vars, var_store))
+        }
+        SolvedType::EmptyTagUnion => Type2::EmptyTagUnion,
+        rest => todo!("{:?}", rest),
+    }
+}
+
+fn var_id_to_flex_var(
+    var_id: VarId,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Variable {
+    if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
+        *var
+    } else {
+        let var = var_store.fresh();
+        free_vars.unnamed_vars.insert(var_id, var);
+
+        var
+    }
 }
 
 #[derive(Debug)]
@@ -40,45 +120,45 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId, _pool: &mut Pool, _var_store: &mut VarStore) -> Scope {
-        use roc_types::solved_types::{BuiltinAlias, FreeVars};
-        let _solved_aliases = roc_types::builtin_aliases::aliases();
-        let aliases = MutMap::default();
+    pub fn new(home: ModuleId, pool: &mut Pool, var_store: &mut VarStore) -> Scope {
+        let solved_aliases = builtin_aliases::aliases();
+        let mut aliases = MutMap::default();
 
-        // for (symbol, builtin_alias) in solved_aliases {
-        //     // let BuiltinAlias { region, vars, typ } = builtin_alias;
-        //     let BuiltinAlias { vars, typ, .. } = builtin_alias;
+        for (symbol, builtin_alias) in solved_aliases {
+            // let BuiltinAlias { region, vars, typ } = builtin_alias;
+            let BuiltinAlias { vars, typ, .. } = builtin_alias;
 
-        //     let mut free_vars = FreeVars::default();
-        //     let typ = solved_type_to_type_id(&typ, &mut free_vars, var_store);
-        //     // roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+            let mut free_vars = FreeVars::default();
 
-        //     // make sure to sort these variables to make them line up with the type arguments
-        //     let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
-        //     type_variables.sort();
+            // roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+            let actual = solved_type_to_type_id(pool, &typ, &mut free_vars, var_store);
 
-        //     debug_assert_eq!(vars.len(), type_variables.len());
-        //     let variables = PoolVec::with_capacity(vars.len() as u32, pool);
+            // make sure to sort these variables to make them line up with the type arguments
+            let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
+            type_variables.sort();
 
-        //     let it = variables
-        //         .iter_node_ids()
-        //         .zip(vars.iter())
-        //         .zip(type_variables);
-        //     for ((node_id, loc_name), (_, var)) in it {
-        //         // TODO region is ignored, but "fake" anyway. How to resolve?
-        //         let name = PoolStr::new(loc_name.value.as_str(), pool);
-        //         pool[node_id] = (name, var);
-        //     }
+            debug_assert_eq!(vars.len(), type_variables.len());
+            let variables = PoolVec::with_capacity(vars.len() as u32, pool);
 
-        //     let alias = Alias {
-        //         actual: typ,
-        //         /// We know that builtin aliases have no hiddden variables (e.g. in closures)
-        //         hidden_variables: PoolVec::empty(pool),
-        //         targs: variables,
-        //     };
+            let it = variables
+                .iter_node_ids()
+                .zip(vars.iter())
+                .zip(type_variables);
+            for ((node_id, loc_name), (_, var)) in it {
+                // TODO region is ignored, but "fake" anyway. How to resolve?
+                let name = PoolStr::new(loc_name.value.as_str(), pool);
+                pool[node_id] = (name, var);
+            }
 
-        //     aliases.insert(symbol, alias);
-        // }
+            let alias = Alias {
+                actual,
+                /// We know that builtin aliases have no hiddden variables (e.g. in closures)
+                hidden_variables: PoolVec::empty(pool),
+                targs: variables,
+            };
+
+            aliases.insert(symbol, alias);
+        }
 
         let idents = Symbol::default_in_scope();
         let idents: MutMap<_, _> = idents.into_iter().collect();

@@ -150,6 +150,16 @@ mod gen_num {
             true,
             bool
         );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    3 == 4
+                "#
+            ),
+            false,
+            bool
+        );
     }
 
     #[test]
@@ -198,34 +208,6 @@ mod gen_num {
         );
     }
 
-    /*
-    #[test]
-    fn f64_sqrt() {
-        // FIXME this works with normal types, but fails when checking uniqueness types
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    when Num.sqrt 100 is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
-            ),
-            10.0,
-            f64
-        );
-    }
-
-    #[test]
-    fn f64_round_old() {
-        assert_evals_to!("Num.round 3.6", 4, i64);
-    }
-
-    #[test]
-    fn f64_abs() {
-        assert_evals_to!("Num.abs -4.7", 4.7, f64);
-        assert_evals_to!("Num.abs 5.8", 5.8, f64);
-    }
-
     #[test]
     fn gen_if_fn() {
         assert_evals_to!(
@@ -265,6 +247,55 @@ mod gen_num {
             -1,
             i64
         );
+    }
+
+    #[test]
+    fn gen_fib_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    fib = \n ->
+                        if n == 0 then
+                            0
+                        else if n == 1 then
+                            1
+                        else
+                            (fib (n - 1)) + (fib (n - 2))
+
+                    fib 10
+                "#
+            ),
+            55,
+            i64
+        );
+    }
+
+    /*
+    #[test]
+    fn f64_sqrt() {
+        // FIXME this works with normal types, but fails when checking uniqueness types
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.sqrt 100 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            10.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn f64_round_old() {
+        assert_evals_to!("Num.round 3.6", 4, i64);
+    }
+
+    #[test]
+    fn f64_abs() {
+        assert_evals_to!("Num.abs -4.7", 4.7, f64);
+        assert_evals_to!("Num.abs 5.8", 5.8, f64);
     }
 
     #[test]

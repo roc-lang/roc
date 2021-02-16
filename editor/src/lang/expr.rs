@@ -46,6 +46,7 @@ impl Output {
     }
 }
 
+#[derive(Debug)]
 pub struct Env<'a> {
     pub home: ModuleId,
     pub var_store: &'a mut VarStore,
@@ -106,7 +107,7 @@ impl<'a> Env<'a> {
     }
 
     pub fn set_region<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
-        todo!();
+        dbg!("Don't Forget to set the region eventually");
     }
 
     pub fn register_closure(&mut self, symbol: Symbol, references: References) {
@@ -807,6 +808,7 @@ pub fn to_expr2<'a>(
             todo!()
         }
         Nested(sub_expr) => to_expr2(env, scope, sub_expr, region),
+        Var { module_name, ident } => canonicalize_lookup(env, scope, module_name, ident, region),
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
@@ -841,7 +843,7 @@ pub fn to_expr2<'a>(
             );
         }
 
-        _ => todo!(),
+        rest => todo!("not yet implemented {:?}", rest),
     }
 }
 
@@ -1179,4 +1181,56 @@ fn canonicalize_when_branch<'a>(
         },
         references,
     )
+}
+
+fn canonicalize_lookup(
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+    module_name: &str,
+    ident: &str,
+    region: Region,
+) -> (Expr2, Output) {
+    use Expr2::*;
+
+    let mut output = Output::default();
+    let can_expr = if module_name.is_empty() {
+        // Since module_name was empty, this is an unqualified var.
+        // Look it up in scope!
+        match scope.lookup(&(*ident).into(), region) {
+            Ok(symbol) => {
+                output.references.lookups.insert(symbol);
+
+                Var(symbol)
+            }
+            Err(_problem) => {
+                // env.problem(Problem::RuntimeError(problem.clone()));
+
+                // RuntimeError(problem)
+                todo!()
+            }
+        }
+    } else {
+        // Since module_name was nonempty, this is a qualified var.
+        // Look it up in the env!
+        match env.qualified_lookup(module_name, ident, region) {
+            Ok(symbol) => {
+                output.references.lookups.insert(symbol);
+
+                Var(symbol)
+            }
+            Err(_problem) => {
+                // Either the module wasn't imported, or
+                // it was imported but it doesn't expose this ident.
+                // env.problem(Problem::RuntimeError(problem.clone()));
+
+                // RuntimeError(problem)
+
+                todo!()
+            }
+        }
+    };
+
+    // If it's valid, this ident should be in scope already.
+
+    (can_expr, output)
 }
