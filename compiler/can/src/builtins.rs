@@ -83,6 +83,11 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
         DICT_INSERT => dict_insert,
+        DICT_REMOVE => dict_remove,
+        DICT_GET => dict_get,
+        DICT_CONTAINS => dict_contains,
+        DICT_KEYS => dict_keys,
+        DICT_VALUES => dict_values,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -182,6 +187,11 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_LEN => dict_len,
         Symbol::DICT_EMPTY => dict_empty,
         Symbol::DICT_INSERT => dict_insert,
+        Symbol::DICT_REMOVE => dict_remove,
+        Symbol::DICT_GET => dict_get,
+        Symbol::DICT_CONTAINS => dict_contains,
+        Symbol::DICT_KEYS => dict_keys,
+        Symbol::DICT_VALUES => dict_values,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -1924,6 +1934,174 @@ fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         dict_var,
+    )
+}
+
+/// Dict.remove : Dict k v, k -> Dict k v
+fn dict_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictRemove,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        dict_var,
+    )
+}
+
+/// Dict.contains : Dict k v, k -> Bool
+fn dict_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictContains,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        bool_var,
+    )
+}
+
+/// Dict.get : Dict k v, k -> Result v [ KeyNotFound ]*
+fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_dict = Symbol::ARG_1;
+    let arg_key = Symbol::ARG_2;
+
+    let temp_record = Symbol::ARG_3;
+
+    let bool_var = var_store.fresh();
+    let flag_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let dict_var = var_store.fresh();
+    let value_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let temp_record_var = var_store.fresh();
+    let ext_var1 = var_store.fresh();
+    let ext_var2 = var_store.fresh();
+
+    // NOTE DictGetUnsafe returns a { flag: Bool, value: v }
+    // when the flag is True, the value is found and defined;
+    // otherwise it is not and `Dict.get` should return `Err ...`
+    let def_body = RunLowLevel {
+        op: LowLevel::DictGetUnsafe,
+        args: vec![(dict_var, Var(arg_dict)), (key_var, Var(arg_key))],
+        ret_var: temp_record_var,
+    };
+
+    let def = Def {
+        annotation: None,
+        expr_var: temp_record_var,
+        loc_expr: Located::at_zero(def_body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(temp_record)),
+        pattern_vars: Default::default(),
+    };
+
+    let get_value = Access {
+        record_var: temp_record_var,
+        ext_var: ext_var1,
+        field_var: value_var,
+        loc_expr: Box::new(no_region(Var(temp_record))),
+        field: "value".into(),
+    };
+
+    let get_flag = Access {
+        record_var: temp_record_var,
+        ext_var: ext_var2,
+        field_var: flag_var,
+        loc_expr: Box::new(no_region(Var(temp_record))),
+        field: "zflag".into(),
+    };
+
+    let make_ok = tag("Ok", vec![get_value], var_store);
+
+    let make_err = tag(
+        "Err",
+        vec![tag("OutOfBounds", Vec::new(), var_store)],
+        var_store,
+    );
+
+    let inspect = If {
+        cond_var: bool_var,
+        branch_var: ret_var,
+        branches: vec![(
+            // if-condition
+            no_region(get_flag),
+            no_region(make_ok),
+        )],
+        final_else: Box::new(no_region(make_err)),
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(inspect)), ret_var);
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// Dict.keys : Dict k v -> List k
+fn dict_keys(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictKeys,
+        args: vec![(dict_var, Var(Symbol::ARG_1))],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
+/// Dict.values : Dict k v -> List v
+fn dict_values(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::DictValues,
+        args: vec![(dict_var, Var(Symbol::ARG_1))],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        list_var,
     )
 }
 

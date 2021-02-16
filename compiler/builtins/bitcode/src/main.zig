@@ -9,6 +9,14 @@ const hash = @import("hash.zig");
 comptime {
     exportDictFn(dict.dictLen, "len");
     exportDictFn(dict.dictEmpty, "empty");
+    exportDictFn(dict.dictInsert, "insert");
+    exportDictFn(dict.dictRemove, "remove");
+    exportDictFn(dict.dictContains, "contains");
+    exportDictFn(dict.dictGet, "get");
+    exportDictFn(dict.elementsRc, "elementsRc");
+    exportDictFn(dict.dictKeys, "keys");
+    exportDictFn(dict.dictValues, "values");
+
     exportDictFn(hash.wyhash, "hash");
     exportDictFn(hash.wyhash_rocstr, "hash_str");
 }
