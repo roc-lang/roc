@@ -33,7 +33,6 @@ use cgmath::Vector2;
 use ed_model::Position;
 use lang::{pool::Pool, scope::Scope};
 use pipelines::RectResources;
-use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
@@ -280,9 +279,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 } else {
                     // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
 
-                    let mut pool = Pool::with_capacity(12);
+                    let mut pool = Pool::with_capacity(1024);
                     let mut var_store = VarStore::default();
-                    let dep_idents = MutMap::default();
+                    let dep_idents = IdentIds::exposed_builtins(8);
                     let mut module_ids = ModuleIds::default();
                     let exposed_ident_ids = IdentIds::default();
 
@@ -303,14 +302,18 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     let region = Region::new(0, 0, 0, 0);
 
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
-                        &arena, "True", &mut env, &mut scope, region,
+                        &arena,
+                        "Num.add 1 1",
+                        &mut env,
+                        &mut scope,
+                        region,
                     )
                     .unwrap();
 
                     render::render_expr2(
                         &mut env,
-                        &size,
                         &expr2,
+                        &size,
                         CODE_TXT_XY.into(),
                         &mut glyph_brush,
                     );
