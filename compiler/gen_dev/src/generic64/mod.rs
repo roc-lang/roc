@@ -2,7 +2,7 @@ use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
-use roc_mono::ir::{Literal, Stmt};
+use roc_mono::ir::{BranchInfo, Literal, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 use std::marker::PhantomData;
 use target_lexicon::Triple;
@@ -71,6 +71,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 /// dst should always come before sources.
 pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn add_freg64_freg64_freg64(
         buf: &mut Vec<'_, u8>,
@@ -84,7 +85,24 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src1: GeneralReg,
         src2: GeneralReg,
     );
+
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String);
+
+    // Jumps by an offset of offset bytes unconditionally.
+    // It should always generate the same number of bytes to enable replacement if offset changes.
+    // It returns the base offset to calculate the jump from (generally the instruction after the jump).
+    fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize;
+
+    // Jumps by an offset of offset bytes if reg is not equal to imm.
+    // It should always generate the same number of bytes to enable replacement if offset changes.
+    // It returns the base offset to calculate the jump from (generally the instruction after the jump).
+    fn jne_reg64_imm64_imm32(
+        buf: &mut Vec<'_, u8>,
+        reg: GeneralReg,
+        imm: u64,
+        offset: i32,
+    ) -> usize;
+
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -113,12 +131,14 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src1: GeneralReg,
         src2: GeneralReg,
     );
+
     fn eq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     );
+
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -369,6 +389,75 @@ impl<
                 "recieving return type, {:?}, is not yet implemented",
                 x
             )),
+        }
+    }
+
+    fn build_switch(
+        &mut self,
+        cond_symbol: &Symbol,
+        _cond_layout: &Layout<'a>, // cond_layout must be a integer due to potential jump table optimizations.
+        branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
+        default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
+        _ret_layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        // Switches are a little complex due to keeping track of jumps.
+        // In general I am trying to not have to loop over things multiple times or waste memory.
+        // The basic plan is to make jumps to nowhere and then correct them once we know the correct address.
+        let cond_reg = self.load_to_general_reg(cond_symbol)?;
+
+        let mut ret_jumps = bumpalo::vec![in self.env.arena];
+        let mut tmp = bumpalo::vec![in self.env.arena];
+        for (val, branch_info, stmt) in branches.iter() {
+            tmp.clear();
+            if let BranchInfo::None = branch_info {
+                // Create jump to next branch if not cond_sym not equal to value.
+                // Since we don't know the offset yet, set it to 0 and overwrite later.
+                let jne_location = self.buf.len();
+                let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
+
+                // Build all statements in this branch.
+                self.build_stmt(stmt)?;
+
+                // Build unconditional jump to the end of this switch.
+                // Since we don't know the offset yet, set it to 0 and overwrite later.
+                let jmp_location = self.buf.len();
+                let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0);
+                ret_jumps.push((jmp_location, jmp_offset));
+
+                // Overwite the original jne with the correct offset.
+                let end_offset = self.buf.len();
+                let jne_offset = end_offset - start_offset;
+                ASM::jne_reg64_imm64_imm32(&mut tmp, cond_reg, *val, jne_offset as i32);
+                for (i, byte) in tmp.iter().enumerate() {
+                    self.buf[jne_location + i] = *byte;
+                }
+            } else {
+                return Err(format!(
+                    "branch info, {:?}, is not yet implemented in switch statemens",
+                    branch_info
+                ));
+            }
+        }
+        let (branch_info, stmt) = default_branch;
+        if let BranchInfo::None = branch_info {
+            self.build_stmt(stmt)?;
+
+            // Update all return jumps to jump past the default case.
+            let ret_offset = self.buf.len();
+            for (jmp_location, start_offset) in ret_jumps.into_iter() {
+                tmp.clear();
+                let jmp_offset = ret_offset - start_offset;
+                ASM::jmp_imm32(&mut tmp, jmp_offset as i32);
+                for (i, byte) in tmp.iter().enumerate() {
+                    self.buf[jmp_location + i] = *byte;
+                }
+            }
+            Ok(())
+        } else {
+            Err(format!(
+                "branch info, {:?}, is not yet implemented in switch statemens",
+                branch_info
+            ))
         }
     }
 

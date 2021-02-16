@@ -738,6 +738,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         neg_reg64(buf, dst);
         cmovl_reg64_reg64(buf, dst, src);
     }
+
     #[inline(always)]
     fn add_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
@@ -784,6 +785,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
             addsd_freg64_freg64(buf, dst, src2);
         }
     }
+
     #[inline(always)]
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String) {
         buf.extend(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
@@ -792,6 +794,30 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
             name: fn_name,
         });
     }
+
+    #[inline(always)]
+    fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
+        jmp_imm32(buf, offset);
+        buf.len()
+    }
+    #[inline(always)]
+    fn jne_reg64_imm64_imm32(
+        buf: &mut Vec<'_, u8>,
+        reg: X86_64GeneralReg,
+        imm: u64,
+        offset: i32,
+    ) -> usize {
+        buf.reserve(13);
+        if imm > i32::MAX as u64 {
+            unimplemented!(
+                "comparison with values greater than i32::max not yet implemented for jne"
+            );
+        }
+        cmp_reg64_imm32(buf, reg, imm as i32);
+        jne_imm32(buf, offset);
+        buf.len()
+    }
+
     #[inline(always)]
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
@@ -853,6 +879,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
         mov_stack32_reg64(buf, offset, src);
     }
+
     #[inline(always)]
     fn sub_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
@@ -936,6 +963,20 @@ const fn add_reg_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
     }
 }
 
+#[inline(always)]
+fn binop_reg64_reg64(
+    op_code: u8,
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
+    let dst_mod = dst as u8 % 8;
+    let src_mod = (src as u8 % 8) << 3;
+    buf.extend(&[rex, op_code, 0xC0 + dst_mod + src_mod]);
+}
+
 // Below here are the functions for all of the assembly instructions.
 // Their names are based on the instruction and operators combined.
 // You should call `buf.reserve()` if you push or extend more than once.
@@ -950,19 +991,6 @@ fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xC0 + dst_mod]);
     buf.extend(&imm.to_le_bytes());
-}
-
-fn binop_reg64_reg64(
-    op_code: u8,
-    buf: &mut Vec<'_, u8>,
-    dst: X86_64GeneralReg,
-    src: X86_64GeneralReg,
-) {
-    let rex = add_rm_extension(dst, REX_W);
-    let rex = add_reg_extension(src, rex);
-    let dst_mod = dst as u8 % 8;
-    let src_mod = (src as u8 % 8) << 3;
-    buf.extend(&[rex, op_code, 0xC0 + dst_mod + src_mod]);
 }
 
 /// `ADD r/m64,r64` -> Add r64 to r/m64.
@@ -991,22 +1019,12 @@ fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     }
 }
 
-/// `SUB r/m64,r64` -> Sub r64 to r/m64.
+/// r/m64 AND imm8 (sign-extended).
 #[inline(always)]
-fn sub_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x29, buf, dst, src);
-}
-
-/// `CMP r/m64,r64` -> Compare r64 to r/m64.
-#[inline(always)]
-fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x39, buf, dst, src);
-}
-
-/// `XOR r/m64,r64` -> Xor r64 to r/m64.
-#[inline(always)]
-fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x31, buf, dst, src);
+fn and_reg64_imm8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i8) {
+    let rex = add_rm_extension(dst, REX_W);
+    let dst_mod = dst as u8 % 8;
+    buf.extend(&[rex, 0x83, 0xE0 + dst_mod, imm as u8]);
 }
 
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
@@ -1017,6 +1035,39 @@ fn cmovl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Ge
     let dst_mod = (dst as u8 % 8) << 3;
     let src_mod = src as u8 % 8;
     buf.extend(&[rex, 0x0F, 0x4C, 0xC0 + dst_mod + src_mod]);
+}
+
+/// `CMP r/m64,i32` -> Compare i32 to r/m64.
+#[inline(always)]
+fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
+    let rex = add_rm_extension(dst, REX_W);
+    let dst_mod = dst as u8 % 8;
+    buf.reserve(7);
+    buf.extend(&[rex, 0x81, 0xF8 + dst_mod]);
+    buf.extend(&imm.to_le_bytes());
+}
+
+/// `CMP r/m64,r64` -> Compare r64 to r/m64.
+#[inline(always)]
+fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0x39, buf, dst, src);
+}
+
+/// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.
+#[inline(always)]
+fn jmp_imm32(buf: &mut Vec<'_, u8>, imm: i32) {
+    buf.reserve(5);
+    buf.push(0xE9);
+    buf.extend(&imm.to_le_bytes());
+}
+
+/// Jump near if not equal (ZF=0).
+#[inline(always)]
+fn jne_imm32(buf: &mut Vec<'_, u8>, imm: i32) {
+    buf.reserve(6);
+    buf.push(0x0F);
+    buf.push(0x85);
+    buf.extend(&imm.to_le_bytes());
 }
 
 /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
@@ -1124,6 +1175,7 @@ fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
 }
 
 // `MOVSD xmm, m64` -> Load scalar double-precision floating-point value from m64 to xmm register.
+#[inline(always)]
 fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: u32) {
     let dst_mod = dst as u8 % 8;
     if dst as u8 > 7 {
@@ -1150,10 +1202,6 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     // XOR needs 3 bytes, actual SETE instruction need 3 or 4 bytes
     buf.reserve(7);
 
-    // We reset reg to 0 because the SETE instruction only applies
-    // to the lower bits of the register
-    xor_reg64_reg64(buf, reg, reg);
-
     // Actually apply the SETE instruction
     let reg_mod = reg as u8 % 8;
     use X86_64GeneralReg::*;
@@ -1164,6 +1212,10 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
             buf.extend(&[REX + 1, 0x0F, 0x94, 0xC0 + reg_mod])
         }
     }
+
+    // We and reg with 1 because the SETE instruction only applies
+    // to the lower bits of the register
+    and_reg64_imm8(buf, reg, 1);
 }
 
 /// `RET` -> Near return to calling procedure.
@@ -1181,6 +1233,12 @@ fn sub_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xE8 + dst_mod]);
     buf.extend(&imm.to_le_bytes());
+}
+
+/// `SUB r/m64,r64` -> Sub r64 to r/m64.
+#[inline(always)]
+fn sub_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0x29, buf, dst, src);
 }
 
 /// `POP r64` -> Pop top of stack into r64; increment stack pointer. Cannot encode 32-bit operand size.
@@ -1205,6 +1263,13 @@ fn push_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     } else {
         buf.push(0x50 + reg_mod);
     }
+}
+
+/// `XOR r/m64,r64` -> Xor r64 to r/m64.
+#[inline(always)]
+#[allow(dead_code)]
+fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0x31, buf, dst, src);
 }
 
 // When writing tests, it is a good idea to test both a number and unnumbered register.
@@ -1341,6 +1406,39 @@ mod tests {
             cmovl_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
+    }
+
+    #[test]
+    fn test_cmp_reg64_imm32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for (dst, expected) in &[
+            (X86_64GeneralReg::RAX, [0x48, 0x81, 0xF8]),
+            (X86_64GeneralReg::R15, [0x49, 0x81, 0xFF]),
+        ] {
+            buf.clear();
+            cmp_reg64_imm32(&mut buf, *dst, TEST_I32);
+            assert_eq!(expected, &buf[..3]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
+        }
+    }
+
+    #[test]
+    fn test_jmp_imm32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        jmp_imm32(&mut buf, TEST_I32);
+        assert_eq!(0xE9, buf[0]);
+        assert_eq!(TEST_I32.to_le_bytes(), &buf[1..]);
+    }
+
+    #[test]
+    fn test_jne_imm32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        jne_imm32(&mut buf, TEST_I32);
+        assert_eq!([0x0F, 0x85], &buf[..2]);
+        assert_eq!(TEST_I32.to_le_bytes(), &buf[2..]);
     }
 
     #[test]
@@ -1539,36 +1637,36 @@ mod tests {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
 
-        // tests for 6 bytes in the output buffer
+        // tests for 7 bytes in the output buffer
         let (reg, expected) = (
             X86_64GeneralReg::RAX,
             [
-                0x48, 0x31, 0xC0, // XOR rax, rax
                 0x0F, 0x94, 0xC0, // SETE al ; al are the 8 lower weight bits of rax
+                0x48, 0x83, 0xE0, 0x01, // AND rax, 1
             ],
         );
         buf.clear();
         sete_reg64(&mut buf, reg);
         assert_eq!(expected, &buf[..]);
 
-        // tests for 7 bytes in the output buffer
+        // tests for 8 bytes in the output buffer
         for (reg, expected) in &[
             (
                 X86_64GeneralReg::RSP,
                 [
-                    // XOR rsp, rsp
-                    0x48, 0x31, 0xE4,
                     // SETE spl ; spl are the 8 lower weight bits of rsp
-                    0x40, 0x0F, 0x94, 0xC4,
+                    0x40, 0x0F, 0x94, 0xC4, //
+                    // AND rsp, 1
+                    0x48, 0x83, 0xE4, 0x01,
                 ],
             ),
             (
                 X86_64GeneralReg::R15,
                 [
-                    // XOR r15, r15
-                    0x4D, 0x31, 0xFF,
                     // SETE r15b ; r15b are the 8 lower weight bits of r15
-                    0x41, 0x0F, 0x94, 0xC7,
+                    0x41, 0x0F, 0x94, 0xC7, //
+                    // AND rsp, 1
+                    0x49, 0x83, 0xE7, 0x01,
                 ],
             ),
         ] {
