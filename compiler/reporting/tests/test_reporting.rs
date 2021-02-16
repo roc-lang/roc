@@ -1132,7 +1132,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int b
+                    Int a
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1171,7 +1171,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int b
+                    Int a
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1207,7 +1207,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int b
+                    Int a
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1541,7 +1541,7 @@ mod test_reporting {
 
                 But the type annotation says it should be:
 
-                    { x : Int b }
+                    { x : Int a }
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -4041,9 +4041,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-                
+
                 Unexpected token :
-                
+
                 1│  f :: I64
                        ^
             "#
@@ -4061,7 +4061,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 x = 3
-                y = 
+                y =
                     x == 5
                     Num.add 1 2
 
@@ -4071,12 +4071,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
-                
+
                 The `add` function expects 2 arguments, but it got 4 instead:
-                
+
                 4│      Num.add 1 2
                         ^^^^^^^
-                
+
                 Are there any missing commas? Or missing parentheses?
             "#
             ),
@@ -4096,9 +4096,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-                
+
                 Unexpected token :
-                
+
                 2│      5 ** 3
                           ^
             "#
@@ -4117,12 +4117,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TAG UNION TYPE ───────────────────────────────────────────────────
-                
+
                 I just started parsing a tag union type, but I got stuck here:
-                
+
                 1│  f : [
                          ^
-                
+
                 Tag unions look like [ Many I64, None ], so I was expecting to see a
                 tag name next.
             "#
@@ -4135,18 +4135,18 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Yes, 
+                f : [ Yes,
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED TAG UNION TYPE ───────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ Yes, 
+
+                1│  f : [ Yes,
                               ^
-                
+
                 I was expecting to see a closing square bracket before this, so try
                 adding a ] and see if that helps?
             "#
@@ -4159,20 +4159,20 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ lowercase ] 
+                f : [ lowercase ]
                 "#
             ),
             indoc!(
                 r#"
                 ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ lowercase ] 
+
+                1│  f : [ lowercase ]
                           ^
-                
+
                 I was expecting to see a tag name.
-                
+
                 Hint: Tag names start with an uppercase letter, like Err or Green.
             "#
             ),
@@ -4184,20 +4184,20 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Good, bad ] 
+                f : [ Good, bad ]
                 "#
             ),
             indoc!(
                 r#"
                 ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ Good, bad ] 
+
+                1│  f : [ Good, bad ]
                                 ^
-                
+
                 I was expecting to see a tag name.
-                
+
                 Hint: Tag names start with an uppercase letter, like Err or Green.
             "#
             ),
@@ -4215,12 +4215,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I just started parsing a record type, but I got stuck here:
-                
+
                 1│  f : {
                          ^
-                
+
                 Record types look like { name : String, age : Int }, so I was
                 expecting to see a field name next.
             "#
@@ -4240,15 +4240,15 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
+
                 1│  f : {
                          ^
-                
+
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4260,18 +4260,18 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { a: Int, 
+                f : { a: Int,
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
-                1│  f : { a: Int, 
+
+                1│  f : { a: Int,
                                  ^
-                
+
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
             "#
@@ -4291,13 +4291,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
+
                 1│  f : { a: Int
                 2│  }
                     ^
-                
+
                 I need this curly brace to be indented more. Try adding more spaces
                 before it!
             "#
@@ -4310,19 +4310,19 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { if : I64 } 
+                f : { if : I64 }
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I just started parsing a record type, but I got stuck on this field
                 name:
-                
-                1│  f : { if : I64 } 
+
+                1│  f : { if : I64 }
                           ^^
-                
+
                 Looks like you are trying to use `if` as a field name, but that is a
                 reserved word. Try using a different name!
             "#
@@ -4342,12 +4342,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
+
                 1│  f : { foo  bar }
                                ^
-                
+
                 I was expecting to see a colon, question mark, comma or closing curly
                 brace.
             "#
@@ -4363,12 +4363,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TAB CHARACTER ───────────────────────────────────────────────────────────────
-                
+
                 I encountered a tab character
-                
+
                 1│  f : { foo 	 }
                               ^
-                
+
                 Tab characters are not allowed.
             "#
             ),
@@ -4383,12 +4383,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TAB CHARACTER ───────────────────────────────────────────────────────────────
-                
+
                 I encountered a tab character
-                
+
                 1│  f : { foo 	 }
                               ^
-                
+
                 Tab characters are not allowed.
             "#
             ),
@@ -4407,12 +4407,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
-                1│  f : { a: Int, 
+
+                1│  f : { a: Int,
                                  ^
-                
+
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
             "#
@@ -4431,13 +4431,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a type in parentheses, but I got stuck
                 here:
-                
+
                 1│  f : ( I64
                              ^
-                
+
                 I was expecting to see a closing parenthesis before this, so try
                 adding a ) and see if that helps?
             "#
@@ -4450,18 +4450,18 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Foo..Bar 
+                f : Foo..Bar
                 "#
             ),
             indoc!(
                 r#"
                 ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
-                
+
                 I encountered two dots in a row:
-                
-                1│  f : Foo..Bar 
+
+                1│  f : Foo..Bar
                             ^
-                
+
                 Try removing one of them.
             "#
             ),
@@ -4479,12 +4479,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TRAILING DOT ────────────────────────────────────────────────────────────────
-                
+
                 I encountered a dot with nothing after it:
-                
+
                 1│  f : Foo.Bar.
                                 ^
-                
+
                 Dots are used to refer to a type in a qualified way, like
                 Num.I64 or List.List a. Try adding a type name next.
             "#
@@ -4499,19 +4499,19 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : . 
+                f : .
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a type in parentheses, but I got stuck
                 here:
-                
+
                 1│  f : ( I64
                              ^
-                
+
                 I was expecting to see a closing parenthesis before this, so try
                 adding a ) and see if that helps?
             "#
@@ -4530,12 +4530,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-                
+
                 I encountered a number at the start of a qualified name segment:
-                
+
                 1│  f : Foo.1
                             ^
-                
+
                 All parts of a qualified type name must start with an uppercase
                 letter, like Num.I64 or List.List a.
             "#
@@ -4554,13 +4554,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-                
+
                 I encountered a lowercase letter at the start of a qualified name
                 segment:
-                
+
                 1│  f : Foo.foo
                             ^
-                
+
                 All parts of a qualified type name must start with an uppercase
                 letter, like Num.I64 or List.List a.
             "#
@@ -4573,7 +4573,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64 as 
+                f : I64 as
                 f = 0
 
                 f
@@ -4582,12 +4582,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED INLINE ALIAS ─────────────────────────────────────────────────────
-                
+
                 I just started parsing an inline type alias, but I got stuck here:
-                
-                1│  f : I64 as 
+
+                1│  f : I64 as
                               ^
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4599,7 +4599,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64,,I64 -> I64 
+                f : I64,,I64 -> I64
                 f = 0
 
                 f
@@ -4608,13 +4608,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── DOUBLE COMMA ────────────────────────────────────────────────────────────────
-                
+
                 I just started parsing a function argument type, but I encounterd two
                 commas in a row:
-                
-                1│  f : I64,,I64 -> I64 
+
+                1│  f : I64,,I64 -> I64
                             ^
-                
+
                 Try removing one of them.
             "#
             ),
@@ -4626,7 +4626,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64, I64 
+                f : I64, I64
                 f = 0
 
                 f
@@ -4635,12 +4635,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
-                
+
                 I just started parsing a type, but I got stuck here:
-                
-                1│  f : I64, I64 
+
+                1│  f : I64, I64
                                 ^
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4653,7 +4653,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64, I64 -> 
+                f : I64, I64 ->
                 f = 0
 
                 f
@@ -4662,12 +4662,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
-                
+
                 I just started parsing a type, but I got stuck here:
-                
-                1│  f : I64, I64 -> 
+
+                1│  f : I64, I64 ->
                                    ^
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4680,7 +4680,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ @Foo Bool, @100 I64 ] 
+                f : [ @Foo Bool, @100 I64 ]
                 f = 0
 
                 f
@@ -4689,14 +4689,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ @Foo Bool, @100 I64 ] 
+
+                1│  f : [ @Foo Bool, @100 I64 ]
                                      ^
-                
+
                 I was expecting to see a private tag name.
-                
+
                 Hint: Private tag names start with an `@` symbol followed by an
                 uppercase letter, like @UID or @SecretKey.
             "#
@@ -4719,20 +4719,57 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 Something is off with the body of the `myDict` definition:
-                
+
                 1│  myDict : Dict I64 Str
                 2│  myDict = Dict.insert Dict.empty "foo" 42
                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 This `insert` call produces:
-                
+
                     Dict Str (Num a)
-                
+
                 But the type annotation on `myDict` says it should be:
-                
+
                     Dict I64 Str
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn alias_type_diff() {
+        report_problem_as(
+            indoc!(
+                r#"
+                HSet a : Set a
+
+                foo : Str -> HSet {}
+
+                myDict : HSet Str
+                myDict = foo "bar"
+
+                myDict
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `myDict` definition:
+
+                5│  myDict : HSet Str
+                6│  myDict = foo "bar"
+                             ^^^^^^^^^
+
+                This `foo` call produces:
+
+                    HSet {}
+
+                But the type annotation on `myDict` says it should be:
+
+                    HSet Str
             "#
             ),
         )
