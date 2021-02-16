@@ -1,3 +1,4 @@
+use crate::ir::Parens;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -6,6 +7,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::HashMap;
+use ven_pretty::{DocAllocator, DocBuilder};
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 const GENERATE_NULLABLE: bool = true;
@@ -61,6 +63,34 @@ pub enum UnionLayout<'a> {
         nullable_id: bool,
         other_fields: &'a [Layout<'a>],
     },
+}
+
+impl<'a> UnionLayout<'a> {
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use UnionLayout::*;
+
+        match self {
+            NonRecursive(tags) => {
+                let tags_doc = tags.iter().map(|fields| {
+                    alloc.text("C ").append(alloc.intersperse(
+                        fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                        ", ",
+                    ))
+                });
+
+                alloc
+                    .text("[")
+                    .append(alloc.intersperse(tags_doc, ", "))
+                    .append(alloc.text("]"))
+            }
+            _ => alloc.text("TODO"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -654,6 +684,51 @@ impl<'a> Layout<'a> {
             FunctionPointer(_, _) | Pointer(_) => false,
         }
     }
+
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: Parens) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use Layout::*;
+
+        match self {
+            Builtin(builtin) => builtin.to_doc(alloc, parens),
+            PhantomEmptyStruct => alloc.text("{}"),
+            Struct(fields) => {
+                let fields_doc = fields.iter().map(|x| x.to_doc(alloc, parens));
+
+                alloc
+                    .text("{")
+                    .append(alloc.intersperse(fields_doc, ", "))
+                    .append(alloc.text("}"))
+            }
+            Union(union_layout) => union_layout.to_doc(alloc, parens),
+            RecursivePointer => alloc.text("*self"),
+            FunctionPointer(args, result) => {
+                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
+
+                alloc
+                    .intersperse(args_doc, ", ")
+                    .append(alloc.text(" -> "))
+                    .append(result.to_doc(alloc, Parens::InFunction))
+            }
+            Closure(args, closure_layout, result) => {
+                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
+
+                let bom = closure_layout.layout.to_doc(alloc, Parens::NotNeeded);
+
+                alloc
+                    .intersperse(args_doc, ", ")
+                    .append(alloc.text(" {| "))
+                    .append(bom)
+                    .append(" |} -> ")
+                    .append(result.to_doc(alloc, Parens::InFunction))
+            }
+            Pointer(_) => todo!(),
+        }
+    }
 }
 
 /// Avoid recomputing Layout from Variable multiple times.
@@ -876,6 +951,47 @@ impl<'a> Builtin<'a> {
             },
 
             Str | Dict(_, _) | Set(_) => true,
+        }
+    }
+
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use Builtin::*;
+
+        match self {
+            Int128 => alloc.text("Int128"),
+            Int64 => alloc.text("Int64"),
+            Int32 => alloc.text("Int32"),
+            Int16 => alloc.text("Int16"),
+            Int8 => alloc.text("Int8"),
+            Int1 => alloc.text("Int1"),
+            Usize => alloc.text("Usize"),
+            Float128 => alloc.text("Float128"),
+            Float64 => alloc.text("Float64"),
+            Float32 => alloc.text("Float32"),
+            Float16 => alloc.text("Float16"),
+
+            EmptyStr => alloc.text("EmptyStr"),
+            EmptyList => alloc.text("EmptyList"),
+            EmptyDict => alloc.text("EmptyDict"),
+            EmptySet => alloc.text("EmptySet"),
+
+            Str => alloc.text("Str"),
+            List(_, layout) => alloc
+                .text("List ")
+                .append(layout.to_doc(alloc, Parens::InTypeParam)),
+            Set(layout) => alloc
+                .text("Set ")
+                .append(layout.to_doc(alloc, Parens::InTypeParam)),
+            Dict(key_layout, value_layout) => alloc
+                .text("Dict ")
+                .append(key_layout.to_doc(alloc, Parens::InTypeParam))
+                .append(" ")
+                .append(value_layout.to_doc(alloc, Parens::InTypeParam)),
         }
     }
 }

@@ -136,8 +136,15 @@ pub enum SelfRecursive {
     SelfRecursive(JoinPointId),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Parens {
+    NotNeeded,
+    InTypeParam,
+    InFunction,
+}
+
 impl<'a> Proc<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: bool) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -148,20 +155,36 @@ impl<'a> Proc<'a> {
             .iter()
             .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
 
-        alloc
-            .text("procedure ")
-            .append(symbol_to_doc(alloc, self.name))
-            .append(" (")
-            .append(alloc.intersperse(args_doc, ", "))
-            .append("):")
-            .append(alloc.hardline())
-            .append(self.body.to_doc(alloc).indent(4))
+        if PRETTY_PRINT_IR_SYMBOLS {
+            alloc
+                .text("procedure : ")
+                .append(symbol_to_doc(alloc, self.name))
+                .append(" ")
+                .append(self.ret_layout.to_doc(alloc, Parens::NotNeeded))
+                .append(alloc.hardline())
+                .append(alloc.text("procedure = "))
+                .append(symbol_to_doc(alloc, self.name))
+                .append(" (")
+                .append(alloc.intersperse(args_doc, ", "))
+                .append("):")
+                .append(alloc.hardline())
+                .append(self.body.to_doc(alloc).indent(4))
+        } else {
+            alloc
+                .text("procedure ")
+                .append(symbol_to_doc(alloc, self.name))
+                .append(" (")
+                .append(alloc.intersperse(args_doc, ", "))
+                .append("):")
+                .append(alloc.hardline())
+                .append(self.body.to_doc(alloc).indent(4))
+        }
     }
 
     pub fn to_pretty(&self, width: usize) -> String {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, ()>(&allocator, false)
+        self.to_doc::<_, ()>(&allocator, Parens::NotNeeded)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -2460,8 +2483,7 @@ fn specialize_naked_symbol<'a>(
                 match hole {
                     Stmt::Jump(_, _) => todo!("not sure what to do in this case yet"),
                     _ => {
-                        let expr =
-                            call_by_pointer(env, procs, layout_cache, symbol, layout.clone());
+                        let expr = call_by_pointer(env, procs, symbol, layout.clone());
                         let new_symbol = env.unique_symbol();
                         return Stmt::Let(
                             new_symbol,
@@ -3549,7 +3571,7 @@ pub fn with_hole<'a>(
                     // TODO should the let have layout Pointer?
                     Stmt::Let(
                         assigned,
-                        call_by_pointer(env, procs, layout_cache, name, layout.clone()),
+                        call_by_pointer(env, procs, name, layout.clone()),
                         layout,
                         hole,
                     )
@@ -3746,13 +3768,7 @@ pub fn with_hole<'a>(
                         }
                     }
 
-                    let expr = call_by_pointer(
-                        env,
-                        procs,
-                        layout_cache,
-                        name,
-                        function_ptr_layout.clone(),
-                    );
+                    let expr = call_by_pointer(env, procs, name, function_ptr_layout.clone());
 
                     stmt = Stmt::Let(
                         function_pointer,
@@ -3778,7 +3794,7 @@ pub fn with_hole<'a>(
                             // TODO should the let have layout Pointer?
                             Stmt::Let(
                                 assigned,
-                                call_by_pointer(env, procs, layout_cache, name, layout.clone()),
+                                call_by_pointer(env, procs, name, layout.clone()),
                                 layout,
                                 hole,
                             )
@@ -5359,7 +5375,7 @@ fn handle_variable_aliasing<'a>(
             .from_var(env.arena, variable, env.subs)
             .unwrap();
 
-        let expr = call_by_pointer(env, procs, layout_cache, right, layout.clone());
+        let expr = call_by_pointer(env, procs, right, layout.clone());
         Stmt::Let(left, expr, layout, env.arena.alloc(result))
     } else {
         substitute_in_exprs(env.arena, &mut result, left, right);
@@ -5407,7 +5423,7 @@ fn reuse_function_symbol<'a>(
 
                     // an imported symbol is always a function pointer:
                     // either it's a function, or a top-level 0-argument thunk
-                    let expr = call_by_pointer(env, procs, layout_cache, original, layout.clone());
+                    let expr = call_by_pointer(env, procs, original, layout.clone());
                     return Stmt::Let(symbol, expr, layout, env.arena.alloc(result));
                 }
                 _ => {
@@ -5505,13 +5521,7 @@ fn reuse_function_symbol<'a>(
                         }
                     }
 
-                    let expr = call_by_pointer(
-                        env,
-                        procs,
-                        layout_cache,
-                        original,
-                        function_ptr_layout.clone(),
-                    );
+                    let expr = call_by_pointer(env, procs, original, function_ptr_layout.clone());
 
                     stmt = Stmt::Let(
                         function_pointer,
@@ -5533,7 +5543,7 @@ fn reuse_function_symbol<'a>(
 
                     Stmt::Let(
                         symbol,
-                        call_by_pointer(env, procs, layout_cache, original, layout.clone()),
+                        call_by_pointer(env, procs, original, layout.clone()),
                         layout,
                         env.arena.alloc(result),
                     )
@@ -5613,7 +5623,6 @@ where
 fn call_by_pointer<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
     symbol: Symbol,
     layout: Layout<'a>,
 ) -> Expr<'a> {
