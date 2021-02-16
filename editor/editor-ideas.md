@@ -56,6 +56,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
 * [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
 * [Lamdu](http://www.lamdu.org/) live functional programming.
+* [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 
 ### Productivity features
 
