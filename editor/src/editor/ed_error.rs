@@ -1,6 +1,5 @@
 use colored::*;
-use snafu::{Backtrace, ErrorCompat, Snafu};
-use crate::ui::ui_error::UIError;
+use snafu::{Backtrace, ErrorCompat, Snafu, ResultExt, NoneError};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -22,15 +21,6 @@ pub enum EdError {
     ))]
     ClipboardInitFailed { err_msg: String },
 
-    #[snafu(display("InvalidSelection: {}.", err_msg))]
-    InvalidSelection {
-        err_msg: String,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display("MissingGlyphDims: glyph_dim_rect_opt was None for model. It needs to be set using the example_code_glyph_rect function."))]
-    MissingGlyphDims { backtrace: Backtrace },
-
     #[snafu(display(
         "OutOfBounds: index {} was out of bounds for {} with length {}.",
         index,
@@ -41,6 +31,12 @@ pub enum EdError {
         index: usize,
         collection_name: String,
         len: usize,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("UIError: {}", msg))]
+    UIErrorBacktrace { 
+        msg: String,
         backtrace: Backtrace,
     },
 }
@@ -110,8 +106,16 @@ impl From<EdError> for String {
     }
 }
 
+use crate::ui::ui_error::UIError;
+
 impl From<UIError> for EdError {
-    fn from(ui_error: UIError) -> Self {
-        //TODO
+    fn from(ui_err: UIError) -> Self {
+        let msg = format!("{}", ui_err);
+
+        // hack to handle EdError derive
+        let dummy_res: Result<(), NoneError> = Err(NoneError{});
+        dummy_res.context(UIErrorBacktrace {
+            msg,
+        }).unwrap_err()
     }
 }

@@ -6,7 +6,7 @@ use winit::event::{ModifiersState};
 use super::selection::validate_selection;
 
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct CaretWSelect {
     pub caret_pos: TextPos,
     pub selection_opt: Option<Selection>,
@@ -34,6 +34,16 @@ impl Default for CaretWSelect {
 }
 
 impl CaretWSelect {
+
+    pub fn new(caret_pos: TextPos, selection_opt: Option<Selection>) -> Self {
+        Self {
+            caret_pos: TextPos {
+                line: 0,
+                column: 0
+            },
+            selection_opt: None
+        }
+    }
 
     pub fn move_caret_w_mods(&mut self, new_pos: TextPos, mods: &ModifiersState) -> UIResult<()> {
         let caret_pos = self.caret_pos;

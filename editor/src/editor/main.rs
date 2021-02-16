@@ -265,7 +265,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     queue_editor_text(
                         &size,
                         &ed_model.text.all_lines(&arena),
-                        ed_model.text.get_caret(),
+                        ed_model.text.caret_w_select.caret_pos,
                         CODE_TXT_XY.into(),
                         &mut glyph_brush,
                     );

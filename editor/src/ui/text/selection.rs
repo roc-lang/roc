@@ -31,11 +31,8 @@ impl std::fmt::Display for RawSelection {
     }
 }
 
-//using the "parse don't validate" pattern
-pub type Selection = ValidSelection;
-
-#[derive(Debug)]
-struct ValidSelection {
+#[derive(Debug, Copy, Clone)]
+pub struct Selection {
     pub start_pos: TextPos,
     pub end_pos: TextPos,
 }
@@ -161,7 +158,8 @@ pub mod test_selection {
     use crate::ui::ui_error::{UIResult, OutOfBounds};
     use crate::ui::text::{
         text_pos::TextPos,
-        selection::{Selection, validate_selection},
+        selection::{validate_selection},
+        big_selectable_text,
         big_selectable_text::BigSelectableText,
         caret_w_select::CaretWSelect,
         lines::Lines,
@@ -172,11 +170,14 @@ pub mod test_selection {
     use crate::ui::util::slice_get;
     use core::cmp::Ordering;
     use pest::Parser;
-    use ropey::Rope;
     use snafu::OptionExt;
-    use std::collections::HashMap;
-    use std::slice::SliceIndex;
     use bumpalo::Bump;
+    use std::collections::HashMap;
+    use std::{
+        slice::SliceIndex,
+        path::Path,
+        time::{SystemTime}
+    };
 
     #[derive(Parser)]
     #[grammar = "../tests/selection.pest"]
@@ -184,10 +185,12 @@ pub mod test_selection {
 
     // show selection and caret position as symbols in lines for easy testing
     pub fn convert_selection_to_dsl(
-        selection_opt: Option<Selection>,
-        caret_pos: TextPos,
+        caret_w_select: CaretWSelect,
         lines: &mut [String],
     ) -> UIResult<&[String]> {
+        let selection_opt = caret_w_select.selection_opt;
+        let caret_pos = caret_w_select.caret_pos;
+
         if let Some(sel) = selection_opt {
             let mut to_insert = vec![
                 (sel.start_pos, '['),
@@ -253,15 +256,11 @@ pub mod test_selection {
     }
 
     fn text_buffer_from_str(lines_str: &str) -> BigSelectableText {
-        BigSelectableText {
-            caret_w_select: CaretWSelect::default(),
-            text_rope: Rope::from_str(lines_str),
-            path_str: "".to_owned(),
-            arena: bumpalo::Bump::new(),
-        }
+        let path = Path::new(format!("temp_{:?}.txt", SystemTime::now()));
+        big_selectable_text::from_path(path).unwrap()
     }
 
-    pub fn text_buffer_from_dsl_str(lines: &[String]) -> BigSelectableText {
+    pub fn big_text_from_dsl_str(lines: &[String]) -> BigSelectableText {
         text_buffer_from_str(
             &lines
                 .iter()
@@ -276,11 +275,7 @@ pub mod test_selection {
 
         for line in big_sel_text.all_lines(arena).split("\n") {
             lines.push(
-                line
-                    .expect(
-                        "Failed to get str from RopeSlice. See https://docs.rs/ropey/1.2.0/ropey/struct.RopeSlice.html#method.as_str"
-                    )
-                    .to_owned()
+                line.to_owned()
             );
         }
 
@@ -290,7 +285,7 @@ pub mod test_selection {
     // Retrieve selection and position from formatted string
     pub fn convert_dsl_to_selection(
         lines: &[String],
-    ) -> Result<(Option<Selection>, TextPos), String> {
+    ) -> Result<CaretWSelect, String> {
         let lines_str: String = lines.join("");
 
         let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str)
@@ -359,11 +354,12 @@ pub mod test_selection {
         if let Some((line, column)) = caret_opt {
             let caret_pos = TextPos { line, column };
             if sel_start_opt.is_none() && sel_end_opt.is_none() {
-                Ok((None, caret_pos))
+                Ok(CaretWSelect::new(caret_pos, None))
             } else if let Some((start_line, start_column)) = sel_start_opt {
                 if let Some((end_line, end_column)) = sel_end_opt {
                     Ok(
-                        (
+                        CaretWSelect::new(
+                            caret_pos,
                             Some(
                                 validate_selection(
                                     TextPos {
@@ -376,7 +372,6 @@ pub mod test_selection {
                                         },
                                 ).unwrap()
                             ),
-                            caret_pos
                         )
                     )
                 } else {
@@ -404,15 +399,15 @@ pub mod test_selection {
             .map(|l| l.to_string())
             .collect();
 
-        let (sel_opt, caret_pos) = convert_dsl_to_selection(&pre_lines)?;
+        let new_caret_w_select = convert_dsl_to_selection(&pre_lines)?;
 
-        let clean_text_buf = text_buffer_from_dsl_str(&pre_lines);
+        let clean_text_buf = big_text_from_dsl_str(&pre_lines);
 
-        let (new_caret_pos, new_sel_opt) =
-            move_fun(caret_pos, sel_opt, shift_pressed, &clean_text_buf)?;
+        let caret_w_select =
+            move_fun(shift_pressed, &clean_text_buf)?;
 
         let mut lines_vec = all_lines_vec(&clean_text_buf, arena);
-        let post_lines_res = convert_selection_to_dsl(new_sel_opt, new_caret_pos, &mut lines_vec);
+        let post_lines_res = convert_selection_to_dsl(caret_w_select, &mut lines_vec);
 
         match post_lines_res {
             Ok(post_lines) => {
@@ -903,6 +898,8 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_right() -> Result<(), String> {
+        let arena = &Bump::new();
+
         assert_move(&["|"], &["|"], true, move_caret_right, arena)?;
         assert_move(&["a|"], &["a|"], true, move_caret_right, arena)?;
         assert_move(&["|A"], &["[A]|"], true, move_caret_right, arena)?;
@@ -918,42 +915,49 @@ pub mod test_selection {
             &["abc\n", "[d]|ef"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "def| "],
             &["abc\n", "def[ ]|"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "def |\n", "ghi"],
             &["abc\n", "def [\n", "]|ghi"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "def|\n", ""],
             &["abc\n", "def[\n", "]|"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             &["abc\n", "def\n", "ghi[\n", "]|jkl"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "|ghi\n", "jkl"],
             &["abc\n", "def\n", "[g]|hi\n", "jkl"],
             true,
             move_caret_right,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "g|hi\n", "jkl"],
             &["abc\n", "def\n", "g[h]|i\n", "jkl"],
             true,
             move_caret_right,
+            arena
         )?;
 
         Ok(())
@@ -961,6 +965,8 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_left() -> Result<(), String> {
+        let arena = &Bump::new();
+
         assert_move(&["|"], &["|"], true, move_caret_left, arena)?;
         assert_move(&["a|"], &["|[a]"], true, move_caret_left, arena)?;
         assert_move(&["|A"], &["|A"], true, move_caret_left, arena)?;
@@ -977,48 +983,56 @@ pub mod test_selection {
             &["abc\n", "|[ ]def"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "d|ef"],
             &["abc\n", "|[d]ef"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "de|f "],
             &["abc\n", "d|[e]f "],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "|"],
             &["abc\n", "def|[\n", "]"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "|ghi\n", "jkl"],
             &["abc\n", "def|[\n", "]ghi\n", "jkl"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "g|hi\n", "jkl"],
             &["abc\n", "def\n", "|[g]hi\n", "jkl"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "gh|i\n", "jkl"],
             &["abc\n", "def\n", "g|[h]i\n", "jkl"],
             true,
             move_caret_left,
+            arena
         )?;
         assert_move(
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             &["abc\n", "def\n", "gh|[i]\n", "jkl"],
             true,
             move_caret_left,
+            arena
         )?;
 
         Ok(())

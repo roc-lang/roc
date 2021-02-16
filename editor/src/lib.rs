@@ -3,9 +3,10 @@
 #![allow(clippy::large_enum_variant)]
 
 extern crate pest;
-#[cfg(test)]
-#[macro_use]
+#[cfg_attr(test, macro_use)]
 extern crate pest_derive;
+#[cfg_attr(test, macro_use)]
+extern crate indoc;
 
 mod graphics;
 mod lang;

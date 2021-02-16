@@ -30,19 +30,23 @@ pub trait SelectableLines {
 
     fn get_selection(&self) -> Option<Selection>;
 
+    fn is_selection_active(&self) -> bool;
+
     fn get_selected_str(&self) -> UIResult<Option<&str>>;
 
     fn set_raw_sel(&mut self, raw_sel: RawSelection) -> UIResult<()>;
+
+    fn set_sel_none(&mut self);
 
     fn last_text_pos(&self) -> TextPos;
 }
 
 pub trait MutSelectableLines {
-    fn insert_char(&mut self, caret_pos: TextPos, new_char: &char) -> UIResult<()>;
+    fn insert_char(&mut self, new_char: &char) -> UIResult<()>;
 
-    fn insert_str(&mut self, caret_pos: TextPos, new_str: &str) -> UIResult<()>;
+    fn insert_str(&mut self, new_str: &str) -> UIResult<()>;
 
-    fn pop_char(&mut self, caret_pos: TextPos);
+    fn pop_char(&mut self);
 
     fn del_selection(&mut self) -> UIResult<()>;
 }

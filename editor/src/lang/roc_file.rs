@@ -95,3 +95,39 @@ impl<'a> File<'a> {
         self.fmt_then_write_to(self.path)
     }
 }
+
+#[cfg(test)]
+mod test_file {
+    use bumpalo::Bump;
+    use std::path::Path;
+    use crate::lang::roc_file;
+
+    #[test]
+    fn read_and_fmt_simple_roc_module() {
+        let simple_module_path = Path::new("./tests/modules/SimpleUnformatted.roc");
+
+        let arena = Bump::new();
+
+        let file = roc_file::File::read(simple_module_path, &arena)
+            .expect("Could not read SimpleUnformatted.roc in test_file test");
+
+        assert_eq!(
+            file.fmt(),
+            indoc!(
+                r#"
+                    interface Simple
+                        exposes [ 
+                        v, x
+                         ]
+                        imports []
+    
+                    v : Str
+                    
+                    v = "Value!"
+
+                    x : Int
+                    x = 4"#
+            )
+        );
+    }
+}

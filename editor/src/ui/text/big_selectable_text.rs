@@ -23,7 +23,7 @@ use std::{
 };
 
 pub struct BigSelectableText {
-    caret_w_select: CaretWSelect,
+    pub caret_w_select: CaretWSelect,
     text_rope: Rope,
     pub path_str: String,
     arena: Bump,
@@ -129,6 +129,10 @@ impl SelectableLines for BigSelectableText {
         self.caret_w_select.selection_opt
     }
 
+    fn is_selection_active(&self) -> bool {
+        self.get_selection().is_some()
+    }
+
     fn get_selected_str(&self) -> UIResult<Option<&str>> {
         if let Some(val_sel) = self.caret_w_select.selection_opt {
             let (start_char_indx, end_char_indx) = self.sel_to_tup(val_sel)?;
@@ -156,17 +160,22 @@ impl SelectableLines for BigSelectableText {
         Ok(())
     }
 
+    fn set_sel_none(&mut self) {
+        self.caret_w_select.selection_opt = None;
+    }
+
     fn last_text_pos(&self) -> TextPos {
         self.char_indx_to_pos(self.nr_of_chars())
     }
 }
 
 impl MutSelectableLines for BigSelectableText {
-    fn insert_char(&mut self, caret_pos: TextPos, new_char: &char) -> UIResult<()> {
-        self.insert_str(caret_pos, &new_char.to_string())
+    fn insert_char(&mut self, new_char: &char) -> UIResult<()> {
+        self.insert_str(&new_char.to_string())
     }
 
-    fn insert_str(&mut self, caret_pos: TextPos, new_str: &str) -> UIResult<()> {
+    fn insert_str(&mut self, new_str: &str) -> UIResult<()> {
+        let caret_pos = self.caret_w_select.caret_pos;
         let char_indx = self.pos_to_char_indx(caret_pos);
 
         self.check_bounds(char_indx)?;
@@ -176,7 +185,8 @@ impl MutSelectableLines for BigSelectableText {
         Ok(())
     }
 
-    fn pop_char(&mut self, caret_pos: TextPos) {
+    fn pop_char(&mut self) {
+        let caret_pos = self.caret_w_select.caret_pos;
         let char_indx = self.pos_to_char_indx(caret_pos);
 
         if (char_indx > 0) && char_indx <= self.text_rope.len_chars() {

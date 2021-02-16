@@ -1,5 +1,5 @@
 use super::ed_model::{EdModel};
-use crate::editor::ed_error::{MissingGlyphDims};
+use crate::ui::ui_error::{MissingGlyphDims};
 use crate::ui::ui_error::UIResult;
 use crate::ui::colors::CARET_COLOR;
 use crate::graphics::primitives::rect::Rect;
@@ -21,7 +21,7 @@ pub fn create_ed_rects<'a>(ed_model: &EdModel, arena: &'a Bump) -> UIResult<Bump
 
     let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
 
-    let selection_opt = ed_model.text.get_selection();
+    let selection_opt = ed_model.text.caret_w_select.selection_opt;
 
     if let Some(selection) = selection_opt {
         let mut selection_rects =
@@ -30,7 +30,8 @@ pub fn create_ed_rects<'a>(ed_model: &EdModel, arena: &'a Bump) -> UIResult<Bump
         all_rects.append(&mut selection_rects);
     }
 
-    all_rects.push(make_caret_rect(ed_model.text.get_caret(), &glyph_rect));
+    let caret_pos = ed_model.text.caret_w_select.caret_pos;
+    all_rects.push(make_caret_rect(caret_pos, &glyph_rect));
 
     Ok(all_rects)
 }

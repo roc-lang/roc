@@ -36,6 +36,9 @@ pub enum UIError {
 
     #[snafu(display("TextBufReadFailed: the file {} could be opened but we encountered the following error while trying to read it: {}.", path_str, err_msg))]
     TextBufReadFailed { path_str: String, err_msg: String },
+
+    #[snafu(display("MissingGlyphDims: glyph_dim_rect_opt was None. It needs to be set using the example_code_glyph_rect function."))]
+    MissingGlyphDims { backtrace: Backtrace },
 }
 
 pub type UIResult<T, E = UIError> = std::result::Result<T, E>;

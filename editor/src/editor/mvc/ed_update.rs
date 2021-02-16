@@ -3,7 +3,7 @@ use crate::ui::text::{
     text_pos::TextPos,
     selection::{RawSelection, Selection, validate_selection},
     big_selectable_text::BigSelectableText,
-    lines::Lines,
+    lines::{Lines, SelectableLines, MutSelectableLines},
     caret_w_select::CaretWSelect,
 };
 use crate::ui::ui_error::UIResult;
@@ -14,7 +14,7 @@ use winit::event::VirtualKeyCode::*;
 use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub type MoveCaretFun =
-    fn(TextPos, Option<Selection>, bool, &BigSelectableText) -> UIResult<CaretWSelect>;
+    fn(bool, &BigSelectableText) -> UIResult<CaretWSelect>;
 
 fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
     Ok(
@@ -26,11 +26,11 @@ fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Sel
 
 // TODO move to BigSelectableText or Lines
 pub fn move_caret_left(
-    old_caret_pos: TextPos,
-    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
     big_text: &BigSelectableText,
 ) -> UIResult<CaretWSelect> {
+    let old_selection_opt = big_text.get_selection();
+    let old_caret_pos = big_text.caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -94,15 +94,15 @@ pub fn move_caret_left(
         None
     };
 
-    Ok((new_caret_pos, new_selection_opt))
+    Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
 pub fn move_caret_right(
-    old_caret_pos: TextPos,
-    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
     big_text: &BigSelectableText,
 ) -> UIResult<CaretWSelect> {
+    let old_selection_opt = big_text.get_selection();
+    let old_caret_pos = big_text.caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -144,7 +144,7 @@ pub fn move_caret_right(
                 } else {
                     validate_sel_opt(
                         new_caret_pos,
-                        end_pos: old_selection.end_pos,
+                        old_selection.end_pos,
                     )?
                 }
             } else {
@@ -174,15 +174,15 @@ pub fn move_caret_right(
         None
     };
 
-    Ok((new_caret_pos, new_selection_opt))
+    Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
 pub fn move_caret_up(
-    old_caret_pos: TextPos,
-    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
     big_text: &BigSelectableText,
 ) -> UIResult<CaretWSelect> {
+    let old_selection_opt = big_text.get_selection();
+    let old_caret_pos = big_text.caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -193,14 +193,14 @@ pub fn move_caret_up(
         }
     } else if old_line_nr == 0 {
         (old_line_nr, 0)
-    } else if let Some(prev_line_len) = big_text.line_len(old_line_nr - 1) {
+    } else {
+        let prev_line_len = big_text.line_len(old_line_nr - 1)?;
+
         if prev_line_len <= old_col_nr {
             (old_line_nr - 1, prev_line_len - 1)
         } else {
             (old_line_nr - 1, old_col_nr)
         }
-    } else {
-        unreachable!()
     };
 
     let new_caret_pos = TextPos {
@@ -220,7 +220,7 @@ pub fn move_caret_up(
                     )?
                 }
             } else {
-                validate_sel_opt( {
+                validate_sel_opt(
                     new_caret_pos,
                     old_selection.end_pos,
                 )?
@@ -237,15 +237,15 @@ pub fn move_caret_up(
         None
     };
 
-    Ok((new_caret_pos, new_selection_opt))
+    Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
 pub fn move_caret_down(
-    old_caret_pos: TextPos,
-    old_selection_opt: Option<Selection>,
     shift_pressed: bool,
     big_text: &BigSelectableText,
 ) -> UIResult<CaretWSelect> {
+    let old_selection_opt = big_text.get_selection();
+    let old_caret_pos = big_text.caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
     let old_col_nr = old_caret_pos.column;
 
@@ -310,150 +310,73 @@ pub fn move_caret_down(
         None
     };
 
-    Ok((new_caret_pos, new_selection_opt))
+    Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
-fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) {
-    let (new_caret_pos, new_selection_opt) = move_caret_fun(
-        ed_model.caret_pos,
-        ed_model.selection_opt,
+fn handle_arrow(move_caret_fun: MoveCaretFun, modifiers: &ModifiersState, ed_model: &mut EdModel) -> UIResult<()> {
+    let new_caret_w_select = move_caret_fun(
         modifiers.shift(),
-        &ed_model.big_text,
-    );
-    ed_model.text.set_caret(new_caret_pos;
-    ed_model.text.set_selection(new_selection_opt);
-}
+        &ed_model.text,
+    )?;
 
-fn del_selection(selection: RawSelection, ed_model: &mut EdModel) -> EdResult<()> {
-    ed_model.text.del_selection(selection)?;
-    ed_model.text.set_caret(selection.start_pos);
+    ed_model.text.caret_w_select = new_caret_w_select;
 
     Ok(())
 }
 
 // TODO move this to impl EdModel
-pub fn handle_select_all(ed_model: &mut EdModel) {
+pub fn handle_select_all(ed_model: &mut EdModel) -> UIResult<()> {
     if ed_model.text.nr_of_chars() > 0 {
-        let last_pos = ed_model.big_text.last_TextPos();
+        let last_pos = ed_model.text.last_text_pos();
 
-        ed_model.selection_opt = validate_sel_opt(
-            TextPos { line: 0, column: 0 },
-            last_pos,
+        ed_model.text.set_raw_sel(
+            RawSelection {
+                start_pos: TextPos { line: 0, column: 0 },
+                end_pos: last_pos,
+            }
         )?;
 
         ed_model.text.set_caret(last_pos);
     }
-}
 
-impl EdModel {
-    pub fn move_caret_w_mods(&mut self, new_pos: TextPos, mods: &ModifiersState) {
-        let caret_pos = self.caret_pos;
-
-        // one does not simply move the caret
-        if new_pos != caret_pos {
-            if mods.shift() {
-                if let Some(selection) = self.selection_opt {
-                    if new_pos < selection.start_pos {
-                        if caret_pos > selection.start_pos {
-                            self.set_selection(
-                                new_pos,
-                                selection.start_pos
-                            )
-                        } else {
-                            self.set_selection(
-                                new_pos,
-                                selection.end_pos
-                            )
-                        }
-                    } else if new_pos > selection.end_pos {
-                        if caret_pos < selection.end_pos {
-                            self.set_selection(
-                                selection.end_pos,
-                                new_pos
-                            )
-                        } else {
-                            self.set_selection(
-                                selection.start_pos,
-                                new_pos
-                            )
-                        }
-                    } else if new_pos > caret_pos {
-                        self.set_selection(
-                            new_pos,
-                            selection.end_pos
-                        )
-                    } else if new_pos < caret_pos {
-                        self.set_selection(
-                            selection.start_pos,
-                            new_pos
-                        )
-                    }
-                } else if new_pos < self.caret_pos {
-                        self.set_selection(
-                            new_pos,
-                            caret_pos
-                        ) 
-                } else {
-                    self.set_selection(
-                        caret_pos,
-                        new_pos
-                    ) 
-                }
-            } else {
-                self.selection_opt = None;
-            }
-
-            self.caret_pos = new_pos;
-        }
-    }
-
-    pub fn set_selection(&mut self, start_pos: TextPos, end_pos: TextPos) {
-        self.selection_opt =
-            if start_pos != end_pos {
-                Some(
-                    RawSelection {
-                        start_pos,
-                        end_pos
-                    }
-                )
-            } else {
-                None
-            }
-    }
+    Ok(())
 }
 
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<()> {
-    let old_caret_pos = ed_model.caret_pos;
+    let old_caret_pos = ed_model.text.caret_w_select.caret_pos;
+
+    // TODO move this to ui folder
 
     match received_char {
         '\u{8}' | '\u{7f}' => {
             // On Linux, '\u{8}' is backspace,
             // on macOS '\u{7f}'.
-            if let Some(selection) = ed_model.selection_opt {
-                del_selection(selection, ed_model)?;
-            } else {
-                ed_model.caret_pos =
-                    move_caret_left(old_caret_pos, None, false, &ed_model.big_text).0;
 
-                ed_model.big_text.pop_char(old_caret_pos);
+            if ed_model.text.is_selection_active() {
+                ed_model.text.del_selection()?;
+            } else {
+                ed_model.text.caret_w_select =
+                    move_caret_left(false, &ed_model.text)?;
+
+                ed_model.text.pop_char();
             }
 
-            ed_model.selection_opt = None;
+            ed_model.text.set_sel_none();
         }
         ch if is_newline(ch) => {
-            if let Some(selection) = ed_model.selection_opt {
-                del_selection(selection, ed_model)?;
-                ed_model.big_text.insert_char(ed_model.caret_pos, &'\n')?;
+            if let Some(selection) = ed_model.text.get_selection() {
+                ed_model.text.del_selection()?;
+                ed_model.text.insert_char(&'\n')?;
             } else {
-                ed_model.big_text.insert_char(old_caret_pos, &'\n')?;
+                ed_model.text.insert_char(&'\n')?;
 
-                ed_model.caret_pos = TextPos {
+                ed_model.text.set_caret(TextPos {
                     line: old_caret_pos.line + 1,
                     column: 0,
-                };
+                });
             }
 
-            ed_model.selection_opt = None;
+            ed_model.text.set_sel_none();
         }
         '\u{1}' // Ctrl + A
         | '\u{3}' // Ctrl + C
@@ -466,26 +389,29 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
             // chars that can be ignored
         }
         _ => {
-            if let Some(selection) = ed_model.selection_opt {
-                del_selection(selection, ed_model)?;
+            if let Some(selection) = ed_model.text.get_selection() {
+                ed_model.text.del_selection()?;
                 ed_model
-                    .big_text
-                    .insert_char(ed_model.caret_pos, received_char)?;
+                    .text
+                    .insert_char(received_char)?;
 
-                ed_model.caret_pos =
-                    move_caret_right(ed_model.caret_pos, None, false, &ed_model.big_text).0;
+                ed_model.text.set_caret(
+                    move_caret_right(false, &ed_model.text)?.caret_pos
+                );
             } else {
                 ed_model
-                    .big_text
-                    .insert_char(old_caret_pos, received_char)?;
+                    .text
+                    .insert_char(received_char)?;
 
-                ed_model.caret_pos = TextPos {
-                    line: old_caret_pos.line,
-                    column: old_caret_pos.column + 1,
-                };
+                ed_model.text.set_caret(
+                    TextPos {
+                        line: old_caret_pos.line,
+                        column: old_caret_pos.column + 1,
+                    }
+                );
             }
 
-            ed_model.selection_opt = None;
+            ed_model.text.set_sel_none();
         }
     }
 
@@ -496,7 +422,7 @@ pub fn handle_key_down(
     modifiers: &ModifiersState,
     virtual_keycode: VirtualKeyCode,
     ed_model: &mut EdModel,
-) {
+) -> UIResult<()> {
     match virtual_keycode {
         Left => handle_arrow(move_caret_left, modifiers, ed_model),
         Up => handle_arrow(move_caret_up, modifiers, ed_model),
@@ -506,12 +432,14 @@ pub fn handle_key_down(
         A => {
             if modifiers.ctrl() {
                 handle_select_all(ed_model)
+            } else {
+                Ok(())
             }
         }
         Home => {
-            let curr_line_nr = ed_model.caret_pos.line;
+            let curr_line_nr = ed_model.text.caret_w_select.caret_pos.line;
             // TODO no unwrap
-            let curr_line_str = ed_model.big_text.line(curr_line_nr).unwrap();
+            let curr_line_str = ed_model.text.get_line(curr_line_nr).unwrap();
             let line_char_iter = curr_line_str.chars();
 
             let mut first_no_space_char_col = 0;
@@ -530,21 +458,21 @@ pub fn handle_key_down(
                 first_no_space_char_col = 0;
             }
 
-            ed_model.move_caret_w_mods(
+            ed_model.text.caret_w_select.move_caret_w_mods(
                 TextPos {
-                    line: ed_model.caret_pos.line,
+                    line: ed_model.text.caret_w_select.caret_pos.line,
                     column: first_no_space_char_col
                 },
                 modifiers
             )
         }
         End => {
-            let curr_line = ed_model.caret_pos.line;
+            let curr_line = ed_model.text.caret_w_select.caret_pos.line;
             // TODO no unwrap
             let new_col = 
                 max(
                         0,
-                        ed_model.big_text.line_len(curr_line).unwrap() - 1
+                        ed_model.text.line_len(curr_line).unwrap() - 1
                     );
 
             let new_pos =
@@ -553,50 +481,53 @@ pub fn handle_key_down(
                     column: new_col
                 };
 
-            ed_model.move_caret_w_mods(new_pos, modifiers);
+            ed_model.text.caret_w_select.move_caret_w_mods(new_pos, modifiers)
         }
-        _ => {}
+        _ => Ok(())
     }
 }
 
 #[cfg(test)]
 pub mod test_ed_update {
     use crate::editor::mvc::app_update::test_app_update::mock_app_model;
-    use crate::editor::mvc::ed_model::{TextPos, RawSelection};
     use crate::editor::mvc::ed_update::{handle_new_char, handle_select_all};
-    use crate::selection::test_selection::{
-        all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, big_textfer_from_dsl_str,
+    use crate::ui::text::{
+        text_pos::TextPos,
+        selection::RawSelection,
+        big_selectable_text::BigSelectableText,
     };
-    use crate::ui::text::big_selectable_text::BigSelectableText;
+    use crate::ui::text::selection::test_selection::{
+        all_lines_vec, convert_dsl_to_selection, convert_selection_to_dsl, big_text_from_dsl_str,
+    };
+    use bumpalo::Bump;
 
-    pub fn gen_caret_big_text(
+    pub fn gen_big_text(
         lines: &[&str],
-    ) -> Result<(TextPos, Option<Selection>, BigSelectableText), String> {
+    ) -> Result<BigSelectableText, String> {
         let lines_string_slice: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        let (selection_opt, caret_pos) = convert_dsl_to_selection(&lines_string_slice)?;
-        let big_text = big_textfer_from_dsl_str(&lines_string_slice);
+        let big_text = big_text_from_dsl_str(&lines_string_slice);
 
-        Ok((caret_pos, selection_opt, big_text))
+        Ok(big_text)
     }
 
     fn assert_insert(
         pre_lines_str: &[&str],
         expected_post_lines_str: &[&str],
         new_char: char,
+        arena: &Bump,
     ) -> Result<(), String> {
-        let (caret_pos, selection_opt, pre_big_text) = gen_caret_big_text(pre_lines_str)?;
+        let pre_big_text = gen_big_text(pre_lines_str)?;
 
-        let app_model = mock_app_model(pre_big_text, caret_pos, selection_opt, None);
+        let app_model = mock_app_model(pre_big_text, None);
         let mut ed_model = app_model.ed_model_opt.unwrap();
 
         if let Err(e) = handle_new_char(&new_char, &mut ed_model) {
             return Err(e.to_string());
         }
 
-        let mut actual_lines = all_lines_vec(&ed_model.big_text);
+        let mut actual_lines = all_lines_vec(&ed_model.text, arena);
         let dsl_slice = convert_selection_to_dsl(
-            ed_model.selection_opt,
-            ed_model.caret_pos,
+            ed_model.text.caret_w_select,
             &mut actual_lines,
         )
         .unwrap();
@@ -607,75 +538,87 @@ pub mod test_ed_update {
 
     #[test]
     fn insert_new_char_simple() -> Result<(), String> {
-        assert_insert(&["|"], &["a|"], 'a')?;
-        assert_insert(&["|"], &[" |"], ' ')?;
-        assert_insert(&["a|"], &["aa|"], 'a')?;
-        assert_insert(&["a|"], &["a |"], ' ')?;
-        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
-        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
-        assert_insert(&["a\n", "|"], &["a\n", "b|"], 'b')?;
-        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "cd|"], 'd')?;
+        let arena = &Bump::new();
+
+        assert_insert(&["|"], &["a|"], 'a', arena)?;
+        assert_insert(&["|"], &[" |"], ' ', arena)?;
+        assert_insert(&["a|"], &["aa|"], 'a', arena)?;
+        assert_insert(&["a|"], &["a |"], ' ', arena)?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b', arena)?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b', arena)?;
+        assert_insert(&["a\n", "|"], &["a\n", "b|"], 'b', arena)?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "cd|"], 'd', arena)?;
 
         Ok(())
     }
 
     #[test]
     fn insert_new_char_mid() -> Result<(), String> {
-        assert_insert(&["ab|d"], &["abc|d"], 'c')?;
-        assert_insert(&["a|cd"], &["ab|cd"], 'b')?;
-        assert_insert(&["abc\n", "|e"], &["abc\n", "d|e"], 'd')?;
-        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", "g| "], 'g')?;
-        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", " | "], ' ')?;
+        let arena = &Bump::new();
+
+        assert_insert(&["ab|d"], &["abc|d"], 'c', arena)?;
+        assert_insert(&["a|cd"], &["ab|cd"], 'b', arena)?;
+        assert_insert(&["abc\n", "|e"], &["abc\n", "d|e"], 'd', arena)?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", "g| "], 'g', arena)?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", " | "], ' ', arena)?;
 
         Ok(())
     }
 
     #[test]
     fn simple_backspace() -> Result<(), String> {
-        assert_insert(&["|"], &["|"], '\u{8}')?;
-        assert_insert(&[" |"], &["|"], '\u{8}')?;
-        assert_insert(&["a|"], &["|"], '\u{8}')?;
-        assert_insert(&["ab|"], &["a|"], '\u{8}')?;
-        assert_insert(&["a|\n", ""], &["|\n", ""], '\u{8}')?;
-        assert_insert(&["ab|\n", ""], &["a|\n", ""], '\u{8}')?;
-        assert_insert(&["a\n", "|"], &["a|"], '\u{8}')?;
-        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "|"], '\u{8}')?;
-        assert_insert(&["a\n", "b\n", "|"], &["a\n", "b|"], '\u{8}')?;
+        let arena = &Bump::new();
+
+        assert_insert(&["|"], &["|"], '\u{8}', arena)?;
+        assert_insert(&[" |"], &["|"], '\u{8}', arena)?;
+        assert_insert(&["a|"], &["|"], '\u{8}', arena)?;
+        assert_insert(&["ab|"], &["a|"], '\u{8}', arena)?;
+        assert_insert(&["a|\n", ""], &["|\n", ""], '\u{8}', arena)?;
+        assert_insert(&["ab|\n", ""], &["a|\n", ""], '\u{8}', arena)?;
+        assert_insert(&["a\n", "|"], &["a|"], '\u{8}', arena)?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "|"], '\u{8}', arena)?;
+        assert_insert(&["a\n", "b\n", "|"], &["a\n", "b|"], '\u{8}', arena)?;
 
         Ok(())
     }
 
     #[test]
     fn selection_backspace() -> Result<(), String> {
-        assert_insert(&["[a]|"], &["|"], '\u{8}')?;
-        assert_insert(&["a[a]|"], &["a|"], '\u{8}')?;
-        assert_insert(&["[aa]|"], &["|"], '\u{8}')?;
-        assert_insert(&["a[b c]|"], &["a|"], '\u{8}')?;
-        assert_insert(&["[abc]|\n", ""], &["|\n", ""], '\u{8}')?;
-        assert_insert(&["a\n", "[abc]|"], &["a\n", "|"], '\u{8}')?;
-        assert_insert(&["[a\n", "abc]|"], &["|"], '\u{8}')?;
-        assert_insert(&["a[b\n", "cdef ghij]|"], &["a|"], '\u{8}')?;
-        assert_insert(&["[a\n", "b\n", "c]|"], &["|"], '\u{8}')?;
-        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "|"], '\u{8}')?;
+        let arena = &Bump::new();
+
+        assert_insert(&["[a]|"], &["|"], '\u{8}', arena)?;
+        assert_insert(&["a[a]|"], &["a|"], '\u{8}', arena)?;
+        assert_insert(&["[aa]|"], &["|"], '\u{8}', arena)?;
+        assert_insert(&["a[b c]|"], &["a|"], '\u{8}', arena)?;
+        assert_insert(&["[abc]|\n", ""], &["|\n", ""], '\u{8}', arena)?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "|"], '\u{8}', arena)?;
+        assert_insert(&["[a\n", "abc]|"], &["|"], '\u{8}', arena)?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["a|"], '\u{8}', arena)?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["|"], '\u{8}', arena)?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "|"], '\u{8}', arena)?;
         assert_insert(
             &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
             &["abc\n", "d|\n", "jkl"],
             '\u{8}',
+            arena,
         )?;
         assert_insert(
             &["abc\n", "[def\n", "ghi]|\n", "jkl"],
             &["abc\n", "|\n", "jkl"],
             '\u{8}',
+            arena,
         )?;
         assert_insert(
             &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
             &["abc\n", "\n", "|\n", "jkl"],
             '\u{8}',
+            arena,
         )?;
         assert_insert(
             &["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"],
             &["|"],
             '\u{8}',
+            arena,
         )?;
 
         Ok(())
@@ -683,32 +626,37 @@ pub mod test_ed_update {
 
     #[test]
     fn insert_with_selection() -> Result<(), String> {
-        assert_insert(&["[a]|"], &["z|"], 'z')?;
-        assert_insert(&["a[a]|"], &["az|"], 'z')?;
-        assert_insert(&["[aa]|"], &["z|"], 'z')?;
-        assert_insert(&["a[b c]|"], &["az|"], 'z')?;
-        assert_insert(&["[abc]|\n", ""], &["z|\n", ""], 'z')?;
-        assert_insert(&["a\n", "[abc]|"], &["a\n", "z|"], 'z')?;
-        assert_insert(&["[a\n", "abc]|"], &["z|"], 'z')?;
-        assert_insert(&["a[b\n", "cdef ghij]|"], &["az|"], 'z')?;
-        assert_insert(&["[a\n", "b\n", "c]|"], &["z|"], 'z')?;
-        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "z|"], 'z')?;
+        let arena = &Bump::new();
+
+        assert_insert(&["[a]|"], &["z|"], 'z', arena)?;
+        assert_insert(&["a[a]|"], &["az|"], 'z', arena)?;
+        assert_insert(&["[aa]|"], &["z|"], 'z', arena)?;
+        assert_insert(&["a[b c]|"], &["az|"], 'z', arena)?;
+        assert_insert(&["[abc]|\n", ""], &["z|\n", ""], 'z', arena)?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "z|"], 'z', arena)?;
+        assert_insert(&["[a\n", "abc]|"], &["z|"], 'z', arena)?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["az|"], 'z', arena)?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["z|"], 'z', arena)?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "z|"], 'z', arena)?;
         assert_insert(
             &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
             &["abc\n", "dz|\n", "jkl"],
             'z',
+            arena,
         )?;
         assert_insert(
             &["abc\n", "[def\n", "ghi]|\n", "jkl"],
             &["abc\n", "z|\n", "jkl"],
             'z',
+            arena,
         )?;
         assert_insert(
             &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
             &["abc\n", "\n", "z|\n", "jkl"],
             'z',
+            arena,
         )?;
-        assert_insert(&["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["z|"], 'z')?;
+        assert_insert(&["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["z|"], 'z', arena)?;
 
         Ok(())
     }
@@ -716,18 +664,18 @@ pub mod test_ed_update {
     fn assert_select_all(
         pre_lines_str: &[&str],
         expected_post_lines_str: &[&str],
+        arena: &Bump,
     ) -> Result<(), String> {
-        let (caret_pos, selection_opt, pre_big_text) = gen_caret_big_text(pre_lines_str)?;
+        let pre_big_text = gen_big_text(pre_lines_str)?;
 
-        let app_model = mock_app_model(pre_big_text, caret_pos, selection_opt, None);
+        let app_model = mock_app_model(pre_big_text, None);
         let mut ed_model = app_model.ed_model_opt.unwrap();
 
         handle_select_all(&mut ed_model);
 
-        let mut big_text_lines = all_lines_vec(&ed_model.big_text);
+        let mut big_text_lines = all_lines_vec(&ed_model.text, arena);
         let post_lines_str = convert_selection_to_dsl(
-            ed_model.selection_opt,
-            ed_model.caret_pos,
+            ed_model.text.caret_w_select,
             &mut big_text_lines,
         )?;
 
@@ -738,23 +686,27 @@ pub mod test_ed_update {
 
     #[test]
     fn select_all() -> Result<(), String> {
-        assert_select_all(&["|"], &["|"])?;
-        assert_select_all(&["|a"], &["[a]|"])?;
-        assert_select_all(&["a|"], &["[a]|"])?;
-        assert_select_all(&["abc d|ef ghi"], &["[abc def ghi]|"])?;
-        assert_select_all(&["[a]|"], &["[a]|"])?;
-        assert_select_all(&["|[a]"], &["[a]|"])?;
-        assert_select_all(&["|[abc def ghi]"], &["[abc def ghi]|"])?;
-        assert_select_all(&["a\n", "[b\n", "]|"], &["[a\n", "b\n", "]|"])?;
-        assert_select_all(&["a\n", "[b]|\n", ""], &["[a\n", "b\n", "]|"])?;
-        assert_select_all(&["a\n", "|[b\n", "]"], &["[a\n", "b\n", "]|"])?;
+        let arena = &Bump::new();
+
+        assert_select_all(&["|"], &["|"], arena)?;
+        assert_select_all(&["|a"], &["[a]|"], arena)?;
+        assert_select_all(&["a|"], &["[a]|"], arena)?;
+        assert_select_all(&["abc d|ef ghi"], &["[abc def ghi]|"], arena)?;
+        assert_select_all(&["[a]|"], &["[a]|"], arena)?;
+        assert_select_all(&["|[a]"], &["[a]|"], arena)?;
+        assert_select_all(&["|[abc def ghi]"], &["[abc def ghi]|"], arena)?;
+        assert_select_all(&["a\n", "[b\n", "]|"], &["[a\n", "b\n", "]|"], arena)?;
+        assert_select_all(&["a\n", "[b]|\n", ""], &["[a\n", "b\n", "]|"], arena)?;
+        assert_select_all(&["a\n", "|[b\n", "]"], &["[a\n", "b\n", "]|"], arena)?;
         assert_select_all(
             &["abc\n", "def\n", "gh|i\n", "jkl"],
             &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            arena,
         )?;
         assert_select_all(
             &["|[abc\n", "def\n", "ghi\n", "jkl]"],
             &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            arena,
         )?;
 
         Ok(())
