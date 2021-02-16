@@ -1620,8 +1620,8 @@ fn to_diff<'b>(
 
         pair => {
             // We hit none of the specific cases where we give more detailed information
-            let left = to_doc(alloc, Parens::Unnecessary, type1);
-            let right = to_doc(alloc, Parens::Unnecessary, type2);
+            let left = to_doc(alloc, parens, type1);
+            let right = to_doc(alloc, parens, type2);
 
             let is_int = |t: &ErrorType| match t {
                 ErrorType::Type(Symbol::NUM_INT, _) => true,

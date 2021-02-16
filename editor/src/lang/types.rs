@@ -4,13 +4,14 @@
 use crate::lang::expr::Env;
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::scope::Scope;
+use inlinable_string::InlinableString;
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
-use roc_types::subs::Variable;
 use roc_types::types::{Problem, RecordField};
+use roc_types::{subs::Variable, types::ErrorType};
 
 pub type TypeId = NodeId<Type2>;
 
@@ -29,16 +30,32 @@ pub enum Type2 {
     },
 
     EmptyTagUnion,
-    TagUnion(PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId),
-    RecursiveTagUnion(Variable, PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId),
+    TagUnion(PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 12B = 8B + 4B
+    RecursiveTagUnion(Variable, PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 16B = 4B + 8B + 4B
 
     EmptyRec,
-    Record(PoolVec<(PoolStr, RecordField<Type2>)>, TypeId),
+    Record(PoolVec<(PoolStr, RecordField<Type2>)>, TypeId), // 12B = 8B + 4B
 
     Function(PoolVec<Type2>, TypeId, TypeId), // 16B = 8B + 4B + 4B
     Apply(Symbol, PoolVec<Type2>),            // 16B = 8B + 8B
 
-    Erroneous(roc_types::types::Problem),
+    Erroneous(Problem2),
+}
+
+#[derive(Debug)]
+pub enum Problem2 {
+    CanonicalizationProblem,
+    CircularType(Symbol, NodeId<ErrorType>), // 12B = 8B + 4B
+    CyclicAlias(Symbol, PoolVec<Symbol>),    // 16B = 8B + 8B
+    UnrecognizedIdent(PoolStr),              // 8B
+    Shadowed(Located<PoolStr>),
+    BadTypeArguments {
+        symbol: Symbol,  // 8B
+        type_got: u8,    // 1B
+        alias_needs: u8, // 1B
+    },
+    InvalidModule,
+    SolvedTypeError,
 }
 
 impl ShallowClone for Type2 {
@@ -309,7 +326,10 @@ pub fn to_type2<'a>(
                     references.symbols.insert(symbol);
                     Type2::Alias(symbol, args, actual)
                 }
-                TypeApply::Erroneous(problem) => Type2::Erroneous(problem),
+                TypeApply::Erroneous(_problem) => {
+                    // Type2::Erroneous(problem)
+                    todo!()
+                }
             }
         }
         Function(argument_types, return_type) => {
@@ -405,15 +425,16 @@ pub fn to_type2<'a>(
                     ) {
                         Ok(symbol) => symbol,
 
-                        Err((original_region, shadow)) => {
-                            let problem = Problem::Shadowed(original_region, shadow.clone());
+                        Err((_original_region, _shadow)) => {
+                            // let problem = Problem2::Shadowed(original_region, shadow.clone());
 
-                            env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
-                                original_region,
-                                shadow,
-                            });
+                            // env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                            //     original_region,
+                            //     shadow,
+                            // });
 
-                            return Type2::Erroneous(problem);
+                            // return Type2::Erroneous(problem);
+                            todo!();
                         }
                     };
 
@@ -455,7 +476,7 @@ pub fn to_type2<'a>(
                             _ => {
                                 // If anything other than a lowercase identifier
                                 // appears here, the whole annotation is invalid.
-                                return Type2::Erroneous(Problem::CanonicalizationProblem);
+                                return Type2::Erroneous(Problem2::CanonicalizationProblem);
                             }
                         }
                     }
@@ -510,7 +531,7 @@ pub fn to_type2<'a>(
                 }
                 _ => {
                     // This is a syntactically invalid type alias.
-                    Type2::Erroneous(Problem::CanonicalizationProblem)
+                    Type2::Erroneous(Problem2::CanonicalizationProblem)
                 }
             }
         }

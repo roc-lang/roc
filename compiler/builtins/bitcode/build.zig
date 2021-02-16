@@ -4,6 +4,7 @@ const mem = std.mem;
 const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
+    // b.setPreferredReleaseMode(builtin.Mode.Debug);
     b.setPreferredReleaseMode(builtin.Mode.ReleaseFast);
     const mode = b.standardReleaseOptions();
 
@@ -27,6 +28,7 @@ pub fn build(b: *Builder) void {
     llvm_obj.strip = true;
     llvm_obj.emit_llvm_ir = true;
     llvm_obj.emit_bin = false;
+    llvm_obj.bundle_compiler_rt = true;
     const ir = b.step("ir", "Build LLVM ir");
     ir.dependOn(&llvm_obj.step);
 
