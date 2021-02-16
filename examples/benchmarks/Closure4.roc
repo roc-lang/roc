@@ -1,4 +1,4 @@
-app "closure1"
+app "closure4"
     packages { base: "platform" }
     imports [base.Task]
     provides [ main ] to base
@@ -7,9 +7,10 @@ app "closure1"
 
 main : Task.Task {} []
 main =
-    Task.succeed (foo toUnitBorrowed "a long string such that it's malloced")
+    x : Str
+    x = "a long string such that it's malloced"
+
+    Task.succeed {}
+        |> Task.after (\_ -> Task.succeed x) 
         |> Task.map (\_ -> {})
-
-toUnitBorrowed = \x -> Str.countGraphemes x
-
-foo = \f, x -> f x
+        
