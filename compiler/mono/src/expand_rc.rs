@@ -227,7 +227,11 @@ fn layout_for_constructor<'a>(
             debug_assert_eq!(constructor, 0);
             HasFields(fields)
         }
-        _ => unreachable!(),
+        Closure(_, _, _) => {
+            // TODO can we somehow get the to the fields reliably?
+            Unknown
+        }
+        other => unreachable!("weird layout {:?}", other),
     }
 }
 
