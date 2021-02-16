@@ -17,7 +17,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -5505,7 +5505,13 @@ fn reuse_function_symbol<'a>(
                         }
                     }
 
-                    let expr = Expr::FunctionPointer(original, function_ptr_layout.clone());
+                    let expr = call_by_pointer(
+                        env,
+                        procs,
+                        layout_cache,
+                        original,
+                        function_ptr_layout.clone(),
+                    );
 
                     stmt = Stmt::Let(
                         function_pointer,
@@ -5527,7 +5533,7 @@ fn reuse_function_symbol<'a>(
 
                     Stmt::Let(
                         symbol,
-                        Expr::FunctionPointer(original, layout.clone()),
+                        call_by_pointer(env, procs, layout_cache, original, layout.clone()),
                         layout,
                         env.arena.alloc(result),
                     )
@@ -5611,11 +5617,13 @@ fn call_by_pointer<'a>(
     symbol: Symbol,
     layout: Layout<'a>,
 ) -> Expr<'a> {
+    let other = env.unique_symbol();
+
     procs
         .passed_by_pointer
-        .insert((symbol, layout.clone()), symbol);
+        .insert((symbol, layout.clone()), other);
 
-    Expr::FunctionPointer(symbol, layout)
+    Expr::FunctionPointer(other, layout)
 }
 
 fn add_needed_external<'a>(

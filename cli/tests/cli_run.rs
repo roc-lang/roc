@@ -209,6 +209,18 @@ mod cli_run {
         );
     }
 
+    #[test]
+    #[serial(closure_borrowed)]
+    fn run_closure_borrowed_not_optimized() {
+        check_output(
+            &example_file("benchmarks", "ClosureBorrowed.roc"),
+            "closure-borrowed",
+            &[],
+            "",
+            true,
+        );
+    }
+
     //    #[test]
     //    #[serial(effect)]
     //    fn run_effect_unoptimized() {
