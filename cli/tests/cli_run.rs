@@ -13,6 +13,7 @@ mod helpers;
 mod cli_run {
     use crate::helpers::{
         example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
+        ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
     use std::path::Path;
@@ -59,8 +60,39 @@ mod cli_run {
                     panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
                 });
 
+                // #[derive(Debug, Deserialize, Clone)]
+                // pub struct ValgrindError {
+                //     kind: String,
+                //     #[serde(default)]
+                //     what: Option<String>,
+                //     #[serde(default)]
+                //     xwhat: Option<ValgrindErrorXWhat>,
+                // }
+                //
+                // #[derive(Debug, Deserialize, Clone)]
+                // pub struct ValgrindErrorXWhat {
+                //     text: String,
+                //     #[serde(default)]
+                //     leakedbytes: Option<isize>,
+                //     #[serde(default)]
+                //     leakedblocks: Option<isize>,
+                // }
+
                 if !memory_errors.is_empty() {
-                    panic!("{:?}", memory_errors);
+                    for error in memory_errors {
+                        let ValgrindError { kind, what, xwhat } = error;
+                        println!("Valgrind Error: {}\n", kind);
+
+                        if let Some(ValgrindErrorXWhat {
+                            text,
+                            leakedbytes: _,
+                            leakedblocks: _,
+                        }) = xwhat
+                        {
+                            println!("    {}", text);
+                        }
+                    }
+                    panic!("Valgrind reported memory errors");
                 }
             } else {
                 let exit_code = match valgrind_out.status.code() {
