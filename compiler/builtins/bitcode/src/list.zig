@@ -153,7 +153,7 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
-        var output = list.makeUnique(std.heap.c_allocator, alignment, list.len() * element_width);
+        var output = RocList.allocate(std.heap.c_allocator, alignment, list.len(), list.len() * element_width);
         const target_ptr = output.bytes orelse unreachable;
 
         var kept: usize = 0;
