@@ -2,6 +2,13 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// List Module
+const list = @import("list.zig");
+
+comptime {
+    exportListFn(list.listMap, "map");
+}
+
 // Dict Module
 const dict = @import("dict.zig");
 const hash = @import("hash.zig");
@@ -65,6 +72,10 @@ fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dict." ++ func_name);
+}
+
+fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "list." ++ func_name);
 }
 
 // Run all tests in imported modules

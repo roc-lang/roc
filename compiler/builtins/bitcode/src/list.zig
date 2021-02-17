@@ -1,15 +1,19 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const mem = std.mem;
+const Allocator = mem.Allocator;
+
+const Opaque = ?[*]u8;
 
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
 
-    pub fn len(self: RocDict) usize {
+    pub fn len(self: RocList) usize {
         return self.length;
     }
 
-    pub fn isEmpty(self: RocDict) bool {
+    pub fn isEmpty(self: RocList) bool {
         return self.len() == 0;
     }
 
@@ -17,7 +21,7 @@ pub const RocList = extern struct {
         return RocList{ .bytes = null, .length = 0 };
     }
 
-    pub fn isUnique(self: RocDict) bool {
+    pub fn isUnique(self: RocList) bool {
         // the empty list is unique (in the sense that copying it will not leak memory)
         if (self.isEmpty()) {
             return true;
@@ -101,3 +105,23 @@ pub const RocList = extern struct {
         return result;
     }
 };
+
+const ListMapCaller = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+pub fn listMap(list: RocList, transform: Opaque, caller: ListMapCaller, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        var i: usize = 0;
+        const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        while (i < size) : (i += 1) {
+            caller(transform, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+        }
+
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}

@@ -3630,18 +3630,16 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let inplace = get_inplace_from_layout(layout);
-
-            list_map(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_map(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListKeepIf => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
