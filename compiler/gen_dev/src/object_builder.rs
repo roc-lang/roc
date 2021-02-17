@@ -2,7 +2,7 @@ use crate::generic64::{aarch64, x86_64, Backend64Bit};
 use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use object::write;
-use object::write::{Object, StandardSection, Symbol, SymbolSection};
+use object::write::{Object, StandardSection, StandardSegment, Symbol, SymbolSection};
 use object::{
     Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
     SymbolFlags, SymbolKind, SymbolScope,
@@ -71,7 +71,6 @@ fn build_object<'a, B: Backend<'a>>(
     mut backend: B,
     mut output: Object,
 ) -> Result<Object, String> {
-    let text = output.section_id(StandardSection::Text);
     let data_section = output.section_id(StandardSection::Data);
     let comment = output.add_section(vec![], b"comment".to_vec(), SectionKind::OtherString);
     output.append_section_data(
@@ -88,6 +87,12 @@ fn build_object<'a, B: Backend<'a>>(
             .get(sym, &layout)
             .to_symbol_string(sym, &env.interns);
 
+        let section_id = output.add_section(
+            output.segment_name(StandardSegment::Text).to_vec(),
+            format!(".text.{}", fn_name).as_bytes().to_vec(),
+            SectionKind::Text,
+        );
+
         let proc_symbol = Symbol {
             name: fn_name.as_bytes().to_vec(),
             value: 0,
@@ -101,19 +106,19 @@ fn build_object<'a, B: Backend<'a>>(
                 SymbolScope::Linkage
             },
             weak: false,
-            section: SymbolSection::Section(text),
+            section: SymbolSection::Section(section_id),
             flags: SymbolFlags::None,
         };
         let proc_id = output.add_symbol(proc_symbol);
-        procs.push((fn_name, proc_id, proc));
+        procs.push((fn_name, section_id, proc_id, proc));
     }
 
     // Build procedures.
     let mut relocations = bumpalo::vec![in env.arena];
-    for (fn_name, proc_id, proc) in procs {
+    for (fn_name, section_id, proc_id, proc) in procs {
         let mut local_data_index = 0;
         let (proc_data, relocs) = backend.build_proc(proc)?;
-        let proc_offset = output.add_symbol_data(proc_id, text, proc_data, 16);
+        let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
         for reloc in relocs {
             let elfreloc = match reloc {
                 Relocation::LocalData { offset, data } => {
@@ -126,7 +131,7 @@ fn build_object<'a, B: Backend<'a>>(
                         kind: SymbolKind::Data,
                         scope: SymbolScope::Compilation,
                         weak: false,
-                        section: write::SymbolSection::Section(data_section),
+                        section: SymbolSection::Section(data_section),
                         flags: SymbolFlags::None,
                     };
                     local_data_index += 1;
@@ -152,10 +157,26 @@ fn build_object<'a, B: Backend<'a>>(
                             addend: -4,
                         }
                     } else {
-                        return Err(format!("failed to find symbol for {:?}", name));
+                        return Err(format!("failed to find data symbol for {:?}", name));
                     }
                 }
                 Relocation::LinkedFunction { offset, name } => {
+                    // If the symbol is an undefined zig builtin, we need to add it here.
+                    if output.symbol_id(name.as_bytes()) == None
+                        && name.starts_with("roc_builtins.")
+                    {
+                        let builtin_symbol = Symbol {
+                            name: name.as_bytes().to_vec(),
+                            value: 0,
+                            size: 0,
+                            kind: SymbolKind::Text,
+                            scope: SymbolScope::Linkage,
+                            weak: false,
+                            section: SymbolSection::Undefined,
+                            flags: SymbolFlags::None,
+                        };
+                        output.add_symbol(builtin_symbol);
+                    }
                     if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                         write::Relocation {
                             offset: offset + proc_offset,
@@ -166,16 +187,16 @@ fn build_object<'a, B: Backend<'a>>(
                             addend: -4,
                         }
                     } else {
-                        return Err(format!("failed to find symbol for {:?}", name));
+                        return Err(format!("failed to find fn symbol for {:?}", name));
                     }
                 }
             };
-            relocations.push(elfreloc);
+            relocations.push((section_id, elfreloc));
         }
     }
-    for reloc in relocations {
+    for (section_id, reloc) in relocations {
         output
-            .add_relocation(text, reloc)
+            .add_relocation(section_id, reloc)
             .map_err(|e| format!("{:?}", e))?;
     }
     Ok(output)
