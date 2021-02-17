@@ -3,6 +3,7 @@
 #![allow(clippy::large_enum_variant)]
 
 use bumpalo::{collections::Vec, Bump};
+use roc_builtins::bitcode;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
@@ -166,21 +167,33 @@ where
                         ret_layout,
                         ..
                     } => {
+                        // For most builtins instead of calling a function, we can just inline the low level.
                         match *func_sym {
                             Symbol::NUM_ABS => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumAbs, arguments, layout)
                             }
                             Symbol::NUM_ADD => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumAdd, arguments, layout)
                             }
+                            Symbol::NUM_ACOS => {
+                                self.build_run_low_level(sym, &LowLevel::NumAcos, arguments, layout)
+                            }
+                            Symbol::NUM_ASIN => {
+                                self.build_run_low_level(sym, &LowLevel::NumAsin, arguments, layout)
+                            }
+                            Symbol::NUM_ATAN => {
+                                self.build_run_low_level(sym, &LowLevel::NumAtan, arguments, layout)
+                            }
+                            Symbol::NUM_POW_INT => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumPowInt,
+                                arguments,
+                                layout,
+                            ),
                             Symbol::NUM_SUB => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
                             }
                             Symbol::BOOL_EQ => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::Eq, arguments, layout)
                             }
                             x if x
@@ -239,6 +252,34 @@ where
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
+            LowLevel::NumAcos => self.build_fn_call(
+                sym,
+                bitcode::NUM_ACOS.to_string(),
+                args,
+                &[layout.clone()],
+                layout,
+            ),
+            LowLevel::NumAsin => self.build_fn_call(
+                sym,
+                bitcode::NUM_ASIN.to_string(),
+                args,
+                &[layout.clone()],
+                layout,
+            ),
+            LowLevel::NumAtan => self.build_fn_call(
+                sym,
+                bitcode::NUM_ATAN.to_string(),
+                args,
+                &[layout.clone()],
+                layout,
+            ),
+            LowLevel::NumPowInt => self.build_fn_call(
+                sym,
+                bitcode::NUM_POW_INT.to_string(),
+                args,
+                &[layout.clone(), layout.clone()],
+                layout,
+            ),
             LowLevel::NumSub => {
                 // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
                 match layout {
