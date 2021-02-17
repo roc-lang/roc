@@ -195,8 +195,11 @@ impl<'a> Proc<'a> {
     pub fn insert_refcount_operations(
         arena: &'a Bump,
         procs: &mut MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-        passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
+        _passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
     ) {
+        // currently we ignore the passed-by-pointerness
+        let passed_by_pointer = &Default::default();
+
         let borrow_params =
             arena.alloc(crate::borrow::infer_borrow(arena, procs, passed_by_pointer));
 
@@ -207,6 +210,11 @@ impl<'a> Proc<'a> {
 
                 let layout = key.1.clone();
                 procs.insert((*other, layout), proc);
+            } else {
+                unreachable!(
+                    "we need a by-pointer version of {:?}, but its by-name version does not exist",
+                    key.0
+                )
             }
         }
 
@@ -5621,12 +5629,13 @@ where
 }
 
 fn call_by_pointer<'a>(
-    env: &mut Env<'a, '_>,
+    _env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     symbol: Symbol,
     layout: Layout<'a>,
 ) -> Expr<'a> {
-    let other = env.unique_symbol();
+    // let other = env.unique_symbol();
+    let other = symbol;
 
     procs
         .passed_by_pointer

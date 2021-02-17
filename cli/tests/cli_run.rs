@@ -60,24 +60,6 @@ mod cli_run {
                     panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
                 });
 
-                // #[derive(Debug, Deserialize, Clone)]
-                // pub struct ValgrindError {
-                //     kind: String,
-                //     #[serde(default)]
-                //     what: Option<String>,
-                //     #[serde(default)]
-                //     xwhat: Option<ValgrindErrorXWhat>,
-                // }
-                //
-                // #[derive(Debug, Deserialize, Clone)]
-                // pub struct ValgrindErrorXWhat {
-                //     text: String,
-                //     #[serde(default)]
-                //     leakedbytes: Option<isize>,
-                //     #[serde(default)]
-                //     leakedblocks: Option<isize>,
-                // }
-
                 if !memory_errors.is_empty() {
                     for error in memory_errors {
                         let ValgrindError {
@@ -245,6 +227,7 @@ mod cli_run {
         );
     }
 
+    #[ignore]
     #[test]
     #[serial(closure1)]
     fn closure1() {
@@ -257,6 +240,7 @@ mod cli_run {
         );
     }
 
+    #[ignore]
     #[test]
     #[serial(closure2)]
     fn closure2() {
@@ -269,8 +253,8 @@ mod cli_run {
         );
     }
 
-    #[test]
     #[ignore]
+    #[test]
     #[serial(closure3)]
     fn closure3() {
         check_output(
@@ -282,6 +266,7 @@ mod cli_run {
         );
     }
 
+    #[ignore]
     #[test]
     #[serial(closure4)]
     fn closure4() {
