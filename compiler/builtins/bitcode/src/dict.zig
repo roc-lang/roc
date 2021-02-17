@@ -276,6 +276,10 @@ pub const RocDict = extern struct {
     }
 
     fn setKey(self: *RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize, data: Opaque) void {
+        if (key_width == 0) {
+            return;
+        }
+
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (index * key_width);
@@ -305,6 +309,10 @@ pub const RocDict = extern struct {
     }
 
     fn setValue(self: *RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize, data: Opaque) void {
+        if (value_width == 0) {
+            return;
+        }
+
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (self.capacity() * key_width) + (index * value_width);

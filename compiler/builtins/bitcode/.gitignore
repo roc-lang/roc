@@ -2,3 +2,4 @@ zig-cache
 src/zig-cache
 builtins.ll
 builtins.bc
+builtins.o
