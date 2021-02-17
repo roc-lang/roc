@@ -3687,16 +3687,21 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            list_walk(
-                env,
-                parent,
-                list,
-                list_layout,
-                func,
-                func_layout,
-                default,
-                default_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk(
+                    env,
+                    layout_ids,
+                    parent,
+                    list,
+                    element_layout,
+                    func,
+                    func_layout,
+                    default,
+                    default_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListWalkBackwards => {
             // List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
@@ -3708,16 +3713,21 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            list_walk_backwards(
-                env,
-                parent,
-                list,
-                list_layout,
-                func,
-                func_layout,
-                default,
-                default_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_backwards(
+                    env,
+                    layout_ids,
+                    parent,
+                    list,
+                    element_layout,
+                    func,
+                    func_layout,
+                    default,
+                    default_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListSum => {
             debug_assert_eq!(args.len(), 1);

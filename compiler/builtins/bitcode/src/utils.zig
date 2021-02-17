@@ -22,13 +22,6 @@ pub fn decref(
     const refcount_isize = @bitCast(isize, refcount);
 
     switch (alignment) {
-        8 => {
-            if (refcount == REFCOUNT_ONE) {
-                allocator.free((bytes - 8)[0 .. 8 + data_bytes]);
-            } else if (refcount_isize < 0) {
-                (usizes - 1)[0] = refcount + 1;
-            }
-        },
         16 => {
             if (refcount == REFCOUNT_ONE) {
                 allocator.free((bytes - 16)[0 .. 16 + data_bytes]);
@@ -36,7 +29,14 @@ pub fn decref(
                 (usizes - 1)[0] = refcount + 1;
             }
         },
-        else => unreachable,
+        else => {
+            // NOTE enums can currently have an alignment of < 8
+            if (refcount == REFCOUNT_ONE) {
+                allocator.free((bytes - 8)[0 .. 8 + data_bytes]);
+            } else if (refcount_isize < 0) {
+                (usizes - 1)[0] = refcount + 1;
+            }
+        },
     }
 }
 
@@ -48,23 +48,6 @@ pub fn allocateWithRefcount(
     comptime const result_in_place = false;
 
     switch (alignment) {
-        8 => {
-            const length = @sizeOf(usize) + data_bytes;
-
-            var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
-
-            var as_usize_array = @ptrCast([*]usize, new_bytes);
-            if (result_in_place) {
-                as_usize_array[0] = @intCast(usize, number_of_slots);
-            } else {
-                as_usize_array[0] = REFCOUNT_ONE;
-            }
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + @sizeOf(usize);
-
-            return first_slot;
-        },
         16 => {
             const length = 2 * @sizeOf(usize) + data_bytes;
 
@@ -84,6 +67,22 @@ pub fn allocateWithRefcount(
 
             return first_slot;
         },
-        else => unreachable,
+        else => {
+            const length = @sizeOf(usize) + data_bytes;
+
+            var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
+
+            var as_usize_array = @ptrCast([*]usize, new_bytes);
+            if (result_in_place) {
+                as_usize_array[0] = @intCast(usize, number_of_slots);
+            } else {
+                as_usize_array[0] = REFCOUNT_ONE;
+            }
+
+            var as_u8_array = @ptrCast([*]u8, new_bytes);
+            const first_slot = as_u8_array + @sizeOf(usize);
+
+            return first_slot;
+        },
     }
 }

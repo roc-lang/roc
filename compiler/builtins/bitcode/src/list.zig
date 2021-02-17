@@ -107,6 +107,8 @@ pub const RocList = extern struct {
 };
 
 const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+
 pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
@@ -155,5 +157,46 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
         return output;
     } else {
         return RocList.empty();
+    }
+}
+
+pub fn listWalk(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
+    if (accum_width == 0) {
+        return;
+    }
+
+    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+
+    if (list.bytes) |source_ptr| {
+        var i: usize = 0;
+        const size = list.len();
+        while (i < size) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            stepper_caller(stepper, element, output, output);
+        }
+
+        const data_bytes = list.len() * element_width;
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+    }
+}
+
+pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
+    if (accum_width == 0) {
+        return;
+    }
+
+    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        var i: usize = size;
+        while (i > 0) {
+            i -= 1;
+            const element = source_ptr + i * element_width;
+            stepper_caller(stepper, element, output, output);
+        }
+
+        const data_bytes = list.len() * element_width;
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
     }
 }

@@ -584,8 +584,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListKeepIf => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        ListWalk => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
-        ListWalkBackwards => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
+        ListWalk => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
+        ListWalkBackwards => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
         ListSum => arena.alloc_slice_copy(&[borrowed]),
 
         // TODO when we have lists with capacity (if ever)

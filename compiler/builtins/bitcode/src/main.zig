@@ -8,6 +8,8 @@ const list = @import("list.zig");
 comptime {
     exportListFn(list.listMap, "map");
     exportListFn(list.listKeepIf, "keep_if");
+    exportListFn(list.listWalk, "walk");
+    exportListFn(list.listWalkBackwards, "walk_backwards");
 }
 
 // Dict Module
