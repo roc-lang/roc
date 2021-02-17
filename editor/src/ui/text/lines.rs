@@ -6,6 +6,7 @@ use crate::ui::ui_error::{
 use crate::ui::text::{
     text_pos::{TextPos},
     selection::{Selection, RawSelection},
+    caret_w_select::CaretWSelect,
 };
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
@@ -27,6 +28,14 @@ pub trait SelectableLines {
     fn get_caret(self) -> TextPos;
 
     fn set_caret(&mut self, caret_pos: TextPos);
+
+    fn move_caret_left(&mut self, shift_pressed: bool) -> UIResult<CaretWSelect>;
+
+    fn move_caret_right(&mut self, shift_pressed: bool) -> UIResult<CaretWSelect>;
+
+    fn move_caret_up(&mut self, shift_pressed: bool) -> UIResult<CaretWSelect>;
+
+    fn move_caret_down(&mut self, shift_pressed: bool) -> UIResult<CaretWSelect>;
 
     fn get_selection(&self) -> Option<Selection>;
 

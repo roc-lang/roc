@@ -3,7 +3,7 @@ use crate::editor::ed_error::{print_err, print_ui_err};
 use crate::ui::{
     ui_error::UIResult,
     text::text_pos::{TextPos},
-    text::lines::{Lines, SelectableLines},
+    text::lines::{Lines},
     colors::{CODE_COLOR, TXT_COLOR},
 };
 use crate::graphics::{
@@ -299,7 +299,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     )
                     .unwrap();
 
-                    super::render::render_expr2(
+                    super::render_ast::render_expr2(
                         &mut env,
                         &size,
                         &expr2,

@@ -1,10 +1,6 @@
-use crate::editor::ed_error::EdResult;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::text::{
     big_selectable_text::{BigSelectableText, from_path},
-    lines::{SelectableLines, MutSelectableLines},
-    text_pos::TextPos,
-    selection::Selection,
 };
 use crate::ui::ui_error::UIResult;
 use std::path::Path;

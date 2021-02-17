@@ -6,7 +6,6 @@ use crate::graphics::primitives::rect::Rect;
 use crate::ui::text::{
     selection::create_selection_rects,
     text_pos::TextPos,
-    lines::SelectableLines,
 };
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;

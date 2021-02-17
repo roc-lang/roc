@@ -6,6 +6,7 @@ use crate::ui::text::{
     lines::{SelectableLines, MutSelectableLines},
     text_pos::TextPos,
 };
+use crate::ui::ui_error::UIResult;
 use crate::editor::ed_error::EdResult;
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
@@ -111,12 +112,14 @@ pub fn pass_keydown_to_focused(
     modifiers: &ModifiersState,
     virtual_keycode: VirtualKeyCode,
     app_model: &mut AppModel,
-) {
+) -> UIResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_update::handle_key_down(modifiers, virtual_keycode, ed_model);
+            ed_update::handle_key_down(modifiers, virtual_keycode, ed_model)?;
         }
     }
+
+    Ok(())
 }
 
 pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
@@ -138,9 +141,6 @@ pub mod test_app_update {
     use crate::editor::mvc::ed_update::test_ed_update::gen_big_text;
     use crate::ui::text::{
         big_selectable_text::BigSelectableText,
-        lines::{SelectableLines, MutSelectableLines},
-        text_pos::TextPos,
-        selection::{RawSelection},
         selection::test_selection::{all_lines_vec, convert_selection_to_dsl},
     };
     use bumpalo::Bump;
@@ -193,7 +193,7 @@ pub mod test_app_update {
         handle_paste(&mut app_model)?;
 
         let ed_model = app_model.ed_model_opt.unwrap();
-        let mut text_lines = all_lines_vec(&ed_model.text, arena);
+        let mut text_lines = all_lines_vec(&ed_model.text);
         let post_lines_str = convert_selection_to_dsl(
             ed_model.text.caret_w_select,
             &mut text_lines,
@@ -222,7 +222,7 @@ pub mod test_app_update {
         assert_eq!(clipboard_content, expected_clipboard_content);
 
         let ed_model = app_model.ed_model_opt.unwrap();
-        let mut text_lines = all_lines_vec(&ed_model.text, arena);
+        let mut text_lines = all_lines_vec(&ed_model.text);
         let post_lines_str = convert_selection_to_dsl(
             ed_model.text.caret_w_select,
             &mut text_lines,

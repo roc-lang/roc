@@ -37,11 +37,8 @@ impl CaretWSelect {
 
     pub fn new(caret_pos: TextPos, selection_opt: Option<Selection>) -> Self {
         Self {
-            caret_pos: TextPos {
-                line: 0,
-                column: 0
-            },
-            selection_opt: None
+            caret_pos,
+            selection_opt,
         }
     }
 

@@ -12,15 +12,6 @@ pub struct RawSelection {
     pub end_pos: TextPos,
 }
 
-impl RawSelection {
-    pub fn make_raw_sel(start_pos: TextPos, end_pos: TextPos) -> RawSelection {
-        RawSelection {
-            start_pos,
-            end_pos
-        }
-    }
-}
-
 impl std::fmt::Display for RawSelection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -175,6 +166,8 @@ pub mod test_selection {
     use std::collections::HashMap;
     use std::{
         slice::SliceIndex,
+        fs,
+        io::prelude::*,
         path::Path,
         time::{SystemTime}
     };
@@ -255,13 +248,22 @@ pub mod test_selection {
         Ok(elt_ref)
     }
 
-    fn text_buffer_from_str(lines_str: &str) -> BigSelectableText {
-        let path = Path::new(format!("temp_{:?}.txt", SystemTime::now()));
-        big_selectable_text::from_path(path).unwrap()
+    fn big_text_from_str(lines_str: &str) -> BigSelectableText {
+        let epoch_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+        let file_name = format!("temp_{:?}.txt", epoch_time);
+        let path = Path::new(&file_name);
+
+        let mut temp_file = fs::File::create(path).unwrap();
+        temp_file.write_all(lines_str.as_bytes()).unwrap();
+
+        let big_text = big_selectable_text::from_path(path).unwrap();
+        fs::remove_file(path).unwrap();
+
+        big_text
     }
 
     pub fn big_text_from_dsl_str(lines: &[String]) -> BigSelectableText {
-        text_buffer_from_str(
+        big_text_from_str(
             &lines
                 .iter()
                 .map(|line| line.replace(&['[', ']', '|'][..], ""))
@@ -270,12 +272,12 @@ pub mod test_selection {
         )
     }
 
-    pub fn all_lines_vec(big_sel_text: &BigSelectableText, arena: &Bump) -> Vec<String> {
+    pub fn all_lines_vec(big_sel_text: &BigSelectableText) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
 
-        for line in big_sel_text.all_lines(arena).split("\n") {
+        for i in 0..big_sel_text.nr_of_lines() {
             lines.push(
-                line.to_owned()
+                big_sel_text.get_line(i).unwrap().to_string()
             );
         }
 
@@ -399,14 +401,12 @@ pub mod test_selection {
             .map(|l| l.to_string())
             .collect();
 
-        let new_caret_w_select = convert_dsl_to_selection(&pre_lines)?;
-
         let clean_text_buf = big_text_from_dsl_str(&pre_lines);
 
         let caret_w_select =
             move_fun(shift_pressed, &clean_text_buf)?;
 
-        let mut lines_vec = all_lines_vec(&clean_text_buf, arena);
+        let mut lines_vec = all_lines_vec(&clean_text_buf);
         let post_lines_res = convert_selection_to_dsl(caret_w_select, &mut lines_vec);
 
         match post_lines_res {

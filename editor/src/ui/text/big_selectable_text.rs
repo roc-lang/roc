@@ -125,6 +125,294 @@ impl SelectableLines for BigSelectableText {
         self.caret_w_select.caret_pos = caret_pos;
     }
 
+    pub fn move_caret_left(
+        &mut self, 
+        shift_pressed: bool,
+    ) -> UIResult<CaretWSelect> {
+        let old_selection_opt = big_text.get_selection();
+        let old_caret_pos = big_text.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+    
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+                None => unreachable!(),
+            }
+        } else if old_col_nr == 0 {
+            if old_line_nr == 0 {
+                (0, 0)
+            } else {
+                let curr_line_len = big_text.line_len(old_line_nr - 1)?;
+    
+                (old_line_nr - 1, curr_line_len - 1)
+            }
+        } else {
+            (old_line_nr, old_col_nr - 1)
+        };
+    
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+    
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_caret_pos >= old_selection.end_pos {
+                    if new_caret_pos == old_selection.start_pos {
+                        None
+                    } else {
+                        validate_sel_opt(
+                            old_selection.start_pos,
+                            new_caret_pos,
+                        )?
+                    }
+                } else {
+                    validate_sel_opt(
+                        TextPos {
+                            line: line_nr,
+                            column: col_nr,
+                        },
+                        old_selection.end_pos,
+                    )?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    TextPos {
+                        line: line_nr,
+                        column: col_nr,
+                    },
+                    TextPos {
+                        line: old_line_nr,
+                        column: old_col_nr,
+                    },
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    
+        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+    }
+    
+    pub fn move_caret_right(
+        &mut self, 
+        shift_pressed: bool,
+    ) -> UIResult<CaretWSelect> {
+        let old_selection_opt = big_text.get_selection();
+        let old_caret_pos = big_text.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+    
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
+                None => unreachable!(),
+            }
+        } else {
+            let curr_line = big_text.get_line(old_line_nr)?;
+    
+            if let Some(last_char) = curr_line.chars().last() {
+                if is_newline(&last_char) {
+                    if old_col_nr + 1 > curr_line.len() - 1 {
+                        (old_line_nr + 1, 0)
+                    } else {
+                        (old_line_nr, old_col_nr + 1)
+                    }
+                } else if old_col_nr < curr_line.len() {
+                    (old_line_nr, old_col_nr + 1)
+                } else {
+                    (old_line_nr, old_col_nr)
+                }
+            } else {
+                (old_line_nr, old_col_nr)
+            }
+        };
+    
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+    
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_caret_pos <= old_selection.start_pos {
+                    if new_caret_pos == old_selection.end_pos {
+                        None
+                    } else {
+                        validate_sel_opt(
+                            new_caret_pos,
+                            old_selection.end_pos,
+                        )?
+                    }
+                } else {
+                    validate_sel_opt(
+                        old_selection.start_pos,
+                        TextPos {
+                            line: line_nr,
+                            column: col_nr,
+                        },
+                    )?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    TextPos {
+                        line: old_line_nr,
+                        column: old_col_nr,
+                    },
+                    TextPos {
+                        line: line_nr,
+                        column: col_nr,
+                    },
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    
+        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+    }
+    
+    pub fn move_caret_up(
+        &mut self, 
+        shift_pressed: bool,
+    ) -> UIResult<CaretWSelect> {
+        let old_selection_opt = big_text.get_selection();
+        let old_caret_pos = big_text.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+    
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+                None => unreachable!(),
+            }
+        } else if old_line_nr == 0 {
+            (old_line_nr, 0)
+        } else {
+            let prev_line_len = big_text.line_len(old_line_nr - 1)?;
+    
+            if prev_line_len <= old_col_nr {
+                (old_line_nr - 1, prev_line_len - 1)
+            } else {
+                (old_line_nr - 1, old_col_nr)
+            }
+        };
+    
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+    
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_selection.end_pos <= old_caret_pos {
+                    if new_caret_pos == old_selection.start_pos {
+                        None
+                    } else {
+                        validate_sel_opt(
+                            min(old_selection.start_pos, new_caret_pos),
+                            max(old_selection.start_pos, new_caret_pos),
+                        )?
+                    }
+                } else {
+                    validate_sel_opt(
+                        new_caret_pos,
+                        old_selection.end_pos,
+                    )?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    min(old_caret_pos, new_caret_pos),
+                    max(old_caret_pos, new_caret_pos),
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    
+        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+    }
+    
+    pub fn move_caret_down(
+        &mut self, 
+        shift_pressed: bool,
+    ) -> UIResult<CaretWSelect> {
+        let old_selection_opt = big_text.get_selection();
+        let old_caret_pos = big_text.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+    
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
+                None => unreachable!(),
+            }
+        } else if old_line_nr + 1 >= big_text.nr_of_lines() {
+            let curr_line_len = big_text.line_len(old_line_nr)?;
+            
+            (old_line_nr, curr_line_len)
+        } else {
+            let next_line = big_text.get_line(old_line_nr + 1)?;
+    
+            if next_line.len() <= old_col_nr {
+                if let Some(last_char) = next_line.chars().last() {
+                    if is_newline(&last_char) {
+                        (old_line_nr + 1, next_line.len() - 1)
+                    } else {
+                        (old_line_nr + 1, next_line.len())
+                    }
+                } else {
+                    (old_line_nr + 1, 0)
+                }
+            } else {
+                (old_line_nr + 1, old_col_nr)
+            }
+        };
+    
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+    
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_caret_pos <= old_selection.start_pos {
+                    if new_caret_pos == old_selection.end_pos {
+                        None
+                    } else {
+                        validate_sel_opt(
+                            min(old_selection.end_pos, new_caret_pos),
+                            max(old_selection.end_pos, new_caret_pos),
+                        )?
+                    }
+                } else {
+                    validate_sel_opt(
+                        old_selection.start_pos,
+                        new_caret_pos,
+                    )?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    min(old_caret_pos, new_caret_pos),
+                    max(old_caret_pos, new_caret_pos),
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    
+        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+    }
+
     fn get_selection(&self) -> Option<Selection> {
         self.caret_w_select.selection_opt
     }
@@ -186,12 +474,14 @@ impl MutSelectableLines for BigSelectableText {
     }
 
     fn pop_char(&mut self) {
-        let caret_pos = self.caret_w_select.caret_pos;
-        let char_indx = self.pos_to_char_indx(caret_pos);
+        let old_caret_pos = self.caret_w_select.caret_pos;
+        let char_indx = self.pos_to_char_indx(old_caret_pos);
 
         if (char_indx > 0) && char_indx <= self.text_rope.len_chars() {
             self.text_rope.remove((char_indx - 1)..char_indx);
         }
+
+        self.move_caret_left(None)
     }
 
     fn del_selection(&mut self) -> UIResult<()> {

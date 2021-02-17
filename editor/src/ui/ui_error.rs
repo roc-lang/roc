@@ -1,4 +1,4 @@
-use snafu::{Backtrace, ErrorCompat, Snafu};
+use snafu::{Backtrace, Snafu};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
