@@ -3724,19 +3724,11 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.contains : List elem, elem -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let list = load_symbol(scope, &args[0]);
 
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_contains(
-                env,
-                layout_ids,
-                parent,
-                elem,
-                elem_layout,
-                list,
-                list_layout,
-            )
+            list_contains(env, layout_ids, elem, elem_layout, list)
         }
         ListWalk => {
             debug_assert_eq!(args.len(), 3);

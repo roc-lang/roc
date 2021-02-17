@@ -65,3 +65,4 @@ pub const LIST_KEEP_OKS: &str = "roc_builtins.list.keep_oks";
 pub const LIST_KEEP_ERRS: &str = "roc_builtins.list.keep_errs";
 pub const LIST_WALK: &str = "roc_builtins.list.walk";
 pub const LIST_WALK_BACKWARDS: &str = "roc_builtins.list.walk_backwards";
+pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";

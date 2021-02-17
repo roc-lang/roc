@@ -300,3 +300,77 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
 
     function_value
 }
+
+pub fn build_eq_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::GENERIC_EQ_REF;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function_value = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+            let function_value = crate::llvm::refcounting::build_header_help(
+                env,
+                &fn_name,
+                env.context.bool_type().into(),
+                &[arg_type.into(), arg_type.into()],
+            );
+
+            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+            debug_assert!(kind_id > 0);
+            let attr = env.context.create_enum_attribute(kind_id, 1);
+            function_value.add_attribute(AttributeLoc::Function, attr);
+
+            let entry = env.context.append_basic_block(function_value, "entry");
+            env.builder.position_at_end(entry);
+
+            debug_info_init!(env, function_value);
+
+            let mut it = function_value.get_param_iter();
+            let value_ptr1 = it.next().unwrap().into_pointer_value();
+            let value_ptr2 = it.next().unwrap().into_pointer_value();
+
+            set_name(value_ptr1.into(), Symbol::ARG_1.ident_string(&env.interns));
+            set_name(value_ptr2.into(), Symbol::ARG_2.ident_string(&env.interns));
+
+            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic);
+
+            let value_cast1 = env
+                .builder
+                .build_bitcast(value_ptr1, value_type, "load_opaque")
+                .into_pointer_value();
+
+            let value_cast2 = env
+                .builder
+                .build_bitcast(value_ptr2, value_type, "load_opaque")
+                .into_pointer_value();
+
+            let value1 = env.builder.build_load(value_cast1, "load_opaque");
+            let value2 = env.builder.build_load(value_cast2, "load_opaque");
+
+            let result =
+                crate::llvm::compare::generic_eq(env, layout_ids, value1, value2, layout, layout);
+
+            env.builder.build_return(Some(&result));
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    function_value
+}

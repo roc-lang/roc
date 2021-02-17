@@ -1,8 +1,10 @@
-use crate::llvm::bitcode::{build_transform_caller, call_bitcode_fn, call_void_bitcode_fn};
+#![allow(clippy::too_many_arguments)]
+use crate::llvm::bitcode::{
+    build_eq_wrapper, build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
+};
 use crate::llvm::build::{
     allocate_with_refcount_help, build_num_binop, cast_basic_basic, complex_bitcast, Env, InPlace,
 };
-use crate::llvm::compare::generic_eq;
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use crate::llvm::refcounting::{
     increment_refcount_layout, refcount_is_one_comparison, PointerToRefcount,
@@ -845,7 +847,6 @@ pub fn list_sum<'a, 'ctx, 'env>(
 }
 
 /// List.walk : List elem, (elem -> accum -> accum), accum -> accum
-#[allow(clippy::too_many_arguments)]
 pub fn list_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -872,7 +873,6 @@ pub fn list_walk<'a, 'ctx, 'env>(
 }
 
 /// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
-#[allow(clippy::too_many_arguments)]
 pub fn list_walk_backwards<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -898,7 +898,6 @@ pub fn list_walk_backwards<'a, 'ctx, 'env>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn list_walk_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -968,123 +967,38 @@ fn list_walk_generic<'a, 'ctx, 'env>(
 pub fn list_contains<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let wrapper_struct = list.into_struct_value();
-    let list_elem_layout = match &list_layout {
-        // this pointer will never actually be dereferenced
-        Layout::Builtin(Builtin::EmptyList) => &Layout::Builtin(Builtin::Int64),
-        Layout::Builtin(Builtin::List(_, element_layout)) => element_layout,
-        _ => unreachable!("Invalid layout {:?} in List.contains", list_layout),
-    };
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list_elem_type =
-        basic_type_from_layout(env.arena, env.context, list_elem_layout, env.ptr_bytes);
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
 
-    let list_ptr = load_list_ptr(
-        builder,
-        wrapper_struct,
-        list_elem_type.ptr_type(AddressSpace::Generic),
-    );
+    let key_ptr = builder.build_alloca(element.get_type(), "key_ptr");
+    env.builder.build_store(key_ptr, element);
 
-    let length = list_len(builder, list.into_struct_value());
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    list_contains_help(
+    let eq_fn = build_eq_wrapper(env, layout_ids, element_layout);
+
+    call_bitcode_fn(
         env,
-        layout_ids,
-        parent,
-        length,
-        list_ptr,
-        list_elem_layout,
-        elem,
-        elem_layout,
+        &[
+            list_i128.into(),
+            env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
+            element_width.into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_CONTAINS,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn list_contains_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
-    length: IntValue<'ctx>,
-    source_ptr: PointerValue<'ctx>,
-    list_elem_layout: &Layout<'a>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let bool_alloca = builder.build_alloca(ctx.bool_type(), "bool_alloca");
-    let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
-    let next_free_index_alloca = builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
-
-    builder.build_store(bool_alloca, ctx.bool_type().const_zero());
-    builder.build_store(index_alloca, ctx.i64_type().const_zero());
-    builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
-
-    let condition_bb = ctx.append_basic_block(parent, "condition");
-    builder.build_unconditional_branch(condition_bb);
-    builder.position_at_end(condition_bb);
-
-    let index = builder.build_load(index_alloca, "index").into_int_value();
-
-    let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
-
-    let body_bb = ctx.append_basic_block(parent, "body");
-    let cont_bb = ctx.append_basic_block(parent, "cont");
-    builder.build_conditional_branch(condition, body_bb, cont_bb);
-
-    // loop body
-    builder.position_at_end(body_bb);
-
-    let current_elem_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
-
-    let current_elem = builder.build_load(current_elem_ptr, "load_elem");
-
-    let has_found = generic_eq(
-        env,
-        layout_ids,
-        current_elem,
-        elem,
-        list_elem_layout,
-        elem_layout,
-    );
-
-    builder.build_store(bool_alloca, has_found.into_int_value());
-
-    let one = ctx.i64_type().const_int(1, false);
-
-    let next_free_index = builder
-        .build_load(next_free_index_alloca, "load_next_free")
-        .into_int_value();
-
-    builder.build_store(
-        next_free_index_alloca,
-        builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
-    );
-
-    builder.build_store(
-        index_alloca,
-        builder.build_int_add(index, one, "incremented_index"),
-    );
-
-    builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
-
-    // continuation
-    builder.position_at_end(cont_bb);
-
-    builder.build_load(bool_alloca, "answer")
-}
-
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
-#[allow(clippy::too_many_arguments)]
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1136,7 +1050,6 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 }
 
 /// List.keepOks : List before, (before -> Result after *) -> List after
-#[allow(clippy::too_many_arguments)]
 pub fn list_keep_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1159,7 +1072,6 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
 }
 
 /// List.keepErrs : List before, (before -> Result * after) -> List after
-#[allow(clippy::too_many_arguments)]
 pub fn list_keep_errs<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1181,7 +1093,6 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn list_keep_result<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1251,7 +1162,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
 }
 
 /// List.map : List before, (before -> after) -> List after
-#[allow(clippy::too_many_arguments)]
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
