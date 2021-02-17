@@ -356,6 +356,7 @@ impl<'a> Procs<'a> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn get_specialized_procs_without_rc(
         self,
         arena: &'a Bump,
