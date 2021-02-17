@@ -726,6 +726,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // mapWithIndex : List before, (Nat, before -> after) -> List after
+    add_type(Symbol::LIST_MAP_WITH_INDEX, {
+        let_tvars! { cvar, before, after};
+        top_level_function(
+            vec![
+                list_type(flex(before)),
+                closure(vec![nat_type(), flex(before)], cvar, Box::new(flex(after))),
+            ],
+            Box::new(list_type(flex(after))),
+        )
+    });
+
     // append : List elem, elem -> List elem
     add_type(
         Symbol::LIST_APPEND,

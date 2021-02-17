@@ -25,6 +25,7 @@ pub enum LowLevel {
     ListPrepend,
     ListJoin,
     ListMap,
+    ListMapWithIndex,
     ListKeepIf,
     ListWalk,
     ListWalkBackwards,

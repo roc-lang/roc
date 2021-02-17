@@ -60,6 +60,7 @@ pub const DICT_WALK: &str = "roc_builtins.dict.walk";
 pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
+pub const LIST_MAP_WITH_INDEX: &str = "roc_builtins.list.map_with_index";
 pub const LIST_KEEP_IF: &str = "roc_builtins.list.keep_if";
 pub const LIST_KEEP_OKS: &str = "roc_builtins.list.keep_oks";
 pub const LIST_KEEP_ERRS: &str = "roc_builtins.list.keep_errs";

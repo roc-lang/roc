@@ -1730,6 +1730,15 @@ mod gen_list {
     }
 
     #[test]
+    fn list_map_with_index() {
+        assert_evals_to!(
+            "List.mapWithIndex [0,0,0] (\\index, x -> index + x)",
+            &[0, 1, 2],
+            &[i64]
+        );
+    }
+
+    #[test]
     #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
     fn cleanup_because_exception() {
         assert_evals_to!(

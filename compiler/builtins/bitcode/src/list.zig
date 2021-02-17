@@ -130,6 +130,25 @@ pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usi
     }
 }
 
+pub fn listMapWithIndex(list: RocList, transform: Opaque, caller: Caller2, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        var i: usize = 0;
+        const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        while (i < size) : (i += 1) {
+            caller(transform, @ptrCast(?[*]u8, &i), source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+        }
+
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, element_width: usize) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();

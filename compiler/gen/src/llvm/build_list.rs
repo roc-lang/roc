@@ -1170,6 +1170,49 @@ pub fn list_map<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    list_map_generic(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        element_layout,
+        bitcode::LIST_MAP,
+        &[element_layout.clone()],
+    )
+}
+
+/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
+pub fn list_map_with_index<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_map_generic(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        element_layout,
+        bitcode::LIST_MAP_WITH_INDEX,
+        &[Layout::Builtin(Builtin::Usize), element_layout.clone()],
+    )
+}
+
+fn list_map_generic<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+    op: &str,
+    argument_layouts: &[Layout<'a>],
+) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
     let return_layout = match transform_layout {
@@ -1186,7 +1229,7 @@ pub fn list_map<'a, 'ctx, 'env>(
     env.builder.build_store(transform_ptr, transform);
 
     let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &[element_layout.clone()])
+        build_transform_caller(env, layout_ids, transform_layout, argument_layouts)
             .as_global_value()
             .as_pointer_value();
 
@@ -1212,7 +1255,7 @@ pub fn list_map<'a, 'ctx, 'env>(
             old_element_width.into(),
             new_element_width.into(),
         ],
-        &bitcode::LIST_MAP,
+        op,
     );
 
     complex_bitcast(
