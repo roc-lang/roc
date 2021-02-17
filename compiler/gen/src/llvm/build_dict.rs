@@ -865,7 +865,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
             dec_key_fn.as_global_value().as_pointer_value().into(),
-            result_ptr.into(),
+            result_ptr,
         ],
         &bitcode::SET_FROM_LIST,
     );
