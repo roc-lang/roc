@@ -9,7 +9,7 @@ jobs:
   prep-dependency-container:
     name: fmt, clippy, test --release
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       FORCE_COLOR: 1
     steps:
