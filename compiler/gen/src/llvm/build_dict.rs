@@ -450,7 +450,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-    let zig_list_type = env.module.get_struct_type("dict.RocList").unwrap();
+    let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     env.builder
@@ -765,7 +765,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-    let zig_list_type = env.module.get_struct_type("dict.RocList").unwrap();
+    let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     env.builder

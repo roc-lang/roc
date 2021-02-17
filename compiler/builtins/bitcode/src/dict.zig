@@ -1,10 +1,12 @@
 const std = @import("std");
-const utils = @import("utils.zig");
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
+
+const utils = @import("utils.zig");
+const RocList = @import("list.zig").RocList;
 
 const INITIAL_SEED = 0xc70f6907;
 
@@ -240,10 +242,6 @@ pub const RocDict = extern struct {
         }
 
         if (self.isUnique()) {
-            return self;
-        }
-
-        if (true) {
             return self;
         }
 
@@ -536,11 +534,6 @@ pub fn elementsRc(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 }
 
-pub const RocList = extern struct {
-    bytes: ?[*]u8,
-    length: usize,
-};
-
 pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_key: Inc, output: *RocList) callconv(.C) void {
     const size = dict.capacity();
 
@@ -556,7 +549,7 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
     }
 
     if (length == 0) {
-        output.* = RocList{ .bytes = null, .length = 0 };
+        output.* = RocList.empty();
         return;
     }
 
@@ -605,7 +598,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 
     if (length == 0) {
-        output.* = RocList{ .bytes = null, .length = 0 };
+        output.* = RocList.empty();
         return;
     }
 
