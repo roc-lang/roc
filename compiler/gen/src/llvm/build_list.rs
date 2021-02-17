@@ -947,7 +947,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            list_i128.into(),
+            list_i128,
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
@@ -989,7 +989,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            list_i128.into(),
+            list_i128,
             env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
             element_width.into(),
             eq_fn.as_global_value().as_pointer_value().into(),
@@ -1031,7 +1031,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     let output = call_bitcode_fn(
         env,
         &[
-            list_i128.into(),
+            list_i128,
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
@@ -1141,7 +1141,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     let output = call_bitcode_fn(
         env,
         &[
-            list_i128.into(),
+            list_i128,
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
@@ -1247,7 +1247,7 @@ fn list_map_generic<'a, 'ctx, 'env>(
     let output = call_bitcode_fn(
         env,
         &[
-            list_i128.into(),
+            list_i128,
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),

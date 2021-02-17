@@ -3633,9 +3633,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    return empty_list(env);
-                }
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => {
                     list_map(env, layout_ids, func, func_layout, list, element_layout)
                 }
@@ -3651,9 +3649,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    return empty_list(env);
-                }
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => {
                     list_map_with_index(env, layout_ids, func, func_layout, list, element_layout)
                 }
@@ -3669,9 +3665,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    return empty_list(env);
-                }
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => {
                     list_keep_if(env, layout_ids, func, func_layout, list, element_layout)
                 }
@@ -3688,9 +3682,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match (list_layout, layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
-                | (Layout::Builtin(Builtin::EmptyList), _) => {
-                    return empty_list(env);
-                }
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
                     Layout::Builtin(Builtin::List(_, before_layout)),
                     Layout::Builtin(Builtin::List(_, after_layout)),
@@ -3718,9 +3710,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match (list_layout, layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
-                | (Layout::Builtin(Builtin::EmptyList), _) => {
-                    return empty_list(env);
-                }
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
                     Layout::Builtin(Builtin::List(_, before_layout)),
                     Layout::Builtin(Builtin::List(_, after_layout)),
