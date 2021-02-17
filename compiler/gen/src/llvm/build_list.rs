@@ -1328,22 +1328,33 @@ const ARGUMENT_SYMBOLS: [Symbol; 8] = [
     Symbol::ARG_8,
 ];
 
-fn build_transform_caller<'a, 'ctx, 'env>(
+pub fn build_transform_caller<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     function_layout: &Layout<'a>,
     argument_layouts: &[Layout<'a>],
 ) -> FunctionValue<'ctx> {
-    debug_assert!(argument_layouts.len() <= 7);
-
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
     let symbol = Symbol::ZIG_FUNCTION_CALLER;
     let fn_name = layout_ids
         .get(symbol, &function_layout)
         .to_symbol_string(symbol, &env.interns);
-    let fn_name = format!("transform_caller_{}", fn_name);
+
+    match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => build_transform_caller_help(env, function_layout, argument_layouts, &fn_name),
+    }
+}
+
+fn build_transform_caller_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    function_layout: &Layout<'a>,
+    argument_layouts: &[Layout<'a>],
+    fn_name: &str,
+) -> FunctionValue<'ctx> {
+    debug_assert!(argument_layouts.len() <= 7);
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
 
     let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 

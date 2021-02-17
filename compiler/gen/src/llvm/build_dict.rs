@@ -688,7 +688,7 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
 #[allow(clippy::too_many_arguments)]
 pub fn dict_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _layout_ids: &mut LayoutIds<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     dict: BasicValueEnum<'ctx>,
     stepper: BasicValueEnum<'ctx>,
     accum: BasicValueEnum<'ctx>,
@@ -709,10 +709,23 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     let stepper_ptr = builder.build_alloca(stepper.get_type(), "stepper_ptr");
     env.builder.build_store(stepper_ptr, stepper);
 
-    let stepper_caller =
-        build_stepper_caller(env, stepper_layout, key_layout, value_layout, accum_layout)
-            .as_global_value()
-            .as_pointer_value();
+    //    let stepper_caller =
+    //        build_stepper_caller(env, stepper_layout, key_layout, value_layout, accum_layout)
+    //            .as_global_value()
+    //            .as_pointer_value();
+
+    let stepper_caller = crate::llvm::build_list::build_transform_caller(
+        env,
+        layout_ids,
+        stepper_layout,
+        &[
+            key_layout.clone(),
+            value_layout.clone(),
+            accum_layout.clone(),
+        ],
+    )
+    .as_global_value()
+    .as_pointer_value();
 
     let accum_bt = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes);
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
@@ -1086,134 +1099,6 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             function_value
         }
     };
-
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
-
-    function_value
-}
-
-fn build_stepper_caller<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    stepper_layout: &Layout<'a>,
-    key_layout: &Layout<'a>,
-    value_layout: &Layout<'a>,
-    accum_layout: &Layout<'a>,
-) -> FunctionValue<'ctx> {
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let fn_name = "dict_stepper_caller";
-
-    let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let function_value = crate::llvm::refcounting::build_header_help(
-        env,
-        &fn_name,
-        env.context.void_type().into(),
-        &[
-            arg_type.into(),
-            arg_type.into(),
-            arg_type.into(),
-            arg_type.into(),
-        ],
-    );
-
-    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-    debug_assert!(kind_id > 0);
-    let attr = env.context.create_enum_attribute(kind_id, 1);
-    function_value.add_attribute(AttributeLoc::Function, attr);
-
-    let entry = env.context.append_basic_block(function_value, "entry");
-    env.builder.position_at_end(entry);
-
-    debug_info_init!(env, function_value);
-
-    let mut it = function_value.get_param_iter();
-    let closure_ptr = it.next().unwrap().into_pointer_value();
-    let key_ptr = it.next().unwrap().into_pointer_value();
-    let value_ptr = it.next().unwrap().into_pointer_value();
-    let accum_ptr = it.next().unwrap().into_pointer_value();
-
-    set_name(closure_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(key_ptr.into(), Symbol::ARG_2.ident_string(&env.interns));
-    set_name(value_ptr.into(), Symbol::ARG_3.ident_string(&env.interns));
-    set_name(accum_ptr.into(), Symbol::ARG_4.ident_string(&env.interns));
-
-    let closure_type =
-        basic_type_from_layout(env.arena, env.context, stepper_layout, env.ptr_bytes)
-            .ptr_type(AddressSpace::Generic);
-
-    let key_type = basic_type_from_layout(env.arena, env.context, key_layout, env.ptr_bytes)
-        .ptr_type(AddressSpace::Generic);
-
-    let value_type = basic_type_from_layout(env.arena, env.context, value_layout, env.ptr_bytes)
-        .ptr_type(AddressSpace::Generic);
-
-    let accum_type = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes)
-        .ptr_type(AddressSpace::Generic);
-
-    let closure_cast = env
-        .builder
-        .build_bitcast(closure_ptr, closure_type, "load_opaque")
-        .into_pointer_value();
-
-    let key_cast = env
-        .builder
-        .build_bitcast(key_ptr, key_type, "load_opaque")
-        .into_pointer_value();
-
-    let value_cast = env
-        .builder
-        .build_bitcast(value_ptr, value_type, "load_opaque")
-        .into_pointer_value();
-
-    let accum_cast = env
-        .builder
-        .build_bitcast(accum_ptr, accum_type, "load_opaque")
-        .into_pointer_value();
-
-    let fpointer = env.builder.build_load(closure_cast, "load_opaque");
-    let key = env.builder.build_load(key_cast, "load_opaque");
-    let value = env.builder.build_load(value_cast, "load_opaque");
-    let accum = env.builder.build_load(accum_cast, "load_opaque");
-
-    let call = match stepper_layout {
-        Layout::FunctionPointer(_, _) => {
-            env.builder
-                .build_call(fpointer.into_pointer_value(), &[key, value, accum], "tmp")
-        }
-        Layout::Closure(_, _, _) | Layout::Struct(_) => {
-            let pair = fpointer.into_struct_value();
-
-            let fpointer = env
-                .builder
-                .build_extract_value(pair, 0, "get_fpointer")
-                .unwrap();
-
-            let closure_data = env
-                .builder
-                .build_extract_value(pair, 1, "get_closure_data")
-                .unwrap();
-
-            env.builder.build_call(
-                fpointer.into_pointer_value(),
-                &[key, value, accum, closure_data],
-                "tmp",
-            )
-        }
-        _ => unreachable!("layout is not callable {:?}", stepper_layout),
-    };
-    call.set_call_convention(FAST_CALL_CONV);
-
-    let result = call
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-    env.builder.build_store(accum_cast, result);
-    env.builder.build_return(None);
 
     env.builder.position_at_end(block);
     env.builder

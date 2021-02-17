@@ -747,7 +747,7 @@ pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_
     decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
 }
 
-const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
     @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
 
@@ -759,7 +759,7 @@ pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, a
                 const key = dict.getKey(i, alignment, key_width, value_width);
                 const value = dict.getValue(i, alignment, key_width, value_width);
 
-                stepper_caller(stepper, key, value, output);
+                stepper_caller(stepper, key, value, output, output);
             },
             else => {},
         }
