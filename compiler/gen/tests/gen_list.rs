@@ -1710,42 +1710,6 @@ mod gen_list {
     }
 
     #[test]
-    fn list_eq_empty() {
-        assert_evals_to!("[] == []", true, bool);
-        assert_evals_to!("[] != []", false, bool);
-    }
-
-    #[test]
-    fn list_eq_by_length() {
-        assert_evals_to!("[1] == []", false, bool);
-        assert_evals_to!("[] == [1]", false, bool);
-    }
-
-    #[test]
-    fn list_eq_compare_pointwise() {
-        assert_evals_to!("[1] == [1]", true, bool);
-        assert_evals_to!("[2] == [1]", false, bool);
-    }
-
-    #[test]
-    fn list_eq_nested() {
-        assert_evals_to!("[[1]] == [[1]]", true, bool);
-        assert_evals_to!("[[2]] == [[1]]", false, bool);
-    }
-
-    #[test]
-    fn list_neq_compare_pointwise() {
-        assert_evals_to!("[1] != [1]", false, bool);
-        assert_evals_to!("[2] != [1]", true, bool);
-    }
-
-    #[test]
-    fn list_neq_nested() {
-        assert_evals_to!("[[1]] != [[1]]", false, bool);
-        assert_evals_to!("[[2]] != [[1]]", true, bool);
-    }
-
-    #[test]
     #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
     fn cleanup_because_exception() {
         assert_evals_to!(
