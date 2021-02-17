@@ -3632,8 +3632,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => {
-                    // no elements, so `key` is not in here
-                    panic!("key type unknown")
+                    return empty_list(env);
                 }
                 Layout::Builtin(Builtin::List(_, element_layout)) => {
                     list_map(env, layout_ids, func, func_layout, list, element_layout)
@@ -3651,16 +3650,15 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_keep_if(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => {
+                    return empty_list(env);
+                }
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_keep_if(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool

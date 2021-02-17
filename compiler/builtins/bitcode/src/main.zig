@@ -7,6 +7,7 @@ const list = @import("list.zig");
 
 comptime {
     exportListFn(list.listMap, "map");
+    exportListFn(list.listKeepIf, "keep_if");
 }
 
 // Dict Module

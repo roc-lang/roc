@@ -46,7 +46,7 @@ pub const RocList = extern struct {
         };
     }
 
-    pub fn makeUnique(self: RocDict, allocator: *Allocator, alignment: Alignment, key_width: usize, value_width: usize) RocDict {
+    pub fn makeUnique(self: RocList, allocator: *Allocator, alignment: usize, element_width: usize) RocList {
         if (self.isEmpty()) {
             return self;
         }
@@ -56,28 +56,28 @@ pub const RocList = extern struct {
         }
 
         // unfortunately, we have to clone
-        var new_dict = RocDict.allocate(allocator, self.number_of_levels, self.dict_entries_len, alignment, key_width, value_width);
+        var new_list = RocList.allocate(allocator, self.length, alignment, element_width);
 
-        var old_bytes: [*]u8 = @ptrCast([*]u8, self.dict_bytes);
-        var new_bytes: [*]u8 = @ptrCast([*]u8, new_dict.dict_bytes);
+        var old_bytes: [*]u8 = @ptrCast([*]u8, self.bytes);
+        var new_bytes: [*]u8 = @ptrCast([*]u8, new_list.bytes);
 
-        const number_of_bytes = self.capacity() * (@sizeOf(Slot) + key_width + value_width);
+        const number_of_bytes = self.len() * element_width;
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        const data_bytes = self.capacity() * slotSize(key_width, value_width);
-        decref(allocator, alignment, self.dict_bytes, data_bytes);
+        const data_bytes = self.len() * element_width;
+        utils.decref(allocator, alignment, self.bytes, data_bytes);
 
-        return new_dict;
+        return new_list;
     }
 
     pub fn reallocate(
-        self: RocDict,
+        self: RocList,
         allocator: *Allocator,
-        alignment: Alignment,
+        alignment: usize,
         new_length: usize,
         element_width: usize,
-    ) RocDict {
+    ) RocList {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
@@ -106,8 +106,8 @@ pub const RocList = extern struct {
     }
 };
 
-const ListMapCaller = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-pub fn listMap(list: RocList, transform: Opaque, caller: ListMapCaller, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
+const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
@@ -119,6 +119,38 @@ pub fn listMap(list: RocList, transform: Opaque, caller: ListMapCaller, alignmen
         }
 
         utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
+pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, element_width: usize) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        var i: usize = 0;
+        var output = list.makeUnique(std.heap.c_allocator, alignment, list.len() * element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        var kept: usize = 0;
+        while (i < size) : (i += 1) {
+            var keep = false;
+            const element = source_ptr + (i * element_width);
+            caller(transform, element, @ptrCast(?[*]u8, &keep));
+
+            if (keep) {
+                @memcpy(target_ptr + (kept * element_width), element, element_width);
+
+                kept += 1;
+            } else {
+                // TODO decrement the value?
+            }
+        }
+
+        output.length = kept;
+
+        // utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
 
         return output;
     } else {
