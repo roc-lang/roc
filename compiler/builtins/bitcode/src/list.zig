@@ -4,6 +4,7 @@ const RocResult = utils.RocResult;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
+const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const Opaque = ?[*]u8;
 
 pub const RocList = extern struct {
@@ -241,4 +242,20 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
         const data_bytes = list.len() * element_width;
         utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
     }
+}
+
+// List.contains : List k, k -> Bool
+pub fn listContains(list: RocList, key: Opaque, key_width: usize, is_eq: EqFn) callconv(.C) bool {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        var i: usize = 0;
+        while (i < size) : (i += 1) {
+            const element = source_ptr + i * key_width;
+            if (is_eq(element, key)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
