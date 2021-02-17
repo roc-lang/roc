@@ -10,6 +10,30 @@ use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
+/// Example:
+///
+///     let_tvars! { a, b, c }
+///
+/// This is equivalent to:
+///
+///     let a = VarId::from_u32(1);
+///     let b = VarId::from_u32(2);
+///     let c = VarId::from_u32(3);
+///
+/// The idea is that this is less error-prone than assigning hardcoded IDs by hand.
+macro_rules! let_tvars {
+    ($($name:ident,)+) => { let_tvars!($($name),+) };
+    ($($name:ident),*) => {
+        let mut _current_tvar = 0;
+
+        $(
+            _current_tvar += 1;
+
+            let $name = VarId::from_u32(_current_tvar);
+        )*
+    };
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Mode {
     Standard,
@@ -657,6 +681,38 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             Box::new(list_type(flex(TVAR1))),
         ),
     );
+
+    // keepOks : List before, (before -> Result after *) -> List after
+    add_type(Symbol::LIST_KEEP_OKS, {
+        let_tvars! { star, cvar, before, after};
+        top_level_function(
+            vec![
+                list_type(flex(before)),
+                closure(
+                    vec![flex(before)],
+                    cvar,
+                    Box::new(result_type(flex(after), flex(star))),
+                ),
+            ],
+            Box::new(list_type(flex(after))),
+        )
+    });
+
+    // keepOks : List before, (before -> Result * after) -> List after
+    add_type(Symbol::LIST_KEEP_ERRS, {
+        let_tvars! { star, cvar, before, after};
+        top_level_function(
+            vec![
+                list_type(flex(before)),
+                closure(
+                    vec![flex(before)],
+                    cvar,
+                    Box::new(result_type(flex(star), flex(after))),
+                ),
+            ],
+            Box::new(list_type(flex(after))),
+        )
+    });
 
     // map : List before, (before -> after) -> List after
     add_type(

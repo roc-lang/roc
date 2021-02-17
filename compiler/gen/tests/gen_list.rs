@@ -1710,6 +1710,26 @@ mod gen_list {
     }
 
     #[test]
+    fn list_keep_oks() {
+        assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
+        assert_evals_to!("List.keepOks [1,2] (\\x -> Ok x)", &[1, 2], &[i64]);
+        assert_evals_to!("List.keepOks [1,2] (\\x -> x % 2)", &[1, 0], &[i64]);
+        assert_evals_to!("List.keepOks [Ok 1, Err 2] (\\x -> x)", &[1], &[i64]);
+    }
+
+    #[test]
+    fn list_keep_errs() {
+        assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
+        assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
+        assert_evals_to!(
+            "List.keepErrs [0,1,2] (\\x -> x % 0 |> Result.mapErr (\\_ -> 32))",
+            &[32, 32, 32],
+            &[i64]
+        );
+        assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
+    }
+
+    #[test]
     #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
     fn cleanup_because_exception() {
         assert_evals_to!(

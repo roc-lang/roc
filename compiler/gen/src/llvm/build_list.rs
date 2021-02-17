@@ -1139,6 +1139,121 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     )
 }
 
+/// List.keepOks : List before, (before -> Result after *) -> List after
+#[allow(clippy::too_many_arguments)]
+pub fn list_keep_oks<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    before_layout: &Layout<'a>,
+    after_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_keep_result(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        before_layout,
+        after_layout,
+        bitcode::LIST_KEEP_OKS,
+    )
+}
+
+/// List.keepErrs : List before, (before -> Result * after) -> List after
+#[allow(clippy::too_many_arguments)]
+pub fn list_keep_errs<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    before_layout: &Layout<'a>,
+    after_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_keep_result(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        before_layout,
+        after_layout,
+        bitcode::LIST_KEEP_ERRS,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn list_keep_result<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    before_layout: &Layout<'a>,
+    after_layout: &Layout<'a>,
+    op: &str,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let result_layout = match transform_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
+    };
+
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
+
+    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
+    env.builder.build_store(transform_ptr, transform);
+
+    let stepper_caller =
+        build_transform_caller(env, layout_ids, transform_layout, &[before_layout.clone()])
+            .as_global_value()
+            .as_pointer_value();
+
+    let before_width = env
+        .ptr_int()
+        .const_int(before_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let after_width = env
+        .ptr_int()
+        .const_int(after_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let result_width = env
+        .ptr_int()
+        .const_int(result_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = before_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_i128.into(),
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            alignment_iv.into(),
+            before_width.into(),
+            result_width.into(),
+            after_width.into(),
+        ],
+        op,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
+}
+
 /// List.map : List before, (before -> after) -> List after
 #[allow(clippy::too_many_arguments)]
 pub fn list_map<'a, 'ctx, 'env>(

@@ -10,6 +10,8 @@ comptime {
     exportListFn(list.listKeepIf, "keep_if");
     exportListFn(list.listWalk, "walk");
     exportListFn(list.listWalkBackwards, "walk_backwards");
+    exportListFn(list.listKeepOks, "keep_oks");
+    exportListFn(list.listKeepErrs, "keep_errs");
 }
 
 // Dict Module

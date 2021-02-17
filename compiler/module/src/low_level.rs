@@ -29,6 +29,8 @@ pub enum LowLevel {
     ListWalk,
     ListWalkBackwards,
     ListSum,
+    ListKeepOks,
+    ListKeepErrs,
     DictSize,
     DictEmpty,
     DictInsert,

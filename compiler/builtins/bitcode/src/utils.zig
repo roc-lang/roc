@@ -86,3 +86,22 @@ pub fn allocateWithRefcount(
         },
     }
 }
+
+pub const RocResult = extern struct {
+    bytes: ?[*]u8,
+
+    pub fn isOk(self: RocResult) bool {
+        // assumptions
+        //
+        // - the tag is the first field
+        // - the tag is usize bytes wide
+        // - Ok has tag_id 1, because Err < Ok
+        const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, self.bytes));
+
+        return usizes[0] == 1;
+    }
+
+    pub fn isErr(self: RocResult) bool {
+        return !self.isOk();
+    }
+};

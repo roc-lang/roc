@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const RocResult = utils.RocResult;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
@@ -152,7 +153,48 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
 
         output.length = kept;
 
-        // utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
+pub fn listKeepOks(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize) callconv(.C) RocList {
+    return listKeepResult(list, RocResult.isOk, transform, caller, alignment, before_width, result_width, after_width);
+}
+
+pub fn listKeepErrs(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize) callconv(.C) RocList {
+    return listKeepResult(list, RocResult.isErr, transform, caller, alignment, before_width, result_width, after_width);
+}
+
+pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        var i: usize = 0;
+        var output = RocList.allocate(std.heap.c_allocator, alignment, list.len(), list.len() * after_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        var temporary = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, result_width) catch unreachable);
+
+        var kept: usize = 0;
+        while (i < size) : (i += 1) {
+            const element = source_ptr + (i * before_width);
+            caller(transform, element, temporary);
+
+            const result = utils.RocResult{ .bytes = temporary };
+
+            if (is_good_constructor(result)) {
+                @memcpy(target_ptr + (kept * after_width), temporary + @sizeOf(i64), after_width);
+
+                kept += 1;
+            }
+        }
+
+        output.length = kept;
+
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * before_width);
 
         return output;
     } else {

@@ -5,8 +5,9 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
-    list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
+    list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
+    list_prepend, list_repeat, list_reverse, list_set, list_single, list_sum, list_walk,
+    list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_join_with,
@@ -3648,8 +3649,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let inplace = get_inplace_from_layout(layout);
-
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => {
                     return empty_list(env);
@@ -3658,6 +3657,66 @@ fn run_low_level<'a, 'ctx, 'env>(
                     list_keep_if(env, layout_ids, func, func_layout, list, element_layout)
                 }
                 _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListKeepOks => {
+            // List.keepOks : List before, (before -> Result after *) -> List after
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => {
+                    return empty_list(env);
+                }
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_oks(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
+        }
+        ListKeepErrs => {
+            // List.keepErrs : List before, (before -> Result * after) -> List after
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => {
+                    return empty_list(env);
+                }
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_errs(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
             }
         }
         ListContains => {

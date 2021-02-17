@@ -79,6 +79,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_JOIN => list_join,
         LIST_MAP => list_map,
         LIST_KEEP_IF => list_keep_if,
+        LIST_KEEP_OKS => list_keep_oks,
+        LIST_KEEP_ERRS=> list_keep_errs,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
         DICT_TEST_HASH => dict_hash_test_only,
@@ -204,6 +206,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
         Symbol::LIST_KEEP_IF => list_keep_if,
+        Symbol::LIST_KEEP_OKS => list_keep_oks,
+        Symbol::LIST_KEEP_ERRS=> list_keep_errs,
         Symbol::LIST_WALK => list_walk,
         Symbol::LIST_WALK_BACKWARDS => list_walk_backwards,
         Symbol::DICT_TEST_HASH => dict_hash_test_only,
@@ -1934,50 +1938,22 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.contains : List elem, elem -> Bool
 fn list_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let elem_var = var_store.fresh();
-    let bool_var = var_store.fresh();
+    lowlevel_2(symbol, LowLevel::ListContains, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::ListContains,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (elem_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: bool_var,
-    };
+/// List.keepOks : List before, (before -> Result after *) -> List after
+fn list_keep_oks(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListKeepOks, var_store)
+}
 
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (elem_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        bool_var,
-    )
+/// List.keepErrs: List before, (before -> Result * after) -> List after
+fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
 }
 
 /// List.map : List before, (before -> after) -> List after
 fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let func_var = var_store.fresh();
-    let ret_list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListMap,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (func_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: ret_list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        ret_list_var,
-    )
+    lowlevel_2(symbol, LowLevel::ListMap, var_store)
 }
 
 /// Dict.hashTestOnly : k, v -> Nat

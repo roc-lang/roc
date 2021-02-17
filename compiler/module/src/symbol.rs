@@ -896,6 +896,8 @@ define_builtins! {
         18 LIST_SUM: "sum"
         19 LIST_WALK: "walk"
         20 LIST_LAST: "last"
+        21 LIST_KEEP_OKS: "keepOks"
+        22 LIST_KEEP_ERRS: "keepErrs"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
