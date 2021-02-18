@@ -13,6 +13,7 @@ mod helpers;
 mod cli_run {
     use crate::helpers::{
         example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
+        ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
     use std::path::Path;
@@ -60,7 +61,24 @@ mod cli_run {
                 });
 
                 if !memory_errors.is_empty() {
-                    panic!("{:?}", memory_errors);
+                    for error in memory_errors {
+                        let ValgrindError {
+                            kind,
+                            what: _,
+                            xwhat,
+                        } = error;
+                        println!("Valgrind Error: {}\n", kind);
+
+                        if let Some(ValgrindErrorXWhat {
+                            text,
+                            leakedbytes: _,
+                            leakedblocks: _,
+                        }) = xwhat
+                        {
+                            println!("    {}", text);
+                        }
+                    }
+                    panic!("Valgrind reported memory errors");
                 }
             } else {
                 let exit_code = match valgrind_out.status.code() {
@@ -222,6 +240,69 @@ mod cli_run {
             false,
         );
     }
+
+    #[ignore]
+    #[test]
+    #[serial(closure1)]
+    fn closure1() {
+        check_output(
+            &example_file("benchmarks", "Closure1.roc"),
+            "closure1",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[ignore]
+    #[test]
+    #[serial(closure2)]
+    fn closure2() {
+        check_output(
+            &example_file("benchmarks", "Closure2.roc"),
+            "closure2",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[ignore]
+    #[test]
+    #[serial(closure3)]
+    fn closure3() {
+        check_output(
+            &example_file("benchmarks", "Closure3.roc"),
+            "closure3",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[ignore]
+    #[test]
+    #[serial(closure4)]
+    fn closure4() {
+        check_output(
+            &example_file("benchmarks", "Closure4.roc"),
+            "closure4",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    //    #[test]
+    //    #[serial(effect)]
+    //    fn run_effect_unoptimized() {
+    //        check_output(
+    //            &example_file("effect", "Main.roc"),
+    //            &[],
+    //            "I am Dep2.str2\n",
+    //            true,
+    //        );
+    //    }
 
     #[test]
     #[serial(multi_dep_str)]

@@ -192,20 +192,20 @@ struct ValgrindDummyStruct {}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ValgrindError {
-    kind: String,
+    pub kind: String,
     #[serde(default)]
-    what: Option<String>,
+    pub what: Option<String>,
     #[serde(default)]
-    xwhat: Option<ValgrindErrorXWhat>,
+    pub xwhat: Option<ValgrindErrorXWhat>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ValgrindErrorXWhat {
-    text: String,
+    pub text: String,
     #[serde(default)]
-    leakedbytes: Option<isize>,
+    pub leakedbytes: Option<isize>,
     #[serde(default)]
-    leakedblocks: Option<isize>,
+    pub leakedblocks: Option<isize>,
 }
 
 #[allow(dead_code)]

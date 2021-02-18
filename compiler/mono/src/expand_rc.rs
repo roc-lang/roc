@@ -157,6 +157,24 @@ impl<'a, 'i> Env<'a, 'i> {
         }
     }
 
+    fn try_insert_struct_info(&mut self, symbol: Symbol, layout: &Layout<'a>) {
+        use Layout::*;
+
+        match layout {
+            Struct(fields) => {
+                self.constructor_map.insert(symbol, 0);
+                self.layout_map.insert(symbol, Layout::Struct(fields));
+            }
+            Closure(arguments, closure_layout, result) => {
+                let fpointer = Layout::FunctionPointer(arguments, result);
+                let fields = self.arena.alloc([fpointer, closure_layout.layout.clone()]);
+                self.constructor_map.insert(symbol, 0);
+                self.layout_map.insert(symbol, Layout::Struct(fields));
+            }
+            _ => {}
+        }
+    }
+
     fn insert_struct_info(&mut self, symbol: Symbol, fields: &'a [Layout<'a>]) {
         self.constructor_map.insert(symbol, 0);
         self.layout_map.insert(symbol, Layout::Struct(fields));
@@ -185,7 +203,7 @@ impl<'a, 'i> Env<'a, 'i> {
 }
 
 fn layout_for_constructor<'a>(
-    _arena: &'a Bump,
+    arena: &'a Bump,
     layout: &Layout<'a>,
     constructor: u64,
 ) -> ConstructorLayout<&'a [Layout<'a>]> {
@@ -227,7 +245,12 @@ fn layout_for_constructor<'a>(
             debug_assert_eq!(constructor, 0);
             HasFields(fields)
         }
-        _ => unreachable!(),
+        Closure(arguments, closure_layout, result) => {
+            let fpointer = Layout::FunctionPointer(arguments, result);
+            let fields = arena.alloc([fpointer, closure_layout.layout.clone()]);
+            HasFields(fields)
+        }
+        other => unreachable!("weird layout {:?}", other),
     }
 }
 
@@ -253,11 +276,11 @@ fn work_for_constructor<'a>(
     match layout_for_constructor(env.arena, full_layout, constructor) {
         Unknown => Unknown,
         IsNull => IsNull,
-        HasFields(cons_layout) => {
+        HasFields(constructor_layout) => {
             // figure out if there is at least one aliased refcounted field. Only then
             // does it make sense to inline the decrement
             let at_least_one_aliased = (|| {
-                for (i, field_layout) in cons_layout.iter().enumerate() {
+                for (i, field_layout) in constructor_layout.iter().enumerate() {
                     if field_layout.contains_refcounted()
                         && field_aliases.and_then(|map| map.get(&(i as u64))).is_some()
                     {
@@ -269,7 +292,7 @@ fn work_for_constructor<'a>(
 
             // for each field, if it has refcounted content, check if it has an alias
             // if so, use the alias, otherwise load the field.
-            for (i, field_layout) in cons_layout.iter().enumerate() {
+            for (i, field_layout) in constructor_layout.iter().enumerate() {
                 if field_layout.contains_refcounted() {
                     match field_aliases.and_then(|map| map.get(&(i as u64))) {
                         Some(alias_symbol) => {
@@ -283,7 +306,7 @@ fn work_for_constructor<'a>(
 
                             let expr = Expr::AccessAtIndex {
                                 index: i as u64,
-                                field_layouts: cons_layout,
+                                field_layouts: constructor_layout,
                                 structure: *symbol,
                                 wrapped: Wrapped::MultiTagUnion,
                             };
@@ -350,10 +373,11 @@ pub fn expand_and_cancel_proc<'a>(
 
                 introduced.push(*symbol);
             }
-            Layout::Closure(_, closure_layout, _) => {
-                if let Layout::Struct(fields) = closure_layout.layout {
-                    env.insert_struct_info(*symbol, fields);
-                }
+            Layout::Closure(arguments, closure_layout, result) => {
+                let fpointer = Layout::FunctionPointer(arguments, result);
+                let fields = env.arena.alloc([fpointer, closure_layout.layout.clone()]);
+                env.insert_struct_info(*symbol, fields);
+                introduced.push(*symbol);
             }
             _ => {}
         }
@@ -414,7 +438,10 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 match &expr {
                     Expr::AccessAtIndex {
-                        structure, index, ..
+                        structure,
+                        index,
+                        field_layouts,
+                        ..
                     } => {
                         let entry = env
                             .alias_map
@@ -423,7 +450,13 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                         entry.insert(*index, symbol);
 
+                        // if the field is a struct, we know its constructor too!
+                        let field_layout = &field_layouts[*index as usize];
+                        env.try_insert_struct_info(symbol, field_layout);
+
                         new_cont = expand_and_cancel(env, cont);
+
+                        env.remove_struct_info(symbol);
 
                         // make sure to remove the alias, so other branches don't use it by accident
                         env.alias_map

@@ -190,7 +190,9 @@ fn unify_alias(
                         problems.extend(unify_pool(subs, pool, *l_var, *r_var));
                     }
 
-                    problems.extend(merge(subs, &ctx, other_content.clone()));
+                    if problems.is_empty() {
+                        problems.extend(merge(subs, &ctx, other_content.clone()));
+                    }
 
                     if problems.is_empty() {
                         problems.extend(unify_pool(subs, pool, real_var, *other_real_var));
