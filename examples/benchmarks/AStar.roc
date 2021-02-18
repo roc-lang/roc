@@ -21,23 +21,11 @@ initialModel = \start ->
     }
 
 
-filterMap : List a, (a -> Result b *) -> List b
-filterMap = \list, toResult ->
-    List.walk list (\element, accum ->
-        when toResult element is
-            Ok value ->
-                List.append accum value
-
-            Err _ ->
-                accum
-        )
-        []
-
 cheapestOpen : (position -> F64), Model position -> Result position {}
 cheapestOpen = \costFn, model ->
     model.openSet
         |> Set.toList
-        |> filterMap (\position ->
+        |> List.keepOks (\position ->
             when Dict.get model.costs position is
                 Err _ ->
                     Err {}

@@ -753,6 +753,9 @@ define_builtins! {
         // a user-defined function that we need to capture in a closure
         // see e.g. Set.walk
         19 USER_FUNCTION: "#user_function"
+
+        // A caller (wrapper) that we pass to zig for it to be able to call Roc functions
+        20 ZIG_FUNCTION_CALLER: "#zig_function_caller"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -893,6 +896,9 @@ define_builtins! {
         18 LIST_SUM: "sum"
         19 LIST_WALK: "walk"
         20 LIST_LAST: "last"
+        21 LIST_KEEP_OKS: "keepOks"
+        22 LIST_KEEP_ERRS: "keepErrs"
+        23 LIST_MAP_WITH_INDEX: "mapWithIndex"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

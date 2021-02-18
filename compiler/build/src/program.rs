@@ -97,6 +97,10 @@ pub fn gen_from_mono_module(
         if name.starts_with("roc_builtins.dict") || name.starts_with("dict.RocDict") {
             function.add_attribute(AttributeLoc::Function, attr);
         }
+
+        if name.starts_with("roc_builtins.list") || name.starts_with("list.RocList") {
+            function.add_attribute(AttributeLoc::Function, attr);
+        }
     }
 
     let builder = context.create_builder();

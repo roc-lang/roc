@@ -1,3 +1,4 @@
+use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build_dict::{
     dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
     dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
@@ -5,8 +6,9 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
-    list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
+    list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
+    list_map_with_index, list_prepend, list_repeat, list_reverse, list_set, list_single, list_sum,
+    list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_join_with,
@@ -36,8 +38,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
-    IntValue, PointerValue, StructValue,
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
+    PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -3630,18 +3632,29 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let inplace = get_inplace_from_layout(layout);
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_map(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMapWithIndex => {
+            // List.map : List before, (before -> after) -> List after
+            debug_assert_eq!(args.len(), 2);
 
-            list_map(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-            )
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_map_with_index(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListKeepIf => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -3651,36 +3664,79 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let inplace = get_inplace_from_layout(layout);
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_keep_if(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListKeepOks => {
+            // List.keepOks : List before, (before -> Result after *) -> List after
+            debug_assert_eq!(args.len(), 2);
 
-            list_keep_if(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-            )
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_oks(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
+        }
+        ListKeepErrs => {
+            // List.keepErrs : List before, (before -> Result * after) -> List after
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_errs(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let list = load_symbol(scope, &args[0]);
 
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_contains(
-                env,
-                layout_ids,
-                parent,
-                elem,
-                elem_layout,
-                list,
-                list_layout,
-            )
+            list_contains(env, layout_ids, elem, elem_layout, list)
         }
         ListWalk => {
             debug_assert_eq!(args.len(), 3);
@@ -3691,16 +3747,21 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            list_walk(
-                env,
-                parent,
-                list,
-                list_layout,
-                func,
-                func_layout,
-                default,
-                default_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk(
+                    env,
+                    layout_ids,
+                    parent,
+                    list,
+                    element_layout,
+                    func,
+                    func_layout,
+                    default,
+                    default_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListWalkBackwards => {
             // List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
@@ -3712,16 +3773,21 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            list_walk_backwards(
-                env,
-                parent,
-                list,
-                list_layout,
-                func,
-                func_layout,
-                default,
-                default_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_backwards(
+                    env,
+                    layout_ids,
+                    parent,
+                    list,
+                    element_layout,
+                    func,
+                    func_layout,
+                    default,
+                    default_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListSum => {
             debug_assert_eq!(args.len(), 1);
@@ -4529,49 +4595,6 @@ fn build_int_binop<'a, 'ctx, 'env>(
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
-}
-
-pub fn call_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Did not get return value from bitcode function {:?}",
-                fn_name
-            )
-        })
-}
-
-pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> InstructionValue<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
-        .try_as_basic_value()
-        .right()
-        .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
-}
-
-fn call_bitcode_fn_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> CallSiteValue<'ctx> {
-    let fn_val = env
-        .module
-        .get_function(fn_name)
-        .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
-
-    let call = env.builder.build_call(fn_val, args, "call_builtin");
-
-    call.set_call_convention(fn_val.get_call_conventions());
-    call
 }
 
 pub fn build_num_binop<'a, 'ctx, 'env>(

@@ -1,6 +1,5 @@
-use crate::llvm::build::{
-    call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, Env, InPlace, Scope,
-};
+use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
+use crate::llvm::build::{complex_bitcast, Env, InPlace, Scope};
 use crate::llvm::build_list::{allocate_list, store_list};
 use crate::llvm::convert::collection;
 use inkwell::builder::Builder;

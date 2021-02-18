@@ -2,6 +2,20 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// List Module
+const list = @import("list.zig");
+
+comptime {
+    exportListFn(list.listMap, "map");
+    exportListFn(list.listMapWithIndex, "map_with_index");
+    exportListFn(list.listKeepIf, "keep_if");
+    exportListFn(list.listWalk, "walk");
+    exportListFn(list.listWalkBackwards, "walk_backwards");
+    exportListFn(list.listKeepOks, "keep_oks");
+    exportListFn(list.listKeepErrs, "keep_errs");
+    exportListFn(list.listContains, "contains");
+}
+
 // Dict Module
 const dict = @import("dict.zig");
 const hash = @import("hash.zig");
@@ -65,6 +79,10 @@ fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dict." ++ func_name);
+}
+
+fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "list." ++ func_name);
 }
 
 // Run all tests in imported modules

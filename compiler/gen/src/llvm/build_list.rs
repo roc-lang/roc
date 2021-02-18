@@ -1,17 +1,21 @@
-use crate::llvm::build::{
-    allocate_with_refcount_help, build_num_binop, cast_basic_basic, Env, InPlace,
+#![allow(clippy::too_many_arguments)]
+use crate::llvm::bitcode::{
+    build_eq_wrapper, build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
 };
-use crate::llvm::compare::generic_eq;
+use crate::llvm::build::{
+    allocate_with_refcount_help, build_num_binop, cast_basic_basic, complex_bitcast, Env, InPlace,
+};
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
-    PointerToRefcount,
+    increment_refcount_layout, refcount_is_one_comparison, PointerToRefcount,
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::types::BasicType;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
 /// List.single : a -> List a
@@ -461,8 +465,6 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use inkwell::types::BasicType;
-
     let builder = env.builder;
     let ctx = env.context;
 
@@ -845,728 +847,423 @@ pub fn list_sum<'a, 'ctx, 'env>(
 }
 
 /// List.walk : List elem, (elem -> accum -> accum), accum -> accum
-#[allow(clippy::too_many_arguments)]
 pub fn list_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     func: BasicValueEnum<'ctx>,
     func_layout: &Layout<'a>,
     default: BasicValueEnum<'ctx>,
     default_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-    let builder = env.builder;
-
-    let list_wrapper = list.into_struct_value();
-    let len = list_len(env.builder, list_wrapper);
-
-    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
-    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
-    builder.build_store(accum_alloca, default);
-
-    let then_block = ctx.append_basic_block(parent, "then");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
-
-    let condition = builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        ctx.i64_type().const_zero(),
-        "list_non_empty",
-    );
-
-    builder.build_conditional_branch(condition, then_block, cont_block);
-
-    builder.position_at_end(then_block);
-
-    match (func, func_layout) {
-        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, _)) => {
-            let elem_layout = match list_layout {
-                Layout::Builtin(Builtin::List(_, layout)) => layout,
-                _ => unreachable!("can only fold over a list"),
-            };
-
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-            let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
-
-            let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
-                // load current accumulator
-                let current = builder.build_load(accum_alloca, "retrieve_accum");
-
-                let call_site_value =
-                    builder.build_call(func_ptr, &[elem, current], "#walk_right_func");
-
-                // set the calling convention explicitly for this call
-                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                let new_current = call_site_value
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-                builder.build_store(accum_alloca, new_current);
-            };
-
-            incrementing_elem_loop(
-                builder,
-                ctx,
-                parent,
-                list_ptr,
-                len,
-                "#index",
-                walk_right_loop,
-            );
-        }
-
-        (BasicValueEnum::StructValue(ptr_and_data), Layout::Closure(_, _, _)) => {
-            let builder = env.builder;
-
-            let func_ptr = builder
-                .build_extract_value(ptr_and_data, 0, "function_ptr")
-                .unwrap()
-                .into_pointer_value();
-
-            let closure_data = builder
-                .build_extract_value(ptr_and_data, 1, "closure_data")
-                .unwrap();
-
-            let elem_layout = match list_layout {
-                Layout::Builtin(Builtin::List(_, layout)) => layout,
-                _ => unreachable!("can only fold over a list"),
-            };
-
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-            let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
-
-            let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
-                // load current accumulator
-                let current = builder.build_load(accum_alloca, "retrieve_accum");
-
-                let call_site_value = builder.build_call(
-                    func_ptr,
-                    &[elem, current, closure_data],
-                    "#walk_right_func",
-                );
-
-                // set the calling convention explicitly for this call
-                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                let new_current = call_site_value
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-                builder.build_store(accum_alloca, new_current);
-            };
-
-            incrementing_elem_loop(
-                builder,
-                ctx,
-                parent,
-                list_ptr,
-                len,
-                "#index",
-                walk_right_loop,
-            );
-        }
-
-        _ => {
-            unreachable!(
-                "Invalid function basic value enum or layout for List.keepIf : {:?}",
-                (func, func_layout)
-            );
-        }
-    }
-
-    builder.build_unconditional_branch(cont_block);
-
-    builder.position_at_end(cont_block);
-
-    builder.build_load(accum_alloca, "load_final_acum")
+    list_walk_generic(
+        env,
+        layout_ids,
+        parent,
+        list,
+        element_layout,
+        func,
+        func_layout,
+        default,
+        default_layout,
+        &bitcode::LIST_WALK,
+    )
 }
 
 /// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
-#[allow(clippy::too_many_arguments)]
 pub fn list_walk_backwards<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     func: BasicValueEnum<'ctx>,
     func_layout: &Layout<'a>,
     default: BasicValueEnum<'ctx>,
     default_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
+    list_walk_generic(
+        env,
+        layout_ids,
+        parent,
+        list,
+        element_layout,
+        func,
+        func_layout,
+        default,
+        default_layout,
+        &bitcode::LIST_WALK_BACKWARDS,
+    )
+}
+
+fn list_walk_generic<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    _parent: FunctionValue<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    default: BasicValueEnum<'ctx>,
+    default_layout: &Layout<'a>,
+    zig_function: &str,
+) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let list_wrapper = list.into_struct_value();
-    let len = list_len(env.builder, list_wrapper);
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
-    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
-    builder.build_store(accum_alloca, default);
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
 
-    let then_block = ctx.append_basic_block(parent, "then");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
+    let transform_ptr = builder.build_alloca(func.get_type(), "transform_ptr");
+    env.builder.build_store(transform_ptr, func);
 
-    let condition = builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        ctx.i64_type().const_zero(),
-        "list_non_empty",
+    let default_ptr = builder.build_alloca(default.get_type(), "default_ptr");
+    env.builder.build_store(default_ptr, default);
+
+    let stepper_caller = build_transform_caller(
+        env,
+        layout_ids,
+        func_layout,
+        &[element_layout.clone(), default_layout.clone()],
+    )
+    .as_global_value()
+    .as_pointer_value();
+
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let default_width = env
+        .ptr_int()
+        .const_int(default_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let result_ptr = env.builder.build_alloca(default.get_type(), "result");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            list_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
+            alignment_iv.into(),
+            element_width.into(),
+            default_width.into(),
+            env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
+        ],
+        zig_function,
     );
 
-    builder.build_conditional_branch(condition, then_block, cont_block);
-
-    builder.position_at_end(then_block);
-
-    match (func, func_layout) {
-        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, _)) => {
-            let elem_layout = match list_layout {
-                Layout::Builtin(Builtin::List(_, layout)) => layout,
-                _ => unreachable!("can only fold over a list"),
-            };
-
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-            let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
-
-            let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
-                // load current accumulator
-                let current = builder.build_load(accum_alloca, "retrieve_accum");
-
-                let call_site_value =
-                    builder.build_call(func_ptr, &[elem, current], "#walk_right_func");
-
-                // set the calling convention explicitly for this call
-                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                let new_current = call_site_value
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-                builder.build_store(accum_alloca, new_current);
-            };
-
-            decrementing_elem_loop(
-                builder,
-                ctx,
-                parent,
-                list_ptr,
-                len,
-                "#index",
-                walk_right_loop,
-            );
-        }
-
-        _ => {
-            unreachable!(
-                "Invalid function basic value enum or layout for List.keepIf : {:?}",
-                (func, func_layout)
-            );
-        }
-    }
-
-    builder.build_unconditional_branch(cont_block);
-
-    builder.position_at_end(cont_block);
-
-    builder.build_load(accum_alloca, "load_final_acum")
+    env.builder.build_load(result_ptr, "load_result")
 }
 
 /// List.contains : List elem, elem -> Bool
 pub fn list_contains<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use inkwell::types::BasicType;
-
     let builder = env.builder;
 
-    let wrapper_struct = list.into_struct_value();
-    let list_elem_layout = match &list_layout {
-        // this pointer will never actually be dereferenced
-        Layout::Builtin(Builtin::EmptyList) => &Layout::Builtin(Builtin::Int64),
-        Layout::Builtin(Builtin::List(_, element_layout)) => element_layout,
-        _ => unreachable!("Invalid layout {:?} in List.contains", list_layout),
-    };
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list_elem_type =
-        basic_type_from_layout(env.arena, env.context, list_elem_layout, env.ptr_bytes);
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
 
-    let list_ptr = load_list_ptr(
-        builder,
-        wrapper_struct,
-        list_elem_type.ptr_type(AddressSpace::Generic),
-    );
+    let key_ptr = builder.build_alloca(element.get_type(), "key_ptr");
+    env.builder.build_store(key_ptr, element);
 
-    let length = list_len(builder, list.into_struct_value());
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    list_contains_help(
+    let eq_fn = build_eq_wrapper(env, layout_ids, element_layout);
+
+    call_bitcode_fn(
         env,
-        layout_ids,
-        parent,
-        length,
-        list_ptr,
-        list_elem_layout,
-        elem,
-        elem_layout,
+        &[
+            list_i128,
+            env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
+            element_width.into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_CONTAINS,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn list_contains_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
-    length: IntValue<'ctx>,
-    source_ptr: PointerValue<'ctx>,
-    list_elem_layout: &Layout<'a>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let bool_alloca = builder.build_alloca(ctx.bool_type(), "bool_alloca");
-    let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
-    let next_free_index_alloca = builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
-
-    builder.build_store(bool_alloca, ctx.bool_type().const_zero());
-    builder.build_store(index_alloca, ctx.i64_type().const_zero());
-    builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
-
-    let condition_bb = ctx.append_basic_block(parent, "condition");
-    builder.build_unconditional_branch(condition_bb);
-    builder.position_at_end(condition_bb);
-
-    let index = builder.build_load(index_alloca, "index").into_int_value();
-
-    let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
-
-    let body_bb = ctx.append_basic_block(parent, "body");
-    let cont_bb = ctx.append_basic_block(parent, "cont");
-    builder.build_conditional_branch(condition, body_bb, cont_bb);
-
-    // loop body
-    builder.position_at_end(body_bb);
-
-    let current_elem_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
-
-    let current_elem = builder.build_load(current_elem_ptr, "load_elem");
-
-    let has_found = generic_eq(
-        env,
-        layout_ids,
-        current_elem,
-        elem,
-        list_elem_layout,
-        elem_layout,
-    );
-
-    builder.build_store(bool_alloca, has_found.into_int_value());
-
-    let one = ctx.i64_type().const_int(1, false);
-
-    let next_free_index = builder
-        .build_load(next_free_index_alloca, "load_next_free")
-        .into_int_value();
-
-    builder.build_store(
-        next_free_index_alloca,
-        builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
-    );
-
-    builder.build_store(
-        index_alloca,
-        builder.build_int_add(index, one, "incremented_index"),
-    );
-
-    builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
-
-    // continuation
-    builder.position_at_end(cont_bb);
-
-    builder.build_load(bool_alloca, "answer")
-}
-
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
-#[allow(clippy::too_many_arguments)]
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    output_inplace: InPlace,
-    parent: FunctionValue<'ctx>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use inkwell::types::BasicType;
-
     let builder = env.builder;
-    let ctx = env.context;
 
-    let wrapper_struct = list.into_struct_value();
-    let (input_inplace, element_layout) = match list_layout.clone() {
-        Layout::Builtin(Builtin::EmptyList) => (
-            InPlace::InPlace,
-            // this pointer will never actually be dereferenced
-            Layout::Builtin(Builtin::Int64),
-        ),
-        Layout::Builtin(Builtin::List(memory_mode, elem_layout)) => (
-            match memory_mode {
-                MemoryMode::Unique => InPlace::InPlace,
-                MemoryMode::Refcounted => InPlace::Clone,
-            },
-            elem_layout.clone(),
-        ),
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-        _ => unreachable!("Invalid layout {:?} in List.keepIf", list_layout),
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
+
+    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
+    env.builder.build_store(transform_ptr, transform);
+
+    let stepper_caller =
+        build_transform_caller(env, layout_ids, transform_layout, &[element_layout.clone()])
+            .as_global_value()
+            .as_pointer_value();
+
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            alignment_iv.into(),
+            element_width.into(),
+        ],
+        &bitcode::LIST_KEEP_IF,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
+}
+
+/// List.keepOks : List before, (before -> Result after *) -> List after
+pub fn list_keep_oks<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    before_layout: &Layout<'a>,
+    after_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_keep_result(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        before_layout,
+        after_layout,
+        bitcode::LIST_KEEP_OKS,
+    )
+}
+
+/// List.keepErrs : List before, (before -> Result * after) -> List after
+pub fn list_keep_errs<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    before_layout: &Layout<'a>,
+    after_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_keep_result(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        before_layout,
+        after_layout,
+        bitcode::LIST_KEEP_ERRS,
+    )
+}
+
+pub fn list_keep_result<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    before_layout: &Layout<'a>,
+    after_layout: &Layout<'a>,
+    op: &str,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let result_layout = match transform_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
     };
 
-    let list_type = basic_type_from_layout(env.arena, env.context, &list_layout, env.ptr_bytes);
-    let elem_type = basic_type_from_layout(env.arena, env.context, &element_layout, env.ptr_bytes);
-    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
 
-    let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-    let length = list_len(builder, list.into_struct_value());
+    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
+    env.builder.build_store(transform_ptr, transform);
 
-    let zero = ctx.i64_type().const_zero();
+    let stepper_caller =
+        build_transform_caller(env, layout_ids, transform_layout, &[before_layout.clone()])
+            .as_global_value()
+            .as_pointer_value();
 
-    match input_inplace {
-        InPlace::InPlace => {
-            let new_length = list_keep_if_help(
-                env,
-                input_inplace,
-                parent,
-                length,
-                list_ptr,
-                list_ptr,
-                func,
-                func_layout,
-            );
+    let before_width = env
+        .ptr_int()
+        .const_int(before_layout.stack_size(env.ptr_bytes) as u64, false);
 
-            store_list(env, list_ptr, new_length)
-        }
-        InPlace::Clone => {
-            let len_0_block = ctx.append_basic_block(parent, "len_0_block");
-            let len_n_block = ctx.append_basic_block(parent, "len_n_block");
-            let cont_block = ctx.append_basic_block(parent, "cont_block");
+    let after_width = env
+        .ptr_int()
+        .const_int(after_layout.stack_size(env.ptr_bytes) as u64, false);
 
-            let result = builder.build_alloca(list_type, "result");
+    let result_width = env
+        .ptr_int()
+        .const_int(result_layout.stack_size(env.ptr_bytes) as u64, false);
 
-            builder.build_switch(length, len_n_block, &[(zero, len_0_block)]);
+    let alignment = before_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-            // build block for length 0
-            {
-                builder.position_at_end(len_0_block);
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            alignment_iv.into(),
+            before_width.into(),
+            result_width.into(),
+            after_width.into(),
+        ],
+        op,
+    );
 
-                let new_list = store_list(env, ptr_type.const_zero(), zero);
-
-                builder.build_store(result, new_list);
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            // build block for length > 0
-            {
-                builder.position_at_end(len_n_block);
-
-                let new_list_ptr = allocate_list(env, output_inplace, &element_layout, length);
-
-                let new_length = list_keep_if_help(
-                    env,
-                    InPlace::Clone,
-                    parent,
-                    length,
-                    list_ptr,
-                    new_list_ptr,
-                    func,
-                    func_layout,
-                );
-
-                // store new list pointer there
-                let new_list = store_list(env, new_list_ptr, new_length);
-
-                builder.build_store(result, new_list);
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            builder.position_at_end(cont_block);
-
-            // consume the input list
-            decrement_refcount_layout(env, parent, layout_ids, list, list_layout);
-
-            builder.build_load(result, "load_result")
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn list_keep_if_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    _inplace: InPlace,
-    parent: FunctionValue<'ctx>,
-    length: IntValue<'ctx>,
-    source_ptr: PointerValue<'ctx>,
-    dest_ptr: PointerValue<'ctx>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
-) -> IntValue<'ctx> {
-    match (func, func_layout) {
-        (
-            BasicValueEnum::PointerValue(func_ptr),
-            Layout::FunctionPointer(_, Layout::Builtin(Builtin::Int1)),
-        ) => {
-            let builder = env.builder;
-            let ctx = env.context;
-
-            let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
-            let next_free_index_alloca =
-                builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
-
-            builder.build_store(index_alloca, ctx.i64_type().const_zero());
-            builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
-
-            // while (length > next_index)
-            let condition_bb = ctx.append_basic_block(parent, "condition");
-            builder.build_unconditional_branch(condition_bb);
-            builder.position_at_end(condition_bb);
-
-            let index = builder.build_load(index_alloca, "index").into_int_value();
-
-            let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
-
-            let body_bb = ctx.append_basic_block(parent, "body");
-            let cont_bb = ctx.append_basic_block(parent, "cont");
-            builder.build_conditional_branch(condition, body_bb, cont_bb);
-
-            // loop body
-            builder.position_at_end(body_bb);
-
-            let elem_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
-
-            let elem = builder.build_load(elem_ptr, "load_elem");
-
-            let call_site_value =
-                builder.build_call(func_ptr, env.arena.alloc([elem]), "#keep_if_insert_func");
-
-            // set the calling convention explicitly for this call
-            call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-            let should_keep = call_site_value
-                .try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-                .into_int_value();
-
-            let filter_pass_bb = ctx.append_basic_block(parent, "loop");
-            let after_filter_pass_bb = ctx.append_basic_block(parent, "after_loop");
-
-            let one = ctx.i64_type().const_int(1, false);
-
-            builder.build_conditional_branch(should_keep, filter_pass_bb, after_filter_pass_bb);
-            builder.position_at_end(filter_pass_bb);
-
-            let next_free_index = builder
-                .build_load(next_free_index_alloca, "load_next_free")
-                .into_int_value();
-
-            // TODO if next_free_index equals index, and we are mutating in place,
-            // then maybe we should not write this value back into memory
-            let dest_elem_ptr = unsafe {
-                builder.build_in_bounds_gep(dest_ptr, &[next_free_index], "dest_elem_ptr")
-            };
-
-            builder.build_store(dest_elem_ptr, elem);
-
-            builder.build_store(
-                next_free_index_alloca,
-                builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
-            );
-
-            builder.build_unconditional_branch(after_filter_pass_bb);
-            builder.position_at_end(after_filter_pass_bb);
-
-            builder.build_store(
-                index_alloca,
-                builder.build_int_add(index, one, "incremented_index"),
-            );
-
-            builder.build_unconditional_branch(condition_bb);
-
-            // continuation
-            builder.position_at_end(cont_bb);
-
-            builder
-                .build_load(next_free_index_alloca, "new_length")
-                .into_int_value()
-        }
-        _ => unreachable!(
-            "Invalid function basic value enum or layout for List.keepIf : {:?}",
-            (func, func_layout)
-        ),
-    }
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
 }
 
 /// List.map : List before, (before -> after) -> List after
-macro_rules! list_map_help {
-    ($env:expr, $layout_ids:expr, $inplace:expr, $parent:expr, $func:expr, $func_layout:expr, $list:expr, $list_layout:expr, $function_ptr:expr, $function_return_layout: expr, $closure_info:expr) => {{
-        let layout_ids = $layout_ids;
-        let inplace = $inplace;
-        let parent = $parent;
-        let func = $func;
-        let func_layout = $func_layout;
-        let list = $list;
-        let list_layout = $list_layout;
-        let function_ptr = $function_ptr;
-        let function_return_layout = $function_return_layout;
-        let closure_info : Option<(&Layout, BasicValueEnum)> = $closure_info;
-
-
-        let non_empty_fn = |elem_layout: &Layout<'a>,
-                            len: IntValue<'ctx>,
-                            list_wrapper: StructValue<'ctx>| {
-            let ctx = $env.context;
-            let builder = $env.builder;
-
-            let ret_list_ptr = allocate_list($env, inplace, function_return_layout, len);
-
-            let elem_type = basic_type_from_layout($env.arena, ctx, elem_layout, $env.ptr_bytes);
-            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-            let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
-
-            let list_loop = |index, before_elem| {
-                increment_refcount_layout($env, parent, layout_ids, 1, before_elem, elem_layout);
-
-                let arguments = match closure_info {
-                    Some((closure_data_layout, closure_data)) => {
-                        increment_refcount_layout( $env, parent, layout_ids, 1, closure_data, closure_data_layout);
-
-                        bumpalo::vec![in $env.arena; before_elem, closure_data]
-                    }
-                    None => bumpalo::vec![in $env.arena; before_elem],
-                };
-
-
-                let call_site_value = builder.build_call(function_ptr, &arguments, "map_func");
-
-                // set the calling convention explicitly for this call
-                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                let after_elem = call_site_value
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-                // The pointer to the element in the mapped-over list
-                let after_elem_ptr = unsafe {
-                    builder.build_in_bounds_gep(ret_list_ptr, &[index], "load_index_after_list")
-                };
-
-                // Mutate the new array in-place to change the element.
-                builder.build_store(after_elem_ptr, after_elem);
-            };
-
-            incrementing_elem_loop(builder, ctx, parent, list_ptr, len, "#index", list_loop);
-
-            let result = store_list($env, ret_list_ptr, len);
-
-            // decrement the input list and function (if it's a closure)
-            decrement_refcount_layout($env, parent, layout_ids, list, list_layout);
-            decrement_refcount_layout($env, parent, layout_ids, func, func_layout);
-
-            if let Some((closure_data_layout, closure_data))  = closure_info  {
-                decrement_refcount_layout( $env, parent, layout_ids, closure_data, closure_data_layout);
-            }
-
-            result
-        };
-
-        if_list_is_not_empty($env, parent, non_empty_fn, list, list_layout, "List.map")
-    }};
-}
-
-/// List.map : List before, (before -> after) -> List after
-#[allow(clippy::too_many_arguments)]
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    inplace: InPlace,
-    parent: FunctionValue<'ctx>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    match (func, func_layout) {
-        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, ret_elem_layout)) => {
-            list_map_help!(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-                func_ptr,
-                ret_elem_layout,
-                None
-            )
-        }
-        (
-            BasicValueEnum::StructValue(ptr_and_data),
-            Layout::Closure(_, closure_layout, ret_elem_layout),
-        ) => {
-            let builder = env.builder;
+    list_map_generic(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        element_layout,
+        bitcode::LIST_MAP,
+        &[element_layout.clone()],
+    )
+}
 
-            let func_ptr = builder
-                .build_extract_value(ptr_and_data, 0, "function_ptr")
-                .unwrap()
-                .into_pointer_value();
+/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
+pub fn list_map_with_index<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_map_generic(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        element_layout,
+        bitcode::LIST_MAP_WITH_INDEX,
+        &[Layout::Builtin(Builtin::Usize), element_layout.clone()],
+    )
+}
 
-            let closure_data = builder
-                .build_extract_value(ptr_and_data, 1, "closure_data")
-                .unwrap();
+fn list_map_generic<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+    op: &str,
+    argument_layouts: &[Layout<'a>],
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
 
-            let closure_data_layout = closure_layout.as_block_of_memory_layout();
+    let return_layout = match transform_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
+    };
 
-            list_map_help!(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-                func_ptr,
-                ret_elem_layout,
-                Some((&closure_data_layout, closure_data))
-            )
-        }
-        _ => {
-            unreachable!(
-                "Invalid function basic value enum or layout for List.map : {:?}",
-                (func, func_layout)
-            );
-        }
-    }
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
+
+    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
+    env.builder.build_store(transform_ptr, transform);
+
+    let stepper_caller =
+        build_transform_caller(env, layout_ids, transform_layout, argument_layouts)
+            .as_global_value()
+            .as_pointer_value();
+
+    let old_element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let new_element_width = env
+        .ptr_int()
+        .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            alignment_iv.into(),
+            old_element_width.into(),
+            new_element_width.into(),
+        ],
+        op,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
 }
 
 /// List.concat : List elem, List elem -> List elem
@@ -1908,59 +1605,6 @@ where
     builder.position_at_end(after_loop_bb);
 
     index_alloca
-}
-
-// This function checks if the list is empty, and
-// if it is, it returns an empty list, and if not
-// it runs whatever code is passed in under `build_non_empty`
-// This is the avoid allocating memory if the list is empty.
-fn if_list_is_not_empty<'a, 'ctx, 'env, 'b, NonEmptyFn>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    mut build_non_empty: NonEmptyFn,
-    list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
-    list_fn_name: &str,
-) -> BasicValueEnum<'ctx>
-where
-    NonEmptyFn: FnMut(&Layout<'a>, IntValue<'ctx>, StructValue<'ctx>) -> BasicValueEnum<'ctx>,
-{
-    match list_layout {
-        Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            let builder = env.builder;
-            let ctx = env.context;
-
-            let wrapper_struct = list.into_struct_value();
-
-            let len = list_len(builder, wrapper_struct);
-
-            // list_len > 0
-            let comparison = builder.build_int_compare(
-                IntPredicate::UGT,
-                len,
-                ctx.i64_type().const_int(0, false),
-                "greaterthanzero",
-            );
-
-            let build_empty = || empty_list(env);
-
-            let struct_type = collection(ctx, env.ptr_bytes);
-
-            build_basic_phi2(
-                env,
-                parent,
-                comparison,
-                || build_non_empty(elem_layout, len, wrapper_struct),
-                build_empty,
-                BasicTypeEnum::StructType(struct_type),
-            )
-        }
-        _ => {
-            unreachable!("Invalid List layout for {} {:?}", list_fn_name, list_layout);
-        }
-    }
 }
 
 pub fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
