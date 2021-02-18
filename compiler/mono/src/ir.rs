@@ -5702,12 +5702,74 @@ where
 }
 
 fn call_by_pointer<'a>(
-    _env: &mut Env<'a, '_>,
-    _procs: &mut Procs<'a>,
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
     symbol: Symbol,
     layout: Layout<'a>,
 ) -> Expr<'a> {
-    Expr::FunctionPointer(symbol, layout)
+    if env.is_imported_symbol(symbol) || procs.partial_procs.contains_key(&symbol) {
+        // println!("going to specialize {:?} {:?}", symbol, layout);
+
+        match layout {
+            Layout::FunctionPointer(arg_layouts, ret_layout) => {
+                let name = env.unique_symbol();
+                let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+                let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+
+                for layout in arg_layouts {
+                    let symbol = env.unique_symbol();
+                    args.push((layout.clone(), symbol));
+                    arg_symbols.push(symbol);
+                }
+                let args = args.into_bump_slice();
+
+                let call_symbol = env.unique_symbol();
+                let callable_symbol = env.unique_symbol();
+                let call_type = CallType::ByPointer {
+                    name: callable_symbol,
+                    full_layout: layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    arg_layouts,
+                };
+                let call = Call {
+                    call_type,
+                    arguments: arg_symbols.into_bump_slice(),
+                };
+                let expr = Expr::Call(call);
+
+                let mut body = Stmt::Ret(call_symbol);
+
+                body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
+
+                let fpointer = Expr::FunctionPointer(symbol, layout.clone());
+                body = Stmt::Let(
+                    callable_symbol,
+                    fpointer,
+                    ret_layout.clone(),
+                    env.arena.alloc(body),
+                );
+
+                let closure_data_layout = None;
+                let proc = Proc {
+                    name,
+                    args,
+                    body,
+                    closure_data_layout,
+                    ret_layout: ret_layout.clone(),
+                    is_self_recursive: SelfRecursive::NotSelfRecursive,
+                    host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                };
+
+                procs
+                    .specialized
+                    .insert((name, layout.clone()), InProgressProc::Done(proc));
+                Expr::FunctionPointer(name, layout)
+            }
+            _ => unreachable!("not a function pointer layout"),
+        }
+    } else {
+        Expr::FunctionPointer(symbol, layout)
+    }
 }
 
 fn add_needed_external<'a>(
