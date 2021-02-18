@@ -16,7 +16,6 @@ fn should_borrow_layout(layout: &Layout) -> bool {
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-    _passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),

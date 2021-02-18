@@ -196,28 +196,8 @@ impl<'a> Proc<'a> {
     pub fn insert_refcount_operations(
         arena: &'a Bump,
         procs: &mut MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-        _passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
     ) {
-        // currently we ignore the passed-by-pointerness
-        let passed_by_pointer = &Default::default();
-
-        let borrow_params =
-            arena.alloc(crate::borrow::infer_borrow(arena, procs, passed_by_pointer));
-
-        for (key, other) in passed_by_pointer {
-            if let Some(proc) = procs.get(key) {
-                let mut proc: Proc = proc.clone();
-                proc.name = *other;
-
-                let layout = key.1.clone();
-                procs.insert((*other, layout), proc);
-            } else {
-                unreachable!(
-                    "we need a by-pointer version of {:?}, but its by-name version does not exist",
-                    key.0
-                )
-            }
-        }
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
         for (key, proc) in procs.iter_mut() {
             crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
@@ -299,7 +279,6 @@ pub struct Procs<'a> {
     pub runtime_errors: MutMap<Symbol, &'a str>,
     pub externals_others_need: ExternalSpecializations,
     pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
-    pub passed_by_pointer: MutMap<(Symbol, Layout<'a>), Symbol>,
 }
 
 impl<'a> Default for Procs<'a> {
@@ -312,7 +291,6 @@ impl<'a> Default for Procs<'a> {
             runtime_errors: MutMap::default(),
             externals_we_need: MutMap::default(),
             externals_others_need: ExternalSpecializations::default(),
-            passed_by_pointer: MutMap::default(),
         }
     }
 }
@@ -357,14 +335,10 @@ impl<'a> Procs<'a> {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn get_specialized_procs_without_rc(
         self,
         arena: &'a Bump,
-    ) -> (
-        MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-        MutMap<(Symbol, Layout<'a>), Symbol>,
-    ) {
+    ) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (key, in_prog_proc) in self.specialized.into_iter() {
@@ -387,7 +361,7 @@ impl<'a> Procs<'a> {
             }
         }
 
-        (result, self.passed_by_pointer)
+        result
     }
 
     // TODO investigate make this an iterator?
@@ -416,11 +390,7 @@ impl<'a> Procs<'a> {
             }
         }
 
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(
-            arena,
-            &result,
-            &self.passed_by_pointer,
-        ));
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
             crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
@@ -460,11 +430,7 @@ impl<'a> Procs<'a> {
             }
         }
 
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(
-            arena,
-            &result,
-            &self.passed_by_pointer,
-        ));
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
             crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
