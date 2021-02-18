@@ -5271,6 +5271,7 @@ fn store_pattern_help<'a>(
             }
         }
         RecordDestructure(destructs, Layout::Struct(sorted_fields)) => {
+            let mut is_productive = false;
             for (index, destruct) in destructs.iter().enumerate().rev() {
                 match store_record_destruct(
                     env,
@@ -5283,12 +5284,17 @@ fn store_pattern_help<'a>(
                     stmt,
                 ) {
                     StorePattern::Productive(new) => {
+                        is_productive = true;
                         stmt = new;
                     }
                     StorePattern::NotProductive(new) => {
                         stmt = new;
                     }
                 }
+            }
+
+            if !is_productive {
+                return StorePattern::NotProductive(stmt);
             }
         }
 
