@@ -1,8 +1,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout, WrappedVariant,
-    TAG_SIZE,
+    BuildClosureData, Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout,
+    WrappedVariant, TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1962,12 +1962,14 @@ fn specialize_external<'a>(
 
                             match tag_layout {
                                 Layout::Struct(field_layouts) => {
-                                    // NOTE closure unions do not store the tag!
-                                    let field_layouts = &field_layouts[1..];
-
                                     // TODO check for field_layouts.len() == 1 and do a rename in that case?
-                                    for (index, (symbol, _variable)) in captured.iter().enumerate()
+                                    for (mut index, (symbol, _variable)) in
+                                        captured.iter().enumerate()
                                     {
+                                        // the field layouts do store the tag, but the tag value is
+                                        // not captured. So we drop the layout of the tag ID here
+                                        index += 1;
+
                                         // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
                                         let expr = Expr::AccessAtIndex {
                                             index: index as _,
@@ -3762,8 +3764,12 @@ pub fn with_hole<'a>(
                             .into_bump_slice();
 
                     // define the closure data, unless it's a basic unwrapped type already
-                    match closure_layout.build_closure_data(name, symbols) {
-                        Ok(expr) => {
+                    match closure_layout.build_closure_data(name, &symbols) {
+                        BuildClosureData::Alias(current) => {
+                            // there is only one symbol captured, use that immediately
+                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        }
+                        BuildClosureData::Struct(expr) => {
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr,
@@ -3771,9 +3777,40 @@ pub fn with_hole<'a>(
                                 env.arena.alloc(stmt),
                             );
                         }
-                        Err(current) => {
-                            // there is only one symbol captured, use that immediately
-                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        BuildClosureData::Union {
+                            tag_id,
+                            tag_layout,
+                            union_size,
+                            tag_name,
+                        } => {
+                            let tag_id_symbol = env.unique_symbol();
+                            let mut tag_symbols =
+                                Vec::with_capacity_in(symbols.len() + 1, env.arena);
+                            tag_symbols.push(tag_id_symbol);
+                            tag_symbols.extend(symbols);
+
+                            let expr1 = Expr::Literal(Literal::Int(tag_id as i64));
+                            let expr2 = Expr::Tag {
+                                tag_id,
+                                tag_layout,
+                                union_size,
+                                tag_name,
+                                arguments: tag_symbols.into_bump_slice(),
+                            };
+
+                            stmt = Stmt::Let(
+                                closure_data,
+                                expr2,
+                                closure_data_layout.clone(),
+                                env.arena.alloc(stmt),
+                            );
+
+                            stmt = Stmt::Let(
+                                tag_id_symbol,
+                                expr1,
+                                Layout::Builtin(Builtin::Int64),
+                                env.arena.alloc(stmt),
+                            );
                         }
                     }
 
@@ -5515,8 +5552,12 @@ fn reuse_function_symbol<'a>(
                     };
 
                     // define the closure data, unless it's a basic unwrapped type already
-                    match closure_layout.build_closure_data(original, symbols) {
-                        Ok(expr) => {
+                    match closure_layout.build_closure_data(original, &symbols) {
+                        BuildClosureData::Alias(current) => {
+                            // there is only one symbol captured, use that immediately
+                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        }
+                        BuildClosureData::Struct(expr) => {
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr,
@@ -5524,9 +5565,40 @@ fn reuse_function_symbol<'a>(
                                 env.arena.alloc(stmt),
                             );
                         }
-                        Err(current) => {
-                            // there is only one symbol captured, use that immediately
-                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        BuildClosureData::Union {
+                            tag_id,
+                            tag_layout,
+                            union_size,
+                            tag_name,
+                        } => {
+                            let tag_id_symbol = env.unique_symbol();
+                            let mut tag_symbols =
+                                Vec::with_capacity_in(symbols.len() + 1, env.arena);
+                            tag_symbols.push(tag_id_symbol);
+                            tag_symbols.extend(symbols);
+
+                            let expr1 = Expr::Literal(Literal::Int(tag_id as i64));
+                            let expr2 = Expr::Tag {
+                                tag_id,
+                                tag_layout,
+                                union_size,
+                                tag_name,
+                                arguments: tag_symbols.into_bump_slice(),
+                            };
+
+                            stmt = Stmt::Let(
+                                closure_data,
+                                expr2,
+                                closure_data_layout.clone(),
+                                env.arena.alloc(stmt),
+                            );
+
+                            stmt = Stmt::Let(
+                                tag_id_symbol,
+                                expr1,
+                                Layout::Builtin(Builtin::Int64),
+                                env.arena.alloc(stmt),
+                            );
                         }
                     }
 
@@ -5631,18 +5703,11 @@ where
 
 fn call_by_pointer<'a>(
     _env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
+    _procs: &mut Procs<'a>,
     symbol: Symbol,
     layout: Layout<'a>,
 ) -> Expr<'a> {
-    // let other = env.unique_symbol();
-    let other = symbol;
-
-    procs
-        .passed_by_pointer
-        .insert((symbol, layout.clone()), other);
-
-    Expr::FunctionPointer(other, layout)
+    Expr::FunctionPointer(symbol, layout)
 }
 
 fn add_needed_external<'a>(
