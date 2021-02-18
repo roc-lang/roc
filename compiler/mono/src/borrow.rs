@@ -16,20 +16,11 @@ fn should_borrow_layout(layout: &Layout) -> bool {
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-    passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
+    _passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),
     };
-
-    for (key, other) in passed_by_pointer {
-        if let Some(proc) = procs.get(key) {
-            let mut proc: Proc = proc.clone();
-            proc.name = *other;
-
-            param_map.visit_proc_always_owned(arena, &proc, key.clone());
-        }
-    }
 
     for (key, proc) in procs {
         param_map.visit_proc(arena, proc, key.clone());
@@ -159,6 +150,10 @@ impl<'a> ParamMap<'a> {
     }
 
     fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, Layout<'a>)) {
+        if proc.must_own_arguments {
+            self.visit_proc_always_owned(arena, proc, key);
+            return;
+        }
         let already_in_there = self.items.insert(
             Key::Declaration(proc.name, key.1),
             Self::init_borrow_args(arena, proc.args),

@@ -12,4 +12,6 @@ main =
 
     Task.succeed {}
         |> Task.map (\_ -> x)
-        |> Task.map (\_ -> {})
+        |> Task.map toUnit
+
+toUnit = (\_ -> {})

@@ -227,7 +227,6 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
     #[serial(closure1)]
     fn closure1() {
@@ -240,7 +239,6 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
     #[serial(closure2)]
     fn closure2() {
@@ -253,8 +251,8 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
+    #[ignore]
     #[serial(closure3)]
     fn closure3() {
         check_output(
@@ -266,7 +264,6 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
     #[serial(closure4)]
     fn closure4() {

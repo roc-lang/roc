@@ -118,6 +118,7 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<Layout<'a>>,
     pub ret_layout: Layout<'a>,
     pub is_self_recursive: SelfRecursive,
+    pub must_own_arguments: bool,
     pub host_exposed_layouts: HostExposedLayouts<'a>,
 }
 
@@ -1935,6 +1936,7 @@ fn specialize_external<'a>(
                 closure_data_layout,
                 ret_layout: full_layout,
                 is_self_recursive: recursivity,
+                must_own_arguments: false,
                 host_exposed_layouts,
             };
 
@@ -2071,6 +2073,7 @@ fn specialize_external<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
+                must_own_arguments: false,
                 host_exposed_layouts,
             };
 
@@ -5707,63 +5710,75 @@ fn call_by_pointer<'a>(
     symbol: Symbol,
     layout: Layout<'a>,
 ) -> Expr<'a> {
+    // when we call a known function by-pointer, we must make sure we call a function that owns all
+    // its arguments (in an RC sense). we can't know this at this point, so we wrap such calls in
+    // a proc that we guarantee owns all its arguments. E.g. we turn
+    //
+    // foo = \x -> ...
+    //
+    // x = List.map [ ... ] foo
+    //
+    // into
+    //
+    // foo = \x -> ...
+    //
+    // @owns_all_arguments
+    // foo1 = \x -> foo x
+    //
+    // x = List.map [ ... ] foo1
     if env.is_imported_symbol(symbol) || procs.partial_procs.contains_key(&symbol) {
-        // println!("going to specialize {:?} {:?}", symbol, layout);
-
         match layout {
             Layout::FunctionPointer(arg_layouts, ret_layout) => {
-                let name = env.unique_symbol();
-                let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
-                let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+                if arg_layouts.iter().any(|l| l.contains_refcounted()) {
+                    let name = env.unique_symbol();
+                    let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+                    let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
 
-                for layout in arg_layouts {
-                    let symbol = env.unique_symbol();
-                    args.push((layout.clone(), symbol));
-                    arg_symbols.push(symbol);
+                    for layout in arg_layouts {
+                        let symbol = env.unique_symbol();
+                        args.push((layout.clone(), symbol));
+                        arg_symbols.push(symbol);
+                    }
+                    let args = args.into_bump_slice();
+
+                    let call_symbol = env.unique_symbol();
+                    let call_type = CallType::ByName {
+                        name: symbol,
+                        full_layout: layout.clone(),
+                        ret_layout: ret_layout.clone(),
+                        arg_layouts,
+                    };
+                    let call = Call {
+                        call_type,
+                        arguments: arg_symbols.into_bump_slice(),
+                    };
+                    let expr = Expr::Call(call);
+
+                    let mut body = Stmt::Ret(call_symbol);
+
+                    body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
+
+                    let closure_data_layout = None;
+                    let proc = Proc {
+                        name,
+                        args,
+                        body,
+                        closure_data_layout,
+                        ret_layout: ret_layout.clone(),
+                        is_self_recursive: SelfRecursive::NotSelfRecursive,
+                        must_own_arguments: true,
+                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                    };
+
+                    procs
+                        .specialized
+                        .insert((name, layout.clone()), InProgressProc::Done(proc));
+                    Expr::FunctionPointer(name, layout)
+                } else {
+                    // if none of the arguments is refcounted, then owning the arguments has no
+                    // meaning
+                    Expr::FunctionPointer(symbol, layout)
                 }
-                let args = args.into_bump_slice();
-
-                let call_symbol = env.unique_symbol();
-                let callable_symbol = env.unique_symbol();
-                let call_type = CallType::ByPointer {
-                    name: callable_symbol,
-                    full_layout: layout.clone(),
-                    ret_layout: ret_layout.clone(),
-                    arg_layouts,
-                };
-                let call = Call {
-                    call_type,
-                    arguments: arg_symbols.into_bump_slice(),
-                };
-                let expr = Expr::Call(call);
-
-                let mut body = Stmt::Ret(call_symbol);
-
-                body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
-
-                let fpointer = Expr::FunctionPointer(symbol, layout.clone());
-                body = Stmt::Let(
-                    callable_symbol,
-                    fpointer,
-                    ret_layout.clone(),
-                    env.arena.alloc(body),
-                );
-
-                let closure_data_layout = None;
-                let proc = Proc {
-                    name,
-                    args,
-                    body,
-                    closure_data_layout,
-                    ret_layout: ret_layout.clone(),
-                    is_self_recursive: SelfRecursive::NotSelfRecursive,
-                    host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-                };
-
-                procs
-                    .specialized
-                    .insert((name, layout.clone()), InProgressProc::Done(proc));
-                Expr::FunctionPointer(name, layout)
             }
             _ => unreachable!("not a function pointer layout"),
         }
