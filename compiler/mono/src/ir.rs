@@ -2760,8 +2760,7 @@ pub fn with_hole<'a>(
                 );
 
                 let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                    .unwrap();
+                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
                 // convert the def body, store in outer_symbol
                 with_hole(
@@ -4523,12 +4522,10 @@ pub fn from_can<'a>(
 
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
                     store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                        .unwrap()
                 } else {
                     let outer_symbol = env.unique_symbol();
                     stmt =
-                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                            .unwrap();
+                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
                     // convert the def body, store in outer_symbol
                     with_hole(
@@ -4739,31 +4736,21 @@ fn from_can_when<'a>(
                     jump,
                 );
 
-                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt) {
-                    Ok(new_guard_stmt) => (
-                        pattern,
-                        Guard::Guard {
-                            id,
-                            symbol,
-                            stmt: new_guard_stmt,
-                        },
-                        branch_stmt,
-                    ),
-                    Err(msg) => (
-                        Pattern::Underscore,
-                        Guard::NoGuard,
-                        Stmt::RuntimeError(env.arena.alloc(msg)),
-                    ),
-                }
+                let new_guard_stmt =
+                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
+                (
+                    pattern,
+                    Guard::Guard {
+                        id,
+                        symbol,
+                        stmt: new_guard_stmt,
+                    },
+                    branch_stmt,
+                )
             } else {
-                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt) {
-                    Ok(new_branch_stmt) => (pattern, Guard::NoGuard, new_branch_stmt),
-                    Err(msg) => (
-                        Pattern::Underscore,
-                        Guard::NoGuard,
-                        Stmt::RuntimeError(env.arena.alloc(msg)),
-                    ),
-                }
+                let new_branch_stmt =
+                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt);
+                (pattern, Guard::NoGuard, new_branch_stmt)
             }
         });
     let mono_branches = Vec::from_iter_in(it, arena);
@@ -5153,8 +5140,31 @@ fn store_pattern<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
+    stmt: Stmt<'a>,
+) -> Stmt<'a> {
+    match store_pattern_help(env, procs, layout_cache, can_pat, outer_symbol, stmt) {
+        StorePattern::Productive(new) => new,
+        StorePattern::NotProductive(new) => new,
+    }
+}
+
+enum StorePattern<'a> {
+    /// we bound new symbols
+    Productive(Stmt<'a>),
+    /// no new symbols were bound in this pattern
+    NotProductive(Stmt<'a>),
+}
+
+/// It is crucial for correct RC insertion that we don't create dead variables!
+#[allow(clippy::too_many_arguments)]
+fn store_pattern_help<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    can_pat: &Pattern<'a>,
+    outer_symbol: Symbol,
     mut stmt: Stmt<'a>,
-) -> Result<Stmt<'a>, &'a str> {
+) -> StorePattern<'a> {
     use Pattern::*;
 
     match can_pat {
@@ -5163,19 +5173,26 @@ fn store_pattern<'a>(
         }
         Underscore => {
             // do nothing
+            return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_)
         | FloatLiteral(_)
         | EnumLiteral { .. }
         | BitLiteral { .. }
-        | StrLiteral(_) => {}
+        | StrLiteral(_) => {
+            return StorePattern::NotProductive(stmt);
+        }
         AppliedTag {
-            arguments, layout, ..
+            arguments,
+            layout,
+            tag_name,
+            ..
         } => {
             let wrapped = Wrapped::from_layout(layout);
             let write_tag = wrapped == Wrapped::MultiTagUnion;
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+            let mut is_productive = false;
 
             if write_tag {
                 // add an element for the tag discriminant
@@ -5206,6 +5223,7 @@ fn store_pattern<'a>(
                     Identifier(symbol) => {
                         // store immediately in the given symbol
                         stmt = Stmt::Let(*symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
+                        is_productive = true;
                     }
                     Underscore => {
                         // ignore
@@ -5220,17 +5238,41 @@ fn store_pattern<'a>(
                         let symbol = env.unique_symbol();
 
                         // first recurse, continuing to unpack symbol
-                        stmt = store_pattern(env, procs, layout_cache, argument, symbol, stmt)?;
-
-                        // then store the symbol
-                        stmt = Stmt::Let(symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
+                        match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                            StorePattern::Productive(new) => {
+                                is_productive = true;
+                                println!(
+                                    "Access  {:?}.{:?} {:?}",
+                                    tag_name.clone(),
+                                    outer_symbol,
+                                    index
+                                );
+                                stmt = new;
+                                // only if we bind one of its (sub)fields to a used name should we
+                                // extract the field
+                                stmt = Stmt::Let(
+                                    symbol,
+                                    load,
+                                    arg_layout.clone(),
+                                    env.arena.alloc(stmt),
+                                );
+                            }
+                            StorePattern::NotProductive(new) => {
+                                // do nothing
+                                stmt = new;
+                            }
+                        }
                     }
                 }
+            }
+
+            if !is_productive {
+                return StorePattern::NotProductive(stmt);
             }
         }
         RecordDestructure(destructs, Layout::Struct(sorted_fields)) => {
             for (index, destruct) in destructs.iter().enumerate().rev() {
-                stmt = store_record_destruct(
+                match store_record_destruct(
                     env,
                     procs,
                     layout_cache,
@@ -5239,7 +5281,14 @@ fn store_pattern<'a>(
                     outer_symbol,
                     sorted_fields,
                     stmt,
-                )?;
+                ) {
+                    StorePattern::Productive(new) => {
+                        stmt = new;
+                    }
+                    StorePattern::NotProductive(new) => {
+                        stmt = new;
+                    }
+                }
             }
         }
 
@@ -5248,7 +5297,7 @@ fn store_pattern<'a>(
         }
     }
 
-    Ok(stmt)
+    StorePattern::Productive(stmt)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5261,7 +5310,7 @@ fn store_record_destruct<'a>(
     outer_symbol: Symbol,
     sorted_fields: &'a [Layout<'a>],
     mut stmt: Stmt<'a>,
-) -> Result<Stmt<'a>, &'a str> {
+) -> StorePattern<'a> {
     use Pattern::*;
 
     let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
@@ -5304,6 +5353,7 @@ fn store_record_destruct<'a>(
                 // { x, y: _ } -> ...
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
+                return StorePattern::NotProductive(stmt);
             }
             IntLiteral(_)
             | FloatLiteral(_)
@@ -5314,14 +5364,19 @@ fn store_record_destruct<'a>(
             _ => {
                 let symbol = env.unique_symbol();
 
-                stmt = store_pattern(env, procs, layout_cache, guard_pattern, symbol, stmt)?;
-
-                stmt = Stmt::Let(symbol, load, destruct.layout.clone(), env.arena.alloc(stmt));
+                match store_pattern_help(env, procs, layout_cache, guard_pattern, symbol, stmt) {
+                    StorePattern::Productive(new) => {
+                        stmt = new;
+                        stmt =
+                            Stmt::Let(symbol, load, destruct.layout.clone(), env.arena.alloc(stmt));
+                    }
+                    StorePattern::NotProductive(stmt) => return StorePattern::NotProductive(stmt),
+                }
             }
         },
     }
 
-    Ok(stmt)
+    StorePattern::Productive(stmt)
 }
 
 /// We want to re-use symbols that are not function symbols

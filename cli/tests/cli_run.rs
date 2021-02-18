@@ -199,7 +199,7 @@ mod cli_run {
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
-            false,
+            true,
         );
     }
 
