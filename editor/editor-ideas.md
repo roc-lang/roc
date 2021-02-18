@@ -58,6 +58,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
 * [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
 * [Lamdu](http://www.lamdu.org/) live functional programming.
+* [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 
 ### Productivity features
 
@@ -85,6 +86,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 #### Productivity Inspiration
 
 * [Kite](https://www.kite.com/) AI autocomplete and doc viewer.
+* [Tabnine](https://www.tabnine.com/) AI autocomplete.
+* [Codota](https://www.codota.com) AI autocomplete and example searching.
 
 ### Non-Code Related Inspiration
 
@@ -104,6 +107,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
     * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
         * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
+        * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Voice input:
     * Good for accessibility.
@@ -115,6 +119,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
         * Show edit history for this function.
     * Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
     Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
+* Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 
 
 ## Testing
