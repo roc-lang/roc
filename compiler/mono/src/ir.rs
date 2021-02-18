@@ -5692,7 +5692,11 @@ fn call_by_pointer<'a>(
     // foo1 = \x -> foo x
     //
     // x = List.map [ ... ] foo1
-    if env.is_imported_symbol(symbol) || procs.partial_procs.contains_key(&symbol) {
+
+    // TODO can we cache this `any`?
+    let is_specialized = procs.specialized.keys().any(|(s, _)| *s == symbol);
+    if env.is_imported_symbol(symbol) || procs.partial_procs.contains_key(&symbol) || is_specialized
+    {
         match layout {
             Layout::FunctionPointer(arg_layouts, ret_layout) => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
@@ -5746,7 +5750,10 @@ fn call_by_pointer<'a>(
                     Expr::FunctionPointer(symbol, layout)
                 }
             }
-            _ => unreachable!("not a function pointer layout"),
+            _ => {
+                // e.g. Num.maxInt or other constants
+                Expr::FunctionPointer(symbol, layout)
+            }
         }
     } else {
         Expr::FunctionPointer(symbol, layout)

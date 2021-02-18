@@ -252,7 +252,6 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore]
     #[serial(closure3)]
     fn closure3() {
         check_output(
