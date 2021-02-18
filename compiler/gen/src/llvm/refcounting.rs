@@ -13,6 +13,7 @@ use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode, UnionLayout};
 
@@ -515,14 +516,14 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_list", Symbol::INC),
-        Mode::Dec => ("decrement_list", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_list",
+        "decrement_list",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -614,14 +615,14 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_str", Symbol::INC),
-        Mode::Dec => ("decrement_str", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_str",
+        "decrement_str",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -712,14 +713,14 @@ fn modify_refcount_dict<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_str", Symbol::INC),
-        Mode::Dec => ("decrement_str", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_dict",
+        "decrement_dict",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -899,14 +900,14 @@ fn build_rec_union<'a, 'ctx, 'env>(
 ) {
     let layout = Layout::Union(UnionLayout::Recursive(fields));
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_rec_union", Symbol::INC),
-        Mode::Dec => ("decrement_rec_union", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_rec_union",
+        "decrement_rec_union",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -1183,6 +1184,26 @@ fn call_help<'a, 'ctx, 'env>(
     call
 }
 
+fn function_name_from_mode<'a>(
+    layout_ids: &mut LayoutIds<'a>,
+    interns: &Interns,
+    if_inc: &'static str,
+    if_dec: &'static str,
+    layout: &Layout<'a>,
+    mode: Mode,
+) -> (&'static str, String) {
+    // NOTE this is not a typo, we always determine the layout ID
+    // using the DEC symbol. Anything that is incrementing must also be
+    // decremented, so `dec` is used on more layouts. That can cause the
+    // layout ids of the inc and dec versions to be different, which is
+    // rather confusing, so now `inc_x` always corresponds to `dec_x`
+    let layout_id = layout_ids.get(Symbol::DEC, layout);
+    match mode {
+        Mode::Inc(_) => (if_inc, layout_id.to_symbol_string(Symbol::INC, interns)),
+        Mode::Dec => (if_dec, layout_id.to_symbol_string(Symbol::DEC, interns)),
+    }
+}
+
 fn modify_refcount_union<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1195,14 +1216,14 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_union", Symbol::INC),
-        Mode::Dec => ("decrement_union", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_union",
+        "decrement_union",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,

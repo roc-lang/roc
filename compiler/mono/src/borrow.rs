@@ -16,23 +16,13 @@ fn should_borrow_layout(layout: &Layout) -> bool {
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-    passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),
     };
 
-    for (key, other) in passed_by_pointer {
-        if let Some(proc) = procs.get(key) {
-            let mut proc: Proc = proc.clone();
-            proc.name = *other;
-
-            param_map.visit_proc_always_owned(arena, &proc);
-        }
-    }
-
-    for proc in procs.values() {
-        param_map.visit_proc(arena, proc);
+    for (key, proc) in procs {
+        param_map.visit_proc(arena, proc, key.clone());
     }
 
     let mut env = BorrowInfState {
@@ -56,8 +46,8 @@ pub fn infer_borrow<'a>(
         // TODO in the future I think we need to do this properly, and group
         // mutually recursive functions (or just make all their arguments owned)
 
-        for proc in procs.values() {
-            env.collect_proc(proc);
+        for (key, proc) in procs {
+            env.collect_proc(proc, key.1.clone());
         }
 
         if !env.modified {
@@ -73,19 +63,19 @@ pub fn infer_borrow<'a>(
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum Key {
-    Declaration(Symbol),
+pub enum Key<'a> {
+    Declaration(Symbol, Layout<'a>),
     JoinPoint(JoinPointId),
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ParamMap<'a> {
-    items: MutMap<Key, &'a [Param<'a>]>,
+    items: MutMap<Key<'a>, &'a [Param<'a>]>,
 }
 
 impl<'a> IntoIterator for ParamMap<'a> {
-    type Item = (Key, &'a [Param<'a>]);
-    type IntoIter = <std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
+    type Item = (Key<'a>, &'a [Param<'a>]);
+    type IntoIter = <std::collections::HashMap<Key<'a>, &'a [Param<'a>]> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.items.into_iter()
@@ -93,8 +83,9 @@ impl<'a> IntoIterator for ParamMap<'a> {
 }
 
 impl<'a> IntoIterator for &'a ParamMap<'a> {
-    type Item = (&'a Key, &'a &'a [Param<'a>]);
-    type IntoIter = <&'a std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
+    type Item = (&'a Key<'a>, &'a &'a [Param<'a>]);
+    type IntoIter =
+        <&'a std::collections::HashMap<Key<'a>, &'a [Param<'a>]> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.items.iter()
@@ -102,8 +93,8 @@ impl<'a> IntoIterator for &'a ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    pub fn get_symbol(&self, symbol: Symbol) -> Option<&'a [Param<'a>]> {
-        let key = Key::Declaration(symbol);
+    pub fn get_symbol(&self, symbol: Symbol, layout: Layout<'a>) -> Option<&'a [Param<'a>]> {
+        let key = Key::Declaration(symbol, layout);
 
         self.items.get(&key).copied()
     }
@@ -157,20 +148,31 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>) {
-        self.items.insert(
-            Key::Declaration(proc.name),
+    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, Layout<'a>)) {
+        if proc.must_own_arguments {
+            self.visit_proc_always_owned(arena, proc, key);
+            return;
+        }
+        let already_in_there = self.items.insert(
+            Key::Declaration(proc.name, key.1),
             Self::init_borrow_args(arena, proc.args),
         );
+        debug_assert!(already_in_there.is_none());
 
         self.visit_stmt(arena, proc.name, &proc.body);
     }
 
-    fn visit_proc_always_owned(&mut self, arena: &'a Bump, proc: &Proc<'a>) {
-        self.items.insert(
-            Key::Declaration(proc.name),
+    fn visit_proc_always_owned(
+        &mut self,
+        arena: &'a Bump,
+        proc: &Proc<'a>,
+        key: (Symbol, Layout<'a>),
+    ) {
+        let already_in_there = self.items.insert(
+            Key::Declaration(proc.name, key.1),
             Self::init_borrow_args_always_owned(arena, proc.args),
         );
+        debug_assert!(already_in_there.is_none());
 
         self.visit_stmt(arena, proc.name, &proc.body);
     }
@@ -188,8 +190,10 @@ impl<'a> ParamMap<'a> {
                     remainder: v,
                     continuation: b,
                 } => {
-                    self.items
+                    let already_in_there = self
+                        .items
                         .insert(Key::JoinPoint(*j), Self::init_borrow_params(arena, xs));
+                    debug_assert!(already_in_there.is_none());
 
                     stack.push(v);
                     stack.push(b);
@@ -252,7 +256,7 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn update_param_map(&mut self, k: Key) {
+    fn update_param_map(&mut self, k: Key<'a>) {
         let arena = self.arena;
         if let Some(ps) = self.param_map.items.get(&k) {
             let ps = Vec::from_iter_in(
@@ -359,9 +363,11 @@ impl<'a> BorrowInfState<'a> {
         } = e;
 
         match call_type {
-            ByName { name, .. } => {
+            ByName {
+                name, full_layout, ..
+            } => {
                 // get the borrow signature of the applied function
-                match self.param_map.get_symbol(*name) {
+                match self.param_map.get_symbol(*name, full_layout.clone()) {
                     Some(ps) => {
                         // the return value will be owned
                         self.own_var(z);
@@ -458,7 +464,12 @@ impl<'a> BorrowInfState<'a> {
         match (v, b) {
             (
                 Expr::Call(crate::ir::Call {
-                    call_type: crate::ir::CallType::ByName { name: g, .. },
+                    call_type:
+                        crate::ir::CallType::ByName {
+                            name: g,
+                            full_layout,
+                            ..
+                        },
                     arguments: ys,
                     ..
                 }),
@@ -466,7 +477,12 @@ impl<'a> BorrowInfState<'a> {
             )
             | (
                 Expr::Call(crate::ir::Call {
-                    call_type: crate::ir::CallType::ByPointer { name: g, .. },
+                    call_type:
+                        crate::ir::CallType::ByPointer {
+                            name: g,
+                            full_layout,
+                            ..
+                        },
                     arguments: ys,
                     ..
                 }),
@@ -475,7 +491,7 @@ impl<'a> BorrowInfState<'a> {
                 if self.current_proc == *g && x == *z {
                     // anonymous functions (for which the ps may not be known)
                     // can never be tail-recursive, so this is fine
-                    if let Some(ps) = self.param_map.get_symbol(*g) {
+                    if let Some(ps) = self.param_map.get_symbol(*g, full_layout.clone()) {
                         self.own_params_using_args(ys, ps)
                     }
                 }
@@ -517,8 +533,10 @@ impl<'a> BorrowInfState<'a> {
 
             Let(x, Expr::FunctionPointer(fsymbol, layout), _, b) => {
                 // ensure that the function pointed to is in the param map
-                if let Some(params) = self.param_map.get_symbol(*fsymbol) {
-                    self.param_map.items.insert(Key::Declaration(*x), params);
+                if let Some(params) = self.param_map.get_symbol(*fsymbol, layout.clone()) {
+                    self.param_map
+                        .items
+                        .insert(Key::Declaration(*x, layout.clone()), params);
                 }
 
                 self.collect_stmt(b);
@@ -574,7 +592,7 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn collect_proc(&mut self, proc: &Proc<'a>) {
+    fn collect_proc(&mut self, proc: &Proc<'a>, layout: Layout<'a>) {
         let old = self.param_set.clone();
 
         let ys = Vec::from_iter_in(proc.args.iter().map(|t| t.1), self.arena).into_bump_slice();
@@ -585,7 +603,7 @@ impl<'a> BorrowInfState<'a> {
         self.owned.entry(proc.name).or_default();
 
         self.collect_stmt(&proc.body);
-        self.update_param_map(Key::Declaration(proc.name));
+        self.update_param_map(Key::Declaration(proc.name, layout));
 
         self.param_set = old;
     }

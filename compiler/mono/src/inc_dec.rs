@@ -232,7 +232,7 @@ impl<'a> Context<'a> {
         let mut vars = MutMap::default();
 
         for (key, _) in param_map.into_iter() {
-            if let crate::borrow::Key::Declaration(symbol) = key {
+            if let crate::borrow::Key::Declaration(symbol, _) = key {
                 vars.insert(
                     *symbol,
                     VarInfo {
@@ -466,9 +466,11 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            ByName { name, .. } => {
+            ByName {
+                name, full_layout, ..
+            } => {
                 // get the borrow signature
-                match self.param_map.get_symbol(*name) {
+                match self.param_map.get_symbol(*name, full_layout.clone()) {
                     Some(ps) => {
                         let v = Expr::Call(crate::ir::Call {
                             call_type,
@@ -601,11 +603,8 @@ impl<'a> Context<'a> {
         persistent: bool,
         consume: bool,
     ) -> Self {
-        // can this type be reference-counted at runtime?
-        let reference = match layout {
-            Layout::Closure(_, closure, _) => closure.layout.contains_refcounted(),
-            _ => layout.contains_refcounted(),
-        };
+        // should we perform incs and decs on this value?
+        let reference = layout.contains_refcounted();
 
         let info = VarInfo {
             reference,
@@ -1005,10 +1004,15 @@ pub fn visit_declaration<'a>(
     ctx.add_dec_for_dead_params(params, b, &b_live_vars)
 }
 
-pub fn visit_proc<'a>(arena: &'a Bump, param_map: &'a ParamMap<'a>, proc: &mut Proc<'a>) {
+pub fn visit_proc<'a>(
+    arena: &'a Bump,
+    param_map: &'a ParamMap<'a>,
+    proc: &mut Proc<'a>,
+    layout: Layout<'a>,
+) {
     let ctx = Context::new(arena, param_map);
 
-    let params = match param_map.get_symbol(proc.name) {
+    let params = match param_map.get_symbol(proc.name, layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(
             proc.args.iter().cloned().map(|(layout, symbol)| Param {

@@ -1,8 +1,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout, WrappedVariant,
-    TAG_SIZE,
+    BuildClosureData, Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout,
+    WrappedVariant, TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -118,6 +118,7 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<Layout<'a>>,
     pub ret_layout: Layout<'a>,
     pub is_self_recursive: SelfRecursive,
+    pub must_own_arguments: bool,
     pub host_exposed_layouts: HostExposedLayouts<'a>,
 }
 
@@ -195,31 +196,11 @@ impl<'a> Proc<'a> {
     pub fn insert_refcount_operations(
         arena: &'a Bump,
         procs: &mut MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-        _passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
     ) {
-        // currently we ignore the passed-by-pointerness
-        let passed_by_pointer = &Default::default();
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
-        let borrow_params =
-            arena.alloc(crate::borrow::infer_borrow(arena, procs, passed_by_pointer));
-
-        for (key, other) in passed_by_pointer {
-            if let Some(proc) = procs.get(key) {
-                let mut proc: Proc = proc.clone();
-                proc.name = *other;
-
-                let layout = key.1.clone();
-                procs.insert((*other, layout), proc);
-            } else {
-                unreachable!(
-                    "we need a by-pointer version of {:?}, but its by-name version does not exist",
-                    key.0
-                )
-            }
-        }
-
-        for (_, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        for (key, proc) in procs.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
         }
     }
 
@@ -298,7 +279,6 @@ pub struct Procs<'a> {
     pub runtime_errors: MutMap<Symbol, &'a str>,
     pub externals_others_need: ExternalSpecializations,
     pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
-    pub passed_by_pointer: MutMap<(Symbol, Layout<'a>), Symbol>,
 }
 
 impl<'a> Default for Procs<'a> {
@@ -311,7 +291,6 @@ impl<'a> Default for Procs<'a> {
             runtime_errors: MutMap::default(),
             externals_we_need: MutMap::default(),
             externals_others_need: ExternalSpecializations::default(),
-            passed_by_pointer: MutMap::default(),
         }
     }
 }
@@ -356,14 +335,10 @@ impl<'a> Procs<'a> {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn get_specialized_procs_without_rc(
         self,
         arena: &'a Bump,
-    ) -> (
-        MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-        MutMap<(Symbol, Layout<'a>), Symbol>,
-    ) {
+    ) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (key, in_prog_proc) in self.specialized.into_iter() {
@@ -386,7 +361,7 @@ impl<'a> Procs<'a> {
             }
         }
 
-        (result, self.passed_by_pointer)
+        result
     }
 
     // TODO investigate make this an iterator?
@@ -415,14 +390,10 @@ impl<'a> Procs<'a> {
             }
         }
 
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(
-            arena,
-            &result,
-            &self.passed_by_pointer,
-        ));
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
-        for (_, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        for (key, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
         }
 
         result
@@ -459,14 +430,10 @@ impl<'a> Procs<'a> {
             }
         }
 
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(
-            arena,
-            &result,
-            &self.passed_by_pointer,
-        ));
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
-        for (_, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        for (key, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
         }
 
         (result, borrow_params)
@@ -1935,6 +1902,7 @@ fn specialize_external<'a>(
                 closure_data_layout,
                 ret_layout: full_layout,
                 is_self_recursive: recursivity,
+                must_own_arguments: false,
                 host_exposed_layouts,
             };
 
@@ -1962,12 +1930,14 @@ fn specialize_external<'a>(
 
                             match tag_layout {
                                 Layout::Struct(field_layouts) => {
-                                    // NOTE closure unions do not store the tag!
-                                    let field_layouts = &field_layouts[1..];
-
                                     // TODO check for field_layouts.len() == 1 and do a rename in that case?
-                                    for (index, (symbol, _variable)) in captured.iter().enumerate()
+                                    for (mut index, (symbol, _variable)) in
+                                        captured.iter().enumerate()
                                     {
+                                        // the field layouts do store the tag, but the tag value is
+                                        // not captured. So we drop the layout of the tag ID here
+                                        index += 1;
+
                                         // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
                                         let expr = Expr::AccessAtIndex {
                                             index: index as _,
@@ -2069,6 +2039,7 @@ fn specialize_external<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
+                must_own_arguments: false,
                 host_exposed_layouts,
             };
 
@@ -2789,8 +2760,7 @@ pub fn with_hole<'a>(
                 );
 
                 let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                    .unwrap();
+                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
                 // convert the def body, store in outer_symbol
                 with_hole(
@@ -3762,8 +3732,12 @@ pub fn with_hole<'a>(
                             .into_bump_slice();
 
                     // define the closure data, unless it's a basic unwrapped type already
-                    match closure_layout.build_closure_data(name, symbols) {
-                        Ok(expr) => {
+                    match closure_layout.build_closure_data(name, &symbols) {
+                        BuildClosureData::Alias(current) => {
+                            // there is only one symbol captured, use that immediately
+                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        }
+                        BuildClosureData::Struct(expr) => {
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr,
@@ -3771,9 +3745,40 @@ pub fn with_hole<'a>(
                                 env.arena.alloc(stmt),
                             );
                         }
-                        Err(current) => {
-                            // there is only one symbol captured, use that immediately
-                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        BuildClosureData::Union {
+                            tag_id,
+                            tag_layout,
+                            union_size,
+                            tag_name,
+                        } => {
+                            let tag_id_symbol = env.unique_symbol();
+                            let mut tag_symbols =
+                                Vec::with_capacity_in(symbols.len() + 1, env.arena);
+                            tag_symbols.push(tag_id_symbol);
+                            tag_symbols.extend(symbols);
+
+                            let expr1 = Expr::Literal(Literal::Int(tag_id as i64));
+                            let expr2 = Expr::Tag {
+                                tag_id,
+                                tag_layout,
+                                union_size,
+                                tag_name,
+                                arguments: tag_symbols.into_bump_slice(),
+                            };
+
+                            stmt = Stmt::Let(
+                                closure_data,
+                                expr2,
+                                closure_data_layout.clone(),
+                                env.arena.alloc(stmt),
+                            );
+
+                            stmt = Stmt::Let(
+                                tag_id_symbol,
+                                expr1,
+                                Layout::Builtin(Builtin::Int64),
+                                env.arena.alloc(stmt),
+                            );
                         }
                     }
 
@@ -4517,12 +4522,10 @@ pub fn from_can<'a>(
 
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
                     store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                        .unwrap()
                 } else {
                     let outer_symbol = env.unique_symbol();
                     stmt =
-                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                            .unwrap();
+                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
                     // convert the def body, store in outer_symbol
                     with_hole(
@@ -4733,31 +4736,21 @@ fn from_can_when<'a>(
                     jump,
                 );
 
-                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt) {
-                    Ok(new_guard_stmt) => (
-                        pattern,
-                        Guard::Guard {
-                            id,
-                            symbol,
-                            stmt: new_guard_stmt,
-                        },
-                        branch_stmt,
-                    ),
-                    Err(msg) => (
-                        Pattern::Underscore,
-                        Guard::NoGuard,
-                        Stmt::RuntimeError(env.arena.alloc(msg)),
-                    ),
-                }
+                let new_guard_stmt =
+                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
+                (
+                    pattern,
+                    Guard::Guard {
+                        id,
+                        symbol,
+                        stmt: new_guard_stmt,
+                    },
+                    branch_stmt,
+                )
             } else {
-                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt) {
-                    Ok(new_branch_stmt) => (pattern, Guard::NoGuard, new_branch_stmt),
-                    Err(msg) => (
-                        Pattern::Underscore,
-                        Guard::NoGuard,
-                        Stmt::RuntimeError(env.arena.alloc(msg)),
-                    ),
-                }
+                let new_branch_stmt =
+                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt);
+                (pattern, Guard::NoGuard, new_branch_stmt)
             }
         });
     let mono_branches = Vec::from_iter_in(it, arena);
@@ -5147,8 +5140,31 @@ fn store_pattern<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
+    stmt: Stmt<'a>,
+) -> Stmt<'a> {
+    match store_pattern_help(env, procs, layout_cache, can_pat, outer_symbol, stmt) {
+        StorePattern::Productive(new) => new,
+        StorePattern::NotProductive(new) => new,
+    }
+}
+
+enum StorePattern<'a> {
+    /// we bound new symbols
+    Productive(Stmt<'a>),
+    /// no new symbols were bound in this pattern
+    NotProductive(Stmt<'a>),
+}
+
+/// It is crucial for correct RC insertion that we don't create dead variables!
+#[allow(clippy::too_many_arguments)]
+fn store_pattern_help<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    can_pat: &Pattern<'a>,
+    outer_symbol: Symbol,
     mut stmt: Stmt<'a>,
-) -> Result<Stmt<'a>, &'a str> {
+) -> StorePattern<'a> {
     use Pattern::*;
 
     match can_pat {
@@ -5157,19 +5173,26 @@ fn store_pattern<'a>(
         }
         Underscore => {
             // do nothing
+            return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_)
         | FloatLiteral(_)
         | EnumLiteral { .. }
         | BitLiteral { .. }
-        | StrLiteral(_) => {}
+        | StrLiteral(_) => {
+            return StorePattern::NotProductive(stmt);
+        }
         AppliedTag {
-            arguments, layout, ..
+            arguments,
+            layout,
+            tag_name,
+            ..
         } => {
             let wrapped = Wrapped::from_layout(layout);
             let write_tag = wrapped == Wrapped::MultiTagUnion;
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+            let mut is_productive = false;
 
             if write_tag {
                 // add an element for the tag discriminant
@@ -5200,6 +5223,7 @@ fn store_pattern<'a>(
                     Identifier(symbol) => {
                         // store immediately in the given symbol
                         stmt = Stmt::Let(*symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
+                        is_productive = true;
                     }
                     Underscore => {
                         // ignore
@@ -5214,17 +5238,42 @@ fn store_pattern<'a>(
                         let symbol = env.unique_symbol();
 
                         // first recurse, continuing to unpack symbol
-                        stmt = store_pattern(env, procs, layout_cache, argument, symbol, stmt)?;
-
-                        // then store the symbol
-                        stmt = Stmt::Let(symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
+                        match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                            StorePattern::Productive(new) => {
+                                is_productive = true;
+                                println!(
+                                    "Access  {:?}.{:?} {:?}",
+                                    tag_name.clone(),
+                                    outer_symbol,
+                                    index
+                                );
+                                stmt = new;
+                                // only if we bind one of its (sub)fields to a used name should we
+                                // extract the field
+                                stmt = Stmt::Let(
+                                    symbol,
+                                    load,
+                                    arg_layout.clone(),
+                                    env.arena.alloc(stmt),
+                                );
+                            }
+                            StorePattern::NotProductive(new) => {
+                                // do nothing
+                                stmt = new;
+                            }
+                        }
                     }
                 }
             }
+
+            if !is_productive {
+                return StorePattern::NotProductive(stmt);
+            }
         }
         RecordDestructure(destructs, Layout::Struct(sorted_fields)) => {
+            let mut is_productive = false;
             for (index, destruct) in destructs.iter().enumerate().rev() {
-                stmt = store_record_destruct(
+                match store_record_destruct(
                     env,
                     procs,
                     layout_cache,
@@ -5233,7 +5282,19 @@ fn store_pattern<'a>(
                     outer_symbol,
                     sorted_fields,
                     stmt,
-                )?;
+                ) {
+                    StorePattern::Productive(new) => {
+                        is_productive = true;
+                        stmt = new;
+                    }
+                    StorePattern::NotProductive(new) => {
+                        stmt = new;
+                    }
+                }
+            }
+
+            if !is_productive {
+                return StorePattern::NotProductive(stmt);
             }
         }
 
@@ -5242,7 +5303,7 @@ fn store_pattern<'a>(
         }
     }
 
-    Ok(stmt)
+    StorePattern::Productive(stmt)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5255,7 +5316,7 @@ fn store_record_destruct<'a>(
     outer_symbol: Symbol,
     sorted_fields: &'a [Layout<'a>],
     mut stmt: Stmt<'a>,
-) -> Result<Stmt<'a>, &'a str> {
+) -> StorePattern<'a> {
     use Pattern::*;
 
     let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
@@ -5298,24 +5359,32 @@ fn store_record_destruct<'a>(
                 // { x, y: _ } -> ...
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
+                return StorePattern::NotProductive(stmt);
             }
             IntLiteral(_)
             | FloatLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
-            | StrLiteral(_) => {}
+            | StrLiteral(_) => {
+                return StorePattern::NotProductive(stmt);
+            }
 
             _ => {
                 let symbol = env.unique_symbol();
 
-                stmt = store_pattern(env, procs, layout_cache, guard_pattern, symbol, stmt)?;
-
-                stmt = Stmt::Let(symbol, load, destruct.layout.clone(), env.arena.alloc(stmt));
+                match store_pattern_help(env, procs, layout_cache, guard_pattern, symbol, stmt) {
+                    StorePattern::Productive(new) => {
+                        stmt = new;
+                        stmt =
+                            Stmt::Let(symbol, load, destruct.layout.clone(), env.arena.alloc(stmt));
+                    }
+                    StorePattern::NotProductive(stmt) => return StorePattern::NotProductive(stmt),
+                }
             }
         },
     }
 
-    Ok(stmt)
+    StorePattern::Productive(stmt)
 }
 
 /// We want to re-use symbols that are not function symbols
@@ -5515,8 +5584,12 @@ fn reuse_function_symbol<'a>(
                     };
 
                     // define the closure data, unless it's a basic unwrapped type already
-                    match closure_layout.build_closure_data(original, symbols) {
-                        Ok(expr) => {
+                    match closure_layout.build_closure_data(original, &symbols) {
+                        BuildClosureData::Alias(current) => {
+                            // there is only one symbol captured, use that immediately
+                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        }
+                        BuildClosureData::Struct(expr) => {
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr,
@@ -5524,9 +5597,40 @@ fn reuse_function_symbol<'a>(
                                 env.arena.alloc(stmt),
                             );
                         }
-                        Err(current) => {
-                            // there is only one symbol captured, use that immediately
-                            substitute_in_exprs(env.arena, &mut stmt, closure_data, current);
+                        BuildClosureData::Union {
+                            tag_id,
+                            tag_layout,
+                            union_size,
+                            tag_name,
+                        } => {
+                            let tag_id_symbol = env.unique_symbol();
+                            let mut tag_symbols =
+                                Vec::with_capacity_in(symbols.len() + 1, env.arena);
+                            tag_symbols.push(tag_id_symbol);
+                            tag_symbols.extend(symbols);
+
+                            let expr1 = Expr::Literal(Literal::Int(tag_id as i64));
+                            let expr2 = Expr::Tag {
+                                tag_id,
+                                tag_layout,
+                                union_size,
+                                tag_name,
+                                arguments: tag_symbols.into_bump_slice(),
+                            };
+
+                            stmt = Stmt::Let(
+                                closure_data,
+                                expr2,
+                                closure_data_layout.clone(),
+                                env.arena.alloc(stmt),
+                            );
+
+                            stmt = Stmt::Let(
+                                tag_id_symbol,
+                                expr1,
+                                Layout::Builtin(Builtin::Int64),
+                                env.arena.alloc(stmt),
+                            );
                         }
                     }
 
@@ -5630,19 +5734,93 @@ where
 }
 
 fn call_by_pointer<'a>(
-    _env: &mut Env<'a, '_>,
+    env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     symbol: Symbol,
     layout: Layout<'a>,
 ) -> Expr<'a> {
-    // let other = env.unique_symbol();
-    let other = symbol;
+    // when we call a known function by-pointer, we must make sure we call a function that owns all
+    // its arguments (in an RC sense). we can't know this at this point, so we wrap such calls in
+    // a proc that we guarantee owns all its arguments. E.g. we turn
+    //
+    // foo = \x -> ...
+    //
+    // x = List.map [ ... ] foo
+    //
+    // into
+    //
+    // foo = \x -> ...
+    //
+    // @owns_all_arguments
+    // foo1 = \x -> foo x
+    //
+    // x = List.map [ ... ] foo1
 
-    procs
-        .passed_by_pointer
-        .insert((symbol, layout.clone()), other);
+    // TODO can we cache this `any`?
+    let is_specialized = procs.specialized.keys().any(|(s, _)| *s == symbol);
+    if env.is_imported_symbol(symbol) || procs.partial_procs.contains_key(&symbol) || is_specialized
+    {
+        match layout {
+            Layout::FunctionPointer(arg_layouts, ret_layout) => {
+                if arg_layouts.iter().any(|l| l.contains_refcounted()) {
+                    let name = env.unique_symbol();
+                    let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+                    let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
 
-    Expr::FunctionPointer(other, layout)
+                    for layout in arg_layouts {
+                        let symbol = env.unique_symbol();
+                        args.push((layout.clone(), symbol));
+                        arg_symbols.push(symbol);
+                    }
+                    let args = args.into_bump_slice();
+
+                    let call_symbol = env.unique_symbol();
+                    let call_type = CallType::ByName {
+                        name: symbol,
+                        full_layout: layout.clone(),
+                        ret_layout: ret_layout.clone(),
+                        arg_layouts,
+                    };
+                    let call = Call {
+                        call_type,
+                        arguments: arg_symbols.into_bump_slice(),
+                    };
+                    let expr = Expr::Call(call);
+
+                    let mut body = Stmt::Ret(call_symbol);
+
+                    body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
+
+                    let closure_data_layout = None;
+                    let proc = Proc {
+                        name,
+                        args,
+                        body,
+                        closure_data_layout,
+                        ret_layout: ret_layout.clone(),
+                        is_self_recursive: SelfRecursive::NotSelfRecursive,
+                        must_own_arguments: true,
+                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                    };
+
+                    procs
+                        .specialized
+                        .insert((name, layout.clone()), InProgressProc::Done(proc));
+                    Expr::FunctionPointer(name, layout)
+                } else {
+                    // if none of the arguments is refcounted, then owning the arguments has no
+                    // meaning
+                    Expr::FunctionPointer(symbol, layout)
+                }
+            }
+            _ => {
+                // e.g. Num.maxInt or other constants
+                Expr::FunctionPointer(symbol, layout)
+            }
+        }
+    } else {
+        Expr::FunctionPointer(symbol, layout)
+    }
 }
 
 fn add_needed_external<'a>(
