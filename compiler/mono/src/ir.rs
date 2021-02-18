@@ -218,8 +218,8 @@ impl<'a> Proc<'a> {
             }
         }
 
-        for (_, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        for (key, proc) in procs.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
         }
     }
 
@@ -421,8 +421,8 @@ impl<'a> Procs<'a> {
             &self.passed_by_pointer,
         ));
 
-        for (_, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        for (key, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
         }
 
         result
@@ -465,8 +465,8 @@ impl<'a> Procs<'a> {
             &self.passed_by_pointer,
         ));
 
-        for (_, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        for (key, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
         }
 
         (result, borrow_params)

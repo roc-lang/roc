@@ -79,7 +79,7 @@ impl<'a> UnionLayout<'a> {
                 let tags_doc = tags.iter().map(|fields| {
                     alloc.text("C ").append(alloc.intersperse(
                         fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
-                        ", ",
+                        " ",
                     ))
                 });
 
