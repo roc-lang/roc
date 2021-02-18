@@ -5359,7 +5359,9 @@ fn store_record_destruct<'a>(
             | FloatLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
-            | StrLiteral(_) => {}
+            | StrLiteral(_) => {
+                return StorePattern::NotProductive(stmt);
+            }
 
             _ => {
                 let symbol = env.unique_symbol();
