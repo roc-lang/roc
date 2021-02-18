@@ -6,13 +6,30 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
+fn should_borrow_layout(layout: &Layout) -> bool {
+    match layout {
+        Layout::Closure(_, _, _) => false,
+        _ => layout.is_refcounted(),
+    }
+}
+
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),
     };
+
+    for (key, other) in passed_by_pointer {
+        if let Some(proc) = procs.get(key) {
+            let mut proc: Proc = proc.clone();
+            proc.name = *other;
+
+            param_map.visit_proc_always_owned(arena, &proc);
+        }
+    }
 
     for proc in procs.values() {
         param_map.visit_proc(arena, proc);
@@ -116,7 +133,22 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: layout.is_refcounted(),
+                borrow: should_borrow_layout(layout),
+                layout: layout.clone(),
+                symbol: *symbol,
+            }),
+            arena,
+        )
+        .into_bump_slice()
+    }
+
+    fn init_borrow_args_always_owned(
+        arena: &'a Bump,
+        ps: &'a [(Layout<'a>, Symbol)],
+    ) -> &'a [Param<'a>] {
+        Vec::from_iter_in(
+            ps.iter().map(|(layout, symbol)| Param {
+                borrow: false,
                 layout: layout.clone(),
                 symbol: *symbol,
             }),
@@ -129,6 +161,15 @@ impl<'a> ParamMap<'a> {
         self.items.insert(
             Key::Declaration(proc.name),
             Self::init_borrow_args(arena, proc.args),
+        );
+
+        self.visit_stmt(arena, proc.name, &proc.body);
+    }
+
+    fn visit_proc_always_owned(&mut self, arena: &'a Bump, proc: &Proc<'a>) {
+        self.items.insert(
+            Key::Declaration(proc.name),
+            Self::init_borrow_args_always_owned(arena, proc.args),
         );
 
         self.visit_stmt(arena, proc.name, &proc.body);

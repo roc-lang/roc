@@ -720,7 +720,9 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             )
         }
 
-        CallType::ByPointer { name, .. } => {
+        CallType::ByPointer {
+            name, full_layout, ..
+        } => {
             let sub_expr = load_symbol(scope, name);
 
             let mut arg_vals: Vec<BasicValueEnum> =
@@ -730,9 +732,24 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 arg_vals.push(load_symbol(scope, arg));
             }
 
-            let call = match sub_expr {
-                BasicValueEnum::PointerValue(ptr) => {
+            let call = match (full_layout, sub_expr) {
+                (_, BasicValueEnum::PointerValue(ptr)) => {
                     env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
+                }
+                (Layout::Closure(_, _, _), BasicValueEnum::StructValue(closure_struct)) => {
+                    let fpointer = env
+                        .builder
+                        .build_extract_value(closure_struct, 0, "fpointer")
+                        .unwrap()
+                        .into_pointer_value();
+
+                    let closure_data = env
+                        .builder
+                        .build_extract_value(closure_struct, 1, "closure_data")
+                        .unwrap();
+
+                    arg_vals.push(closure_data);
+                    env.builder.build_call(fpointer, arg_vals.as_slice(), "tmp")
                 }
                 non_ptr => {
                     panic!(

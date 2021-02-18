@@ -117,22 +117,24 @@ pub fn build_file<'a>(
     report_timing(buf, "Generate LLVM IR", code_gen_timing.code_gen);
     report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
 
-    println!(
-        "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
-        buf
-    );
-
-    println!("\nSuccess! 🎉\n\n\t➡ {}\n", app_o_file.display());
-
     let compilation_end = compilation_start.elapsed().unwrap();
 
     let size = std::fs::metadata(&app_o_file).unwrap().len();
 
-    println!(
-        "Finished compilation and code gen in {} ms\n\nProduced a app.o file of size {:?}\n",
-        compilation_end.as_millis(),
-        size,
-    );
+    if emit_debug_info {
+        println!(
+            "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
+            buf
+        );
+
+        println!("\nSuccess! 🎉\n\n\t➡ {}\n", app_o_file.display());
+
+        println!(
+            "Finished compilation and code gen in {} ms\n\nProduced a app.o file of size {:?}\n",
+            compilation_end.as_millis(),
+            size,
+        );
+    }
 
     // Step 2: link the precompiled host and compiled app
     let mut host_input_path = PathBuf::from(cwd);
@@ -144,10 +146,13 @@ pub fn build_file<'a>(
     let rebuild_host_start = SystemTime::now();
     rebuild_host(host_input_path.as_path());
     let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
-    println!(
-        "Finished rebuilding the host in {} ms\n",
-        rebuild_host_end.as_millis()
-    );
+
+    if emit_debug_info {
+        println!(
+            "Finished rebuilding the host in {} ms\n",
+            rebuild_host_end.as_millis()
+        );
+    }
 
     // TODO try to move as much of this linking as possible to the precompiled
     // host, to minimize the amount of host-application linking required.
@@ -168,7 +173,9 @@ pub fn build_file<'a>(
     });
 
     let link_end = link_start.elapsed().unwrap();
-    println!("Finished linking in {} ms\n", link_end.as_millis());
+    if emit_debug_info {
+        println!("Finished linking in {} ms\n", link_end.as_millis());
+    }
 
     // Clean up the leftover .o file from the Roc, if possible.
     // (If cleaning it up fails, that's fine. No need to take action.)

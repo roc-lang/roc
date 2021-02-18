@@ -602,7 +602,10 @@ impl<'a> Context<'a> {
         consume: bool,
     ) -> Self {
         // can this type be reference-counted at runtime?
-        let reference = layout.contains_refcounted();
+        let reference = match layout {
+            Layout::Closure(_, closure, _) => closure.layout.contains_refcounted(),
+            _ => layout.contains_refcounted(),
+        };
 
         let info = VarInfo {
             reference,

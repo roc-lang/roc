@@ -1952,7 +1952,7 @@ mod gen_primitives {
                 main =
                     x : Tree F64
                     x = singleton 3
-                    when x is 
+                    when x is
                         Tree 3.0 _ -> True
                         _ -> False
                 "#
@@ -2213,6 +2213,25 @@ mod gen_primitives {
             ),
             6,
             i64
+        );
+    }
+
+    #[test]
+    fn build_then_apply_closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main =
+                    x = "long string that is malloced"
+
+                    (\_ -> x) {}
+                "#
+            ),
+            "long string that is malloced",
+            &'static str
         );
     }
 }
