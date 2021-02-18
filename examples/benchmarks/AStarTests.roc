@@ -9,14 +9,15 @@ fromList = \list -> List.walk list (\x, a -> Set.insert a x) Set.empty
 
 main : Task.Task {} []
 main =
-    Task.after Task.getInt \n ->
-        when n is
-            1 -> 
-                Task.putLine (showBool test1)
-
-            _ -> 
-                ns = Str.fromInt n
-                Task.putLine "No test \(ns)"
+    Task.putLine (showBool test1)
+#     Task.after Task.getInt \n ->
+#         when n is
+#             1 -> 
+#                 Task.putLine (showBool test1)
+# 
+#             _ -> 
+#                 ns = Str.fromInt n
+#                 Task.putLine "No test \(ns)"
 
 showBool : Bool -> Str
 showBool = \b ->

@@ -3597,7 +3597,15 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_repeat(env, inplace, parent, list_len, elem, elem_layout)
+            list_repeat(
+                env,
+                layout_ids,
+                inplace,
+                parent,
+                list_len,
+                elem,
+                elem_layout,
+            )
         }
         ListReverse => {
             // List.reverse : List elem -> List elem

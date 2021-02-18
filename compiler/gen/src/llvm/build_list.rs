@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_eq_wrapper, build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
+    build_eq_wrapper, build_inc_wrapper, build_transform_caller, call_bitcode_fn,
+    call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, build_num_binop, cast_basic_basic, complex_bitcast, Env, InPlace,
@@ -53,90 +54,45 @@ pub fn list_single<'a, 'ctx, 'env>(
 /// List.repeat : Int, elem -> List elem
 pub fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     inplace: InPlace,
     parent: FunctionValue<'ctx>,
     list_len: IntValue<'ctx>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
-    // list_len > 0
-    // We have to do a loop below, continuously adding the `elem`
-    // to the output list `List elem` until we have reached the
-    // number of repeats. This `comparison` is used to check
-    // if we need to do any looping; because if we dont, then we
-    // dont need to allocate memory for the index or the check
-    // if index != 0
-    let comparison = builder.build_int_compare(
-        IntPredicate::UGT,
-        list_len,
-        ctx.i64_type().const_int(0, false),
-        "atleastzero",
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let element_ptr = builder.build_alloca(element.get_type(), "element_ptr");
+    env.builder.build_store(element_ptr, element);
+
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+    let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_len.into(),
+            alignment_iv.into(),
+            env.builder.build_bitcast(element_ptr, u8_ptr, "to_u8_ptr"),
+            element_width.into(),
+            inc_element_fn.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_REPEAT,
     );
 
-    let build_then = || {
-        // Allocate space for the new array that we'll copy into.
-        let list_ptr = allocate_list(env, inplace, elem_layout, list_len);
-        // TODO check if malloc returned null; if so, runtime error for OOM!
-
-        let index_name = "#index";
-        let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
-
-        // Start at the last element in the list.
-        let last_elem_index = builder.build_int_sub(
-            list_len,
-            ctx.i64_type().const_int(1, false),
-            "lastelemindex",
-        );
-        builder.build_store(start_alloca, last_elem_index);
-
-        let loop_bb = ctx.append_basic_block(parent, "loop");
-        builder.build_unconditional_branch(loop_bb);
-        builder.position_at_end(loop_bb);
-
-        // #index = #index - 1
-        let curr_index = builder
-            .build_load(start_alloca, index_name)
-            .into_int_value();
-        let next_index =
-            builder.build_int_sub(curr_index, ctx.i64_type().const_int(1, false), "nextindex");
-
-        builder.build_store(start_alloca, next_index);
-        let elem_ptr =
-            unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
-
-        // Mutate the new array in-place to change the element.
-        builder.build_store(elem_ptr, elem);
-
-        // #index != 0
-        let end_cond = builder.build_int_compare(
-            IntPredicate::NE,
-            ctx.i64_type().const_int(0, false),
-            curr_index,
-            "loopcond",
-        );
-
-        let after_bb = ctx.append_basic_block(parent, "afterloop");
-
-        builder.build_conditional_branch(end_cond, loop_bb, after_bb);
-        builder.position_at_end(after_bb);
-
-        store_list(env, list_ptr, list_len)
-    };
-
-    let build_else = || empty_polymorphic_list(env);
-
-    let struct_type = collection(ctx, env.ptr_bytes);
-
-    build_basic_phi2(
-        env,
-        parent,
-        comparison,
-        build_then,
-        build_else,
-        BasicTypeEnum::StructType(struct_type),
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
     )
 }
 
@@ -1532,7 +1488,7 @@ where
         "bounds_check",
     );
 
-    let after_loop_bb = ctx.append_basic_block(parent, "after_outer_loop");
+    let after_loop_bb = ctx.append_basic_block(parent, "after_outer_loop_1");
 
     builder.build_conditional_branch(condition, loop_bb, after_loop_bb);
     builder.position_at_end(after_loop_bb);
@@ -1599,7 +1555,7 @@ where
     // #index < end
     let loop_end_cond = bounds_check_comparison(builder, next_index, end);
 
-    let after_loop_bb = ctx.append_basic_block(parent, "after_outer_loop");
+    let after_loop_bb = ctx.append_basic_block(parent, "after_outer_loop_2");
 
     builder.build_conditional_branch(loop_end_cond, loop_bb, after_loop_bb);
     builder.position_at_end(after_loop_bb);
