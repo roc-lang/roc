@@ -3389,9 +3389,16 @@ fn function_value_by_name<'a, 'ctx, 'env>(
         if symbol.is_builtin() {
             panic!("Unrecognized builtin function: {:?}", fn_name)
         } else {
-            panic!(
-                "Unrecognized non-builtin function: {:?} (symbol: {:?}, layout: {:?})",
+            // Unrecognized non-builtin function:
+            eprintln!(
+                "Unrecognized non-builtin function: {:?}\n\nSymbol: {:?}\nLayout: {:?}\n",
                 fn_name, symbol, layout
+            );
+            eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
+
+            panic!(
+                "Unrecognized non-builtin function: {:?} (symbol: {:?})",
+                fn_name, symbol,
             )
         }
     })
