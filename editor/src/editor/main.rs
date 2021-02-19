@@ -11,9 +11,7 @@ use crate::graphics::{
     lowlevel::buffer::create_rect_buffers, lowlevel::ortho::update_ortho_buffer,
     lowlevel::pipelines, style::CODE_FONT_SIZE, style::CODE_TXT_XY,
 };
-use crate::ui::{
-    colors::TXT_COL, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult,
-};
+use crate::ui::{colors::TXT_COL, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};
 //use crate::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool, scope::Scope};
