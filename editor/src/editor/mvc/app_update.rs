@@ -115,18 +115,18 @@ pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResu
     Ok(())
 }
 
-/*
 #[cfg(test)]
 pub mod test_app_update {
     use crate::editor::mvc::app_model;
     use crate::editor::mvc::app_model::{AppModel, Clipboard};
     use crate::editor::mvc::app_update::{handle_copy, handle_cut, handle_paste};
-    use crate::editor::mvc::ed_model::{EdModel};
+    use crate::editor::mvc::ed_model::EdModel;
     use crate::ui::text::{
+        big_selectable_text::test_big_sel_text::{
+            all_lines_vec, convert_selection_to_dsl, gen_big_text,
+        },
         big_selectable_text::BigSelectableText,
-        selection::test_selection::{all_lines_vec, convert_selection_to_dsl},
     };
-    use bumpalo::Bump;
 
     pub fn mock_app_model(
         big_sel_text: BigSelectableText,
@@ -165,7 +165,6 @@ pub mod test_app_update {
         clipboard_content: &str,
         expected_post_lines_str: &[&str],
         clipboard_opt: Option<Clipboard>,
-        arena: &Bump,
     ) -> Result<Option<Clipboard>, String> {
         let pre_big_text = gen_big_text(pre_lines_str)?;
 
@@ -177,10 +176,8 @@ pub mod test_app_update {
 
         let ed_model = app_model.ed_model_opt.unwrap();
         let mut text_lines = all_lines_vec(&ed_model.text);
-        let post_lines_str = convert_selection_to_dsl(
-            ed_model.text.caret_w_select,
-            &mut text_lines,
-        )?;
+        let post_lines_str =
+            convert_selection_to_dsl(ed_model.text.caret_w_select, &mut text_lines)?;
 
         assert_eq!(post_lines_str, expected_post_lines_str);
 
@@ -192,7 +189,6 @@ pub mod test_app_update {
         expected_clipboard_content: &str,
         expected_post_lines_str: &[&str],
         clipboard_opt: Option<Clipboard>,
-        arena: &Bump,
     ) -> Result<Option<Clipboard>, String> {
         let pre_big_text = gen_big_text(pre_lines_str)?;
 
@@ -206,10 +202,8 @@ pub mod test_app_update {
 
         let ed_model = app_model.ed_model_opt.unwrap();
         let mut text_lines = all_lines_vec(&ed_model.text);
-        let post_lines_str = convert_selection_to_dsl(
-            ed_model.text.caret_w_select,
-            &mut text_lines,
-        )?;
+        let post_lines_str =
+            convert_selection_to_dsl(ed_model.text.caret_w_select, &mut text_lines)?;
 
         assert_eq!(post_lines_str, expected_post_lines_str);
 
@@ -236,39 +230,36 @@ pub mod test_app_update {
         )?;
 
         // paste
-        let arena = &Bump::new();
 
-        clipboard_opt = assert_paste(&["|"], "", &["|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_paste(&["|"], "a", &["a|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_paste(&["a|"], "b", &["ab|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_paste(&["|a"], "b", &["b|a"], clipboard_opt, arena)?;
-        clipboard_opt = assert_paste(&["[a]|"], "c", &["c|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_paste(&["[ab]|"], "d", &["d|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_paste(&["a[b]|c"], "e", &["ae|c"], clipboard_opt, arena)?;
-        clipboard_opt = assert_paste(&["a\n", "[b\n", "]|"], "f", &["a\n", "f|"], clipboard_opt, arena)?;
+        clipboard_opt = assert_paste(&["|"], "", &["|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["|"], "a", &["a|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["a|"], "b", &["ab|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["|a"], "b", &["b|a"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["[a]|"], "c", &["c|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["[ab]|"], "d", &["d|"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["a[b]|c"], "e", &["ae|c"], clipboard_opt)?;
+        clipboard_opt = assert_paste(&["a\n", "[b\n", "]|"], "f", &["a\n", "f|"], clipboard_opt)?;
         clipboard_opt = assert_paste(
             &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
             "ef\nghi",
             &["abc\n", "def\n", "ghi|\n", "jkl"],
             clipboard_opt,
-            arena,
         )?;
 
         // cut
-        clipboard_opt = assert_cut(&["[a]|"], "a", &["|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_cut(&["|[b]"], "b", &["|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_cut(&["a[ ]|"], " ", &["a|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_cut(&["[ ]|b"], " ", &["|b"], clipboard_opt, arena)?;
-        clipboard_opt = assert_cut(&["a\n", "[b\n", "]|"], "b\n", &["a\n", "|"], clipboard_opt, arena)?;
-        clipboard_opt = assert_cut(&["[a\n", " b\n", "]|"], "a\n b\n", &["|"], clipboard_opt, arena)?;
+        clipboard_opt = assert_cut(&["[a]|"], "a", &["|"], clipboard_opt)?;
+        clipboard_opt = assert_cut(&["|[b]"], "b", &["|"], clipboard_opt)?;
+        clipboard_opt = assert_cut(&["a[ ]|"], " ", &["a|"], clipboard_opt)?;
+        clipboard_opt = assert_cut(&["[ ]|b"], " ", &["|b"], clipboard_opt)?;
+        clipboard_opt = assert_cut(&["a\n", "[b\n", "]|"], "b\n", &["a\n", "|"], clipboard_opt)?;
+        clipboard_opt = assert_cut(&["[a\n", " b\n", "]|"], "a\n b\n", &["|"], clipboard_opt)?;
         assert_cut(
             &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
             "ef\nghi",
             &["abc\n", "d|\n", "jkl"],
             clipboard_opt,
-            arena,
         )?;
 
         Ok(())
     }
-}*/
+}
