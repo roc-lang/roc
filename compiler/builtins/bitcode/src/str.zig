@@ -50,9 +50,6 @@ pub const RocStr = extern struct {
         const length = @sizeOf(usize) + number_of_chars;
         var new_bytes: []usize = allocator.alloc(usize, length) catch unreachable;
 
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("Hello, {d}!\n", .{length}) catch unreachable;
-
         if (in_place == InPlace.InPlace) {
             new_bytes[0] = @intCast(usize, number_of_chars);
         } else {

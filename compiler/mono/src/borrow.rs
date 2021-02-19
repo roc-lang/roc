@@ -610,7 +610,9 @@ impl<'a> BorrowInfState<'a> {
 }
 
 pub fn foreign_borrow_signature(arena: &Bump, arity: usize) -> &[bool] {
-    let all = bumpalo::vec![in arena; false; arity];
+    // NOTE this means that Roc is responsible for cleaning up resources;
+    // the host cannot (currently) take ownership
+    let all = bumpalo::vec![in arena; true; arity];
     all.into_bump_slice()
 }
 

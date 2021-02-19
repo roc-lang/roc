@@ -330,7 +330,6 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
 
 fn modify_refcount_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     value: BasicValueEnum<'ctx>,
@@ -394,9 +393,7 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => {
-            modify_refcount_builtin(env, parent, layout_ids, mode, value, layout, builtin)
-        }
+        Builtin(builtin) => modify_refcount_builtin(env, layout_ids, mode, value, layout, builtin),
 
         Union(variant) => {
             use UnionLayout::*;

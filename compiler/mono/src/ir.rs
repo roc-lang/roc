@@ -5183,10 +5183,7 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         AppliedTag {
-            arguments,
-            layout,
-            tag_name,
-            ..
+            arguments, layout, ..
         } => {
             let wrapped = Wrapped::from_layout(layout);
             let write_tag = wrapped == Wrapped::MultiTagUnion;

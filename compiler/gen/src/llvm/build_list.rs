@@ -55,8 +55,6 @@ pub fn list_single<'a, 'ctx, 'env>(
 pub fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    inplace: InPlace,
-    parent: FunctionValue<'ctx>,
     list_len: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,

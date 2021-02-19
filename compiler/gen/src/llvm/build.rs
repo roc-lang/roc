@@ -3595,17 +3595,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let list_len = load_symbol(scope, &args[0]).into_int_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let inplace = get_inplace_from_layout(layout);
-
-            list_repeat(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                list_len,
-                elem,
-                elem_layout,
-            )
+            list_repeat(env, layout_ids, list_len, elem, elem_layout)
         }
         ListReverse => {
             // List.reverse : List elem -> List elem
