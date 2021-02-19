@@ -1112,6 +1112,7 @@ fn layout_from_flat_type<'a>(
                         other => Ok(other),
                     }
                 }
+                Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
                 }

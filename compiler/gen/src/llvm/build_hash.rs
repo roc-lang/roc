@@ -1,8 +1,7 @@
 use crate::debug_info_init;
+use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build::{
-    call_bitcode_fn, cast_block_of_memory_to_tag, complex_bitcast, set_name, FAST_CALL_CONV,
-};
+use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, set_name, FAST_CALL_CONV};
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;

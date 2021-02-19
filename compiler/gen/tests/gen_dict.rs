@@ -305,4 +305,218 @@ mod gen_dict {
             &[RocStr]
         );
     }
+
+    #[test]
+    fn unit_values() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict I64 {}
+                myDict =
+                    Dict.empty
+                        |> Dict.insert 0 {}
+                        |> Dict.insert 1 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 3 {}
+
+                Dict.len myDict
+                "#
+            ),
+            4,
+            i64
+        );
+    }
+
+    #[test]
+    fn singleton() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict I64 {}
+                myDict =
+                    Dict.singleton 0 {}
+
+                Dict.len myDict
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn union() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict I64 {}
+                myDict =
+                    Dict.union (Dict.singleton 0 {}) (Dict.singleton 1 {})
+
+                Dict.len myDict
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn union_prefer_first() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                myDict : Dict I64 I64
+                myDict =
+                    Dict.union (Dict.singleton 0 100) (Dict.singleton 0 200)
+
+                Dict.values myDict
+                "#
+            ),
+            &[100],
+            &[i64]
+        );
+    }
+
+    #[test]
+    fn intersection() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 {}
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 3 {}
+                        |> Dict.insert 4 {}
+                        |> Dict.insert 5 {}
+
+                dict2 : Dict I64 {}
+                dict2 = 
+                    Dict.empty
+                        |> Dict.insert 0 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 4 {}
+
+                Dict.intersection dict1 dict2 
+                    |> Dict.len 
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn intersection_prefer_first() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 I64
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 1
+                        |> Dict.insert 2 2
+                        |> Dict.insert 3 3
+                        |> Dict.insert 4 4
+                        |> Dict.insert 5 5
+
+                dict2 : Dict I64 I64
+                dict2 = 
+                    Dict.empty
+                        |> Dict.insert 0 100
+                        |> Dict.insert 2 200
+                        |> Dict.insert 4 300
+
+                Dict.intersection dict1 dict2 
+                    |> Dict.values 
+                "#
+            ),
+            &[4, 2],
+            &[i64]
+        );
+    }
+
+    #[test]
+    fn difference() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 {}
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 3 {}
+                        |> Dict.insert 4 {}
+                        |> Dict.insert 5 {}
+
+                dict2 : Dict I64 {}
+                dict2 = 
+                    Dict.empty
+                        |> Dict.insert 0 {}
+                        |> Dict.insert 2 {}
+                        |> Dict.insert 4 {}
+
+                Dict.difference dict1 dict2 
+                    |> Dict.len 
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn difference_prefer_first() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 I64
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 1
+                        |> Dict.insert 2 2
+                        |> Dict.insert 3 3
+                        |> Dict.insert 4 4
+                        |> Dict.insert 5 5
+
+                dict2 : Dict I64 I64
+                dict2 = 
+                    Dict.empty
+                        |> Dict.insert 0 100
+                        |> Dict.insert 2 200
+                        |> Dict.insert 4 300
+
+                Dict.difference dict1 dict2 
+                    |> Dict.values 
+                "#
+            ),
+            &[5, 3, 1],
+            &[i64]
+        );
+    }
+
+    #[test]
+    fn walk_sum_keys() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                dict1 : Dict I64 I64
+                dict1 = 
+                    Dict.empty
+                        |> Dict.insert 1 1
+                        |> Dict.insert 2 2
+                        |> Dict.insert 3 3
+                        |> Dict.insert 4 4
+                        |> Dict.insert 5 5
+
+                Dict.walk dict1 (\k, _, a -> k + a) 0 
+                "#
+            ),
+            15,
+            i64
+        );
+    }
 }

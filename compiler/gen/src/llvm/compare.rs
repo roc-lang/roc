@@ -366,7 +366,6 @@ fn build_list_eq<'a, 'ctx, 'env>(
     list2: StructValue<'ctx>,
     when_recursive: WhenRecursive<'a>,
 ) -> BasicValueEnum<'ctx> {
-    dbg!("list", &when_recursive);
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 

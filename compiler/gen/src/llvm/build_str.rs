@@ -1,6 +1,5 @@
-use crate::llvm::build::{
-    call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, Env, InPlace, Scope,
-};
+use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
+use crate::llvm::build::{complex_bitcast, Env, InPlace, Scope};
 use crate::llvm::build_list::{allocate_list, store_list};
 use crate::llvm::convert::collection;
 use inkwell::builder::Builder;
@@ -270,6 +269,19 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     let int = load_symbol(scope, &int_symbol);
 
     let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
+
+    zig_str_to_struct(env, zig_result).into()
+}
+
+/// Str.fromInt : Int -> Str
+pub fn str_from_float<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    int_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let float = load_symbol(scope, &int_symbol);
+
+    let zig_result = call_bitcode_fn(env, &[float], &bitcode::STR_FROM_FLOAT).into_struct_value();
 
     zig_str_to_struct(env, zig_result).into()
 }
