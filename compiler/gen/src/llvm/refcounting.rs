@@ -813,6 +813,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn modify_refcount_dict<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -863,6 +864,7 @@ fn modify_refcount_dict<'a, 'ctx, 'env>(
     call_help(env, function, mode, original_wrapper.into(), call_name);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn modify_refcount_dict_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
