@@ -296,6 +296,10 @@ pub const RocDict = extern struct {
     }
 
     fn getKey(self: *const RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
+        if (key_width == 0) {
+            return null;
+        }
+
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (index * key_width);
@@ -329,6 +333,10 @@ pub const RocDict = extern struct {
     }
 
     fn getValue(self: *const RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize) Opaque {
+        if (value_width == 0) {
+            return null;
+        }
+
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (self.capacity() * key_width) + (index * value_width);
@@ -492,6 +500,8 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
             if (dict.dict_entries_len == 0) {
                 const data_bytes = dict.capacity() * slotSize(key_width, value_width);
                 decref(std.heap.c_allocator, alignment, dict.dict_bytes, data_bytes);
+                output.* = RocDict.empty();
+                return;
             }
 
             output.* = dict;
@@ -660,6 +670,7 @@ pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width
 
                         // we need an extra RC token for the key
                         inc_key(key);
+                        inc_value(value);
 
                         const dec_key = doNothing;
                         const dec_value = doNothing;
@@ -702,7 +713,7 @@ pub fn dictIntersection(dict1: RocDict, dict2: RocDict, alignment: Alignment, ke
     }
 }
 
-pub fn dictDifference(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Inc, dec_value: Inc, output: *RocDict) callconv(.C) void {
+pub fn dictDifference(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
     output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
 
     var i: usize = 0;
@@ -748,7 +759,7 @@ pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_
 }
 
 const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
+pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, inc_key: Inc, inc_value: Inc, output: Opaque) callconv(.C) void {
     @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
 
     var i: usize = 0;
@@ -756,10 +767,16 @@ pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, a
     while (i < size) : (i += 1) {
         switch (dict.getSlot(i, key_width, value_width)) {
             Slot.Filled => {
-                const key = dict.getKey(i, alignment, key_width, value_width);
-                const value = dict.getValue(i, alignment, key_width, value_width);
+                if (value_width == 0) {
+                    const key = dict.getKey(i, alignment, key_width, value_width);
 
-                stepper_caller(stepper, key, value, output, output);
+                    stepper_caller(stepper, key, null, output, output);
+                } else {
+                    const key = dict.getKey(i, alignment, key_width, value_width);
+                    const value = dict.getValue(i, alignment, key_width, value_width);
+
+                    stepper_caller(stepper, key, value, output, output);
+                }
             },
             else => {},
         }

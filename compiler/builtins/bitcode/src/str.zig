@@ -50,6 +50,9 @@ pub const RocStr = extern struct {
         const length = @sizeOf(usize) + number_of_chars;
         var new_bytes: []usize = allocator.alloc(usize, length) catch unreachable;
 
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("Hello, {d}!\n", .{length}) catch unreachable;
+
         if (in_place == InPlace.InPlace) {
             new_bytes[0] = @intCast(usize, number_of_chars);
         } else {
@@ -833,8 +836,10 @@ pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv
 
 fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
+        // the second argument is borrowed, so we must increment its refcount before returning
         return RocStr.clone(allocator, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
+        // the first argument is owned, so we can return it without cloning
         return RocStr.clone(allocator, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();

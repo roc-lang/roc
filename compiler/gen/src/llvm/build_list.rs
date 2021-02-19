@@ -1099,6 +1099,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     let alignment = before_layout.alignment_bytes(env.ptr_bytes);
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
+    let inc_closure = build_inc_wrapper(env, layout_ids, transform_layout);
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
     let output = call_bitcode_fn(
@@ -1112,6 +1113,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             before_width.into(),
             result_width.into(),
             after_width.into(),
+            inc_closure.as_global_value().as_pointer_value().into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         op,

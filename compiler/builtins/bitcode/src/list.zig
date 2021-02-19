@@ -192,15 +192,15 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
     }
 }
 
-pub fn listKeepOks(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, dec_result: Dec) callconv(.C) RocList {
-    return listKeepResult(list, RocResult.isOk, transform, caller, alignment, before_width, result_width, after_width, dec_result);
+pub fn listKeepOks(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) callconv(.C) RocList {
+    return listKeepResult(list, RocResult.isOk, transform, caller, alignment, before_width, result_width, after_width, inc_closure, dec_result);
 }
 
-pub fn listKeepErrs(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, dec_result: Dec) callconv(.C) RocList {
-    return listKeepResult(list, RocResult.isErr, transform, caller, alignment, before_width, result_width, after_width, dec_result);
+pub fn listKeepErrs(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) callconv(.C) RocList {
+    return listKeepResult(list, RocResult.isErr, transform, caller, alignment, before_width, result_width, after_width, inc_closure, dec_result);
 }
 
-pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, dec_result: Dec) RocList {
+pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
@@ -212,6 +212,7 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
         var kept: usize = 0;
         while (i < size) : (i += 1) {
             const before_element = source_ptr + (i * before_width);
+            inc_closure(transform);
             caller(transform, before_element, temporary);
 
             const result = utils.RocResult{ .bytes = temporary };

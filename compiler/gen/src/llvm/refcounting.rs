@@ -802,7 +802,7 @@ fn modify_refcount_dict_help<'a, 'ctx, 'env>(
         .into_int_value();
 
     // the block we'll always jump to when we're done
-    let cont_block = ctx.append_basic_block(parent, "modify_rc_str_cont");
+    let cont_block = ctx.append_basic_block(parent, "modify_rc_dict_cont");
     let modification_block = ctx.append_basic_block(parent, "modify_rc");
 
     let is_non_empty = builder.build_int_compare(
