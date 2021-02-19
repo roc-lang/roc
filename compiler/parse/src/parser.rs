@@ -321,6 +321,7 @@ pub enum SyntaxError<'a> {
     NotYetImplemented(String),
     TODO,
     Type(Type<'a>),
+    Pattern(EPattern<'a>),
     Space(BadInputError),
 }
 
@@ -367,6 +368,26 @@ impl<'a> SyntaxError<'a> {
 
 pub type Row = u32;
 pub type Col = u16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPattern<'a> {
+    Record(PRecord<'a>, Row, Col),
+    Underscore(Row, Col),
+
+    Start(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+    FunctionArgument(Row, Col),
+
+    IndentStart(Row, Col),
+    IndentEnd(Row, Col),
+    AsIndentStart(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PRecord<'a> {
+    EPattern(&'a Type<'a>, Row, Col),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type<'a> {

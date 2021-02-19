@@ -13,6 +13,7 @@ use crate::parser::{
     fail, map, newline_char, not, not_followed_by, optional, sep_by1, then, unexpected,
     unexpected_eof, Either, ParseResult, Parser, State, SyntaxError,
 };
+use crate::pattern::underscore_pattern;
 use crate::type_annotation;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -1110,19 +1111,6 @@ fn number_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
 
 fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
     map!(crate::string_literal::parse(), Pattern::StrLiteral)
-}
-
-fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
-        let (_, _, next_state) = ascii_char(b'_').parse(arena, state)?;
-
-        let (_, output, final_state) = optional(lowercase_ident()).parse(arena, next_state)?;
-
-        match output {
-            Some(name) => Ok((MadeProgress, Pattern::Underscore(name), final_state)),
-            None => Ok((MadeProgress, Pattern::Underscore(&""), final_state)),
-        }
-    }
 }
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
