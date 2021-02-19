@@ -1,7 +1,5 @@
 use crate::graphics::primitives::rect::Rect;
-use crate::ui::text::{
-    big_selectable_text::{BigSelectableText, from_path},
-};
+use crate::ui::text::big_selectable_text::{from_path, BigSelectableText};
 use crate::ui::ui_error::UIResult;
 use std::path::Path;
 

@@ -1,7 +1,4 @@
-use cgmath::Vector2;
-use wgpu_glyph::GlyphBrush;
-use winit::dpi::PhysicalSize;
-use crate::ui::colors::CODE_COLOR;
+use crate::editor::colors::CODE_COLOR;
 use crate::{
     graphics::{
         primitives::text::{queue_code_text_draw, Text},
@@ -9,6 +6,9 @@ use crate::{
     },
     lang::{ast::Expr2, expr::Env},
 };
+use cgmath::Vector2;
+use wgpu_glyph::GlyphBrush;
+use winit::dpi::PhysicalSize;
 
 pub fn render_expr2<'a>(
     env: &mut Env<'a>,

@@ -1,21 +1,8 @@
-pub type ColorTup = (f32, f32, f32, f32);
-pub const WHITE: ColorTup = (1.0, 1.0, 1.0, 1.0);
-pub const BLACK: ColorTup = (0.0, 0.0, 0.0, 1.0);
+use crate::graphics::colors as gr_colors;
+use gr_colors::ColorTup;
+
+pub const LIGHT_BRAND_COL: ColorTup = (0.506, 0.337, 0.902, 1.0);
+//pub const DARK_BRAND_COL: ColorTup = (0.380, 0.169, 0.871, 1.0);
 pub const TXT_COLOR: ColorTup = (1.0, 1.0, 1.0, 1.0);
-pub const CODE_COLOR: ColorTup = (0.21, 0.55, 0.83, 1.0);
-pub const CARET_COLOR: ColorTup = WHITE;
+pub const CARET_COLOR: ColorTup = gr_colors::WHITE;
 pub const SELECT_COLOR: ColorTup = (0.45, 0.61, 1.0, 1.0);
-pub const BG_COLOR: ColorTup = (0.11, 0.11, 0.13, 1.0);
-
-pub fn to_wgpu_color((r, g, b, a): ColorTup) -> wgpu::Color {
-    wgpu::Color {
-        r: r as f64,
-        g: g as f64,
-        b: b as f64,
-        a: a as f64,
-    }
-}
-
-pub fn to_slice((r, g, b, a): ColorTup) -> [f32; 4] {
-    [r, g, b, a]
-}

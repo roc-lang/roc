@@ -1,8 +1,8 @@
-
-pub mod main;
-pub mod mvc;
+mod colors;
 mod ed_error;
 mod keyboard_input;
+pub mod main;
+mod mvc;
 mod render_ast;
-mod colors;
-mod util;
+pub mod syntax_highlight;
+mod util; // TODO remove pub once we have ast based syntax highlighting

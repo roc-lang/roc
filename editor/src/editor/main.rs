@@ -1,43 +1,30 @@
-
+use super::keyboard_input;
+use crate::editor::colors::BG_COL;
+use crate::editor::colors::CODE_COLOR;
 use crate::editor::ed_error::{print_err, print_ui_err};
-use crate::ui::{
-    ui_error::UIResult,
-    text::text_pos::{TextPos},
-    text::lines::{Lines},
-    colors::{CODE_COLOR, TXT_COLOR},
+use crate::editor::mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view};
+use crate::graphics::colors::to_wgpu_color;
+use crate::graphics::primitives::text::{
+    build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw, Text,
 };
 use crate::graphics::{
-    lowlevel::buffer::create_rect_buffers,
-    lowlevel::ortho::update_ortho_buffer,
-    lowlevel::pipelines,
-    style::CODE_FONT_SIZE,
-    style::CODE_TXT_XY,
+    lowlevel::buffer::create_rect_buffers, lowlevel::ortho::update_ortho_buffer,
+    lowlevel::pipelines, style::CODE_FONT_SIZE, style::CODE_TXT_XY,
 };
-use crate::graphics::primitives::text::{
-    build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw,
-    Text,
+use crate::ui::{
+    colors::TXT_COLOR, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult,
 };
-use crate::editor::mvc::{
-    app_update, ed_model, ed_view,
-    app_model::AppModel,
-    ed_model::EdModel,
-};
-use super::keyboard_input;
 //use crate::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool, scope::Scope};
+use bumpalo::Bump;
+use cgmath::Vector2;
 use pipelines::RectResources;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
-use bumpalo::Bump;
-use cgmath::Vector2;
-use std::{
-    io,
-    error::Error,
-    path::Path,
-};
+use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
 use winit::{
@@ -388,17 +375,14 @@ fn begin_render_pass<'a>(
     encoder: &'a mut CommandEncoder,
     texture_view: &'a TextureView,
 ) -> RenderPass<'a> {
+    let bg_color = to_wgpu_color(BG_COL);
+
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
             attachment: texture_view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.1,
-                    g: 0.2,
-                    b: 0.3,
-                    a: 1.0,
-                }),
+                load: wgpu::LoadOp::Clear(bg_color),
                 store: true,
             },
         }],

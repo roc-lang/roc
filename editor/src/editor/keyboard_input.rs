@@ -1,6 +1,8 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_model::AppModel;
-use crate::editor::mvc::app_update::{handle_copy, handle_cut, handle_paste, pass_keydown_to_focused};
+use crate::editor::mvc::app_update::{
+    handle_copy, handle_cut, handle_paste, pass_keydown_to_focused,
+};
 use winit::event::VirtualKeyCode::*;
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
@@ -15,7 +17,9 @@ pub fn handle_keydown(
     }
 
     match virtual_keycode {
-        Left | Up | Right | Down => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
+        Left | Up | Right | Down => {
+            pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?
+        }
 
         Copy => handle_copy(app_model)?,
         Paste => handle_paste(app_model)?,

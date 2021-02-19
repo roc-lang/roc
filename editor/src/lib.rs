@@ -2,15 +2,15 @@
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 
+#[cfg_attr(test, macro_use)]
+extern crate indoc;
 extern crate pest;
 #[cfg_attr(test, macro_use)]
 extern crate pest_derive;
-#[cfg_attr(test, macro_use)]
-extern crate indoc;
 
-mod graphics;
-mod lang;
 mod editor;
+mod graphics;
+pub mod lang; //TODO remove pub for unused warnings
 mod ui;
 
 use std::io;

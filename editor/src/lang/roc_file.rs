@@ -98,9 +98,9 @@ impl<'a> File<'a> {
 
 #[cfg(test)]
 mod test_file {
+    use crate::lang::roc_file;
     use bumpalo::Bump;
     use std::path::Path;
-    use crate::lang::roc_file;
 
     #[test]
     fn read_and_fmt_simple_roc_module() {

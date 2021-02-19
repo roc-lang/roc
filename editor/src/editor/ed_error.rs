@@ -1,5 +1,5 @@
 use colored::*;
-use snafu::{Backtrace, ErrorCompat, Snafu, ResultExt, NoneError};
+use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -35,10 +35,7 @@ pub enum EdError {
     },
 
     #[snafu(display("UIError: {}", msg))]
-    UIErrorBacktrace { 
-        msg: String,
-        backtrace: Backtrace,
-    },
+    UIErrorBacktrace { msg: String, backtrace: Backtrace },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
@@ -113,9 +110,7 @@ impl From<UIError> for EdError {
         let msg = format!("{}", ui_err);
 
         // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError{});
-        dummy_res.context(UIErrorBacktrace {
-            msg,
-        }).unwrap_err()
+        let dummy_res: Result<(), NoneError> = Err(NoneError {});
+        dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
     }
 }

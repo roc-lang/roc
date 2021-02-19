@@ -2,12 +2,12 @@
 // by Benjamin Hansen, licensed under the MIT license
 
 use super::rect::Rect;
-use crate::ui::colors;
+use crate::editor::syntax_highlight;
+use crate::graphics::colors;
+use crate::graphics::colors::ColorTup;
 use crate::graphics::style::{CODE_FONT_SIZE, CODE_TXT_XY};
-use crate::graphics::syntax_highlight;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
-use colors::{ColorTup, CODE_COLOR, WHITE};
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 
 #[derive(Debug)]
@@ -40,7 +40,7 @@ pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
     let code_text = Text {
         position: CODE_TXT_XY.into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
-        color: CODE_COLOR.into(),
+        color: (1.0, 1.0, 1.0, 1.0).into(),
         text: "a",
         size: CODE_FONT_SIZE,
         ..Default::default()
@@ -145,7 +145,7 @@ fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
         top_left_coords: [position.x, top_y].into(),
         width,
         height,
-        color: WHITE,
+        color: colors::WHITE,
     }
 }
 

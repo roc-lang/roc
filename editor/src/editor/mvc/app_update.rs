@@ -1,13 +1,12 @@
 use super::app_model;
 use super::app_model::AppModel;
-use super::ed_update;
-use winit::event::{ModifiersState, VirtualKeyCode};
+use crate::editor::ed_error::EdResult;
 use crate::ui::text::{
-    lines::{SelectableLines, MutSelectableLines},
+    lines::{MutSelectableLines, SelectableLines},
     text_pos::TextPos,
 };
 use crate::ui::ui_error::UIResult;
-use crate::editor::ed_error::EdResult;
+use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
@@ -41,48 +40,32 @@ pub fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
                     let start_caret_pos = selection.start_pos;
                     ed_model.text.del_selection()?;
 
-                    ed_model
-                        .text
-                        .insert_str(&clipboard_content)?;
+                    ed_model.text.insert_str(&clipboard_content)?;
 
                     if clipboard_nr_lines > 0 {
-                        ed_model
-                            .text
-                            .set_caret( TextPos {
-                                line: start_caret_pos.line + clipboard_nr_lines,
-                                column: last_line_nr_chars,
-                            })
+                        ed_model.text.set_caret(TextPos {
+                            line: start_caret_pos.line + clipboard_nr_lines,
+                            column: last_line_nr_chars,
+                        })
                     } else {
-                        ed_model
-                            .text
-                            .set_caret( TextPos {
-                                line: start_caret_pos.line,
-                                column: start_caret_pos.column + last_line_nr_chars,
-                            })
+                        ed_model.text.set_caret(TextPos {
+                            line: start_caret_pos.line,
+                            column: start_caret_pos.column + last_line_nr_chars,
+                        })
                     }
                 } else {
-                    ed_model
-                        .text
-                        .insert_str(&clipboard_content)?;
+                    ed_model.text.insert_str(&clipboard_content)?;
 
                     if clipboard_nr_lines > 0 {
-                        ed_model
-                            .text
-                            .set_caret(
-                                TextPos {
-                                    line: old_caret_pos.line + clipboard_nr_lines,
-                                    column: last_line_nr_chars,
-                                }
-                            )
+                        ed_model.text.set_caret(TextPos {
+                            line: old_caret_pos.line + clipboard_nr_lines,
+                            column: last_line_nr_chars,
+                        })
                     } else {
-                        ed_model
-                            .text
-                            .set_caret(
-                                TextPos {
-                                    line: old_caret_pos.line,
-                                    column: old_caret_pos.column + last_line_nr_chars,
-                                }
-                            )
+                        ed_model.text.set_caret(TextPos {
+                            line: old_caret_pos.line,
+                            column: old_caret_pos.column + last_line_nr_chars,
+                        })
                     }
                 }
             }
@@ -115,7 +98,7 @@ pub fn pass_keydown_to_focused(
 ) -> UIResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_update::handle_key_down(modifiers, virtual_keycode, ed_model)?;
+            ed_model.text.handle_key_down(modifiers, virtual_keycode)?;
         }
     }
 
@@ -125,20 +108,20 @@ pub fn pass_keydown_to_focused(
 pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_update::handle_new_char(received_char, ed_model)?;
+            ed_model.text.handle_new_char(received_char)?;
         }
     }
 
     Ok(())
 }
 
+/*
 #[cfg(test)]
 pub mod test_app_update {
     use crate::editor::mvc::app_model;
     use crate::editor::mvc::app_model::{AppModel, Clipboard};
     use crate::editor::mvc::app_update::{handle_copy, handle_cut, handle_paste};
     use crate::editor::mvc::ed_model::{EdModel};
-    use crate::editor::mvc::ed_update::test_ed_update::gen_big_text;
     use crate::ui::text::{
         big_selectable_text::BigSelectableText,
         selection::test_selection::{all_lines_vec, convert_selection_to_dsl},
@@ -288,4 +271,4 @@ pub mod test_app_update {
 
         Ok(())
     }
-}
+}*/

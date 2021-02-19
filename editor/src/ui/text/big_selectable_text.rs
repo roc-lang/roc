@@ -1,26 +1,29 @@
 // Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
 
+use crate::ui::text::{
+    caret_w_select::CaretWSelect,
+    lines::{Lines, MutSelectableLines, SelectableLines},
+    selection::{validate_raw_sel, validate_selection, RawSelection, Selection},
+    text_pos::TextPos,
+};
 use crate::ui::ui_error::{
+    OutOfBounds,
     UIError::{FileOpenFailed, TextBufReadFailed},
     UIResult,
-    OutOfBounds,
 };
-use crate::ui::text::{
-    text_pos::{TextPos},
-    selection::{Selection, RawSelection, validate_raw_sel},
-    caret_w_select::{CaretWSelect},
-    lines::{Lines, SelectableLines, MutSelectableLines},
-};
+use crate::ui::util::is_newline;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use ropey::Rope;
-use snafu::{ensure};
+use snafu::ensure;
 use std::{
+    cmp::{max, min},
     fmt,
     fs::File,
     io,
-    path::Path
+    path::Path,
 };
+use winit::event::{ModifiersState, VirtualKeyCode, VirtualKeyCode::*};
 
 pub struct BigSelectableText {
     pub caret_w_select: CaretWSelect,
@@ -30,7 +33,6 @@ pub struct BigSelectableText {
 }
 
 impl BigSelectableText {
-
     fn check_bounds(&self, char_indx: usize) -> UIResult<()> {
         ensure!(
             char_indx <= self.text_rope.len_chars(),
@@ -66,6 +68,10 @@ impl BigSelectableText {
     }
 }
 
+fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
+    Ok(Some(validate_selection(start_pos, end_pos)?))
+}
+
 impl Lines for BigSelectableText {
     fn get_line(&self, line_nr: usize) -> UIResult<&str> {
         ensure!(
@@ -77,7 +83,6 @@ impl Lines for BigSelectableText {
             }
         );
 
-
         let rope_slice = self.text_rope.line(line_nr);
 
         if let Some(line_str_ref) = rope_slice.as_str() {
@@ -88,7 +93,6 @@ impl Lines for BigSelectableText {
             let arena_str_ref = self.arena.alloc(line_str);
             Ok(arena_str_ref)
         }
-
     }
 
     fn line_len(&self, line_nr: usize) -> UIResult<usize> {
@@ -125,47 +129,43 @@ impl SelectableLines for BigSelectableText {
         self.caret_w_select.caret_pos = caret_pos;
     }
 
-    pub fn move_caret_left(
-        &mut self, 
-        shift_pressed: bool,
-    ) -> UIResult<CaretWSelect> {
-        let old_selection_opt = big_text.get_selection();
-        let old_caret_pos = big_text.caret_w_select.caret_pos;
+    fn move_caret_left(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
         let old_line_nr = old_caret_pos.line;
         let old_col_nr = old_caret_pos.column;
-    
+
         let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
             match old_selection_opt {
-                Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+                Some(old_selection) => {
+                    (old_selection.start_pos.line, old_selection.start_pos.column)
+                }
                 None => unreachable!(),
             }
         } else if old_col_nr == 0 {
             if old_line_nr == 0 {
                 (0, 0)
             } else {
-                let curr_line_len = big_text.line_len(old_line_nr - 1)?;
-    
+                let curr_line_len = self.line_len(old_line_nr - 1)?;
+
                 (old_line_nr - 1, curr_line_len - 1)
             }
         } else {
             (old_line_nr, old_col_nr - 1)
         };
-    
+
         let new_caret_pos = TextPos {
             line: line_nr,
             column: col_nr,
         };
-    
+
         let new_selection_opt = if shift_pressed {
             if let Some(old_selection) = old_selection_opt {
                 if old_caret_pos >= old_selection.end_pos {
                     if new_caret_pos == old_selection.start_pos {
                         None
                     } else {
-                        validate_sel_opt(
-                            old_selection.start_pos,
-                            new_caret_pos,
-                        )?
+                        validate_sel_opt(old_selection.start_pos, new_caret_pos)?
                     }
                 } else {
                     validate_sel_opt(
@@ -193,27 +193,26 @@ impl SelectableLines for BigSelectableText {
         } else {
             None
         };
-    
-        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
     }
-    
-    pub fn move_caret_right(
-        &mut self, 
-        shift_pressed: bool,
-    ) -> UIResult<CaretWSelect> {
-        let old_selection_opt = big_text.get_selection();
-        let old_caret_pos = big_text.caret_w_select.caret_pos;
+
+    fn move_caret_right(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
         let old_line_nr = old_caret_pos.line;
         let old_col_nr = old_caret_pos.column;
-    
+
         let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
             match old_selection_opt {
                 Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
                 None => unreachable!(),
             }
         } else {
-            let curr_line = big_text.get_line(old_line_nr)?;
-    
+            let curr_line = self.get_line(old_line_nr)?;
+
             if let Some(last_char) = curr_line.chars().last() {
                 if is_newline(&last_char) {
                     if old_col_nr + 1 > curr_line.len() - 1 {
@@ -230,22 +229,19 @@ impl SelectableLines for BigSelectableText {
                 (old_line_nr, old_col_nr)
             }
         };
-    
+
         let new_caret_pos = TextPos {
             line: line_nr,
             column: col_nr,
         };
-    
+
         let new_selection_opt = if shift_pressed {
             if let Some(old_selection) = old_selection_opt {
                 if old_caret_pos <= old_selection.start_pos {
                     if new_caret_pos == old_selection.end_pos {
                         None
                     } else {
-                        validate_sel_opt(
-                            new_caret_pos,
-                            old_selection.end_pos,
-                        )?
+                        validate_sel_opt(new_caret_pos, old_selection.end_pos)?
                     }
                 } else {
                     validate_sel_opt(
@@ -273,41 +269,42 @@ impl SelectableLines for BigSelectableText {
         } else {
             None
         };
-    
-        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
     }
-    
-    pub fn move_caret_up(
-        &mut self, 
-        shift_pressed: bool,
-    ) -> UIResult<CaretWSelect> {
-        let old_selection_opt = big_text.get_selection();
-        let old_caret_pos = big_text.caret_w_select.caret_pos;
+
+    fn move_caret_up(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
         let old_line_nr = old_caret_pos.line;
         let old_col_nr = old_caret_pos.column;
-    
+
         let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
             match old_selection_opt {
-                Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
+                Some(old_selection) => {
+                    (old_selection.start_pos.line, old_selection.start_pos.column)
+                }
                 None => unreachable!(),
             }
         } else if old_line_nr == 0 {
             (old_line_nr, 0)
         } else {
-            let prev_line_len = big_text.line_len(old_line_nr - 1)?;
-    
+            let prev_line_len = self.line_len(old_line_nr - 1)?;
+
             if prev_line_len <= old_col_nr {
                 (old_line_nr - 1, prev_line_len - 1)
             } else {
                 (old_line_nr - 1, old_col_nr)
             }
         };
-    
+
         let new_caret_pos = TextPos {
             line: line_nr,
             column: col_nr,
         };
-    
+
         let new_selection_opt = if shift_pressed {
             if let Some(old_selection) = old_selection_opt {
                 if old_selection.end_pos <= old_caret_pos {
@@ -320,10 +317,7 @@ impl SelectableLines for BigSelectableText {
                         )?
                     }
                 } else {
-                    validate_sel_opt(
-                        new_caret_pos,
-                        old_selection.end_pos,
-                    )?
+                    validate_sel_opt(new_caret_pos, old_selection.end_pos)?
                 }
             } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
                 validate_sel_opt(
@@ -336,31 +330,30 @@ impl SelectableLines for BigSelectableText {
         } else {
             None
         };
-    
-        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
     }
-    
-    pub fn move_caret_down(
-        &mut self, 
-        shift_pressed: bool,
-    ) -> UIResult<CaretWSelect> {
-        let old_selection_opt = big_text.get_selection();
-        let old_caret_pos = big_text.caret_w_select.caret_pos;
+
+    fn move_caret_down(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
         let old_line_nr = old_caret_pos.line;
         let old_col_nr = old_caret_pos.column;
-    
+
         let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
             match old_selection_opt {
                 Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
                 None => unreachable!(),
             }
-        } else if old_line_nr + 1 >= big_text.nr_of_lines() {
-            let curr_line_len = big_text.line_len(old_line_nr)?;
-            
+        } else if old_line_nr + 1 >= self.nr_of_lines() {
+            let curr_line_len = self.line_len(old_line_nr)?;
+
             (old_line_nr, curr_line_len)
         } else {
-            let next_line = big_text.get_line(old_line_nr + 1)?;
-    
+            let next_line = self.get_line(old_line_nr + 1)?;
+
             if next_line.len() <= old_col_nr {
                 if let Some(last_char) = next_line.chars().last() {
                     if is_newline(&last_char) {
@@ -375,12 +368,12 @@ impl SelectableLines for BigSelectableText {
                 (old_line_nr + 1, old_col_nr)
             }
         };
-    
+
         let new_caret_pos = TextPos {
             line: line_nr,
             column: col_nr,
         };
-    
+
         let new_selection_opt = if shift_pressed {
             if let Some(old_selection) = old_selection_opt {
                 if old_caret_pos <= old_selection.start_pos {
@@ -393,10 +386,7 @@ impl SelectableLines for BigSelectableText {
                         )?
                     }
                 } else {
-                    validate_sel_opt(
-                        old_selection.start_pos,
-                        new_caret_pos,
-                    )?
+                    validate_sel_opt(old_selection.start_pos, new_caret_pos)?
                 }
             } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
                 validate_sel_opt(
@@ -409,8 +399,10 @@ impl SelectableLines for BigSelectableText {
         } else {
             None
         };
-    
-        Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
     }
 
     fn get_selection(&self) -> Option<Selection> {
@@ -452,6 +444,21 @@ impl SelectableLines for BigSelectableText {
         self.caret_w_select.selection_opt = None;
     }
 
+    fn select_all(&mut self) -> UIResult<()> {
+        if self.nr_of_chars() > 0 {
+            let last_pos = self.last_text_pos();
+
+            self.set_raw_sel(RawSelection {
+                start_pos: TextPos { line: 0, column: 0 },
+                end_pos: last_pos,
+            })?;
+
+            self.set_caret(last_pos);
+        }
+
+        Ok(())
+    }
+
     fn last_text_pos(&self) -> TextPos {
         self.char_indx_to_pos(self.nr_of_chars())
     }
@@ -459,7 +466,52 @@ impl SelectableLines for BigSelectableText {
 
 impl MutSelectableLines for BigSelectableText {
     fn insert_char(&mut self, new_char: &char) -> UIResult<()> {
-        self.insert_str(&new_char.to_string())
+        if self.is_selection_active() {
+            self.del_selection()?;
+        }
+
+        self.insert_str(&new_char.to_string())?;
+
+        if is_newline(new_char) {
+            self.set_caret(TextPos {
+                line: self.caret_w_select.caret_pos.line + 1,
+                column: 0,
+            });
+        } else {
+            self.move_caret_right(false)?;
+        }
+
+        self.set_sel_none();
+
+        Ok(())
+    }
+
+    fn handle_new_char(&mut self, received_char: &char) -> UIResult<()> {
+        match received_char {
+            '\u{8}' | '\u{7f}' => {
+                // On Linux, '\u{8}' is backspace,
+                // on macOS '\u{7f}'.
+
+                self.pop_char()?
+            }
+
+            '\u{1}' // Ctrl + A
+            | '\u{3}' // Ctrl + C
+            | '\u{16}' // Ctrl + V
+            | '\u{18}' // Ctrl + X
+            | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
+            | '\u{f0000}'..='\u{ffffd}' // ^
+            | '\u{100000}'..='\u{10fffd}' // ^
+            => {
+                // chars that can be ignored
+            }
+
+            _ => {
+                self.insert_char(received_char)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn insert_str(&mut self, new_str: &str) -> UIResult<()> {
@@ -473,15 +525,21 @@ impl MutSelectableLines for BigSelectableText {
         Ok(())
     }
 
-    fn pop_char(&mut self) {
-        let old_caret_pos = self.caret_w_select.caret_pos;
-        let char_indx = self.pos_to_char_indx(old_caret_pos);
+    fn pop_char(&mut self) -> UIResult<()> {
+        if self.is_selection_active() {
+            self.del_selection()?;
+        } else {
+            let old_caret_pos = self.caret_w_select.caret_pos;
+            let char_indx = self.pos_to_char_indx(old_caret_pos);
 
-        if (char_indx > 0) && char_indx <= self.text_rope.len_chars() {
-            self.text_rope.remove((char_indx - 1)..char_indx);
+            self.move_caret_left(false)?;
+
+            if (char_indx > 0) && char_indx <= self.text_rope.len_chars() {
+                self.text_rope.remove((char_indx - 1)..char_indx);
+            }
         }
 
-        self.move_caret_left(None)
+        Ok(())
     }
 
     fn del_selection(&mut self) -> UIResult<()> {
@@ -489,13 +547,86 @@ impl MutSelectableLines for BigSelectableText {
             let (start_char_indx, end_char_indx) = self.sel_to_tup(selection)?;
 
             self.check_bounds(end_char_indx)?;
-    
+
             self.text_rope.remove(start_char_indx..end_char_indx);
 
             self.set_caret(selection.start_pos);
+
+            self.set_sel_none();
         }
 
         Ok(())
+    }
+
+    fn handle_key_down(
+        &mut self,
+        modifiers: &ModifiersState,
+        virtual_keycode: VirtualKeyCode,
+    ) -> UIResult<()> {
+        let shift_pressed = modifiers.shift();
+
+        match virtual_keycode {
+            Left => self.move_caret_left(shift_pressed),
+            Up => self.move_caret_up(shift_pressed),
+            Right => self.move_caret_right(shift_pressed),
+            Down => self.move_caret_down(shift_pressed),
+
+            A => {
+                if modifiers.ctrl() {
+                    self.select_all()
+                } else {
+                    Ok(())
+                }
+            }
+            Home => {
+                let curr_line_nr = self.caret_w_select.caret_pos.line;
+                // TODO no unwrap
+                let curr_line_str = self.get_line(curr_line_nr).unwrap();
+                let line_char_iter = curr_line_str.chars();
+
+                let mut first_no_space_char_col = 0;
+                let mut non_space_found = false;
+
+                for c in line_char_iter {
+                    if !c.is_whitespace() {
+                        non_space_found = true;
+                        break;
+                    } else {
+                        first_no_space_char_col += 1;
+                    }
+                }
+
+                if !non_space_found {
+                    first_no_space_char_col = 0;
+                }
+
+                self.caret_w_select.move_caret_w_mods(
+                    TextPos {
+                        line: curr_line_nr,
+                        column: first_no_space_char_col,
+                    },
+                    modifiers,
+                )
+            }
+            End => {
+                let curr_line_nr = self.caret_w_select.caret_pos.line;
+                let curr_line_len = self.line_len(curr_line_nr)?;
+                // TODO no unwrap
+                let new_col = if curr_line_len > 0 {
+                    curr_line_len - 1
+                } else {
+                    0
+                };
+
+                let new_pos = TextPos {
+                    line: curr_line_nr,
+                    column: new_col,
+                };
+
+                self.caret_w_select.move_caret_w_mods(new_pos, modifiers)
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -547,5 +678,2310 @@ impl fmt::Debug for BigSelectableText {
             .field("text_rope", &self.text_rope)
             .field("path_str", &self.path_str)
             .finish()
+    }
+}
+
+#[cfg(test)]
+pub mod test_big_sel_text {
+    use crate::ui::text::{
+        big_selectable_text,
+        big_selectable_text::BigSelectableText,
+        caret_w_select::CaretWSelect,
+        lines::{Lines, MutSelectableLines, SelectableLines},
+        selection::validate_selection,
+        text_pos::TextPos,
+    };
+    use crate::ui::ui_error::{OutOfBounds, UIResult};
+    use core::cmp::Ordering;
+    use pest::Parser;
+    use snafu::OptionExt;
+    use std::{
+        collections::HashMap, fs, io::Write, path::Path, slice::SliceIndex, time::SystemTime,
+    };
+
+    // replace vec methods that return Option with ones that return Result and proper Error
+    pub fn slice_get<T>(
+        index: usize,
+        slice: &[T],
+    ) -> UIResult<&<usize as SliceIndex<[T]>>::Output> {
+        let elt_ref = slice.get(index).context(OutOfBounds {
+            index,
+            collection_name: "Slice",
+            len: slice.len(),
+        })?;
+
+        Ok(elt_ref)
+    }
+
+    #[derive(Parser)]
+    #[grammar = "../tests/selection.pest"]
+    pub struct LineParser;
+
+    // show selection and caret position as symbols in lines for easy testing
+    pub fn convert_selection_to_dsl(
+        caret_w_select: CaretWSelect,
+        lines: &mut [String],
+    ) -> UIResult<&[String]> {
+        let selection_opt = caret_w_select.selection_opt;
+        let caret_pos = caret_w_select.caret_pos;
+
+        if let Some(sel) = selection_opt {
+            let mut to_insert = vec![(sel.start_pos, '['), (sel.end_pos, ']'), (caret_pos, '|')];
+            let symbol_map: HashMap<char, usize> =
+                [('[', 2), (']', 0), ('|', 1)].iter().cloned().collect();
+
+            // sort for nice printing
+            to_insert.sort_by(|a, b| {
+                let pos_cmp = a.0.cmp(&b.0);
+                if pos_cmp == Ordering::Equal {
+                    symbol_map.get(&a.1).cmp(&symbol_map.get(&b.1))
+                } else {
+                    pos_cmp
+                }
+            });
+
+            // insert symbols into text lines
+            for i in 0..to_insert.len() {
+                let (pos, insert_char) = *slice_get(i, &to_insert)?;
+
+                insert_at_pos(lines, pos, insert_char)?;
+
+                // shift position of following symbols now that symbol is inserted
+                for j in i..to_insert.len() {
+                    let (old_pos, _) = get_mut_res(j, &mut to_insert)?;
+
+                    if old_pos.line == pos.line {
+                        old_pos.column += 1;
+                    }
+                }
+            }
+        } else {
+            insert_at_pos(lines, caret_pos, '|')?;
+        }
+
+        Ok(lines)
+    }
+
+    fn insert_at_pos(lines: &mut [String], pos: TextPos, insert_char: char) -> UIResult<()> {
+        let line = get_mut_res(pos.line, lines)?;
+        line.insert(pos.column, insert_char);
+
+        Ok(())
+    }
+
+    // It's much nicer to have get_mut return a Result with clear error than an Option
+    fn get_mut_res<T>(
+        index: usize,
+        vec: &mut [T],
+    ) -> UIResult<&mut <usize as SliceIndex<[T]>>::Output> {
+        let vec_len = vec.len();
+
+        let elt_ref = vec.get_mut(index).context(OutOfBounds {
+            index,
+            collection_name: "Slice",
+            len: vec_len,
+        })?;
+
+        Ok(elt_ref)
+    }
+
+    fn big_text_from_str(lines_str: &str) -> BigSelectableText {
+        let epoch_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let file_name = format!("temp_{:?}.txt", epoch_time);
+        let path = Path::new(&file_name);
+
+        let mut temp_file = fs::File::create(path).unwrap();
+        temp_file.write_all(lines_str.as_bytes()).unwrap();
+
+        let big_text = big_selectable_text::from_path(path).unwrap();
+        fs::remove_file(path).unwrap();
+
+        big_text
+    }
+
+    pub fn big_text_from_dsl_str(lines: &[String]) -> BigSelectableText {
+        big_text_from_str(
+            &lines
+                .iter()
+                .map(|line| line.replace(&['[', ']', '|'][..], ""))
+                .collect::<Vec<String>>()
+                .join(""),
+        )
+    }
+
+    pub fn all_lines_vec(big_sel_text: &BigSelectableText) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+
+        for i in 0..big_sel_text.nr_of_lines() {
+            lines.push(big_sel_text.get_line(i).unwrap().to_string());
+        }
+
+        lines
+    }
+
+    // Retrieve selection and position from formatted string
+    pub fn convert_dsl_to_selection(lines: &[String]) -> Result<CaretWSelect, String> {
+        let lines_str: String = lines.join("");
+
+        let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str)
+            .expect("Selection test DSL parsing failed");
+
+        let mut caret_opt: Option<(usize, usize)> = None;
+        let mut sel_start_opt: Option<(usize, usize)> = None;
+        let mut sel_end_opt: Option<(usize, usize)> = None;
+        let mut line_nr = 0;
+        let mut col_nr = 0;
+
+        for line in parsed {
+            for elt in line.into_inner() {
+                match elt.as_rule() {
+                    Rule::optCaret => {
+                        if elt.as_span().as_str() == "|" {
+                            if caret_opt.is_some() {
+                                return Err(
+                                    "Multiple carets found, there should be only one".to_owned()
+                                );
+                            } else {
+                                caret_opt = Some((line_nr, col_nr));
+                            }
+                        }
+                    }
+                    Rule::optSelStart => {
+                        if sel_start_opt.is_some() {
+                            if elt.as_span().as_str() == "[" {
+                                return Err("Found start of selection more than once, there should be only one".to_owned());
+                            }
+                        } else if elt.as_span().as_str() == "[" {
+                            sel_start_opt = Some((line_nr, col_nr));
+                        }
+                    }
+                    Rule::optSelEnd => {
+                        if sel_end_opt.is_some() {
+                            if elt.as_span().as_str() == "]" {
+                                return Err("Found end of selection more than once, there should be only one".to_owned());
+                            }
+                        } else if elt.as_span().as_str() == "]" {
+                            sel_end_opt = Some((line_nr, col_nr));
+                        }
+                    }
+                    Rule::text => {
+                        let split_str = elt
+                            .as_span()
+                            .as_str()
+                            .split('\n')
+                            .into_iter()
+                            .collect::<Vec<&str>>();
+
+                        if split_str.len() > 1 {
+                            line_nr += split_str.len() - 1;
+                            col_nr = 0
+                        }
+                        if let Some(last_str) = split_str.last() {
+                            col_nr += last_str.len()
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Make sure return makes sense
+        if let Some((line, column)) = caret_opt {
+            let caret_pos = TextPos { line, column };
+            if sel_start_opt.is_none() && sel_end_opt.is_none() {
+                Ok(CaretWSelect::new(caret_pos, None))
+            } else if let Some((start_line, start_column)) = sel_start_opt {
+                if let Some((end_line, end_column)) = sel_end_opt {
+                    Ok(CaretWSelect::new(
+                        caret_pos,
+                        Some(
+                            validate_selection(
+                                TextPos {
+                                    line: start_line,
+                                    column: start_column,
+                                },
+                                TextPos {
+                                    line: end_line,
+                                    column: end_column,
+                                },
+                            )
+                            .unwrap(),
+                        ),
+                    ))
+                } else {
+                    Err("Selection end ']' was not found, but selection start '[' was. Bad input string.".to_owned())
+                }
+            } else {
+                Err("Selection start '[' was not found, but selection end ']' was. Bad input string.".to_owned())
+            }
+        } else {
+            Err("No caret was found in lines.".to_owned())
+        }
+    }
+
+    pub fn gen_big_text(lines: &[&str]) -> Result<BigSelectableText, String> {
+        let lines_string_slice: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let mut big_text = big_text_from_dsl_str(&lines_string_slice);
+        let caret_w_select = convert_dsl_to_selection(&lines_string_slice).unwrap();
+
+        big_text.caret_w_select = caret_w_select;
+
+        Ok(big_text)
+    }
+
+    fn assert_insert(
+        pre_lines_str: &[&str],
+        expected_post_lines_str: &[&str],
+        new_char: char,
+    ) -> Result<(), String> {
+        let mut big_text = gen_big_text(pre_lines_str)?;
+
+        if let Err(e) = big_text.handle_new_char(&new_char) {
+            return Err(e.to_string());
+        }
+
+        let mut actual_lines = all_lines_vec(&big_text);
+        let dsl_slice =
+            convert_selection_to_dsl(big_text.caret_w_select, &mut actual_lines).unwrap();
+        assert_eq!(dsl_slice, expected_post_lines_str);
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_new_char_simple() -> Result<(), String> {
+        assert_insert(&["|"], &["a|"], 'a')?;
+        assert_insert(&["|"], &[" |"], ' ')?;
+        assert_insert(&["a|"], &["aa|"], 'a')?;
+        assert_insert(&["a|"], &["a |"], ' ')?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
+        assert_insert(&["a\n", "|"], &["a\n", "b|"], 'b')?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "cd|"], 'd')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_new_char_mid() -> Result<(), String> {
+        assert_insert(&["ab|d"], &["abc|d"], 'c')?;
+        assert_insert(&["a|cd"], &["ab|cd"], 'b')?;
+        assert_insert(&["abc\n", "|e"], &["abc\n", "d|e"], 'd')?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", "g| "], 'g')?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", " | "], ' ')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn simple_backspace() -> Result<(), String> {
+        assert_insert(&["|"], &["|"], '\u{8}')?;
+        assert_insert(&[" |"], &["|"], '\u{8}')?;
+        assert_insert(&["a|"], &["|"], '\u{8}')?;
+        assert_insert(&["ab|"], &["a|"], '\u{8}')?;
+        assert_insert(&["a|\n", ""], &["|\n", ""], '\u{8}')?;
+        assert_insert(&["ab|\n", ""], &["a|\n", ""], '\u{8}')?;
+        assert_insert(&["a\n", "|"], &["a|"], '\u{8}')?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "|"], '\u{8}')?;
+        assert_insert(&["a\n", "b\n", "|"], &["a\n", "b|"], '\u{8}')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn selection_backspace() -> Result<(), String> {
+        assert_insert(&["[a]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[a]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[aa]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[b c]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[abc]|\n", ""], &["|\n", ""], '\u{8}')?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "|"], '\u{8}')?;
+        assert_insert(&["[a\n", "abc]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "|"], '\u{8}')?;
+        assert_insert(
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            &["abc\n", "d|\n", "jkl"],
+            '\u{8}',
+        )?;
+        assert_insert(
+            &["abc\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "|\n", "jkl"],
+            '\u{8}',
+        )?;
+        assert_insert(
+            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "\n", "|\n", "jkl"],
+            '\u{8}',
+        )?;
+        assert_insert(
+            &["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"],
+            &["|"],
+            '\u{8}',
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_with_selection() -> Result<(), String> {
+        assert_insert(&["[a]|"], &["z|"], 'z')?;
+        assert_insert(&["a[a]|"], &["az|"], 'z')?;
+        assert_insert(&["[aa]|"], &["z|"], 'z')?;
+        assert_insert(&["a[b c]|"], &["az|"], 'z')?;
+        assert_insert(&["[abc]|\n", ""], &["z|\n", ""], 'z')?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "z|"], 'z')?;
+        assert_insert(&["[a\n", "abc]|"], &["z|"], 'z')?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["az|"], 'z')?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["z|"], 'z')?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "z|"], 'z')?;
+        assert_insert(
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            &["abc\n", "dz|\n", "jkl"],
+            'z',
+        )?;
+        assert_insert(
+            &["abc\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "z|\n", "jkl"],
+            'z',
+        )?;
+        assert_insert(
+            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "\n", "z|\n", "jkl"],
+            'z',
+        )?;
+        assert_insert(&["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["z|"], 'z')?;
+
+        Ok(())
+    }
+
+    fn assert_select_all(
+        pre_lines_str: &[&str],
+        expected_post_lines_str: &[&str],
+    ) -> Result<(), String> {
+        let mut big_text = gen_big_text(pre_lines_str)?;
+
+        big_text.select_all().unwrap();
+
+        let mut big_text_lines = all_lines_vec(&big_text);
+        let post_lines_str =
+            convert_selection_to_dsl(big_text.caret_w_select, &mut big_text_lines)?;
+
+        assert_eq!(post_lines_str, expected_post_lines_str);
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_all() -> Result<(), String> {
+        assert_select_all(&["|"], &["|"])?;
+        assert_select_all(&["|a"], &["[a]|"])?;
+        assert_select_all(&["a|"], &["[a]|"])?;
+        assert_select_all(&["abc d|ef ghi"], &["[abc def ghi]|"])?;
+        assert_select_all(&["[a]|"], &["[a]|"])?;
+        assert_select_all(&["|[a]"], &["[a]|"])?;
+        assert_select_all(&["|[abc def ghi]"], &["[abc def ghi]|"])?;
+        assert_select_all(&["a\n", "[b\n", "]|"], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(&["a\n", "[b]|\n", ""], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(&["a\n", "|[b\n", "]"], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(
+            &["abc\n", "def\n", "gh|i\n", "jkl"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+        )?;
+        assert_select_all(
+            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+        )?;
+
+        Ok(())
+    }
+
+    // TODO hometest
+
+    // TODO endtest
+
+    type MoveCaretFun = fn(&mut BigSelectableText, bool) -> UIResult<()>;
+
+    // Convert nice string representations and compare results
+    fn assert_move(
+        pre_lines_str: &[&str],
+        expected_post_lines_str: &[&str],
+        shift_pressed: bool,
+        move_fun: MoveCaretFun,
+    ) -> Result<(), String> {
+        let expected_post_lines: Vec<String> = expected_post_lines_str
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+
+        let mut big_text = gen_big_text(pre_lines_str)?;
+
+        move_fun(&mut big_text, shift_pressed)?;
+
+        let mut lines_vec = all_lines_vec(&big_text);
+        let post_lines_res = convert_selection_to_dsl(big_text.caret_w_select, &mut lines_vec);
+
+        match post_lines_res {
+            Ok(post_lines) => {
+                assert_eq!(expected_post_lines, post_lines);
+                Ok(())
+            }
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    #[test]
+    fn move_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
+        assert_move(&["|"], &["|"], false, move_caret_right)?;
+        assert_move(&["a|"], &["a|"], false, move_caret_right)?;
+        assert_move(&["|A"], &["A|"], false, move_caret_right)?;
+        assert_move(&["|abc"], &["a|bc"], false, move_caret_right)?;
+        assert_move(&["a|bc"], &["ab|c"], false, move_caret_right)?;
+        assert_move(&["abc|"], &["abc|"], false, move_caret_right)?;
+        assert_move(&["| abc"], &[" |abc"], false, move_caret_right)?;
+        assert_move(&["abc| "], &["abc |"], false, move_caret_right)?;
+        assert_move(&["abc|\n", "d"], &["abc\n", "|d"], false, move_caret_right)?;
+        assert_move(&["abc|\n", ""], &["abc\n", "|"], false, move_caret_right)?;
+        assert_move(
+            &["abc\n", "|def"],
+            &["abc\n", "d|ef"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def| "],
+            &["abc\n", "def |"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def |\n", "ghi"],
+            &["abc\n", "def \n", "|ghi"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def|\n", ""],
+            &["abc\n", "def\n", "|"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi|\n", "jkl"],
+            &["abc\n", "def\n", "ghi\n", "|jkl"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "|ghi\n", "jkl"],
+            &["abc\n", "def\n", "g|hi\n", "jkl"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "g|hi\n", "jkl"],
+            &["abc\n", "def\n", "gh|i\n", "jkl"],
+            false,
+            move_caret_right,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn move_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
+        assert_move(&["|"], &["|"], false, move_caret_left)?;
+        assert_move(&["|a"], &["|a"], false, move_caret_left)?;
+        assert_move(&["|A"], &["|A"], false, move_caret_left)?;
+        assert_move(&["a|bc"], &["|abc"], false, move_caret_left)?;
+        assert_move(&["ab|c"], &["a|bc"], false, move_caret_left)?;
+        assert_move(&["abc|"], &["ab|c"], false, move_caret_left)?;
+        assert_move(&[" |abc"], &["| abc"], false, move_caret_left)?;
+        assert_move(&["abc |"], &["abc| "], false, move_caret_left)?;
+        assert_move(&["abc\n", "|d"], &["abc|\n", "d"], false, move_caret_left)?;
+        assert_move(&["abc\n", "|"], &["abc|\n", ""], false, move_caret_left)?;
+        assert_move(
+            &["abc\n", "d|ef"],
+            &["abc\n", "|def"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def |"],
+            &["abc\n", "def| "],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "|ghi"],
+            &["abc\n", "def |\n", "ghi"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "|"],
+            &["abc\n", "def|\n", ""],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi\n", "|jkl"],
+            &["abc\n", "def\n", "ghi|\n", "jkl"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "g|hi\n", "jkl"],
+            &["abc\n", "def\n", "|ghi\n", "jkl"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "gh|i\n", "jkl"],
+            &["abc\n", "def\n", "g|hi\n", "jkl"],
+            false,
+            move_caret_left,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn move_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
+        assert_move(&["|"], &["|"], false, move_caret_up)?;
+        assert_move(&["|a"], &["|a"], false, move_caret_up)?;
+        assert_move(&["A|"], &["|A"], false, move_caret_up)?;
+        assert_move(&["a|bc"], &["|abc"], false, move_caret_up)?;
+        assert_move(&["ab|c"], &["|abc"], false, move_caret_up)?;
+        assert_move(&["abc|"], &["|abc"], false, move_caret_up)?;
+        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], false, move_caret_up)?;
+        assert_move(&["abc\n", "|def"], &["|abc\n", "def"], false, move_caret_up)?;
+        assert_move(&["abc\n", "d|ef"], &["a|bc\n", "def"], false, move_caret_up)?;
+        assert_move(&["abc\n", "de|f"], &["ab|c\n", "def"], false, move_caret_up)?;
+        assert_move(&["abc\n", "def|"], &["abc|\n", "def"], false, move_caret_up)?;
+        assert_move(
+            &["abc\n", "def \n", "|ghi"],
+            &["abc\n", "|def \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "g|hi"],
+            &["abc\n", "d|ef \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "gh|i"],
+            &["abc\n", "de|f \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "ghi|"],
+            &["abc\n", "def| \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de\n", "ghi|"],
+            &["abc\n", "de|\n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(&["abc\n", "de|"], &["ab|c\n", "de"], false, move_caret_up)?;
+        assert_move(&["abc\n", "d|e"], &["a|bc\n", "de"], false, move_caret_up)?;
+        assert_move(&["abc\n", "|de"], &["|abc\n", "de"], false, move_caret_up)?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
+            &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
+            &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
+            &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
+            &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
+            &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cde|f\n", "ghijkl\n", "mnopqrst"],
+            &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
+            &["abcdefgh\n", "ijklmn\n", "op|qr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
+            &["abcdefgh\n", "ijkl|mn\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
+            &["abcdef|gh\n", "ijklmn\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
+            &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefg|h\n", "ijklmn\n", "opqr\n", "st"],
+            &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["a|bcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(&["abc def gh |"], &["|abc def gh "], false, move_caret_up)?;
+        assert_move(&["abc de|f gh "], &["|abc def gh "], false, move_caret_up)?;
+        assert_move(&["ab|c def gh "], &["|abc def gh "], false, move_caret_up)?;
+        assert_move(&["a|bc def gh "], &["|abc def gh "], false, move_caret_up)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn move_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
+        assert_move(&["|"], &["|"], false, move_caret_down)?;
+        assert_move(&["|a"], &["a|"], false, move_caret_down)?;
+        assert_move(&["A|"], &["A|"], false, move_caret_down)?;
+        assert_move(&["a|bc"], &["abc|"], false, move_caret_down)?;
+        assert_move(&["ab|c"], &["abc|"], false, move_caret_down)?;
+        assert_move(&["abc|"], &["abc|"], false, move_caret_down)?;
+        assert_move(&["abc| "], &["abc |"], false, move_caret_down)?;
+        assert_move(
+            &["abc\n", "|def"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "d|ef"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|f"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def|"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["|abc\n", "def"],
+            &["abc\n", "|def"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|bc\n", "def"],
+            &["abc\n", "d|ef"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|c\n", "def"],
+            &["abc\n", "de|f"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc|\n", "def"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "|def \n", "ghi"],
+            &["abc\n", "def \n", "|ghi"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "d|ef \n", "ghi"],
+            &["abc\n", "def \n", "g|hi"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|f \n", "ghi"],
+            &["abc\n", "def \n", "gh|i"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def| \n", "ghi"],
+            &["abc\n", "def \n", "ghi|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def |\n", "ghi"],
+            &["abc\n", "def \n", "ghi|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|\n", "ghi"],
+            &["abc\n", "de\n", "gh|i"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(&["abc|\n", "de"], &["abc\n", "de|"], false, move_caret_down)?;
+        assert_move(&["ab|c\n", "de"], &["abc\n", "de|"], false, move_caret_down)?;
+        assert_move(&["a|bc\n", "de"], &["abc\n", "d|e"], false, move_caret_down)?;
+        assert_move(&["|abc\n", "de"], &["abc\n", "|de"], false, move_caret_down)?;
+        assert_move(
+            &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
+            &["ab\n", "cd|ef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "ghij|kl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
+            &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "|cdef\n", "ghijkl\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
+            &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
+            &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "|st"],
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(&["abc def gh |"], &["abc def gh |"], false, move_caret_down)?;
+        assert_move(&["abc de|f gh "], &["abc def gh |"], false, move_caret_down)?;
+        assert_move(&["ab|c def gh "], &["abc def gh |"], false, move_caret_down)?;
+        assert_move(&["a|bc def gh "], &["abc def gh |"], false, move_caret_down)?;
+        assert_move(&["|abc def gh "], &["abc def gh |"], false, move_caret_down)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
+        assert_move(&["|"], &["|"], true, move_caret_right)?;
+        assert_move(&["a|"], &["a|"], true, move_caret_right)?;
+        assert_move(&["|A"], &["[A]|"], true, move_caret_right)?;
+        assert_move(&["|abc"], &["[a]|bc"], true, move_caret_right)?;
+        assert_move(&["a|bc"], &["a[b]|c"], true, move_caret_right)?;
+        assert_move(&["abc|"], &["abc|"], true, move_caret_right)?;
+        assert_move(&["| abc"], &["[ ]|abc"], true, move_caret_right)?;
+        assert_move(&["abc| "], &["abc[ ]|"], true, move_caret_right)?;
+        assert_move(&["abc|\n", "d"], &["abc[\n", "]|d"], true, move_caret_right)?;
+        assert_move(&["abc|\n", ""], &["abc[\n", "]|"], true, move_caret_right)?;
+        assert_move(
+            &["abc\n", "|def"],
+            &["abc\n", "[d]|ef"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def| "],
+            &["abc\n", "def[ ]|"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def |\n", "ghi"],
+            &["abc\n", "def [\n", "]|ghi"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def|\n", ""],
+            &["abc\n", "def[\n", "]|"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi|\n", "jkl"],
+            &["abc\n", "def\n", "ghi[\n", "]|jkl"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "|ghi\n", "jkl"],
+            &["abc\n", "def\n", "[g]|hi\n", "jkl"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "g|hi\n", "jkl"],
+            &["abc\n", "def\n", "g[h]|i\n", "jkl"],
+            true,
+            move_caret_right,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
+        assert_move(&["|"], &["|"], true, move_caret_left)?;
+        assert_move(&["a|"], &["|[a]"], true, move_caret_left)?;
+        assert_move(&["|A"], &["|A"], true, move_caret_left)?;
+        assert_move(&["|abc"], &["|abc"], true, move_caret_left)?;
+        assert_move(&["a|bc"], &["|[a]bc"], true, move_caret_left)?;
+        assert_move(&["abc|"], &["ab|[c]"], true, move_caret_left)?;
+        assert_move(&[" |abc"], &["|[ ]abc"], true, move_caret_left)?;
+        assert_move(&["abc |"], &["abc|[ ]"], true, move_caret_left)?;
+        assert_move(&["abc|\n", "d"], &["ab|[c]\n", "d"], true, move_caret_left)?;
+        assert_move(&["abc\n", "|d"], &["abc|[\n", "]d"], true, move_caret_left)?;
+        assert_move(&["abc\n", "|"], &["abc|[\n", "]"], true, move_caret_left)?;
+        assert_move(
+            &["abc\n", " |def"],
+            &["abc\n", "|[ ]def"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "d|ef"],
+            &["abc\n", "|[d]ef"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "de|f "],
+            &["abc\n", "d|[e]f "],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "|"],
+            &["abc\n", "def|[\n", "]"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "|ghi\n", "jkl"],
+            &["abc\n", "def|[\n", "]ghi\n", "jkl"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "g|hi\n", "jkl"],
+            &["abc\n", "def\n", "|[g]hi\n", "jkl"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "gh|i\n", "jkl"],
+            &["abc\n", "def\n", "g|[h]i\n", "jkl"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi|\n", "jkl"],
+            &["abc\n", "def\n", "gh|[i]\n", "jkl"],
+            true,
+            move_caret_left,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
+        assert_move(&["|"], &["|"], true, move_caret_down)?;
+        assert_move(&["|a"], &["[a]|"], true, move_caret_down)?;
+        assert_move(&["A|"], &["A|"], true, move_caret_down)?;
+        assert_move(&["a|bc"], &["a[bc]|"], true, move_caret_down)?;
+        assert_move(&["ab|c"], &["ab[c]|"], true, move_caret_down)?;
+        assert_move(&["abc|"], &["abc|"], true, move_caret_down)?;
+        assert_move(&["abc| "], &["abc[ ]|"], true, move_caret_down)?;
+        assert_move(
+            &["abc\n", "|def"],
+            &["abc\n", "[def]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "d|ef"],
+            &["abc\n", "d[ef]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|f"],
+            &["abc\n", "de[f]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def|"],
+            &["abc\n", "def|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["|abc\n", "def"],
+            &["[abc\n", "]|def"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|bc\n", "def"],
+            &["a[bc\n", "d]|ef"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|c\n", "def"],
+            &["ab[c\n", "de]|f"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc|\n", "def"],
+            &["abc[\n", "def]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "|def \n", "ghi"],
+            &["abc\n", "[def \n", "]|ghi"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "d|ef \n", "ghi"],
+            &["abc\n", "d[ef \n", "g]|hi"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|f \n", "ghi"],
+            &["abc\n", "de[f \n", "gh]|i"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def| \n", "ghi"],
+            &["abc\n", "def[ \n", "ghi]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def |\n", "ghi"],
+            &["abc\n", "def [\n", "ghi]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|\n", "ghi"],
+            &["abc\n", "de[\n", "gh]|i"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc|\n", "de"],
+            &["abc[\n", "de]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|c\n", "de"],
+            &["ab[c\n", "de]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|bc\n", "de"],
+            &["a[bc\n", "d]|e"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["|abc\n", "de"],
+            &["[abc\n", "]|de"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
+            &["ab[\n", "cd]|ef\n", "ghijkl\n", "mnopqrst"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
+            &["ab\n", "cdef[\n", "ghij]|kl\n", "mnopqrst"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "ghijkl[\n", "mnopqr]|st"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
+            &[" [ab\n", " ]|cdef\n", "ghijkl\n", "mnopqrst"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "|cdef\n", "ghijkl\n", "mnopqrst"],
+            &["ab\n", "[cdef\n", "]|ghijkl\n", "mnopqrst"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "[ghijkl\n", "]|mnopqrst"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
+            &["abcdefgh[\n", "ijklmn]|\n", "opqr\n", "st"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
+            &["abcdefgh\n", "ijklmn[\n", "opqr]|\n", "st"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
+            &["abcdefgh\n", "ijklmn\n", "opqr[\n", "st]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "|st"],
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "[st]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(&["abc def gh |"], &["abc def gh |"], true, move_caret_down)?;
+        assert_move(
+            &["abc de|f gh "],
+            &["abc de[f gh ]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|c def gh "],
+            &["ab[c def gh ]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|bc def gh "],
+            &["a[bc def gh ]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["|abc def gh "],
+            &["[abc def gh ]|"],
+            true,
+            move_caret_down,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
+        assert_move(&["|"], &["|"], true, move_caret_up)?;
+        assert_move(&["|a"], &["|a"], true, move_caret_up)?;
+        assert_move(&["A|"], &["|[A]"], true, move_caret_up)?;
+        assert_move(&["a|bc"], &["|[a]bc"], true, move_caret_up)?;
+        assert_move(&["ab|c"], &["|[ab]c"], true, move_caret_up)?;
+        assert_move(&["abc|"], &["|[abc]"], true, move_caret_up)?;
+        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], true, move_caret_up)?;
+        assert_move(
+            &["abc\n", "|def"],
+            &["|[abc\n", "]def"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "d|ef"],
+            &["a|[bc\n", "d]ef"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de|f"],
+            &["ab|[c\n", "de]f"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def|"],
+            &["abc|[\n", "def]"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "|ghi"],
+            &["abc\n", "|[def \n", "]ghi"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "g|hi"],
+            &["abc\n", "d|[ef \n", "g]hi"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "gh|i"],
+            &["abc\n", "de|[f \n", "gh]i"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def \n", "ghi|"],
+            &["abc\n", "def|[ \n", "ghi]"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de\n", "ghi|"],
+            &["abc\n", "de|[\n", "ghi]"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(&["abc\n", "de|"], &["ab|[c\n", "de]"], true, move_caret_up)?;
+        assert_move(&["abc\n", "d|e"], &["a|[bc\n", "d]e"], true, move_caret_up)?;
+        assert_move(&["abc\n", "|de"], &["|[abc\n", "]de"], true, move_caret_up)?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
+            &["ab\n", "cdef\n", "ghijkl|[\n", "mnopqrst]"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
+            &["ab\n", "cdef|[\n", "ghijkl]\n", "mnopqrst"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
+            &["ab\n", "cdef\n", "|[ghijkl\n", "]mnopqrst"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
+            &[" |[ab\n", " ]cdef\n", "ghijkl\n", "mnopqrst"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
+            &["ab\n", "cdef\n", "ghijkl|[\n", "mnopqr]st"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cde|f\n", "ghijkl\n", "mnopqrst"],
+            &["ab|[\n", "cde]f\n", "ghijkl\n", "mnopqrst"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
+            &["abcdefgh\n", "ijklmn\n", "op|[qr\n", "st]"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
+            &["abcdefgh\n", "ijkl|[mn\n", "opqr]\n", "st"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
+            &["abcdef|[gh\n", "ijklmn]\n", "opqr\n", "st"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
+            &["|[abcdefgh]\n", "ijklmn\n", "opqr\n", "st"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefg|h\n", "ijklmn\n", "opqr\n", "st"],
+            &["|[abcdefg]h\n", "ijklmn\n", "opqr\n", "st"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["a|bcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            &["|[a]bcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            &["|abcdefgh\n", "ijklmn\n", "opqr\n", "st"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(&["abc def gh |"], &["|[abc def gh ]"], true, move_caret_up)?;
+        assert_move(&["abc de|f gh "], &["|[abc de]f gh "], true, move_caret_up)?;
+        assert_move(&["ab|c def gh "], &["|[ab]c def gh "], true, move_caret_up)?;
+        assert_move(&["a|bc def gh "], &["|[a]bc def gh "], true, move_caret_up)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn end_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
+        assert_move(&["[A]|"], &["A|"], false, move_caret_right)?;
+        assert_move(&["[a]|bc"], &["a|bc"], false, move_caret_right)?;
+        assert_move(&["a[b]|c"], &["ab|c"], false, move_caret_right)?;
+        assert_move(&["ab[c]|"], &["abc|"], false, move_caret_right)?;
+        assert_move(&["[ ]|abc"], &[" |abc"], false, move_caret_right)?;
+        assert_move(&["|[ ]abc"], &[" |abc"], false, move_caret_right)?;
+        assert_move(&["a|[b]c"], &["ab|c"], false, move_caret_right)?;
+        assert_move(
+            &["abc[\n", "]|d"],
+            &["abc\n", "|d"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc|[\n", "]d"],
+            &["abc\n", "|d"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(&["abc|[\n", "]"], &["abc\n", "|"], false, move_caret_right)?;
+        assert_move(
+            &["abc\n", "[d]|ef"],
+            &["abc\n", "d|ef"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi[\n", "]|jkl"],
+            &["abc\n", "def\n", "ghi\n", "|jkl"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(&["[ab]|c"], &["ab|c"], false, move_caret_right)?;
+        assert_move(&["[abc]|"], &["abc|"], false, move_caret_right)?;
+        assert_move(
+            &["ab|[c\n", "]def\n", "ghi"],
+            &["abc\n", "|def\n", "ghi"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["ab[c\n", "]|def\n", "ghi"],
+            &["abc\n", "|def\n", "ghi"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["a|[bc\n", "]def\n", "ghi"],
+            &["abc\n", "|def\n", "ghi"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["|[abc\n", "]def\n", "ghi"],
+            &["abc\n", "|def\n", "ghi"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["a|[bc\n", "d]ef\n", "ghi"],
+            &["abc\n", "d|ef\n", "ghi"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["|[abc\n", "def]\n", "ghi"],
+            &["abc\n", "def|\n", "ghi"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["|[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]"],
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["ab\n", "c[def\n", "ghijkl\n", "mno]|pqrst"],
+            &["ab\n", "cdef\n", "ghijkl\n", "mno|pqrst"],
+            false,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["ab\n", "c|[def\n", "ghijkl\n", "mno]pqrst"],
+            &["ab\n", "cdef\n", "ghijkl\n", "mno|pqrst"],
+            false,
+            move_caret_right,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn end_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
+        assert_move(&["[A]|"], &["|A"], false, move_caret_left)?;
+        assert_move(&["[a]|bc"], &["|abc"], false, move_caret_left)?;
+        assert_move(&["a[b]|c"], &["a|bc"], false, move_caret_left)?;
+        assert_move(&["ab[c]|"], &["ab|c"], false, move_caret_left)?;
+        assert_move(&["[ ]|abc"], &["| abc"], false, move_caret_left)?;
+        assert_move(&["|[ ]abc"], &["| abc"], false, move_caret_left)?;
+        assert_move(&["a|[b]c"], &["a|bc"], false, move_caret_left)?;
+        assert_move(&["abc[\n", "]|d"], &["abc|\n", "d"], false, move_caret_left)?;
+        assert_move(&["abc|[\n", "]d"], &["abc|\n", "d"], false, move_caret_left)?;
+        assert_move(&["abc|[\n", "]"], &["abc|\n", ""], false, move_caret_left)?;
+        assert_move(
+            &["abc\n", "[d]|ef"],
+            &["abc\n", "|def"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi[\n", "]|jkl"],
+            &["abc\n", "def\n", "ghi|\n", "jkl"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(&["[ab]|c"], &["|abc"], false, move_caret_left)?;
+        assert_move(&["[abc]|"], &["|abc"], false, move_caret_left)?;
+        assert_move(
+            &["ab|[c\n", "]def\n", "ghi"],
+            &["ab|c\n", "def\n", "ghi"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["ab[c\n", "]|def\n", "ghi"],
+            &["ab|c\n", "def\n", "ghi"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["a|[bc\n", "]def\n", "ghi"],
+            &["a|bc\n", "def\n", "ghi"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["|[abc\n", "]def\n", "ghi"],
+            &["|abc\n", "def\n", "ghi"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["a|[bc\n", "d]ef\n", "ghi"],
+            &["a|bc\n", "def\n", "ghi"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["|[abc\n", "def]\n", "ghi"],
+            &["|abc\n", "def\n", "ghi"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            &["|ab\n", "cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["|[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]"],
+            &["|ab\n", "cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["ab\n", "c[def\n", "ghijkl\n", "mno]|pqrst"],
+            &["ab\n", "c|def\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["ab\n", "c|[def\n", "ghijkl\n", "mno]pqrst"],
+            &["ab\n", "c|def\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_left,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn end_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
+        assert_move(&["[a]|"], &["a|"], false, move_caret_down)?;
+        assert_move(&["|[a]"], &["a|"], false, move_caret_down)?;
+        assert_move(&["a|[bc]"], &["abc|"], false, move_caret_down)?;
+        assert_move(&["ab[c]|"], &["abc|"], false, move_caret_down)?;
+        assert_move(&["abc|[ ]"], &["abc |"], false, move_caret_down)?;
+        assert_move(
+            &["abc\n", "|[def]"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "d|[ef]"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f]"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["[abc\n", "]|def"],
+            &["abc\n", "|def"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a[bc\n", "d]|ef"],
+            &["abc\n", "d|ef"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|[c\n", "de]f"],
+            &["abc\n", "de|f"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc[\n", "def]|"],
+            &["abc\n", "def|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "|[def \n", "]ghi"],
+            &["abc\n", "def \n", "|ghi"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "d[ef \n", "g]|hi"],
+            &["abc\n", "def \n", "g|hi"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de[f \n", "gh]|i"],
+            &["abc\n", "def \n", "gh|i"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def[ \n", "ghi]|"],
+            &["abc\n", "def \n", "ghi|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "def [\n", "ghi]|"],
+            &["abc\n", "def \n", "ghi|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de[\n", "gh]|i"],
+            &["abc\n", "de\n", "gh|i"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc|[\n", "de]"],
+            &["abc\n", "de|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab[c\n", "de]|"],
+            &["abc\n", "de|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|[bc\n", "d]e"],
+            &["abc\n", "d|e"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["[abc\n", "]|de"],
+            &["abc\n", "|de"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab[\n", "cd]|ef\n", "ghijkl\n", "mnopqrst"],
+            &["ab\n", "cd|ef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef|[\n", "ghij]kl\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "ghij|kl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl[\n", "mnopqr]|st"],
+            &["ab\n", "cdef\n", "ghijkl\n", "mnopqr|st"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &[" [ab\n", " ]|cdef\n", "ghijkl\n", "mnopqrst"],
+            &[" ab\n", " |cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "|[cdef\n", "]ghijkl\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "[ghijkl\n", "]|mnopqrst"],
+            &["ab\n", "cdef\n", "ghijkl\n", "|mnopqrst"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh[\n", "ijklmn]|\n", "opqr\n", "st"],
+            &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn[\n", "opqr]|\n", "st"],
+            &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr[\n", "st]|"],
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "[st]|"],
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "st|"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc de[f gh ]|"],
+            &["abc def gh |"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|[c def gh ]"],
+            &["abc def gh |"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a[bc def gh ]|"],
+            &["abc def gh |"],
+            false,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["[abc def gh ]|"],
+            &["abc def gh |"],
+            false,
+            move_caret_down,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn end_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
+        assert_move(&["[a]|"], &["|a"], false, move_caret_up)?;
+        assert_move(&["|[a]"], &["|a"], false, move_caret_up)?;
+        assert_move(&["a|[bc]"], &["a|bc"], false, move_caret_up)?;
+        assert_move(&["ab[c]|"], &["ab|c"], false, move_caret_up)?;
+        assert_move(&["abc|[ ]"], &["abc| "], false, move_caret_up)?;
+        assert_move(
+            &["abc\n", "|[def]"],
+            &["abc\n", "|def"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "d|[ef]"],
+            &["abc\n", "d|ef"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f]"],
+            &["abc\n", "de|f"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["[abc\n", "]|def"],
+            &["|abc\n", "def"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["a[bc\n", "d]|ef"],
+            &["a|bc\n", "def"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab|[c\n", "de]f"],
+            &["ab|c\n", "def"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc[\n", "def]|"],
+            &["abc|\n", "def"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "|[def \n", "]ghi"],
+            &["abc\n", "|def \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "d[ef \n", "g]|hi"],
+            &["abc\n", "d|ef \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f \n", "gh]i"],
+            &["abc\n", "de|f \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def[ \n", "ghi]|"],
+            &["abc\n", "def| \n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def [\n", "ghi]|"],
+            &["abc\n", "def |\n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de[\n", "gh]|i"],
+            &["abc\n", "de|\n", "ghi"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(&["abc|[\n", "de]"], &["abc|\n", "de"], false, move_caret_up)?;
+        assert_move(&["ab[c\n", "de]|"], &["ab|c\n", "de"], false, move_caret_up)?;
+        assert_move(&["a|[bc\n", "d]e"], &["a|bc\n", "de"], false, move_caret_up)?;
+        assert_move(&["[abc\n", "]|de"], &["|abc\n", "de"], false, move_caret_up)?;
+        assert_move(
+            &["ab[\n", "cd]|ef\n", "ghijkl\n", "mnopqrst"],
+            &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef|[\n", "ghij]kl\n", "mnopqrst"],
+            &["ab\n", "cdef|\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl[\n", "mnopqr]|st"],
+            &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &[" [ab\n", " ]|cdef\n", "ghijkl\n", "mnopqrst"],
+            &[" |ab\n", " cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "|[cdef\n", "]ghijkl\n", "mnopqrst"],
+            &["ab\n", "|cdef\n", "ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "[ghijkl\n", "]|mnopqrst"],
+            &["ab\n", "cdef\n", "|ghijkl\n", "mnopqrst"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh[\n", "ijklmn]|\n", "opqr\n", "st"],
+            &["abcdefgh|\n", "ijklmn\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn[\n", "opqr]|\n", "st"],
+            &["abcdefgh\n", "ijklmn|\n", "opqr\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr[\n", "st]|"],
+            &["abcdefgh\n", "ijklmn\n", "opqr|\n", "st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "[st]|"],
+            &["abcdefgh\n", "ijklmn\n", "opqr\n", "|st"],
+            false,
+            move_caret_up,
+        )?;
+        assert_move(&["abc de[f gh ]|"], &["abc de|f gh "], false, move_caret_up)?;
+        assert_move(&["ab|[c def gh ]"], &["ab|c def gh "], false, move_caret_up)?;
+        assert_move(&["a[bc def gh ]|"], &["a|bc def gh "], false, move_caret_up)?;
+        assert_move(&["[abc def gh ]|"], &["|abc def gh "], false, move_caret_up)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn extend_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
+        assert_move(&["[a]|bc"], &["[ab]|c"], true, move_caret_right)?;
+        assert_move(&["a[b]|c"], &["a[bc]|"], true, move_caret_right)?;
+        assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_right)?;
+        assert_move(&["[ ]|abc"], &["[ a]|bc"], true, move_caret_right)?;
+        assert_move(&["[abc]|"], &["[abc]|"], true, move_caret_right)?;
+        assert_move(&["a[bc]|"], &["a[bc]|"], true, move_caret_right)?;
+        assert_move(&["ab[c]|"], &["ab[c]|"], true, move_caret_right)?;
+        assert_move(
+            &["abc[\n", "]|d"],
+            &["abc[\n", "d]|"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(&["ab[c]|\n", ""], &["ab[c\n", "]|"], true, move_caret_right)?;
+        assert_move(
+            &["ab[c]|\n", "d"],
+            &["ab[c\n", "]|d"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi[\n", "]|jkl"],
+            &["abc\n", "def\n", "ghi[\n", "j]|kl"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["ab[c\n", "def\n", "ghi\n", "]|jkl"],
+            &["ab[c\n", "def\n", "ghi\n", "j]|kl"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["ab[c\n", "def\n", "]|ghi\n", "jkl"],
+            &["ab[c\n", "def\n", "g]|hi\n", "jkl"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["[abc\n", "def\n", "ghi\n", "jk]|l"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            true,
+            move_caret_right,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn extend_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
+        assert_move(&["ab|[c]"], &["a|[bc]"], true, move_caret_left)?;
+        assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_left)?;
+        assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_left)?;
+        assert_move(&["|[ab]c"], &["|[ab]c"], true, move_caret_left)?;
+        assert_move(&["|[a]bc"], &["|[a]bc"], true, move_caret_left)?;
+        assert_move(&[" |[a]bc"], &["|[ a]bc"], true, move_caret_left)?;
+        assert_move(
+            &["abc|[\n", "]d"],
+            &["ab|[c\n", "]d"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "|[d]"],
+            &["abc|[\n", "d]"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(&["ab|[c\n", "]"], &["a|[bc\n", "]"], true, move_caret_left)?;
+        assert_move(
+            &["abc\n", "def|[\n", "ghi\n", "j]kl"],
+            &["abc\n", "de|[f\n", "ghi\n", "j]kl"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["a|[bc\n", "def\n", "ghi\n", "jkl]"],
+            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi\n", "|[jkl]"],
+            &["abc\n", "def\n", "ghi|[\n", "jkl]"],
+            true,
+            move_caret_left,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn extend_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
+        assert_move(&["ab|[c]"], &["|[abc]"], true, move_caret_up)?;
+        assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_up)?;
+        assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_up)?;
+        assert_move(&["|[ab]c"], &["|[ab]c"], true, move_caret_up)?;
+        assert_move(&["|[a]bc"], &["|[a]bc"], true, move_caret_up)?;
+        assert_move(&[" |[a]bc"], &["|[ a]bc"], true, move_caret_up)?;
+        assert_move(&["ab[c]|"], &["|[ab]c"], true, move_caret_up)?;
+        assert_move(&["[a]|"], &["|a"], true, move_caret_up)?;
+        assert_move(&["[a]|bc"], &["|abc"], true, move_caret_up)?;
+        assert_move(&["[a]|bc\n", "d"], &["|abc\n", "d"], true, move_caret_up)?;
+        assert_move(
+            &["abc\n", "de[f]|"],
+            &["abc|[\n", "de]f"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f]"],
+            &["ab|[c\n", "def]"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab|[c\n", "def]"],
+            &["|[abc\n", "def]"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "[mnopqr]|st"],
+            &["ab\n", "cdef\n", "ghijkl|[\n", "]mnopqrst"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "[mnopqrs]|t"],
+            &["ab\n", "cdef\n", "ghijkl|[\n", "]mnopqrst"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "|[o]pqr\n", "st"],
+            &["abcdefgh\n", "|[ijklmn\n", "o]pqr\n", "st"],
+            true,
+            move_caret_up,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn extend_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
+        assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_down)?;
+        assert_move(&["[a]|bc"], &["[abc]|"], true, move_caret_down)?;
+        assert_move(&["[abc]|"], &["[abc]|"], true, move_caret_down)?;
+        assert_move(&["|[ab]c"], &["ab[c]|"], true, move_caret_down)?;
+        assert_move(&["|[a]bc"], &["a[bc]|"], true, move_caret_down)?;
+        assert_move(
+            &["[a]|bc\n", "d"],
+            &["[abc\n", "d]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["[a]|bc\n", "de"],
+            &["[abc\n", "d]|e"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["[abc\n", "d]|e"],
+            &["[abc\n", "de]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(&["[a]|bc\n", ""], &["[abc\n", "]|"], true, move_caret_down)?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "[mnopqr]|st"],
+            &["ab\n", "cdef\n", "ghijkl\n", "[mnopqrst]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a[b\n", "cdef\n", "ghijkl\n", "mnopqr]|st"],
+            &["a[b\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcd[efgh]|\n", "ijklmn\n", "opqr\n", "st"],
+            &["abcd[efgh\n", "ijklmn]|\n", "opqr\n", "st"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcd[e]|fgh\n", "ijklmn\n", "opqr\n", "st"],
+            &["abcd[efgh\n", "ijklm]|n\n", "opqr\n", "st"],
+            true,
+            move_caret_down,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn shrink_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
+        assert_move(&["ab|[c]"], &["abc|"], true, move_caret_right)?;
+        assert_move(&["a|[bc]"], &["ab|[c]"], true, move_caret_right)?;
+        assert_move(&["|[abc]"], &["a|[bc]"], true, move_caret_right)?;
+        assert_move(
+            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
+            &["a|[bc\n", "def\n", "ghi\n", "jkl]"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "d|[ef\n", "]ghi\n", "jkl"],
+            &["abc\n", "de|[f\n", "]ghi\n", "jkl"],
+            true,
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f]\n", "ghi\n", "jkl"],
+            &["abc\n", "def|\n", "ghi\n", "jkl"],
+            true,
+            move_caret_right,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn shrink_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
+        assert_move(&["ab[c]|"], &["ab|c"], true, move_caret_left)?;
+        assert_move(&["a[bc]|"], &["a[b]|c"], true, move_caret_left)?;
+        assert_move(&["[abc]|"], &["[ab]|c"], true, move_caret_left)?;
+        assert_move(
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            &["[abc\n", "def\n", "ghi\n", "jk]|l"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
+            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "def[\n", "]|ghi\n", "jkl"],
+            &["abc\n", "def|\n", "ghi\n", "jkl"],
+            true,
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "d[ef\n", "gh]|i\n", "jkl"],
+            &["abc\n", "d[ef\n", "g]|hi\n", "jkl"],
+            true,
+            move_caret_left,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn shrink_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
+        assert_move(&["[abc]|"], &["|abc"], true, move_caret_up)?;
+        assert_move(&["[ab]|c"], &["|abc"], true, move_caret_up)?;
+        assert_move(&["[a]|bc"], &["|abc"], true, move_caret_up)?;
+        assert_move(&["|abc"], &["|abc"], true, move_caret_up)?;
+        assert_move(
+            &["[abc\n", "def]|"],
+            &["[abc]|\n", "def"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["[abc\n", "de]|f"],
+            &["[ab]|c\n", "def"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            &["[abc\n", "def\n", "ghi]|\n", "jkl"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi[\n", "jkl]|"],
+            &["abc\n", "def\n", "ghi|\n", "jkl"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "d[ef\n", "ghi\n", "jk]|l"],
+            &["abc\n", "d[ef\n", "gh]|i\n", "jkl"],
+            true,
+            move_caret_up,
+        )?;
+        assert_move(
+            &["[abc\n", "d]|ef\n", "ghi\n", "jkl"],
+            &["[a]|bc\n", "def\n", "ghi\n", "jkl"],
+            true,
+            move_caret_up,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn shrink_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
+        assert_move(&["|[abc]"], &["abc|"], true, move_caret_down)?;
+        assert_move(
+            &["|[abc\n", "def]"],
+            &["abc\n", "|[def]"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|[bc\n", "def]"],
+            &["abc\n", "d|[ef]"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["|[abc\n", "def\n", "ghi]"],
+            &["abc\n", "|[def\n", "ghi]"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|[c\n", "def\n", "ghi]"],
+            &["abc\n", "de|[f\n", "ghi]"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f\n", "ghi]"],
+            &["abc\n", "def\n", "gh|[i]"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcdef|[\n", "ghij\n", "kl]"],
+            &["abcdef\n", "ghij|[\n", "kl]"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abcde|[f\n", "ghij\n", "kl]"],
+            &["abcdef\n", "ghij|[\n", "kl]"],
+            true,
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|[cdef\n", "ghij\n", "kl]"],
+            &["abcdef\n", "gh|[ij\n", "kl]"],
+            true,
+            move_caret_down,
+        )?;
+
+        Ok(())
     }
 }

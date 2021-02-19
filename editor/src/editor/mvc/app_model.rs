@@ -1,8 +1,8 @@
 use super::ed_model::EdModel;
 use crate::editor::ed_error::{
     print_err,
-    EdResult,
     EdError::{ClipboardInitFailed, ClipboardReadFailed, ClipboardWriteFailed},
+    EdResult,
 };
 use copypasta::{ClipboardContext, ClipboardProvider};
 use std::fmt;

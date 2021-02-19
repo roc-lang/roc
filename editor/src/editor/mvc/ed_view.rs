@@ -1,12 +1,9 @@
-use super::ed_model::{EdModel};
-use crate::ui::ui_error::{MissingGlyphDims};
-use crate::ui::ui_error::UIResult;
-use crate::ui::colors::CARET_COLOR;
+use super::ed_model::EdModel;
 use crate::graphics::primitives::rect::Rect;
-use crate::ui::text::{
-    selection::create_selection_rects,
-    text_pos::TextPos,
-};
+use crate::ui::colors::CARET_COLOR;
+use crate::ui::text::{selection::create_selection_rects, text_pos::TextPos};
+use crate::ui::ui_error::MissingGlyphDims;
+use crate::ui::ui_error::UIResult;
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use snafu::ensure;
