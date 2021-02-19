@@ -20,7 +20,6 @@ use crate::lang::{pool::Pool, scope::Scope};
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
-use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
@@ -261,7 +260,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     let mut pool = Pool::with_capacity(12);
                     let mut var_store = VarStore::default();
-                    let dep_idents = MutMap::default();
+                    let dep_idents = IdentIds::exposed_builtins(8);
                     let mut module_ids = ModuleIds::default();
                     let exposed_ident_ids = IdentIds::default();
 
@@ -288,8 +287,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     super::render_ast::render_expr2(
                         &mut env,
-                        &size,
                         &expr2,
+                        &size,
                         CODE_TXT_XY.into(),
                         &mut glyph_brush,
                     );
