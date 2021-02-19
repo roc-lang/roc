@@ -6514,8 +6514,10 @@ fn from_can_pattern_help<'a>(
                             debug_assert_eq!(
                                 arguments.len(),
                                 argument_layouts[1..].len(),
-                                "{:?}",
-                                tag_name
+                                "The {:?} tag got {} arguments, but its layout expects {}!",
+                                tag_name,
+                                arguments.len(),
+                                argument_layouts[1..].len(),
                             );
                             let it = argument_layouts[1..].iter();
 
