@@ -632,16 +632,16 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        ListConcat | StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
+        ListConcat | StrConcat => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
         ListSingle => arena.alloc_slice_copy(&[irrelevant]),
         ListRepeat => arena.alloc_slice_copy(&[irrelevant, borrowed]),
         ListReverse => arena.alloc_slice_copy(&[owned]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
-        StrJoinWith => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         ListJoin => arena.alloc_slice_copy(&[irrelevant]),
         ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListKeepIf | ListKeepOks | ListKeepErrs => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListKeepIf | ListKeepOks | ListKeepErrs => arena.alloc_slice_copy(&[owned, borrowed]),
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListWalk => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
         ListWalkBackwards => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
@@ -651,9 +651,11 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[borrowed, owned]),
 
-        Eq | NotEq | And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap
-        | NumSubChecked | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte
-        | NumCompare | NumDivUnchecked | NumRemUnchecked | NumPow | NumPowInt | NumBitwiseAnd
+        Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
+
+        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap | NumSubChecked
+        | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare
+        | NumDivUnchecked | NumRemUnchecked | NumPow | NumPowInt | NumBitwiseAnd
         | NumBitwiseXor => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
 
         NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumCeiling | NumFloor
