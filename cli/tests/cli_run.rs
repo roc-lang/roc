@@ -227,7 +227,6 @@ mod cli_run {
         );
     }
 
-
     #[test]
     #[ignore]
     #[serial(astar)]
