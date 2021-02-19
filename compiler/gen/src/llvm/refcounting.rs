@@ -342,30 +342,16 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     match builtin {
         List(memory_mode, element_layout) => {
             let wrapper_struct = value.into_struct_value();
-            if element_layout.contains_refcounted() {
-                let ptr_type =
-                    basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
-                        .ptr_type(AddressSpace::Generic);
-
-                let (len, ptr) = load_list(env.builder, wrapper_struct, ptr_type);
-
-                let loop_fn = |_index, element| {
-                    modify_refcount_layout(env, parent, layout_ids, mode, element, element_layout);
-                };
-
-                incrementing_elem_loop(
-                    env.builder,
-                    env.context,
-                    parent,
-                    ptr,
-                    len,
-                    "modify_rc_index",
-                    loop_fn,
-                );
-            }
 
             if let MemoryMode::Refcounted = memory_mode {
-                modify_refcount_list(env, layout_ids, mode, layout, wrapper_struct);
+                modify_refcount_list(
+                    env,
+                    layout_ids,
+                    mode,
+                    layout,
+                    element_layout,
+                    wrapper_struct,
+                );
             }
         }
         Set(element_layout) => {
@@ -511,6 +497,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     original_wrapper: StructValue<'ctx>,
 ) {
     let block = env.builder.get_insert_block().expect("to be in a function");
@@ -531,7 +518,14 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
             let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            modify_refcount_list_help(env, mode, layout, function_value);
+            modify_refcount_list_help(
+                env,
+                layout_ids,
+                mode,
+                layout,
+                element_layout,
+                function_value,
+            );
 
             function_value
         }
@@ -553,8 +547,10 @@ fn mode_to_call_mode(function: FunctionValue<'_>, mode: Mode) -> CallMode<'_> {
 
 fn modify_refcount_list_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     let builder = env.builder;
@@ -592,6 +588,28 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     builder.build_conditional_branch(is_non_empty, modification_block, cont_block);
 
     builder.position_at_end(modification_block);
+
+    if element_layout.contains_refcounted() {
+        let ptr_type =
+            basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic);
+
+        let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
+
+        let loop_fn = |_index, element| {
+            modify_refcount_layout(env, parent, layout_ids, mode, element, element_layout);
+        };
+
+        incrementing_elem_loop(
+            env.builder,
+            env.context,
+            parent,
+            ptr,
+            len,
+            "modify_rc_index",
+            loop_fn,
+        );
+    }
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
     let call_mode = mode_to_call_mode(fn_val, mode);

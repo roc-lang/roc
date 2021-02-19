@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_eq_wrapper, build_inc_wrapper, build_transform_caller, call_bitcode_fn,
-    call_void_bitcode_fn,
+    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, build_transform_caller,
+    call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, build_num_binop, cast_basic_basic, complex_bitcast, Env, InPlace,
@@ -984,6 +984,9 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     let alignment = element_layout.alignment_bytes(env.ptr_bytes);
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
+    let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+
     let output = call_bitcode_fn(
         env,
         &[
@@ -993,6 +996,8 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             stepper_caller.into(),
             alignment_iv.into(),
             element_width.into(),
+            inc_element_fn.as_global_value().as_pointer_value().into(),
+            dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         &bitcode::LIST_KEEP_IF,
     );
@@ -1094,6 +1099,8 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     let alignment = before_layout.alignment_bytes(env.ptr_bytes);
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
+    let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
+
     let output = call_bitcode_fn(
         env,
         &[
@@ -1105,6 +1112,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             before_width.into(),
             result_width.into(),
             after_width.into(),
+            dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         op,
     );
