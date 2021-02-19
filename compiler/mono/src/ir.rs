@@ -19,6 +19,28 @@ use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
+macro_rules! return_on_layout_error {
+    ($env:expr, $layout_result:expr) => {
+        match $layout_result {
+            Ok(cached) => cached,
+            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                return Stmt::RuntimeError($env.arena.alloc(format!(
+                    "UnresolvedTypeVar {} line {}",
+                    file!(),
+                    line!()
+                )));
+            }
+            Err(LayoutProblem::Erroneous) => {
+                return Stmt::RuntimeError($env.arena.alloc(format!(
+                    "Erroneous {} line {}",
+                    file!(),
+                    line!()
+                )));
+            }
+        }
+    };
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
     PatternProblem(crate::exhaustive::Error),
@@ -114,8 +136,15 @@ pub enum SelfRecursive {
     SelfRecursive(JoinPointId),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Parens {
+    NotNeeded,
+    InTypeParam,
+    InFunction,
+}
+
 impl<'a> Proc<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: bool) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -126,20 +155,36 @@ impl<'a> Proc<'a> {
             .iter()
             .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
 
-        alloc
-            .text("procedure ")
-            .append(symbol_to_doc(alloc, self.name))
-            .append(" (")
-            .append(alloc.intersperse(args_doc, ", "))
-            .append("):")
-            .append(alloc.hardline())
-            .append(self.body.to_doc(alloc).indent(4))
+        if PRETTY_PRINT_IR_SYMBOLS {
+            alloc
+                .text("procedure : ")
+                .append(symbol_to_doc(alloc, self.name))
+                .append(" ")
+                .append(self.ret_layout.to_doc(alloc, Parens::NotNeeded))
+                .append(alloc.hardline())
+                .append(alloc.text("procedure = "))
+                .append(symbol_to_doc(alloc, self.name))
+                .append(" (")
+                .append(alloc.intersperse(args_doc, ", "))
+                .append("):")
+                .append(alloc.hardline())
+                .append(self.body.to_doc(alloc).indent(4))
+        } else {
+            alloc
+                .text("procedure ")
+                .append(symbol_to_doc(alloc, self.name))
+                .append(" (")
+                .append(alloc.intersperse(args_doc, ", "))
+                .append("):")
+                .append(alloc.hardline())
+                .append(self.body.to_doc(alloc).indent(4))
+        }
     }
 
     pub fn to_pretty(&self, width: usize) -> String {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, ()>(&allocator, false)
+        self.to_doc::<_, ()>(&allocator, Parens::NotNeeded)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -150,8 +195,28 @@ impl<'a> Proc<'a> {
     pub fn insert_refcount_operations(
         arena: &'a Bump,
         procs: &mut MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+        _passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
     ) {
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
+        // currently we ignore the passed-by-pointerness
+        let passed_by_pointer = &Default::default();
+
+        let borrow_params =
+            arena.alloc(crate::borrow::infer_borrow(arena, procs, passed_by_pointer));
+
+        for (key, other) in passed_by_pointer {
+            if let Some(proc) = procs.get(key) {
+                let mut proc: Proc = proc.clone();
+                proc.name = *other;
+
+                let layout = key.1.clone();
+                procs.insert((*other, layout), proc);
+            } else {
+                unreachable!(
+                    "we need a by-pointer version of {:?}, but its by-name version does not exist",
+                    key.0
+                )
+            }
+        }
 
         for (_, proc) in procs.iter_mut() {
             crate::inc_dec::visit_proc(arena, borrow_params, proc);
@@ -183,7 +248,11 @@ impl<'a> Proc<'a> {
         };
 
         for (_, proc) in procs.iter_mut() {
-            let b = expand_rc::expand_and_cancel(&mut env, arena.alloc(proc.body.clone()));
+            let b = expand_rc::expand_and_cancel_proc(
+                &mut env,
+                arena.alloc(proc.body.clone()),
+                proc.args,
+            );
             proc.body = b.clone();
         }
     }
@@ -229,6 +298,7 @@ pub struct Procs<'a> {
     pub runtime_errors: MutMap<Symbol, &'a str>,
     pub externals_others_need: ExternalSpecializations,
     pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
+    pub passed_by_pointer: MutMap<(Symbol, Layout<'a>), Symbol>,
 }
 
 impl<'a> Default for Procs<'a> {
@@ -241,6 +311,7 @@ impl<'a> Default for Procs<'a> {
             runtime_errors: MutMap::default(),
             externals_we_need: MutMap::default(),
             externals_others_need: ExternalSpecializations::default(),
+            passed_by_pointer: MutMap::default(),
         }
     }
 }
@@ -285,10 +356,14 @@ impl<'a> Procs<'a> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn get_specialized_procs_without_rc(
         self,
         arena: &'a Bump,
-    ) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
+    ) -> (
+        MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+        MutMap<(Symbol, Layout<'a>), Symbol>,
+    ) {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (key, in_prog_proc) in self.specialized.into_iter() {
@@ -311,7 +386,7 @@ impl<'a> Procs<'a> {
             }
         }
 
-        result
+        (result, self.passed_by_pointer)
     }
 
     // TODO investigate make this an iterator?
@@ -340,7 +415,11 @@ impl<'a> Procs<'a> {
             }
         }
 
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(
+            arena,
+            &result,
+            &self.passed_by_pointer,
+        ));
 
         for (_, proc) in result.iter_mut() {
             crate::inc_dec::visit_proc(arena, borrow_params, proc);
@@ -380,7 +459,11 @@ impl<'a> Procs<'a> {
             }
         }
 
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(
+            arena,
+            &result,
+            &self.passed_by_pointer,
+        ));
 
         for (_, proc) in result.iter_mut() {
             crate::inc_dec::visit_proc(arena, borrow_params, proc);
@@ -2409,7 +2492,7 @@ fn specialize_naked_symbol<'a>(
                 match hole {
                     Stmt::Jump(_, _) => todo!("not sure what to do in this case yet"),
                     _ => {
-                        let expr = Expr::FunctionPointer(symbol, layout.clone());
+                        let expr = call_by_pointer(env, procs, symbol, layout.clone());
                         let new_symbol = env.unique_symbol();
                         return Stmt::Let(
                             new_symbol,
@@ -3497,7 +3580,7 @@ pub fn with_hole<'a>(
                     // TODO should the let have layout Pointer?
                     Stmt::Let(
                         assigned,
-                        Expr::FunctionPointer(name, layout.clone()),
+                        call_by_pointer(env, procs, name, layout.clone()),
                         layout,
                         hole,
                     )
@@ -3694,7 +3777,7 @@ pub fn with_hole<'a>(
                         }
                     }
 
-                    let expr = Expr::FunctionPointer(name, function_ptr_layout.clone());
+                    let expr = call_by_pointer(env, procs, name, function_ptr_layout.clone());
 
                     stmt = Stmt::Let(
                         function_pointer,
@@ -3720,7 +3803,7 @@ pub fn with_hole<'a>(
                             // TODO should the let have layout Pointer?
                             Stmt::Let(
                                 assigned,
-                                Expr::FunctionPointer(name, layout.clone()),
+                                call_by_pointer(env, procs, name, layout.clone()),
                                 layout,
                                 hole,
                             )
@@ -3786,11 +3869,10 @@ pub fn with_hole<'a>(
                     )
                     .into_bump_slice();
 
-                    let full_layout = layout_cache
-                        .from_var(env.arena, fn_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
+                    let full_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.from_var(env.arena, fn_var, env.subs)
+                    );
 
                     let arg_layouts = match full_layout {
                         Layout::FunctionPointer(args, _) => args,
@@ -3798,11 +3880,10 @@ pub fn with_hole<'a>(
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
 
-                    let ret_layout = layout_cache
-                        .from_var(env.arena, ret_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
+                    let ret_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.from_var(env.arena, ret_var, env.subs)
+                    );
 
                     // if the function expression (loc_expr) is already a symbol,
                     // re-use that symbol, and don't define its value again
@@ -5303,7 +5384,7 @@ fn handle_variable_aliasing<'a>(
             .from_var(env.arena, variable, env.subs)
             .unwrap();
 
-        let expr = Expr::FunctionPointer(right, layout.clone());
+        let expr = call_by_pointer(env, procs, right, layout.clone());
         Stmt::Let(left, expr, layout, env.arena.alloc(result))
     } else {
         substitute_in_exprs(env.arena, &mut result, left, right);
@@ -5351,7 +5432,7 @@ fn reuse_function_symbol<'a>(
 
                     // an imported symbol is always a function pointer:
                     // either it's a function, or a top-level 0-argument thunk
-                    let expr = Expr::FunctionPointer(original, layout.clone());
+                    let expr = call_by_pointer(env, procs, original, layout.clone());
                     return Stmt::Let(symbol, expr, layout, env.arena.alloc(result));
                 }
                 _ => {
@@ -5449,7 +5530,7 @@ fn reuse_function_symbol<'a>(
                         }
                     }
 
-                    let expr = Expr::FunctionPointer(original, function_ptr_layout.clone());
+                    let expr = call_by_pointer(env, procs, original, function_ptr_layout.clone());
 
                     stmt = Stmt::Let(
                         function_pointer,
@@ -5471,7 +5552,7 @@ fn reuse_function_symbol<'a>(
 
                     Stmt::Let(
                         symbol,
-                        Expr::FunctionPointer(original, layout.clone()),
+                        call_by_pointer(env, procs, original, layout.clone()),
                         layout,
                         env.arena.alloc(result),
                     )
@@ -5546,6 +5627,22 @@ where
     }
 
     result
+}
+
+fn call_by_pointer<'a>(
+    _env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    symbol: Symbol,
+    layout: Layout<'a>,
+) -> Expr<'a> {
+    // let other = env.unique_symbol();
+    let other = symbol;
+
+    procs
+        .passed_by_pointer
+        .insert((symbol, layout.clone()), other);
+
+    Expr::FunctionPointer(other, layout)
 }
 
 fn add_needed_external<'a>(
@@ -5905,20 +6002,34 @@ fn call_by_name<'a>(
                             None if assigned.module_id() != proc_name.module_id() => {
                                 add_needed_external(procs, env, original_fn_var, proc_name);
 
-                                debug_assert_eq!(
-                                    arg_layouts.len(),
-                                    field_symbols.len(),
-                                    "scroll up a bit for background"
-                                );
-
-                                let call = self::Call {
-                                    call_type: CallType::ByName {
-                                        name: proc_name,
-                                        ret_layout: ret_layout.clone(),
-                                        full_layout: full_layout.clone(),
-                                        arg_layouts,
-                                    },
-                                    arguments: field_symbols,
+                                let call = if proc_name.module_id() == ModuleId::ATTR {
+                                    // the callable is one of the ATTR::ARG_n symbols
+                                    // we must call those by-pointer
+                                    self::Call {
+                                        call_type: CallType::ByPointer {
+                                            name: proc_name,
+                                            ret_layout: ret_layout.clone(),
+                                            full_layout: full_layout.clone(),
+                                            arg_layouts,
+                                        },
+                                        arguments: field_symbols,
+                                    }
+                                } else {
+                                    debug_assert_eq!(
+                                        arg_layouts.len(),
+                                        field_symbols.len(),
+                                        "scroll up a bit for background {:?}",
+                                        proc_name
+                                    );
+                                    self::Call {
+                                        call_type: CallType::ByName {
+                                            name: proc_name,
+                                            ret_layout: ret_layout.clone(),
+                                            full_layout: full_layout.clone(),
+                                            arg_layouts,
+                                        },
+                                        arguments: field_symbols,
+                                    }
                                 };
 
                                 let result =

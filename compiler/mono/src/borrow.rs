@@ -6,13 +6,30 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
+fn should_borrow_layout(layout: &Layout) -> bool {
+    match layout {
+        Layout::Closure(_, _, _) => false,
+        _ => layout.is_refcounted(),
+    }
+}
+
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    passed_by_pointer: &MutMap<(Symbol, Layout<'a>), Symbol>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),
     };
+
+    for (key, other) in passed_by_pointer {
+        if let Some(proc) = procs.get(key) {
+            let mut proc: Proc = proc.clone();
+            proc.name = *other;
+
+            param_map.visit_proc_always_owned(arena, &proc);
+        }
+    }
 
     for proc in procs.values() {
         param_map.visit_proc(arena, proc);
@@ -116,7 +133,22 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: layout.is_refcounted(),
+                borrow: should_borrow_layout(layout),
+                layout: layout.clone(),
+                symbol: *symbol,
+            }),
+            arena,
+        )
+        .into_bump_slice()
+    }
+
+    fn init_borrow_args_always_owned(
+        arena: &'a Bump,
+        ps: &'a [(Layout<'a>, Symbol)],
+    ) -> &'a [Param<'a>] {
+        Vec::from_iter_in(
+            ps.iter().map(|(layout, symbol)| Param {
+                borrow: false,
                 layout: layout.clone(),
                 symbol: *symbol,
             }),
@@ -129,6 +161,15 @@ impl<'a> ParamMap<'a> {
         self.items.insert(
             Key::Declaration(proc.name),
             Self::init_borrow_args(arena, proc.args),
+        );
+
+        self.visit_stmt(arena, proc.name, &proc.body);
+    }
+
+    fn visit_proc_always_owned(&mut self, arena: &'a Bump, proc: &Proc<'a>) {
+        self.items.insert(
+            Key::Declaration(proc.name),
+            Self::init_borrow_args_always_owned(arena, proc.args),
         );
 
         self.visit_stmt(arena, proc.name, &proc.body);
@@ -261,6 +302,16 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
+    fn own_arg(&mut self, x: Symbol) {
+        self.own_var(x);
+    }
+
+    fn own_args(&mut self, xs: &[Symbol]) {
+        for x in xs.iter() {
+            self.own_arg(*x);
+        }
+    }
+
     /// For each xs[i], if xs[i] is owned, then mark ps[i] as owned.
     /// We use this action to preserve tail calls. That is, if we have
     /// a tail call `f xs`, if the i-th parameter is borrowed, but `xs[i]` is owned
@@ -308,31 +359,33 @@ impl<'a> BorrowInfState<'a> {
         } = e;
 
         match call_type {
-            ByName {
-                name, arg_layouts, ..
-            }
-            | ByPointer {
-                name, arg_layouts, ..
-            } => {
+            ByName { name, .. } => {
                 // get the borrow signature of the applied function
-                let ps = match self.param_map.get_symbol(*name) {
-                    Some(slice) => slice,
-                    None => Vec::from_iter_in(
-                        arg_layouts.iter().cloned().map(|layout| Param {
-                            symbol: Symbol::UNDERSCORE,
-                            borrow: false,
-                            layout,
-                        }),
-                        self.arena,
-                    )
-                    .into_bump_slice(),
-                };
+                match self.param_map.get_symbol(*name) {
+                    Some(ps) => {
+                        // the return value will be owned
+                        self.own_var(z);
 
+                        // if the function exects an owned argument (ps), the argument must be owned (args)
+                        self.own_args_using_params(arguments, ps);
+                    }
+                    None => {
+                        // this is really an indirect call, but the function was bound to a symbol
+                        // the return value will be owned
+                        self.own_var(z);
+
+                        // if the function exects an owned argument (ps), the argument must be owned (args)
+                        self.own_args(arguments);
+                    }
+                }
+            }
+
+            ByPointer { .. } => {
                 // the return value will be owned
                 self.own_var(z);
 
                 // if the function exects an owned argument (ps), the argument must be owned (args)
-                self.own_args_using_params(arguments, ps);
+                self.own_args(arguments);
             }
 
             LowLevel { op } => {
@@ -566,16 +619,19 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListSingle => arena.alloc_slice_copy(&[irrelevant]),
         ListRepeat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListReverse => arena.alloc_slice_copy(&[owned]),
-        ListAppend => arena.alloc_slice_copy(&[owned, owned]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListJoin => arena.alloc_slice_copy(&[irrelevant]),
-        ListMap => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListKeepIf => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListKeepIf | ListKeepOks | ListKeepErrs => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        ListWalk => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
-        ListWalkBackwards => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
+        ListWalk => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
+        ListWalkBackwards => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
         ListSum => arena.alloc_slice_copy(&[borrowed]),
+
+        // TODO when we have lists with capacity (if ever)
+        // List.append should own its first argument
+        ListAppend => arena.alloc_slice_copy(&[borrowed, owned]),
 
         Eq | NotEq | And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap
         | NumSubChecked | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte
@@ -587,10 +643,20 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
             arena.alloc_slice_copy(&[irrelevant])
         }
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
-        StrFromInt => arena.alloc_slice_copy(&[irrelevant]),
+        StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
         Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         DictSize => arena.alloc_slice_copy(&[borrowed]),
         DictEmpty => &[],
         DictInsert => arena.alloc_slice_copy(&[owned, owned, owned]),
+        DictRemove => arena.alloc_slice_copy(&[owned, borrowed]),
+        DictContains => arena.alloc_slice_copy(&[borrowed, borrowed]),
+        DictGetUnsafe => arena.alloc_slice_copy(&[borrowed, borrowed]),
+        DictKeys | DictValues => arena.alloc_slice_copy(&[borrowed]),
+        DictUnion | DictDifference | DictIntersection => arena.alloc_slice_copy(&[owned, borrowed]),
+
+        // borrow function argument so we don't have to worry about RC of the closure
+        DictWalk => arena.alloc_slice_copy(&[owned, borrowed, owned]),
+
+        SetFromList => arena.alloc_slice_copy(&[owned]),
     }
 }

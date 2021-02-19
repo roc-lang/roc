@@ -683,6 +683,7 @@ mod test_mono {
                     let Test.9 = 2i64;
                     let Test.4 = Array [Test.8, Test.9];
                     let Test.3 = CallByName Test.1 Test.4;
+                    dec Test.4;
                     ret Test.3;
                 "#
             ),
@@ -708,6 +709,7 @@ mod test_mono {
                     let Test.2 = Array [Test.5];
                     let Test.3 = 2i64;
                     let Test.1 = CallByName List.5 Test.2 Test.3;
+                    dec Test.2;
                     ret Test.1;
                 "#
             ),
@@ -949,8 +951,7 @@ mod test_mono {
                     let Test.5 = 3.14f64;
                     let Test.3 = Struct {Test.4, Test.5};
                     let Test.1 = Index 0 Test.3;
-                    inc Test.1;
-                    dec Test.3;
+                    decref Test.3;
                     ret Test.1;
                 "#
             ),

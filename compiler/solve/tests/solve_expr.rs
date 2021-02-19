@@ -3257,7 +3257,7 @@ mod solve_expr {
                                             else
                                                 Ok { position, cost: 0.0 }
 
-                    Set.foldl model.openSet folder (Ok { position: boom {}, cost: 0.0 })
+                    Set.walk model.openSet folder (Ok { position: boom {}, cost: 0.0 })
                         |> Result.map (\x -> x.position)
 
                 astar : Model position -> Result position [ KeyNotFound ]*

@@ -282,6 +282,7 @@ fn link_linux(
                     .collect::<HashMap<String, String>>(),
             )
             .args(&[
+                "--gc-sections",
                 "--eh-frame-hdr",
                 "-arch",
                 arch_str(target),
@@ -350,6 +351,7 @@ fn link_macos(
             // Don't allow LD_ env vars to affect this
             .env_clear()
             .args(&[
+                "--gc-sections",
                 link_type_arg,
                 "-arch",
                 target.architecture.to_string().as_str(),

@@ -466,35 +466,46 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            ByName {
-                name, arg_layouts, ..
-            }
-            | ByPointer {
-                name, arg_layouts, ..
-            } => {
+            ByName { name, .. } => {
                 // get the borrow signature
-                let ps = match self.param_map.get_symbol(*name) {
-                    Some(slice) => slice,
-                    None => Vec::from_iter_in(
-                        arg_layouts.iter().cloned().map(|layout| Param {
-                            symbol: Symbol::UNDERSCORE,
-                            borrow: false,
-                            layout,
-                        }),
-                        self.arena,
-                    )
-                    .into_bump_slice(),
-                };
+                match self.param_map.get_symbol(*name) {
+                    Some(ps) => {
+                        let v = Expr::Call(crate::ir::Call {
+                            call_type,
+                            arguments,
+                        });
 
+                        let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
+                        let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                        self.add_inc_before(arguments, ps, b, b_live_vars)
+                    }
+                    None => {
+                        // an indirect call that was bound to a name
+                        let v = Expr::Call(crate::ir::Call {
+                            call_type,
+                            arguments,
+                        });
+
+                        self.add_inc_before_consume_all(
+                            arguments,
+                            self.arena.alloc(Stmt::Let(z, v, l, b)),
+                            b_live_vars,
+                        )
+                    }
+                }
+            }
+            ByPointer { .. } => {
                 let v = Expr::Call(crate::ir::Call {
                     call_type,
                     arguments,
                 });
 
-                let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
-                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                self.add_inc_before(arguments, ps, b, b_live_vars)
+                self.add_inc_before_consume_all(
+                    arguments,
+                    self.arena.alloc(Stmt::Let(z, v, l, b)),
+                    b_live_vars,
+                )
             }
         }
     }
@@ -591,7 +602,10 @@ impl<'a> Context<'a> {
         consume: bool,
     ) -> Self {
         // can this type be reference-counted at runtime?
-        let reference = layout.contains_refcounted();
+        let reference = match layout {
+            Layout::Closure(_, closure, _) => closure.layout.contains_refcounted(),
+            _ => layout.contains_refcounted(),
+        };
 
         let info = VarInfo {
             reference,

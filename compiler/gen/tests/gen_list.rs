@@ -1710,39 +1710,32 @@ mod gen_list {
     }
 
     #[test]
-    fn list_eq_empty() {
-        assert_evals_to!("[] == []", true, bool);
-        assert_evals_to!("[] != []", false, bool);
+    fn list_keep_oks() {
+        assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
+        assert_evals_to!("List.keepOks [1,2] (\\x -> Ok x)", &[1, 2], &[i64]);
+        assert_evals_to!("List.keepOks [1,2] (\\x -> x % 2)", &[1, 0], &[i64]);
+        assert_evals_to!("List.keepOks [Ok 1, Err 2] (\\x -> x)", &[1], &[i64]);
     }
 
     #[test]
-    fn list_eq_by_length() {
-        assert_evals_to!("[1] == []", false, bool);
-        assert_evals_to!("[] == [1]", false, bool);
+    fn list_keep_errs() {
+        assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
+        assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
+        assert_evals_to!(
+            "List.keepErrs [0,1,2] (\\x -> x % 0 |> Result.mapErr (\\_ -> 32))",
+            &[32, 32, 32],
+            &[i64]
+        );
+        assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
     }
 
     #[test]
-    fn list_eq_compare_pointwise() {
-        assert_evals_to!("[1] == [1]", true, bool);
-        assert_evals_to!("[2] == [1]", false, bool);
-    }
-
-    #[test]
-    fn list_eq_nested() {
-        assert_evals_to!("[[1]] == [[1]]", true, bool);
-        assert_evals_to!("[[2]] == [[1]]", false, bool);
-    }
-
-    #[test]
-    fn list_neq_compare_pointwise() {
-        assert_evals_to!("[1] != [1]", false, bool);
-        assert_evals_to!("[2] != [1]", true, bool);
-    }
-
-    #[test]
-    fn list_neq_nested() {
-        assert_evals_to!("[[1]] != [[1]]", false, bool);
-        assert_evals_to!("[[2]] != [[1]]", true, bool);
+    fn list_map_with_index() {
+        assert_evals_to!(
+            "List.mapWithIndex [0,0,0] (\\index, x -> index + x)",
+            &[0, 1, 2],
+            &[i64]
+        );
     }
 
     #[test]

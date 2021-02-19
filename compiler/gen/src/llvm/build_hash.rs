@@ -1,7 +1,7 @@
+use crate::debug_info_init;
+use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build::{
-    call_bitcode_fn, cast_block_of_memory_to_tag, complex_bitcast, set_name, FAST_CALL_CONV,
-};
+use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, set_name, FAST_CALL_CONV};
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
@@ -236,28 +236,8 @@ fn build_hash_struct_help<'a, 'ctx, 'env>(
     field_layouts: &[Layout<'a>],
 ) {
     let ctx = env.context;
-    let builder = env.builder;
 
-    {
-        use inkwell::debug_info::AsDIScope;
-
-        let func_scope = parent.get_subprogram().unwrap();
-        let lexical_block = env.dibuilder.create_lexical_block(
-            /* scope */ func_scope.as_debug_info_scope(),
-            /* file */ env.compile_unit.get_file(),
-            /* line_no */ 0,
-            /* column_no */ 0,
-        );
-
-        let loc = env.dibuilder.create_debug_location(
-            ctx,
-            /* line */ 0,
-            /* column */ 0,
-            /* current_scope */ lexical_block.as_debug_info_scope(),
-            /* inlined_at */ None,
-        );
-        builder.set_current_debug_location(&ctx, loc);
-    }
+    debug_info_init!(env, parent);
 
     // Add args to scope
     let mut it = parent.get_param_iter();
@@ -404,28 +384,8 @@ fn build_hash_tag_help<'a, 'ctx, 'env>(
     union_layout: &UnionLayout<'a>,
 ) {
     let ctx = env.context;
-    let builder = env.builder;
 
-    {
-        use inkwell::debug_info::AsDIScope;
-
-        let func_scope = parent.get_subprogram().unwrap();
-        let lexical_block = env.dibuilder.create_lexical_block(
-            /* scope */ func_scope.as_debug_info_scope(),
-            /* file */ env.compile_unit.get_file(),
-            /* line_no */ 0,
-            /* column_no */ 0,
-        );
-
-        let loc = env.dibuilder.create_debug_location(
-            ctx,
-            /* line */ 0,
-            /* column */ 0,
-            /* current_scope */ lexical_block.as_debug_info_scope(),
-            /* inlined_at */ None,
-        );
-        builder.set_current_debug_location(&ctx, loc);
-    }
+    debug_info_init!(env, parent);
 
     // Add args to scope
     let mut it = parent.get_param_iter();
@@ -707,28 +667,8 @@ fn build_hash_list_help<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
 ) {
     let ctx = env.context;
-    let builder = env.builder;
 
-    {
-        use inkwell::debug_info::AsDIScope;
-
-        let func_scope = parent.get_subprogram().unwrap();
-        let lexical_block = env.dibuilder.create_lexical_block(
-            /* scope */ func_scope.as_debug_info_scope(),
-            /* file */ env.compile_unit.get_file(),
-            /* line_no */ 0,
-            /* column_no */ 0,
-        );
-
-        let loc = env.dibuilder.create_debug_location(
-            ctx,
-            /* line */ 0,
-            /* column */ 0,
-            /* current_scope */ lexical_block.as_debug_info_scope(),
-            /* inlined_at */ None,
-        );
-        builder.set_current_debug_location(&ctx, loc);
-    }
+    debug_info_init!(env, parent);
 
     // Add args to scope
     let mut it = parent.get_param_iter();

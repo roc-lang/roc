@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
+use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
@@ -45,6 +46,18 @@ pub fn get_array_type<'ctx>(bt_enum: &BasicTypeEnum<'ctx>, size: u32) -> ArrayTy
         PointerType(typ) => typ.array_type(size),
         StructType(typ) => typ.array_type(size),
         VectorType(typ) => typ.array_type(size),
+    }
+}
+
+/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
+pub fn as_const_zero<'ctx>(bt_enum: &BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    match bt_enum {
+        ArrayType(typ) => typ.const_zero().into(),
+        IntType(typ) => typ.const_zero().into(),
+        FloatType(typ) => typ.const_zero().into(),
+        PointerType(typ) => typ.const_zero().into(),
+        StructType(typ) => typ.const_zero().into(),
+        VectorType(typ) => typ.const_zero().into(),
     }
 }
 
@@ -185,7 +198,7 @@ pub fn basic_type_from_builtin<'ctx>(
         Float64 => context.f64_type().as_basic_type_enum(),
         Float32 => context.f32_type().as_basic_type_enum(),
         Float16 => context.f16_type().as_basic_type_enum(),
-        Dict(_, _) | EmptyDict => collection(context, ptr_bytes).into(),
+        Dict(_, _) | EmptyDict => dict(context, ptr_bytes).into(),
         Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
         List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
         EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
@@ -258,6 +271,20 @@ pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
     let u8_ptr = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
     ctx.struct_type(&[u8_ptr.into(), usize_type.into()], false)
+}
+
+pub fn dict(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
+    let usize_type = ptr_int(ctx, ptr_bytes);
+    let u8_ptr = ctx.i8_type().ptr_type(AddressSpace::Generic);
+
+    ctx.struct_type(
+        &[u8_ptr.into(), usize_type.into(), usize_type.into()],
+        false,
+    )
+}
+
+pub fn dict_ptr(ctx: &Context, ptr_bytes: u32) -> PointerType<'_> {
+    dict(ctx, ptr_bytes).ptr_type(AddressSpace::Generic)
 }
 
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {

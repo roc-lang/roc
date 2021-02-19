@@ -741,7 +741,21 @@ define_builtins! {
         11 DEC: "#dec" // internal function that increments the refcount
         12 ARG_CLOSURE: "#arg_closure" // symbol used to store the closure record
         13 LIST_EQ: "#list_eq" // internal function that checks list equality
-        14 GENERIC_HASH: "#generic_hash" // internal function that checks list equality
+
+        14 GENERIC_HASH: "#generic_hash" // hash of arbitrary layouts
+        15 GENERIC_HASH_REF: "#generic_hash_by_ref" // hash of arbitrary layouts, passed as an opaque pointer
+
+        16 GENERIC_EQ_REF: "#generic_eq_by_ref" // equality of arbitrary layouts, passed as an opaque pointer
+        17 GENERIC_RC_REF: "#generic_rc_by_ref" // refcount of arbitrary layouts, passed as an opaque pointer
+
+        18 GENERIC_EQ: "#generic_eq" // internal function that checks generic equality
+
+        // a user-defined function that we need to capture in a closure
+        // see e.g. Set.walk
+        19 USER_FUNCTION: "#user_function"
+
+        // A caller (wrapper) that we pass to zig for it to be able to call Roc functions
+        20 ZIG_FUNCTION_CALLER: "#zig_function_caller"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -858,6 +872,7 @@ define_builtins! {
         8 STR_STARTS_WITH: "startsWith"
         9 STR_ENDS_WITH: "endsWith"
         10 STR_FROM_INT: "fromInt"
+        11 STR_FROM_FLOAT: "fromFloat"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -881,10 +896,15 @@ define_builtins! {
         18 LIST_SUM: "sum"
         19 LIST_WALK: "walk"
         20 LIST_LAST: "last"
+        21 LIST_KEEP_OKS: "keepOks"
+        22 LIST_KEEP_ERRS: "keepErrs"
+        23 LIST_MAP_WITH_INDEX: "mapWithIndex"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
+        2 RESULT_MAP_ERR: "mapErr"
+        3 RESULT_WITH_DEFAULT: "withDefault"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
@@ -898,17 +918,35 @@ define_builtins! {
         // This should not be exposed to users, its for testing the
         // hash function ONLY
         7 DICT_TEST_HASH: "hashTestOnly"
+
+        8 DICT_REMOVE: "remove"
+        9 DICT_CONTAINS: "contains"
+        10 DICT_KEYS: "keys"
+        11 DICT_VALUES: "values"
+
+        12 DICT_UNION: "union"
+        13 DICT_INTERSECTION: "intersection"
+        14 DICT_DIFFERENCE: "difference"
+
+        15 DICT_WALK: "walk"
+
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
         1 SET_AT_SET: "@Set" // the Set.@Set private tag
         2 SET_EMPTY: "empty"
         3 SET_SINGLETON: "singleton"
-        4 SET_UNION: "union"
-        5 SET_FOLDL: "foldl"
-        6 SET_INSERT: "insert"
-        7 SET_REMOVE: "remove"
-        8 SET_DIFF: "diff"
+        4 SET_LEN: "len"
+        5 SET_INSERT: "insert"
+        6 SET_REMOVE: "remove"
+        7 SET_UNION: "union"
+        8 SET_DIFFERENCE: "difference"
+        9 SET_INTERSECTION: "intersection"
+        10 SET_TO_LIST: "toList"
+        11 SET_FROM_LIST: "fromList"
+        12 SET_WALK: "walk"
+        13 SET_WALK_USER_FUNCTION: "#walk_user_function"
+        14 SET_CONTAINS: "contains"
     }
 
     num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)

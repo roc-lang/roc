@@ -302,6 +302,23 @@ fn strFromIntHelp(allocator: *Allocator, comptime T: type, int: T) RocStr {
     return RocStr.init(allocator, &buf, result.len);
 }
 
+// Str.fromFloat
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
+pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
+    // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
+    // hopefully we can use zig instead of snprintf in the future when we upgrade
+    const c = @cImport({
+        // See https://github.com/ziglang/zig/issues/515
+        @cDefine("_NO_CRT_STDIO_INLINE", "1");
+        @cInclude("stdio.h");
+    });
+    var buf: [100]u8 = undefined;
+
+    const result = c.snprintf(&buf, 100, "%f", float);
+
+    return RocStr.init(std.heap.c_allocator, &buf, @intCast(usize, result));
+}
+
 // Str.split
 // When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
 pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {

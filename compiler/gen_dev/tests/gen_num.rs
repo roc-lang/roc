@@ -139,32 +139,93 @@ mod gen_num {
         assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
     }
 
-    /*
     #[test]
-    fn f64_sqrt() {
-        // FIXME this works with normal types, but fails when checking uniqueness types
+    fn gen_int_eq() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    when Num.sqrt 100 is
-                        Ok val -> val
-                        Err _ -> -1
+                    4 == 4
                 "#
             ),
-            10.0,
-            f64
+            true,
+            bool
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    3 == 4
+                "#
+            ),
+            false,
+            bool
         );
     }
 
     #[test]
-    fn f64_round_old() {
-        assert_evals_to!("Num.round 3.6", 4, i64);
+    fn gen_basic_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
+                    always42 = \_ -> 42
+
+                    always42 5
+                "#
+            ),
+            42,
+            i64
+        );
     }
 
     #[test]
-    fn f64_abs() {
-        assert_evals_to!("Num.abs -4.7", 4.7, f64);
-        assert_evals_to!("Num.abs 5.8", 5.8, f64);
+    fn gen_wrap_add_nums() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    add2 = \num1, num2 -> num1 + num2
+
+                    add2 4 5
+                "#
+            ),
+            9,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_wrap_add_nums_force_stack() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    add9 = \num1, num2, num3, num4, num5, num6, num7, num8, num9 -> num1 + num2 + num3 + num4 + num5 + num6 + num7 + num8 + num9
+
+                    add9 1 2 3 4 5 6 7 8 9
+                "#
+            ),
+            45,
+            i64
+        );
+    }
+
+    #[test]
+    fn pow_int() {
+        assert_evals_to!("Num.powInt 2 3", 8, i64);
+    }
+
+    #[test]
+    fn acos() {
+        assert_evals_to!("Num.acos 0.5", 1.0471975511965979, f64);
+    }
+
+    #[test]
+    fn asin() {
+        assert_evals_to!("Num.asin 0.5", 0.5235987755982989, f64);
+    }
+
+    #[test]
+    fn atan() {
+        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
     }
 
     #[test]
@@ -209,6 +270,55 @@ mod gen_num {
     }
 
     #[test]
+    fn gen_fib_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    fib = \n ->
+                        if n == 0 then
+                            0
+                        else if n == 1 then
+                            1
+                        else
+                            (fib (n - 1)) + (fib (n - 2))
+
+                    fib 10
+                "#
+            ),
+            55,
+            i64
+        );
+    }
+
+    /*
+    #[test]
+    fn f64_sqrt() {
+        // FIXME this works with normal types, but fails when checking uniqueness types
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.sqrt 100 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            10.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn f64_round_old() {
+        assert_evals_to!("Num.round 3.6", 4, i64);
+    }
+
+    #[test]
+    fn f64_abs() {
+        assert_evals_to!("Num.abs -4.7", 4.7, f64);
+        assert_evals_to!("Num.abs 5.8", 5.8, f64);
+    }
+
+    #[test]
     fn gen_float_eq() {
         assert_evals_to!(
             indoc!(
@@ -218,21 +328,6 @@ mod gen_num {
             ),
             true,
             bool
-        );
-    }
-
-    #[test]
-    fn gen_wrap_add_nums() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    add2 = \num1, num2 -> num1 + num2
-
-                    add2 4 5
-                "#
-            ),
-            9,
-            i64
         );
     }
 
@@ -251,20 +346,7 @@ mod gen_num {
             f64
         );
     }
-    */
-    #[test]
-    fn gen_int_eq() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    4 == 4
-                "#
-            ),
-            true,
-            bool
-        );
-    }
-    /*
+
     #[test]
     fn gen_int_neq() {
         assert_evals_to!(
@@ -630,21 +712,6 @@ mod gen_num {
         );
     }
 
-    #[test]
-    fn gen_basic_fn() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    always42 : Num.Num Num.Integer -> Num.Num Num.Integer
-                    always42 = \_ -> 42
-
-                    always42 5
-                "#
-            ),
-            42,
-            i64
-        );
-    }
 
     #[test]
     fn int_to_float() {
@@ -688,16 +755,6 @@ mod gen_num {
     #[test]
     fn floor() {
         assert_evals_to!("Num.floor 1.9", 1, i64);
-    }
-
-    #[test]
-    fn pow_int() {
-        assert_evals_to!("Num.powInt 2 3", 8, i64);
-    }
-
-    #[test]
-    fn atan() {
-        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
     }
 
     // #[test]
