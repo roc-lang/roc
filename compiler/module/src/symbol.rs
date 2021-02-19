@@ -912,23 +912,24 @@ define_builtins! {
         2 DICT_EMPTY: "empty"
         3 DICT_SINGLETON: "singleton"
         4 DICT_GET: "get"
-        5 DICT_INSERT: "insert"
-        6 DICT_LEN: "len"
+        5 DICT_GET_RESULT: "#get_result" // symbol used in the definition of Dict.get
+        6 DICT_WALK: "walk"
+        7 DICT_INSERT: "insert"
+        8 DICT_LEN: "len"
 
         // This should not be exposed to users, its for testing the
         // hash function ONLY
-        7 DICT_TEST_HASH: "hashTestOnly"
+        9 DICT_TEST_HASH: "hashTestOnly"
 
-        8 DICT_REMOVE: "remove"
-        9 DICT_CONTAINS: "contains"
-        10 DICT_KEYS: "keys"
-        11 DICT_VALUES: "values"
+        10 DICT_REMOVE: "remove"
+        11 DICT_CONTAINS: "contains"
+        12 DICT_KEYS: "keys"
+        13 DICT_VALUES: "values"
 
-        12 DICT_UNION: "union"
-        13 DICT_INTERSECTION: "intersection"
-        14 DICT_DIFFERENCE: "difference"
+        14 DICT_UNION: "union"
+        15 DICT_INTERSECTION: "intersection"
+        16 DICT_DIFFERENCE: "difference"
 
-        15 DICT_WALK: "walk"
 
     }
     7 SET: "Set" => {
