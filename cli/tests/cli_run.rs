@@ -236,7 +236,7 @@ mod cli_run {
             "astar-tests",
             &[],
             "True\n",
-            false,
+            true,
         );
     }
 

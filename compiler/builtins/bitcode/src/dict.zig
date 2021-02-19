@@ -672,6 +672,7 @@ pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width
                         inc_key(key);
                         inc_value(value);
 
+                        // we know the newly added key is not a duplicate, so the `dec`s are unreachable
                         const dec_key = doNothing;
                         const dec_value = doNothing;
 
