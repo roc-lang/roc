@@ -1,6 +1,6 @@
 use super::keyboard_input;
 use crate::editor::colors::BG_COL;
-use crate::editor::colors::CODE_COLOR;
+use crate::editor::colors::CODE_COL;
 use crate::editor::ed_error::{print_err, print_ui_err};
 use crate::editor::mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view};
 use crate::graphics::colors::to_wgpu_color;
@@ -12,7 +12,7 @@ use crate::graphics::{
     lowlevel::pipelines, style::CODE_FONT_SIZE, style::CODE_TXT_XY,
 };
 use crate::ui::{
-    colors::TXT_COLOR, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult,
+    colors::TXT_COL, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult,
 };
 //use crate::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
@@ -402,7 +402,7 @@ fn queue_editor_text(
     let code_text = Text {
         position: code_coords,
         area_bounds,
-        color: CODE_COLOR.into(),
+        color: CODE_COL.into(),
         text: editor_lines,
         size: CODE_FONT_SIZE,
         ..Default::default()
@@ -414,7 +414,7 @@ fn queue_editor_text(
     let caret_pos_label = Text {
         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
         area_bounds,
-        color: TXT_COLOR.into(),
+        color: TXT_COL.into(),
         text,
         size: 25.0,
         ..Default::default()
@@ -436,7 +436,7 @@ fn _queue_no_file_text(
     let code_text = Text {
         position: text_coords,
         area_bounds,
-        color: CODE_COLOR.into(),
+        color: CODE_COL.into(),
         text,
         size: CODE_FONT_SIZE,
         ..Default::default()

@@ -1,4 +1,4 @@
-use crate::editor::colors::CODE_COLOR;
+use crate::editor::colors::CODE_COL;
 use crate::{
     graphics::{
         primitives::text::{queue_code_text_draw, Text},
@@ -24,7 +24,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -36,7 +36,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -48,7 +48,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -60,7 +60,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -72,7 +72,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -84,7 +84,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(name),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -103,7 +103,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: text.as_str(),
                 size: CODE_FONT_SIZE,
                 ..Default::default()

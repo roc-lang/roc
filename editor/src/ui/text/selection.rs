@@ -83,7 +83,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords: (sel_rect_x, start_y).into(),
             width,
             height,
-            color: colors::SELECT_COLOR,
+            color: colors::SELECT_COL,
         });
 
         Ok(all_rects)
@@ -99,7 +99,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords: (sel_rect_x, start_y).into(),
             width,
             height,
-            color: colors::SELECT_COLOR,
+            color: colors::SELECT_COL,
         });
 
         //middle lines
@@ -117,7 +117,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords: (line_start_x, sel_rect_y).into(),
                 width,
                 height,
-                color: colors::SELECT_COLOR,
+                color: colors::SELECT_COL,
             });
         }
 
@@ -132,7 +132,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords: (line_start_x, sel_rect_y).into(),
                 width,
                 height,
-                color: colors::SELECT_COLOR,
+                color: colors::SELECT_COL,
             });
         }
 

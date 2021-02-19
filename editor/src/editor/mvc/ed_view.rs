@@ -1,6 +1,6 @@
 use super::ed_model::EdModel;
 use crate::graphics::primitives::rect::Rect;
-use crate::ui::colors::CARET_COLOR;
+use crate::ui::colors::CARET_COL;
 use crate::ui::text::{selection::create_selection_rects, text_pos::TextPos};
 use crate::ui::ui_error::MissingGlyphDims;
 use crate::ui::ui_error::UIResult;
@@ -43,6 +43,6 @@ fn make_caret_rect(caret_pos: TextPos, glyph_dim_rect: &Rect) -> Rect {
         top_left_coords: (caret_x, caret_y).into(),
         height: glyph_dim_rect.height,
         width: 2.0,
-        color: CARET_COLOR,
+        color: CARET_COL,
     }
 }
