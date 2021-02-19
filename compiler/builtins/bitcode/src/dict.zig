@@ -5,9 +5,10 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
+const utils = @import("utils.zig");
+const RocList = @import("list.zig").RocList;
+
 const INITIAL_SEED = 0xc70f6907;
-const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
-const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 
 const InPlace = packed enum(u8) {
     InPlace,
@@ -91,6 +92,23 @@ const Alignment = packed enum(u8) {
         }
     }
 };
+
+pub fn decref(
+    allocator: *Allocator,
+    alignment: Alignment,
+    bytes_or_null: ?[*]u8,
+    data_bytes: usize,
+) void {
+    return utils.decref(allocator, alignment.toUsize(), bytes_or_null, data_bytes);
+}
+
+pub fn allocateWithRefcount(
+    allocator: *Allocator,
+    alignment: Alignment,
+    data_bytes: usize,
+) [*]u8 {
+    return utils.allocateWithRefcount(allocator, alignment.toUsize(), data_bytes);
+}
 
 pub const RocDict = extern struct {
     dict_bytes: ?[*]u8,
@@ -211,7 +229,7 @@ pub const RocDict = extern struct {
 
         // otherwise, check if the refcount is one
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.dict_bytes));
-        return (ptr - 1)[0] == REFCOUNT_ONE;
+        return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
     pub fn capacity(self: RocDict) usize {
@@ -228,8 +246,6 @@ pub const RocDict = extern struct {
         }
 
         // unfortunately, we have to clone
-
-        const in_place = InPlace.Clone;
         var new_dict = RocDict.allocate(allocator, self.number_of_levels, self.dict_entries_len, alignment, key_width, value_width);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, self.dict_bytes);
@@ -260,6 +276,10 @@ pub const RocDict = extern struct {
     }
 
     fn setKey(self: *RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize, data: Opaque) void {
+        if (key_width == 0) {
+            return;
+        }
+
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (index * key_width);
@@ -289,6 +309,10 @@ pub const RocDict = extern struct {
     }
 
     fn setValue(self: *RocDict, index: usize, alignment: Alignment, key_width: usize, value_width: usize, data: Opaque) void {
+        if (value_width == 0) {
+            return;
+        }
+
         const offset = blk: {
             if (alignment.keyFirst()) {
                 break :blk (self.capacity() * key_width) + (index * value_width);
@@ -518,11 +542,6 @@ pub fn elementsRc(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 }
 
-pub const RocList = extern struct {
-    bytes: ?[*]u8,
-    length: usize,
-};
-
 pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_key: Inc, output: *RocList) callconv(.C) void {
     const size = dict.capacity();
 
@@ -538,7 +557,7 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
     }
 
     if (length == 0) {
-        output.* = RocList{ .bytes = null, .length = 0 };
+        output.* = RocList.empty();
         return;
     }
 
@@ -587,7 +606,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 
     if (length == 0) {
-        output.* = RocList{ .bytes = null, .length = 0 };
+        output.* = RocList.empty();
         return;
     }
 
@@ -621,82 +640,131 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     output.* = RocList{ .bytes = ptr, .length = length };
 }
 
-fn decref(
-    allocator: *Allocator,
-    alignment: Alignment,
-    bytes_or_null: ?[*]u8,
-    data_bytes: usize,
-) void {
-    var bytes = bytes_or_null orelse return;
+fn doNothing(ptr: Opaque) callconv(.C) void {
+    return;
+}
 
-    const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));
+pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, inc_value: Inc, output: *RocDict) callconv(.C) void {
+    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
 
-    const refcount = (usizes - 1)[0];
-    const refcount_isize = @bitCast(isize, refcount);
+    var i: usize = 0;
+    while (i < dict2.capacity()) : (i += 1) {
+        switch (dict2.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict2.getKey(i, alignment, key_width, value_width);
 
-    switch (alignment.toUsize()) {
-        8 => {
-            if (refcount == REFCOUNT_ONE) {
-                allocator.free((bytes - 8)[0 .. 8 + data_bytes]);
-            } else if (refcount_isize < 0) {
-                (usizes - 1)[0] = refcount + 1;
-            }
-        },
-        16 => {
-            if (refcount == REFCOUNT_ONE) {
-                allocator.free((bytes - 16)[0 .. 16 + data_bytes]);
-            } else if (refcount_isize < 0) {
-                (usizes - 1)[0] = refcount + 1;
-            }
-        },
-        else => unreachable,
+                switch (output.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
+                    MaybeIndex.not_found => {
+                        const value = dict2.getValue(i, alignment, key_width, value_width);
+                        inc_value(value);
+
+                        // we need an extra RC token for the key
+                        inc_key(key);
+
+                        const dec_key = doNothing;
+                        const dec_value = doNothing;
+
+                        dictInsert(output.*, alignment, key, key_width, value, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+                    },
+                    MaybeIndex.index => |_| {
+                        // the key is already in the output dict
+                        continue;
+                    },
+                }
+            },
+            else => {},
+        }
     }
 }
 
-fn allocateWithRefcount(
-    allocator: *Allocator,
-    alignment: Alignment,
-    data_bytes: usize,
-) [*]u8 {
-    comptime const result_in_place = InPlace.Clone;
+pub fn dictIntersection(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Inc, dec_value: Inc, output: *RocDict) callconv(.C) void {
+    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
 
-    switch (alignment.toUsize()) {
-        8 => {
-            const length = @sizeOf(usize) + data_bytes;
+    var i: usize = 0;
+    const size = dict1.capacity();
+    while (i < size) : (i += 1) {
+        switch (output.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict1.getKey(i, alignment, key_width, value_width);
 
-            var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
-
-            var as_usize_array = @ptrCast([*]usize, new_bytes);
-            if (result_in_place == InPlace.InPlace) {
-                as_usize_array[0] = @intCast(usize, number_of_slots);
-            } else {
-                as_usize_array[0] = REFCOUNT_ONE;
-            }
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + @sizeOf(usize);
-
-            return first_slot;
-        },
-        16 => {
-            const length = 2 * @sizeOf(usize) + data_bytes;
-
-            var new_bytes: []align(16) u8 = allocator.alignedAlloc(u8, 16, length) catch unreachable;
-
-            var as_usize_array = @ptrCast([*]usize, new_bytes);
-            if (result_in_place == InPlace.InPlace) {
-                as_usize_array[0] = 0;
-                as_usize_array[1] = @intCast(usize, number_of_slots);
-            } else {
-                as_usize_array[0] = 0;
-                as_usize_array[1] = REFCOUNT_ONE;
-            }
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + 2 * @sizeOf(usize);
-
-            return first_slot;
-        },
-        else => unreachable,
+                switch (dict2.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
+                    MaybeIndex.not_found => {
+                        dictRemove(output.*, alignment, key, key_width, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+                    },
+                    MaybeIndex.index => |_| {
+                        // keep this key/value
+                        continue;
+                    },
+                }
+            },
+            else => {},
+        }
     }
+}
+
+pub fn dictDifference(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Inc, dec_value: Inc, output: *RocDict) callconv(.C) void {
+    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+
+    var i: usize = 0;
+    const size = dict1.capacity();
+    while (i < size) : (i += 1) {
+        switch (output.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict1.getKey(i, alignment, key_width, value_width);
+
+                switch (dict2.findIndex(alignment, key, key_width, value_width, hash_fn, is_eq)) {
+                    MaybeIndex.not_found => {
+                        // keep this key/value
+                        continue;
+                    },
+                    MaybeIndex.index => |_| {
+                        dictRemove(output.*, alignment, key, key_width, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+                    },
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, output: *RocDict) callconv(.C) void {
+    output.* = RocDict.empty();
+
+    var ptr = @ptrCast([*]u8, list.bytes);
+
+    const dec_value = doNothing;
+    const value = null;
+
+    const size = list.length;
+    var i: usize = 0;
+    while (i < size) : (i += 1) {
+        const key = ptr + i * key_width;
+        dictInsert(output.*, alignment, key, key_width, value, value_width, hash_fn, is_eq, dec_key, dec_value, output);
+    }
+
+    // NOTE: decref checks for the empty case
+    const data_bytes = size * key_width;
+    decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+}
+
+const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
+    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+
+    var i: usize = 0;
+    const size = dict.capacity();
+    while (i < size) : (i += 1) {
+        switch (dict.getSlot(i, key_width, value_width)) {
+            Slot.Filled => {
+                const key = dict.getKey(i, alignment, key_width, value_width);
+                const value = dict.getValue(i, alignment, key_width, value_width);
+
+                stepper_caller(stepper, key, value, output, output);
+            },
+            else => {},
+        }
+    }
+
+    const data_bytes = dict.capacity() * slotSize(key_width, value_width);
+    decref(std.heap.c_allocator, alignment, dict.dict_bytes, data_bytes);
 }

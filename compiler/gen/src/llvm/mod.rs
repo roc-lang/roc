@@ -1,3 +1,4 @@
+pub mod bitcode;
 pub mod build;
 pub mod build_dict;
 pub mod build_hash;

@@ -1,10 +1,13 @@
 use crate::debug_info_init;
+use crate::llvm::bitcode::{
+    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, build_transform_caller,
+    call_bitcode_fn, call_void_bitcode_fn,
+};
 use crate::llvm::build::{
-    call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, load_symbol, load_symbol_and_layout,
-    set_name, Env, Scope,
+    complex_bitcast, load_symbol, load_symbol_and_layout, set_name, Env, Scope,
 };
 use crate::llvm::convert::{self, as_const_zero, basic_type_from_layout, collection};
-use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout, Mode};
+use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, StructValue};
@@ -128,8 +131,8 @@ pub fn dict_insert<'a, 'ctx, 'env>(
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
 
-    let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Dec);
-    let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Dec);
+    let dec_key_fn = build_dec_wrapper(env, layout_ids, key_layout);
+    let dec_value_fn = build_dec_wrapper(env, layout_ids, value_layout);
 
     call_void_bitcode_fn(
         env,
@@ -198,8 +201,8 @@ pub fn dict_remove<'a, 'ctx, 'env>(
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
 
-    let dec_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Dec);
-    let dec_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Dec);
+    let dec_key_fn = build_dec_wrapper(env, layout_ids, key_layout);
+    let dec_value_fn = build_dec_wrapper(env, layout_ids, value_layout);
 
     call_void_bitcode_fn(
         env,
@@ -315,7 +318,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
 
-    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Inc(1));
+    let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
     // { flag: bool, value: *const u8 }
     let result = call_bitcode_fn(
@@ -422,6 +425,7 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
     let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
 
+    use crate::llvm::bitcode::build_rc_wrapper;
     let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, rc_operation);
     let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, rc_operation);
 
@@ -450,7 +454,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-    let zig_list_type = env.module.get_struct_type("dict.RocList").unwrap();
+    let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     env.builder
@@ -467,7 +471,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
     let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
 
-    let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, Mode::Inc(1));
+    let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
 
     let list_ptr = builder.build_alloca(zig_list_type, "list_ptr");
 
@@ -497,6 +501,272 @@ pub fn dict_keys<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn dict_union<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict1: BasicValueEnum<'ctx>,
+    dict2: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+
+    let dict1_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    let dict2_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+
+    env.builder.build_store(
+        dict1_ptr,
+        struct_to_zig_dict(env, dict1.into_struct_value()),
+    );
+
+    env.builder.build_store(
+        dict2_ptr,
+        struct_to_zig_dict(env, dict2.into_struct_value()),
+    );
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
+    let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
+
+    let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
+    let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
+
+    let output_ptr = builder.build_alloca(zig_dict_type, "output_ptr");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            dict1_ptr.into(),
+            dict2_ptr.into(),
+            alignment_iv.into(),
+            key_width.into(),
+            value_width.into(),
+            hash_fn.as_global_value().as_pointer_value().into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+            inc_key_fn.as_global_value().as_pointer_value().into(),
+            inc_value_fn.as_global_value().as_pointer_value().into(),
+            output_ptr.into(),
+        ],
+        &bitcode::DICT_UNION,
+    );
+
+    let output_ptr = env
+        .builder
+        .build_bitcast(
+            output_ptr,
+            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            "to_roc_dict",
+        )
+        .into_pointer_value();
+
+    env.builder.build_load(output_ptr, "load_output_ptr")
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_difference<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict1: BasicValueEnum<'ctx>,
+    dict2: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    dict_intersect_or_difference(
+        env,
+        layout_ids,
+        dict1,
+        dict2,
+        key_layout,
+        value_layout,
+        &bitcode::DICT_DIFFERENCE,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_intersection<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict1: BasicValueEnum<'ctx>,
+    dict2: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    dict_intersect_or_difference(
+        env,
+        layout_ids,
+        dict1,
+        dict2,
+        key_layout,
+        value_layout,
+        &bitcode::DICT_INTERSECTION,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dict_intersect_or_difference<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict1: BasicValueEnum<'ctx>,
+    dict2: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    op: &str,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+
+    let dict1_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    let dict2_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+
+    env.builder.build_store(
+        dict1_ptr,
+        struct_to_zig_dict(env, dict1.into_struct_value()),
+    );
+
+    env.builder.build_store(
+        dict2_ptr,
+        struct_to_zig_dict(env, dict2.into_struct_value()),
+    );
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
+    let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
+
+    let dec_key_fn = build_dec_wrapper(env, layout_ids, key_layout);
+    let dec_value_fn = build_dec_wrapper(env, layout_ids, value_layout);
+
+    let output_ptr = builder.build_alloca(zig_dict_type, "output_ptr");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            dict1_ptr.into(),
+            dict2_ptr.into(),
+            alignment_iv.into(),
+            key_width.into(),
+            value_width.into(),
+            hash_fn.as_global_value().as_pointer_value().into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+            dec_key_fn.as_global_value().as_pointer_value().into(),
+            dec_value_fn.as_global_value().as_pointer_value().into(),
+            output_ptr.into(),
+        ],
+        op,
+    );
+
+    let output_ptr = env
+        .builder
+        .build_bitcast(
+            output_ptr,
+            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            "to_roc_dict",
+        )
+        .into_pointer_value();
+
+    env.builder.build_load(output_ptr, "load_output_ptr")
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dict_walk<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    dict: BasicValueEnum<'ctx>,
+    stepper: BasicValueEnum<'ctx>,
+    accum: BasicValueEnum<'ctx>,
+    stepper_layout: &Layout<'a>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    accum_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+
+    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
+    env.builder
+        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+
+    let stepper_ptr = builder.build_alloca(stepper.get_type(), "stepper_ptr");
+    env.builder.build_store(stepper_ptr, stepper);
+
+    let stepper_caller = build_transform_caller(
+        env,
+        layout_ids,
+        stepper_layout,
+        &[
+            key_layout.clone(),
+            value_layout.clone(),
+            accum_layout.clone(),
+        ],
+    )
+    .as_global_value()
+    .as_pointer_value();
+
+    let accum_bt = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes);
+    let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
+    env.builder.build_store(accum_ptr, accum);
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env
+        .ptr_int()
+        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let accum_width = env
+        .ptr_int()
+        .const_int(accum_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let output_ptr = builder.build_alloca(accum_bt, "output_ptr");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            dict_ptr.into(),
+            env.builder.build_bitcast(stepper_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            env.builder.build_bitcast(accum_ptr, u8_ptr, "to_opaque"),
+            alignment_iv.into(),
+            key_width.into(),
+            value_width.into(),
+            accum_width.into(),
+            env.builder.build_bitcast(output_ptr, u8_ptr, "to_opaque"),
+        ],
+        &bitcode::DICT_WALK,
+    );
+
+    env.builder.build_load(output_ptr, "load_output_ptr")
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn dict_values<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -507,7 +777,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-    let zig_list_type = env.module.get_struct_type("dict.RocList").unwrap();
+    let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     env.builder
@@ -524,7 +794,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
     let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
 
-    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, Mode::Inc(1));
+    let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
     let list_ptr = builder.build_alloca(zig_list_type, "list_ptr");
 
@@ -551,6 +821,68 @@ pub fn dict_values<'a, 'ctx, 'env>(
         .into_pointer_value();
 
     env.builder.build_load(list_ptr, "load_keys_list")
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn set_from_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    list: BasicValueEnum<'ctx>,
+    key_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
+
+    let list_alloca = builder.build_alloca(list.get_type(), "list_alloca");
+    let list_ptr = env.builder.build_bitcast(
+        list_alloca,
+        env.context.i128_type().ptr_type(AddressSpace::Generic),
+        "to_zig_list",
+    );
+
+    env.builder.build_store(list_alloca, list);
+
+    let key_width = env
+        .ptr_int()
+        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let value_width = env.ptr_int().const_zero();
+
+    let result_alloca =
+        builder.build_alloca(convert::dict(env.context, env.ptr_bytes), "result_alloca");
+    let result_ptr = builder.build_bitcast(
+        result_alloca,
+        zig_dict_type.ptr_type(AddressSpace::Generic),
+        "to_zig_dict",
+    );
+
+    let alignment =
+        Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.ptr_bytes);
+    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+
+    let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
+    let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
+
+    let dec_key_fn = build_dec_wrapper(env, layout_ids, key_layout);
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder
+                .build_load(list_ptr.into_pointer_value(), "as_i128"),
+            alignment_iv.into(),
+            key_width.into(),
+            value_width.into(),
+            hash_fn.as_global_value().as_pointer_value().into(),
+            eq_fn.as_global_value().as_pointer_value().into(),
+            dec_key_fn.as_global_value().as_pointer_value().into(),
+            result_ptr,
+        ],
+        &bitcode::SET_FROM_LIST,
+    );
+
+    env.builder.build_load(result_alloca, "load_result")
 }
 
 fn build_hash_wrapper<'a, 'ctx, 'env>(
@@ -610,158 +942,6 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
                 crate::llvm::build_hash::generic_hash(env, layout_ids, seed_arg, val_arg, layout);
 
             env.builder.build_return(Some(&result));
-
-            function_value
-        }
-    };
-
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
-
-    function_value
-}
-
-fn build_eq_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
-) -> FunctionValue<'ctx> {
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let symbol = Symbol::GENERIC_EQ_REF;
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
-
-    let function_value = match env.module.get_function(fn_name.as_str()) {
-        Some(function_value) => function_value,
-        None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-            let function_value = crate::llvm::refcounting::build_header_help(
-                env,
-                &fn_name,
-                env.context.bool_type().into(),
-                &[arg_type.into(), arg_type.into()],
-            );
-
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
-
-            let entry = env.context.append_basic_block(function_value, "entry");
-            env.builder.position_at_end(entry);
-
-            debug_info_init!(env, function_value);
-
-            let mut it = function_value.get_param_iter();
-            let value_ptr1 = it.next().unwrap().into_pointer_value();
-            let value_ptr2 = it.next().unwrap().into_pointer_value();
-
-            set_name(value_ptr1.into(), Symbol::ARG_1.ident_string(&env.interns));
-            set_name(value_ptr2.into(), Symbol::ARG_2.ident_string(&env.interns));
-
-            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic);
-
-            let value_cast1 = env
-                .builder
-                .build_bitcast(value_ptr1, value_type, "load_opaque")
-                .into_pointer_value();
-
-            let value_cast2 = env
-                .builder
-                .build_bitcast(value_ptr2, value_type, "load_opaque")
-                .into_pointer_value();
-
-            let value1 = env.builder.build_load(value_cast1, "load_opaque");
-            let value2 = env.builder.build_load(value_cast2, "load_opaque");
-
-            let result =
-                crate::llvm::compare::generic_eq(env, layout_ids, value1, value2, layout, layout);
-
-            env.builder.build_return(Some(&result));
-
-            function_value
-        }
-    };
-
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
-
-    function_value
-}
-
-fn build_rc_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
-    rc_operation: Mode,
-) -> FunctionValue<'ctx> {
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let symbol = Symbol::GENERIC_RC_REF;
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
-
-    let fn_name = match rc_operation {
-        Mode::Inc(n) => format!("{}_inc_{}", fn_name, n),
-        Mode::Dec => format!("{}_dec", fn_name),
-    };
-
-    let function_value = match env.module.get_function(fn_name.as_str()) {
-        Some(function_value) => function_value,
-        None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-            let function_value = crate::llvm::refcounting::build_header_help(
-                env,
-                &fn_name,
-                env.context.void_type().into(),
-                &[arg_type.into()],
-            );
-
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
-
-            let entry = env.context.append_basic_block(function_value, "entry");
-            env.builder.position_at_end(entry);
-
-            debug_info_init!(env, function_value);
-
-            let mut it = function_value.get_param_iter();
-            let value_ptr = it.next().unwrap().into_pointer_value();
-
-            set_name(value_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
-
-            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic);
-
-            let value_cast = env
-                .builder
-                .build_bitcast(value_ptr, value_type, "load_opaque")
-                .into_pointer_value();
-
-            let value = env.builder.build_load(value_cast, "load_opaque");
-
-            match rc_operation {
-                Mode::Inc(n) => {
-                    increment_refcount_layout(env, function_value, layout_ids, n, value, layout);
-                }
-                Mode::Dec => {
-                    decrement_refcount_layout(env, function_value, layout_ids, value, layout);
-                }
-            }
-
-            env.builder.build_return(None);
 
             function_value
         }

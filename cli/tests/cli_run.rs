@@ -227,6 +227,20 @@ mod cli_run {
         );
     }
 
+    #[test]
+    #[ignore]
+    #[serial(astar)]
+    fn run_astar_optimized_1() {
+        check_output_with_stdin(
+            &example_file("benchmarks", "AStarTests.roc"),
+            "1",
+            "astar-tests",
+            &[],
+            "True\n",
+            false,
+        );
+    }
+
     #[ignore]
     #[test]
     #[serial(closure1)]

@@ -1,14 +1,17 @@
+use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build_dict::{
-    dict_contains, dict_empty, dict_get, dict_insert, dict_keys, dict_len, dict_remove, dict_values,
+    dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
+    dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
-    list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
+    list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
+    list_map_with_index, list_prepend, list_repeat, list_reverse, list_set, list_single, list_sum,
+    list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_int, str_join_with,
+    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_join_with,
     str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
@@ -35,8 +38,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
-    IntValue, PointerValue, StructValue,
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
+    PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -753,8 +756,8 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 }
                 non_ptr => {
                     panic!(
-                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                        non_ptr
+                        "Tried to call by pointer, but encountered a non-pointer: {:?} {:?} {:?}",
+                        name, non_ptr, full_layout
                     );
                 }
             };
@@ -1866,6 +1869,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     layout: Layout<'a>,
     function_value: Either<FunctionValue<'ctx>, PointerValue<'ctx>>,
     arguments: &[Symbol],
+    closure_argument: Option<BasicValueEnum<'ctx>>,
     pass: &'a roc_mono::ir::Stmt<'a>,
     fail: &'a roc_mono::ir::Stmt<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -1876,6 +1880,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     for arg in arguments.iter() {
         arg_vals.push(load_symbol(scope, arg));
     }
+    arg_vals.extend(closure_argument);
 
     let pass_block = context.append_basic_block(parent, "invoke_pass");
     let fail_block = context.append_basic_block(parent, "invoke_fail");
@@ -2035,6 +2040,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     layout.clone(),
                     function_value.into(),
                     call.arguments,
+                    None,
                     pass,
                     fail,
                 )
@@ -2042,28 +2048,57 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             CallType::ByPointer { name, .. } => {
                 let sub_expr = load_symbol(scope, &name);
 
-                let function_ptr = match sub_expr {
-                    BasicValueEnum::PointerValue(ptr) => ptr,
+                match sub_expr {
+                    BasicValueEnum::PointerValue(function_ptr) => {
+                        // basic call by pointer
+                        invoke_roc_function(
+                            env,
+                            layout_ids,
+                            scope,
+                            parent,
+                            *symbol,
+                            layout.clone(),
+                            function_ptr.into(),
+                            call.arguments,
+                            None,
+                            pass,
+                            fail,
+                        )
+                    }
+                    BasicValueEnum::StructValue(ptr_and_data) => {
+                        // this is a closure
+                        let builder = env.builder;
+
+                        let function_ptr = builder
+                            .build_extract_value(ptr_and_data, 0, "function_ptr")
+                            .unwrap()
+                            .into_pointer_value();
+
+                        let closure_data = builder
+                            .build_extract_value(ptr_and_data, 1, "closure_data")
+                            .unwrap();
+
+                        invoke_roc_function(
+                            env,
+                            layout_ids,
+                            scope,
+                            parent,
+                            *symbol,
+                            layout.clone(),
+                            function_ptr.into(),
+                            call.arguments,
+                            Some(closure_data),
+                            pass,
+                            fail,
+                        )
+                    }
                     non_ptr => {
                         panic!(
                             "Tried to call by pointer, but encountered a non-pointer: {:?}",
                             non_ptr
                         );
                     }
-                };
-
-                invoke_roc_function(
-                    env,
-                    layout_ids,
-                    scope,
-                    parent,
-                    *symbol,
-                    layout.clone(),
-                    function_ptr.into(),
-                    call.arguments,
-                    pass,
-                    fail,
-                )
+                }
             }
             CallType::Foreign {
                 ref foreign_symbol,
@@ -2229,9 +2264,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     if layout.is_refcounted() {
-                        let value_ptr = value.into_pointer_value();
-                        let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-                        refcount_ptr.decrement(env, layout);
+                        if value.is_pointer_value() {
+                            // BasicValueEnum::PointerValue(value_ptr) => {
+                            let value_ptr = value.into_pointer_value();
+                            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                            refcount_ptr.decrement(env, layout);
+                        } else {
+                            eprint!("we're likely leaking memory; see issue #985 for details");
+                        }
                     }
 
                     build_exp_stmt(env, layout_ids, scope, parent, cont)
@@ -3516,6 +3556,12 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_from_int(env, scope, args[0])
         }
+        StrFromFloat => {
+            // Str.fromFloat : Float * -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            str_from_float(env, scope, args[0])
+        }
         StrSplit => {
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
@@ -3601,18 +3647,29 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let inplace = get_inplace_from_layout(layout);
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_map(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMapWithIndex => {
+            // List.map : List before, (before -> after) -> List after
+            debug_assert_eq!(args.len(), 2);
 
-            list_map(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-            )
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_map_with_index(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListKeepIf => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -3622,36 +3679,79 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let inplace = get_inplace_from_layout(layout);
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_keep_if(env, layout_ids, func, func_layout, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListKeepOks => {
+            // List.keepOks : List before, (before -> Result after *) -> List after
+            debug_assert_eq!(args.len(), 2);
 
-            list_keep_if(
-                env,
-                layout_ids,
-                inplace,
-                parent,
-                func,
-                func_layout,
-                list,
-                list_layout,
-            )
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_oks(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
+        }
+        ListKeepErrs => {
+            // List.keepErrs : List before, (before -> Result * after) -> List after
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_errs(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let list = load_symbol(scope, &args[0]);
 
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_contains(
-                env,
-                layout_ids,
-                parent,
-                elem,
-                elem_layout,
-                list,
-                list_layout,
-            )
+            list_contains(env, layout_ids, elem, elem_layout, list)
         }
         ListWalk => {
             debug_assert_eq!(args.len(), 3);
@@ -3662,16 +3762,21 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            list_walk(
-                env,
-                parent,
-                list,
-                list_layout,
-                func,
-                func_layout,
-                default,
-                default_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk(
+                    env,
+                    layout_ids,
+                    parent,
+                    list,
+                    element_layout,
+                    func,
+                    func_layout,
+                    default,
+                    default_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListWalkBackwards => {
             // List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
@@ -3683,16 +3788,21 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            list_walk_backwards(
-                env,
-                parent,
-                list,
-                list_layout,
-                func,
-                func_layout,
-                default,
-                default_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_backwards(
+                    env,
+                    layout_ids,
+                    parent,
+                    list,
+                    element_layout,
+                    func,
+                    func_layout,
+                    default,
+                    default_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
         }
         ListSum => {
             debug_assert_eq!(args.len(), 1);
@@ -4066,7 +4176,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
                     // no elements, so `key` is not in here
-                    panic!("key type unknown")
+                    empty_list(env)
                 }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_keys(env, layout_ids, dict, key_layout, value_layout)
@@ -4082,10 +4192,100 @@ fn run_low_level<'a, 'ctx, 'env>(
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
                     // no elements, so `key` is not in here
-                    panic!("key type unknown")
+                    empty_list(env)
                 }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_values(env, layout_ids, dict, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictUnion => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictDifference => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictIntersection => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        DictWalk => {
+            debug_assert_eq!(args.len(), 3);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (stepper, stepper_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (accum, accum_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => dict_walk(
+                    env,
+                    layout_ids,
+                    dict,
+                    stepper,
+                    accum,
+                    stepper_layout,
+                    key_layout,
+                    value_layout,
+                    accum_layout,
+                ),
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        SetFromList => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => dict_empty(env, scope),
+                Layout::Builtin(Builtin::List(_, key_layout)) => {
+                    set_from_list(env, layout_ids, list, key_layout)
                 }
                 _ => unreachable!("invalid dict layout"),
             }
@@ -4410,49 +4610,6 @@ fn build_int_binop<'a, 'ctx, 'env>(
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
-}
-
-pub fn call_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Did not get return value from bitcode function {:?}",
-                fn_name
-            )
-        })
-}
-
-pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> InstructionValue<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
-        .try_as_basic_value()
-        .right()
-        .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
-}
-
-fn call_bitcode_fn_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> CallSiteValue<'ctx> {
-    let fn_val = env
-        .module
-        .get_function(fn_name)
-        .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
-
-    let call = env.builder.build_call(fn_val, args, "call_builtin");
-
-    call.set_call_convention(fn_val.get_call_conventions());
-    call
 }
 
 pub fn build_num_binop<'a, 'ctx, 'env>(
