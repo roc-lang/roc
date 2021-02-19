@@ -17,7 +17,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -5241,12 +5241,6 @@ fn store_pattern_help<'a>(
                         match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
                             StorePattern::Productive(new) => {
                                 is_productive = true;
-                                println!(
-                                    "Access  {:?}.{:?} {:?}",
-                                    tag_name.clone(),
-                                    outer_symbol,
-                                    index
-                                );
                                 stmt = new;
                                 // only if we bind one of its (sub)fields to a used name should we
                                 // extract the field
@@ -5948,7 +5942,8 @@ fn call_by_name<'a>(
                 debug_assert_eq!(
                     arg_layouts.len(),
                     field_symbols.len(),
-                    "see call_by_name for background (scroll down a bit)"
+                    "see call_by_name for background (scroll down a bit), function is {:?}",
+                    proc_name,
                 );
 
                 let call = self::Call {
@@ -5999,7 +5994,8 @@ fn call_by_name<'a>(
                         debug_assert_eq!(
                             arg_layouts.len(),
                             field_symbols.len(),
-                            "see call_by_name for background (scroll down a bit)"
+                            "see call_by_name for background (scroll down a bit), function is {:?}",
+                            proc_name,
                         );
 
                         let call = self::Call {
