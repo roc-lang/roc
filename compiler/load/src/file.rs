@@ -3496,6 +3496,7 @@ fn unpack_exposes_entries<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
