@@ -761,27 +761,34 @@ pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_
 
 const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, inc_key: Inc, inc_value: Inc, output: Opaque) callconv(.C) void {
-    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+    // allocate space to write the result of the stepper into
+    // experimentally aliasing the accum and output pointers is not a good idea
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    var b1 = output orelse unreachable;
+    var b2 = alloc;
+
+    @memcpy(b2, accum orelse unreachable, accum_width);
 
     var i: usize = 0;
     const size = dict.capacity();
     while (i < size) : (i += 1) {
         switch (dict.getSlot(i, key_width, value_width)) {
             Slot.Filled => {
-                if (value_width == 0) {
-                    const key = dict.getKey(i, alignment, key_width, value_width);
+                const key = dict.getKey(i, alignment, key_width, value_width);
+                const value = dict.getValue(i, alignment, key_width, value_width);
 
-                    stepper_caller(stepper, key, null, output, output);
-                } else {
-                    const key = dict.getKey(i, alignment, key_width, value_width);
-                    const value = dict.getValue(i, alignment, key_width, value_width);
+                stepper_caller(stepper, key, value, b2, b1);
 
-                    stepper_caller(stepper, key, value, output, output);
-                }
+                const temp = b1;
+                b2 = b1;
+                b1 = temp;
             },
             else => {},
         }
     }
+
+    @memcpy(output orelse unreachable, b2, accum_width);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
 
     const data_bytes = dict.capacity() * slotSize(key_width, value_width);
     decref(std.heap.c_allocator, alignment, dict.dict_bytes, data_bytes);
