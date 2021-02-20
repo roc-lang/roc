@@ -1404,10 +1404,6 @@ fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
     }
 }
 
-fn next_is_arrow(rest_of_line: &str) -> bool {
-    rest_of_line.starts_with("->")
-}
-
 fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
     match source_lines.get(row as usize + 1) {
         None => None,

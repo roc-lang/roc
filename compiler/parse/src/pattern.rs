@@ -228,7 +228,6 @@ fn loc_ident_pattern_help<'a>(
             Ident::Access { module_name, parts } => {
                 // Plain identifiers (e.g. `foo`) are allowed in patterns, but
                 // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
-                dbg!(&parts[0]);
                 if crate::keyword::KEYWORDS.contains(&parts[0]) {
                     Err((
                         NoProgress,
@@ -292,7 +291,7 @@ fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
         let (_, _, next_state) = word1(b'_', EPattern::Underscore).parse(arena, state)?;
 
         let (_, output, final_state) =
-            optional(|a, s| lowercase_ident_pattern(a, s)).parse(arena, next_state)?;
+            optional(lowercase_ident_pattern).parse(arena, next_state)?;
 
         match output {
             Some(name) => Ok((MadeProgress, Pattern::Underscore(name), final_state)),
