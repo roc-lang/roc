@@ -4790,12 +4790,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                ── IF GUARD NO CONDITION ───────────────────────────────────────────────────────
                 
-                Unexpected token :
+                I just started parsing an if guard, but there is no guard condition:
                 
+                1│  when Just 4 is
                 2│      Just if ->
                                 ^
+                
+                Try adding an expression before the arrow!
             "#
             ),
         )

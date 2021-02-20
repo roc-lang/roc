@@ -390,6 +390,10 @@ pub enum When<'a> {
     Is(Row, Col),
     Pattern(EPattern<'a>, Row, Col),
     Arrow(Row, Col),
+    Bar(Row, Col),
+    IfToken(Row, Col),
+    // TODO make EExpr
+    IfGuard(&'a SyntaxError<'a>, Row, Col),
     Condition(&'a EExpr<'a>, Row, Col),
     Branch(&'a EExpr<'a>, Row, Col),
     Syntax(&'a SyntaxError<'a>, Row, Col),
@@ -399,6 +403,7 @@ pub enum When<'a> {
     IndentPattern(Row, Col),
     IndentArrow(Row, Col),
     IndentBranch(Row, Col),
+    IndentIfGuard(Row, Col),
     PatternAlignment(u16, Row, Col),
 }
 
@@ -967,16 +972,17 @@ pub fn keyword<'a>(
     }
 }
 
-pub fn keyword_e<'a, E>(keyword: &'static str, if_error: E) -> impl Parser<'a, (), E>
+pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
 where
-    E: 'a + Clone,
+    ToError: Fn(Row, Col) -> E,
+    E: 'a,
 {
     move |arena, state: State<'a>| {
         let initial_state = state.clone();
         // first parse the keyword characters
         let (_, _, after_keyword_state) = ascii_string(keyword)
             .parse(arena, state)
-            .map_err(|(_, _, state)| (NoProgress, if_error.clone(), state))?;
+            .map_err(|(_, _, state)| (NoProgress, if_error(state.line, state.column), state))?;
 
         // then we must have at least one space character
         // TODO this is potentially wasteful if there are a lot of spaces
@@ -990,7 +996,11 @@ where
                 // this is not a keyword, maybe it's `whence` or `iffy`
                 // anyway, make no progress and return the initial state
                 // so we can try something else
-                Err((NoProgress, if_error.clone(), initial_state))
+                Err((
+                    NoProgress,
+                    if_error(initial_state.line, initial_state.column),
+                    initial_state,
+                ))
             }
         }
     }

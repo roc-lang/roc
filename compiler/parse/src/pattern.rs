@@ -62,7 +62,9 @@ pub fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>,
     )
 }
 
-fn loc_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+pub fn loc_pattern_help<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
         loc!(underscore_pattern_help()),

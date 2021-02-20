@@ -145,6 +145,59 @@ fn to_syntax_report<'a>(
         }
         Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
         Pattern(pat) => to_pattern_report(alloc, filename, &pat, 0, 0),
+        Expr(expr) => to_expr_report(alloc, filename, &expr, 0, 0),
+        _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_expr_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EExpr<'a>,
+    _start_row: Row,
+    _start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EExpr;
+
+    match parse_problem {
+        EExpr::When(when, row, col) => to_when_report(alloc, filename, &when, *row, *col),
+        _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_when_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::When<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::When;
+
+    match *parse_problem {
+        When::IfGuard(nested, row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Token("->") => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(
+                        r"I just started parsing an if guard, but there is no guard condition:",
+                    ),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("Try adding an expression before the arrow!")
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "IF GUARD NO CONDITION".to_string(),
+                }
+            }
+            _ => to_syntax_report(alloc, filename, nested, row, col),
+        },
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -1289,6 +1342,7 @@ enum Next<'a> {
     Keyword(&'a str),
     // Operator(&'a str),
     Close(&'a str, char),
+    Token(&'a str),
     Other(Option<char>),
 }
 
@@ -1299,18 +1353,20 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a>
         None => Next::Other(None),
         Some(line) => {
             let chars = &line[col_index..];
+            let mut it = chars.chars();
 
             match roc_parse::keyword::KEYWORDS
                 .iter()
                 .find(|keyword| starts_with_keyword(chars, keyword))
             {
                 Some(keyword) => Next::Keyword(keyword),
-                None => match chars.chars().next() {
+                None => match it.next() {
                     None => Next::Other(None),
                     Some(c) => match c {
                         ')' => Next::Close("parenthesis", ')'),
                         ']' => Next::Close("square bracket", ']'),
                         '}' => Next::Close("curly brace", '}'),
+                        '-' if it.next() == Some('>') => Next::Token("->"),
                         // _ if is_symbol(c) => todo!("it's an operator"),
                         _ => Next::Other(Some(c)),
                     },
@@ -1329,6 +1385,10 @@ fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
     } else {
         false
     }
+}
+
+fn next_is_arrow(rest_of_line: &str) -> bool {
+    rest_of_line.starts_with("->")
 }
 
 fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {

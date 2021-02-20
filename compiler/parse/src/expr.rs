@@ -2,8 +2,8 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_around, space0_before, space0_before_e, space1,
-    space1_around, space1_before, spaces_exactly,
+    line_comment, space0, space0_after, space0_around, space0_around_e, space0_before,
+    space0_before_e, space1, space1_around, space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -11,10 +11,10 @@ use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     fail, map, newline_char, not, not_followed_by, optional, sep_by1, specialize, specialize_ref,
-    then, unexpected, unexpected_eof, word2, EExpr, Either, ParseResult, Parser, State,
+    then, unexpected, unexpected_eof, word1, word2, EExpr, Either, ParseResult, Parser, State,
     SyntaxError, When,
 };
-use crate::pattern::{loc_closure_param, loc_pattern};
+use crate::pattern::loc_closure_param;
 use crate::type_annotation;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -1150,19 +1150,43 @@ mod when {
         min_indent: u16,
     ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>), SyntaxError<'a>>
     {
+        specialize(
+            |e, r, c| SyntaxError::Expr(EExpr::When(e, r, c)),
+            branch_alternatives_help(min_indent),
+        )
+    }
+
+    fn branch_alternatives_help<'a>(
+        min_indent: u16,
+    ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>), When<'a>> {
         and!(
             sep_by1(
-                ascii_char(b'|'),
-                space0_around(loc_pattern(min_indent), min_indent),
+                word1(b'|', When::Bar),
+                space0_around_e(
+                    specialize(When::Pattern, crate::pattern::loc_pattern_help(min_indent)),
+                    min_indent,
+                    When::Space,
+                    When::IndentPattern
+                ),
             ),
-            optional(skip_first!(
-                parser::keyword(keyword::IF, min_indent),
-                // TODO we should require space before the expression but not after
-                space1_around(
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent
-                )
-            ))
+            one_of![
+                map!(
+                    skip_first!(
+                        parser::keyword_e(keyword::IF, When::IfToken),
+                        // TODO we should require space before the expression but not after
+                        space0_around_e(
+                            loc!(specialize_ref(When::IfGuard, move |arena, state| {
+                                parse_expr(min_indent, arena, state)
+                            })),
+                            min_indent,
+                            When::Space,
+                            When::IndentIfGuard,
+                        )
+                    ),
+                    Some
+                ),
+                |_, s| Ok((NoProgress, None, s))
+            ]
         )
     }
 
