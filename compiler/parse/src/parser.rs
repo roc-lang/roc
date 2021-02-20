@@ -322,6 +322,7 @@ pub enum SyntaxError<'a> {
     TODO,
     Type(Type<'a>),
     Pattern(EPattern<'a>),
+    Expr(EExpr<'a>),
     Space(BadInputError),
 }
 
@@ -368,6 +369,38 @@ impl<'a> SyntaxError<'a> {
 
 pub type Row = u32;
 pub type Col = u16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EExpr<'a> {
+    // Record(PRecord<'a>, Row, Col),
+    Start(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+
+    When(When<'a>, Row, Col),
+
+    // EInParens(PInParens<'a>, Row, Col),
+    IndentStart(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum When<'a> {
+    Space(BadInputError, Row, Col),
+    Is(Row, Col),
+    Pattern(EPattern<'a>, Row, Col),
+    Arrow(Row, Col),
+    Condition(&'a EExpr<'a>, Row, Col),
+    Branch(&'a EExpr<'a>, Row, Col),
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    IndentOf(Row, Col),
+    IndentExpr(Row, Col),
+    IndentPattern(Row, Col),
+    IndentArrow(Row, Col),
+    IndentBranch(Row, Col),
+    PatternAlignment(u16, Row, Col),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPattern<'a> {

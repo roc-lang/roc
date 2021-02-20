@@ -2,16 +2,17 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_around, space0_before, space1, space1_around,
-    space1_before, spaces_exactly,
+    line_comment, space0, space0_after, space0_around, space0_before, space0_before_e, space1,
+    space1_around, space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
-    fail, map, newline_char, not, not_followed_by, optional, sep_by1, then, unexpected,
-    unexpected_eof, Either, ParseResult, Parser, State, SyntaxError,
+    fail, map, newline_char, not, not_followed_by, optional, sep_by1, specialize, specialize_ref,
+    then, unexpected, unexpected_eof, word2, EExpr, Either, ParseResult, Parser, State,
+    SyntaxError, When,
 };
 use crate::pattern::{loc_closure_param, loc_pattern};
 use crate::type_annotation;
@@ -1180,11 +1181,23 @@ mod when {
 
     /// Parsing the righthandside of a branch in a when conditional.
     fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
+        specialize(
+            |e, r, c| SyntaxError::Expr(EExpr::When(e, r, c)),
+            branch_result_help(indent),
+        )
+    }
+
+    fn branch_result_help<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, When<'a>> {
         skip_first!(
-            ascii_string("->"),
-            space0_before(
-                loc!(move |arena, state| parse_expr(indent, arena, state)),
+            word2(b'-', b'>', When::Arrow),
+            space0_before_e(
+                specialize_ref(
+                    When::Syntax,
+                    loc!(move |arena, state| parse_expr(indent, arena, state))
+                ),
                 indent,
+                When::Space,
+                When::IndentBranch,
             )
         )
     }
