@@ -1628,10 +1628,18 @@ fn to_diff<'b>(
                 ErrorType::Alias(Symbol::NUM_INT, _, _) => true,
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
-                    matches!( &args.get(0) ,Some(ErrorType::Type(Symbol::NUM_INTEGER, _)) | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _)))
+                    matches!(
+                        &args.get(0),
+                        Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _))
+                    )
                 }
                 ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
-                    matches!(&args.get(0), Some((_, ErrorType::Type(Symbol::NUM_INTEGER, _))) | Some((_, ErrorType::Alias(Symbol::NUM_INTEGER, _, _))))
+                    matches!(
+                        &args.get(0),
+                        Some((_, ErrorType::Type(Symbol::NUM_INTEGER, _)))
+                            | Some((_, ErrorType::Alias(Symbol::NUM_INTEGER, _, _)))
+                    )
                 }
                 _ => false,
             };
@@ -1640,11 +1648,19 @@ fn to_diff<'b>(
                 ErrorType::Alias(Symbol::NUM_FLOAT, _, _) => true,
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
-                    matches!(&args.get(0), Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _)) | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _)))
+                    matches!(
+                        &args.get(0),
+                        Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _))
+                    )
                 }
 
                 ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
-                    matches!(&args.get(0), Some((_, ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))) | Some((_, ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _))))
+                    matches!(
+                        &args.get(0),
+                        Some((_, ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _)))
+                            | Some((_, ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _)))
+                    )
                 }
                 _ => false,
             };
