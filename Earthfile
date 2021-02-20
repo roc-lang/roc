@@ -1,4 +1,4 @@
-FROM rust:1.49-slim-buster
+FROM rust:1.50-slim-buster
 WORKDIR /earthbuild
 
 prep-debian:
