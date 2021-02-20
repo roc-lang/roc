@@ -2928,7 +2928,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "crossbeam",
- "indoc",
  "inlinable_string",
  "maplit",
  "num_cpus",
@@ -2950,6 +2949,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
+ "ven_pretty",
 ]
 
 [[package]]
