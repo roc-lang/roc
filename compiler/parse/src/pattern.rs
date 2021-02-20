@@ -324,7 +324,7 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
         let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
             word1(b'{', PRecord::Open),
-            loc!(record_pattern_field(min_indent)),
+            record_pattern_field(min_indent),
             word1(b',', PRecord::End),
             // word1_check_indent!(b'}', PRecord::End, min_indent, PRecord::IndentEnd),
             word1(b'}', PRecord::End),
@@ -344,7 +344,7 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
     }
 }
 
-fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
+fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, PRecord<'a>> {
     use crate::parser::Either::*;
 
     move |arena, state: State<'a>| {
@@ -377,15 +377,23 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRe
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
                         .parse(arena, state)?;
 
-                // let Located { value, region } = loc_val;
+                let Located {
+                    value: label,
+                    region,
+                } = loc_label;
+
+                let region = Region::span_across(&region, &loc_val.region);
 
                 Ok((
                     MadeProgress,
-                    Pattern::RequiredField(
-                        loc_label.value,
-                        // TODO spaces are dropped here
-                        // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
-                        arena.alloc(loc_val),
+                    Located::at(
+                        region,
+                        Pattern::RequiredField(
+                            label,
+                            // TODO spaces are dropped here
+                            // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
+                            arena.alloc(loc_val),
+                        ),
                     ),
                     state,
                 ))
@@ -398,15 +406,23 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRe
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
                         .parse(arena, state)?;
 
-                // let Located { value, region } = loc_val;
+                let Located {
+                    value: label,
+                    region,
+                } = loc_label;
+
+                let region = Region::span_across(&region, &loc_val.region);
 
                 Ok((
                     MadeProgress,
-                    Pattern::OptionalField(
-                        loc_label.value,
-                        // TODO spaces are dropped
-                        // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
-                        arena.alloc(loc_val),
+                    Located::at(
+                        region,
+                        Pattern::OptionalField(
+                            label,
+                            // TODO spaces are dropped
+                            // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
+                            arena.alloc(loc_val),
+                        ),
                     ),
                     state,
                 ))
@@ -414,15 +430,14 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRe
             // If no value was provided, record it as a Var.
             // Canonicalize will know what to do with a Var later.
             None => {
+                let Located { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
-                    let Located { value, .. } = loc_label;
                     Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(value)), spaces)
                 } else {
-                    let Located { value, .. } = loc_label;
                     Pattern::Identifier(value)
                 };
 
-                Ok((MadeProgress, value, state))
+                Ok((MadeProgress, Located::at(region, value), state))
             }
         }
     }
