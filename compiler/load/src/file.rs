@@ -2576,6 +2576,7 @@ fn parse_header<'a>(
 }
 
 /// Load a module by its filename
+#[allow(clippy::too_many_arguments)]
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
