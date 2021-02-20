@@ -2212,7 +2212,7 @@ fn load_pkg_config<'a>(
                         &header,
                         pkg_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     let effects_module_msg = fabricate_effects_module(
                         arena,
@@ -2223,7 +2223,7 @@ fn load_pkg_config<'a>(
                         header,
                         effect_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
@@ -3093,11 +3093,11 @@ fn fabricate_pkg_config_module<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
         header.provides.clone().into_bump_slice();
 
-    Ok(send_header_two(
+    send_header_two(
         arena,
         filename,
         shorthand,
@@ -3110,7 +3110,7 @@ fn fabricate_pkg_config_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_timing,
-    ))
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3122,7 +3122,7 @@ fn fabricate_effects_module<'a>(
     mode: Mode,
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
