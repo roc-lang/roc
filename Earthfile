@@ -40,7 +40,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # rustfmt
     RUN rustup component add rustfmt
     # sccache
-    RUN apt install libssl-dev
+    RUN apt -y install libssl-dev
     RUN cargo install sccache
     RUN sccache -V
 
