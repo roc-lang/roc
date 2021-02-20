@@ -1026,7 +1026,8 @@ fn parse_closure_param<'a>(
         // Underscore is also common, e.g. \_ -> ...
         loc!(underscore_pattern()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
-        loc!(record_destructure(min_indent)),
+        // loc!(record_destructure(min_indent)),
+        loc!(crate::pattern::record_pattern(min_indent)),
         // If you wrap it in parens, you can match any arbitrary pattern at all.
         // e.g. \User.UserId userId -> ...
         between!(
@@ -1038,7 +1039,7 @@ fn parse_closure_param<'a>(
     .parse(arena, state)
 }
 
-fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
+pub fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
     skip_first!(
         // If this is a reserved keyword ("if", "then", "case, "when"), then
         // it is not a pattern!
@@ -1047,7 +1048,8 @@ fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, Syn
             loc_parenthetical_pattern(min_indent),
             loc!(underscore_pattern()),
             loc_ident_pattern(min_indent, true),
-            loc!(record_destructure(min_indent)),
+            // loc!(record_destructure(min_indent)),
+            loc!(crate::pattern::record_pattern(min_indent)),
             loc!(string_pattern()),
             loc!(number_pattern())
         )
@@ -1083,7 +1085,8 @@ fn loc_parse_tag_pattern_arg<'a>(
         loc!(underscore_pattern()),
         // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
         loc_ident_pattern(min_indent, false),
-        loc!(record_destructure(min_indent)),
+        // loc!(record_destructure(min_indent)),
+        loc!(crate::pattern::record_pattern(min_indent)),
         loc!(string_pattern()),
         loc!(number_pattern())
     )

@@ -386,7 +386,22 @@ pub enum EPattern<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PRecord<'a> {
-    EPattern(&'a Type<'a>, Row, Col),
+    End(Row, Col),
+    Open(Row, Col),
+
+    Field(Row, Col),
+    Colon(Row, Col),
+    Optional(Row, Col),
+    Type(&'a EPattern<'a>, Row, Col),
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    Space(BadInputError, Row, Col),
+
+    IndentOpen(Row, Col),
+    IndentColon(Row, Col),
+    IndentOptional(Row, Col),
+    IndentEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
