@@ -9,9 +9,9 @@ use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::number_literal::number_literal;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, map, newline_char, not, not_followed_by, optional, peek_utf8_char_e, sep_by1, specialize,
-    specialize_ref, unexpected, word1, BadInputError, EPattern, PInParens, PRecord, ParseResult,
-    Parser, State, SyntaxError,
+    self, backtrackable, map, newline_char, not, not_followed_by, optional, peek_utf8_char_e,
+    sep_by1, specialize, specialize_ref, unexpected, word1, BadInputError, EPattern, PApply,
+    PInParens, PRecord, ParseResult, Parser, State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -75,18 +75,43 @@ pub fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>,
 fn loc_tag_pattern_args<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>, SyntaxError<'a>> {
-    zero_or_more!(space1_before(loc_tag_pattern_arg(min_indent), min_indent))
+    specialize(
+        |e, r, c| SyntaxError::Pattern(EPattern::Apply(e, r, c)),
+        loc_tag_pattern_args_help(min_indent),
+    )
 }
 
-fn loc_tag_pattern_arg<'a>(
+fn loc_tag_pattern_args_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
+) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>, PApply<'a>> {
+    debug!(zero_or_more!(specialize_ref(
+        PApply::Pattern,
+        loc_tag_pattern_arg(min_indent)
+    )))
+}
+
+fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
     // Don't parse operators, because they have a higher precedence than function application.
     // If we encounter one, we're done parsing function args!
-    specialize(
-        |e, _, _| SyntaxError::Pattern(e),
-        move |arena, state| loc_parse_tag_pattern_arg(min_indent, arena, state),
-    )
+    move |arena, state| {
+        let (_, spaces, state) =
+            backtrackable(space0_e(min_indent, EPattern::Space, EPattern::IndentStart))
+                .parse(arena, state)?;
+
+        let (_, loc_pat, state) = loc_parse_tag_pattern_arg(min_indent, arena, state)?;
+
+        let Located { region, value } = loc_pat;
+
+        Ok((
+            MadeProgress,
+            if spaces.is_empty() {
+                Located::at(region, value)
+            } else {
+                Located::at(region, Pattern::SpaceBefore(arena.alloc(value), spaces))
+            },
+            state,
+        ))
+    }
 }
 
 fn loc_parse_tag_pattern_arg<'a>(

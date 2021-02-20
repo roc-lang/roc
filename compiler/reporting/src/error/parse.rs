@@ -132,7 +132,137 @@ fn to_syntax_report<'a>(
             }
         }
         Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
+        Pattern(pat) => to_pattern_report(alloc, filename, &pat, 0, 0),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_pattern_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EPattern<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EPattern;
+
+    match parse_problem {
+        EPattern::Apply(tag_apply, row, col) => {
+            to_papply_report(alloc, filename, &tag_apply, *row, *col)
+        }
+        _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_papply_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::PApply<'a>,
+    _start_row: Row,
+    _start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::PApply;
+
+    match *parse_problem {
+        PApply::DoubleDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered two dots in a row:"),
+                alloc.region(region),
+                alloc.concat(vec![alloc.reflow("Try removing one of them.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "DOUBLE DOT".to_string(),
+            }
+        }
+        PApply::TrailingDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered a dot with nothing after it:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Dots are used to refer to a type in a qualified way, like "),
+                    alloc.parser_suggestion("Num.I64"),
+                    alloc.text(" or "),
+                    alloc.parser_suggestion("List.List a"),
+                    alloc.reflow(". Try adding a type name next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "TRAILING DOT".to_string(),
+            }
+        }
+        PApply::StartIsNumber(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered a number at the start of a qualified name segment:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
+                    alloc.parser_suggestion("Num.I64"),
+                    alloc.text(" or "),
+                    alloc.parser_suggestion("List.List a"),
+                    alloc.text("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD QUALIFIED NAME".to_string(),
+            }
+        }
+        PApply::StartNotUppercase(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I encountered a lowercase letter at the start of a qualified name segment:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
+                    alloc.parser_suggestion("Num.I64"),
+                    alloc.text(" or "),
+                    alloc.parser_suggestion("List.List a"),
+                    alloc.text("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD QUALIFIED NAME".to_string(),
+            }
+        }
+
+        PApply::End(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I reached the end of the input file while parsing a qualified type name",
+                ),
+                alloc.region(region),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "END OF FILE".to_string(),
+            }
+        }
+
+        PApply::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        PApply::Pattern(pat, row, col) => to_pattern_report(alloc, filename, pat, row, col),
+        PApply::IndentStart(_, _) => todo!(),
     }
 }
 

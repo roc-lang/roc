@@ -372,6 +372,7 @@ pub type Col = u16;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPattern<'a> {
     Record(PRecord<'a>, Row, Col),
+    Apply(PApply<'a>, Row, Col),
     Underscore(Row, Col),
 
     Start(Row, Col),
@@ -418,6 +419,21 @@ pub enum PInParens<'a> {
     ///
     IndentOpen(Row, Col),
     IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PApply<'a> {
+    ///
+    StartNotUppercase(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+    IndentStart(Row, Col),
+    ///
+    Pattern(&'a EPattern<'a>, Row, Col),
+    ///
+    DoubleDot(Row, Col),
+    TrailingDot(Row, Col),
+    StartIsNumber(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
