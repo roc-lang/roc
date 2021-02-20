@@ -980,6 +980,8 @@ pub enum LoadingProblem<'a> {
     },
     ParsingFailed(ParseProblem<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
+    /// there is no platform (likely running an Interface module)
+    NoPlatform,
 
     MsgChannelDied,
     ErrJoiningWorkerThreads,
@@ -1479,7 +1481,7 @@ where
                             state,
                             subs,
                             exposed_to_host,
-                        )));
+                        )?));
                     }
                     Msg::FailedToParse(problem) => {
                         // Shut down all the worker threads.
@@ -2044,7 +2046,7 @@ fn finish_specialization(
     state: State,
     subs: Subs,
     exposed_to_host: MutMap<Symbol, Variable>,
-) -> MonomorphizedModule {
+) -> Result<MonomorphizedModule, LoadingProblem> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
@@ -2085,7 +2087,7 @@ fn finish_specialization(
                 }
             }
             Some(To::NewPackage(p_or_p)) => p_or_p,
-            None => panic!("no platform!"),
+            None => return Err(LoadingProblem::NoPlatform),
         };
 
         match package_or_path {
@@ -2097,7 +2099,7 @@ fn finish_specialization(
 
     let platform_path = path_to_platform.into();
 
-    MonomorphizedModule {
+    Ok(MonomorphizedModule {
         can_problems,
         mono_problems,
         type_problems,
@@ -2110,7 +2112,7 @@ fn finish_specialization(
         procedures,
         sources,
         timings: state.timings,
-    }
+    })
 }
 
 fn finish(
