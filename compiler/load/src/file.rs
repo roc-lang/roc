@@ -2465,7 +2465,7 @@ fn parse_header<'a>(
                 },
             }
         }
-        Ok((_, ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+        Ok((_, ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
             arena,
             &"",
             module_ids,
@@ -2473,7 +2473,7 @@ fn parse_header<'a>(
             mode,
             header,
             module_timing,
-        ),
+        )),
         Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
             fail.into_parse_problem(filename, src_bytes),
         )),
@@ -3350,7 +3350,7 @@ fn fabricate_effects_module<'a>(
         module_timing,
     };
 
-    Ok((
+    (
         module_id,
         Msg::MadeEffectModule {
             type_shortname: effects.effect_shortname,
@@ -3358,7 +3358,7 @@ fn fabricate_effects_module<'a>(
             canonicalization_problems: module_output.problems,
             module_docs,
         },
-    ))
+    )
 }
 
 fn unpack_exposes_entries<'a>(
