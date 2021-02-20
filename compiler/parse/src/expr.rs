@@ -2,8 +2,8 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_around, space0_around_e, space0_before,
-    space0_before_e, space1, space1_around, space1_before, spaces_exactly,
+    line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_e,
+    space0_before, space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -1019,27 +1019,34 @@ mod when {
 
     /// Parser for when expressions.
     pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+        specialize(
+            |e, r, c| SyntaxError::Expr(EExpr::When(e, r, c)),
+            expr_help(min_indent),
+        )
+    }
+    pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, When<'a>> {
         then(
             and!(
-                when_with_indent(min_indent),
-                attempt!(
-                    Attempting::WhenCondition,
-                    skip_second!(
-                        space1_around(
-                            loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                            min_indent,
-                        ),
-                        parser::keyword(keyword::IS, min_indent)
-                    )
+                when_with_indent(),
+                skip_second!(
+                    space0_around_e(
+                        loc!(specialize_ref(
+                            When::Syntax,
+                            move |arena, state| parse_expr(min_indent, arena, state)
+                        )),
+                        min_indent,
+                        When::Space,
+                        When::IndentCondition
+                    ),
+                    parser::keyword_e(keyword::IS, When::Is)
                 )
             ),
             move |arena, state, progress, (case_indent, loc_condition)| {
                 if case_indent < min_indent {
                     return Err((
                         progress,
-                        SyntaxError::NotYetImplemented(
-                            "TODO case wasn't indented enough".to_string(),
-                        ),
+                        // TODO maybe pass case_indent here?
+                        When::PatternAlignment(5, state.line, state.column),
                         state,
                     ));
                 }
@@ -1047,8 +1054,7 @@ mod when {
                 // Everything in the branches must be indented at least as much as the case itself.
                 let min_indent = case_indent;
 
-                let (p1, branches, state) =
-                    attempt!(Attempting::WhenBranch, branches(min_indent)).parse(arena, state)?;
+                let (p1, branches, state) = branches(min_indent).parse(arena, state)?;
 
                 Ok((
                     progress.or(p1),
@@ -1060,18 +1066,15 @@ mod when {
     }
 
     /// Parsing when with indentation.
-    fn when_with_indent<'a>(min_indent: u16) -> impl Parser<'a, u16, SyntaxError<'a>> {
+    fn when_with_indent<'a>() -> impl Parser<'a, u16, When<'a>> {
         move |arena, state: State<'a>| {
-            parser::keyword(keyword::WHEN, min_indent)
+            parser::keyword_e(keyword::WHEN, When::When)
                 .parse(arena, state)
                 .map(|(progress, (), state)| (progress, state.indent_col, state))
         }
     }
 
-    /// Parsing branches of when conditional.
-    fn branches<'a>(
-        min_indent: u16,
-    ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, SyntaxError<'a>> {
+    fn branches<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, When<'a>> {
         move |arena, state| {
             let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
 
@@ -1100,17 +1103,13 @@ mod when {
                     then(
                         branch_alternatives(min_indent),
                         move |_arena, state, _, (loc_patterns, loc_guard)| {
-                            if alternatives_indented_correctly(&loc_patterns, original_indent) {
-                                Ok((MadeProgress, (loc_patterns, loc_guard), state))
-                            } else {
-                                Err((
-                                        MadeProgress,
-                                        SyntaxError::NotYetImplemented(
-                                            "TODO additional branch didn't have same indentation as first branch".to_string(),
-                                        ),
-
+                            match alternatives_indented_correctly(&loc_patterns, original_indent) {
+                                Ok(()) => Ok((MadeProgress, (loc_patterns, loc_guard), state)),
+                                Err(indent) => Err((
+                                    MadeProgress,
+                                    When::PatternAlignment(indent, state.line, state.column),
                                     state,
-                                ))
+                                )),
                             }
                         },
                     ),
@@ -1133,7 +1132,10 @@ mod when {
 
                         branches.push(arena.alloc(next_output));
                     }
-                    Err((_, _, old_state)) => {
+                    Err((MadeProgress, problem, old_state)) => {
+                        return Err((MadeProgress, problem, old_state));
+                    }
+                    Err((NoProgress, _, old_state)) => {
                         state = old_state;
 
                         break;
@@ -1148,27 +1150,33 @@ mod when {
     /// Parsing alternative patterns in when branches.
     fn branch_alternatives<'a>(
         min_indent: u16,
-    ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>), SyntaxError<'a>>
-    {
-        specialize(
-            |e, r, c| SyntaxError::Expr(EExpr::When(e, r, c)),
-            branch_alternatives_help(min_indent),
-        )
-    }
-
-    fn branch_alternatives_help<'a>(
-        min_indent: u16,
     ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>), When<'a>> {
         and!(
-            sep_by1(
-                word1(b'|', When::Bar),
-                space0_around_e(
+            sep_by1(word1(b'|', When::Bar), |arena, state| {
+                let (_, spaces, state) =
+                    backtrackable(space0_e(min_indent, When::Space, When::IndentPattern))
+                        .parse(arena, state)?;
+
+                let (_, loc_pattern, state) = space0_after_e(
                     specialize(When::Pattern, crate::pattern::loc_pattern_help(min_indent)),
                     min_indent,
                     When::Space,
-                    When::IndentPattern
-                ),
-            ),
+                    When::IndentPattern,
+                )
+                .parse(arena, state)?;
+
+                Ok((
+                    MadeProgress,
+                    if spaces.is_empty() {
+                        loc_pattern
+                    } else {
+                        arena
+                            .alloc(loc_pattern.value)
+                            .with_spaces_before(spaces, loc_pattern.region)
+                    },
+                    state,
+                ))
+            }),
             one_of![
                 map!(
                     skip_first!(
@@ -1194,24 +1202,23 @@ mod when {
     fn alternatives_indented_correctly<'a>(
         loc_patterns: &'a Vec<'a, Located<Pattern<'a>>>,
         original_indent: u16,
-    ) -> bool {
+    ) -> Result<(), u16> {
         let (first, rest) = loc_patterns.split_first().unwrap();
         let first_indented_correctly = first.region.start_col == original_indent;
-        let rest_indented_correctly = rest
-            .iter()
-            .all(|when_pattern| when_pattern.region.start_col >= original_indent);
-        first_indented_correctly && rest_indented_correctly
+        if first_indented_correctly {
+            for when_pattern in rest.iter() {
+                if when_pattern.region.start_col < original_indent {
+                    return Err(original_indent - when_pattern.region.start_col);
+                }
+            }
+            Ok(())
+        } else {
+            Err(original_indent - first.region.start_col)
+        }
     }
 
     /// Parsing the righthandside of a branch in a when conditional.
-    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-        specialize(
-            |e, r, c| SyntaxError::Expr(EExpr::When(e, r, c)),
-            branch_result_help(indent),
-        )
-    }
-
-    fn branch_result_help<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, When<'a>> {
+    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, When<'a>> {
         skip_first!(
             word2(b'-', b'>', When::Arrow),
             space0_before_e(

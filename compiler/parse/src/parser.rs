@@ -387,19 +387,20 @@ pub enum EExpr<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum When<'a> {
     Space(BadInputError, Row, Col),
+    When(Row, Col),
     Is(Row, Col),
     Pattern(EPattern<'a>, Row, Col),
     Arrow(Row, Col),
     Bar(Row, Col),
     IfToken(Row, Col),
-    // TODO make EExpr
+    // TODO make EEXpr
     IfGuard(&'a SyntaxError<'a>, Row, Col),
     Condition(&'a EExpr<'a>, Row, Col),
     Branch(&'a EExpr<'a>, Row, Col),
     Syntax(&'a SyntaxError<'a>, Row, Col),
 
-    IndentOf(Row, Col),
-    IndentExpr(Row, Col),
+    IndentIs(Row, Col),
+    IndentCondition(Row, Col),
     IndentPattern(Row, Col),
     IndentArrow(Row, Col),
     IndentBranch(Row, Col),
