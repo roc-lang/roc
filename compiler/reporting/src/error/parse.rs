@@ -198,6 +198,7 @@ fn to_when_report<'a>(
             }
             _ => to_syntax_report(alloc, filename, nested, row, col),
         },
+        When::Pattern(ref pat, row, col) => to_pattern_report(alloc, filename, pat, row, col),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -206,12 +207,28 @@ fn to_pattern_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EPattern<'a>,
-    _start_row: Row,
-    _start_col: Col,
+    start_row: Row,
+    start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::EPattern;
 
     match parse_problem {
+        EPattern::Start(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a pattern, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PATTERN".to_string(),
+            }
+        }
         EPattern::Record(record, row, col) => {
             to_precord_report(alloc, filename, &record, *row, *col)
         }

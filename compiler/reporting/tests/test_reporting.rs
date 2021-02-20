@@ -4774,6 +4774,7 @@ mod test_reporting {
             ),
         )
     }
+
     #[test]
     fn if_guard_without_condition() {
         // this should get better with time
@@ -4799,6 +4800,35 @@ mod test_reporting {
                                 ^
                 
                 Try adding an expression before the arrow!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn empty_or_pattern() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just 4 | ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
+                
+                I just started parsing a pattern, but I got stuck here:
+                
+                2│      Just 4 | ->
+                                 ^
+                
+                Note: I may be confused by indentation
             "#
             ),
         )
