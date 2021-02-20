@@ -377,7 +377,8 @@ pub enum EPattern<'a> {
     Start(Row, Col),
     End(Row, Col),
     Space(BadInputError, Row, Col),
-    FunctionArgument(Row, Col),
+
+    PInParens(PInParens<'a>, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
@@ -392,7 +393,7 @@ pub enum PRecord<'a> {
     Field(Row, Col),
     Colon(Row, Col),
     Optional(Row, Col),
-    Type(&'a EPattern<'a>, Row, Col),
+    Pattern(&'a EPattern<'a>, Row, Col),
     // TODO remove
     Syntax(&'a SyntaxError<'a>, Row, Col),
 
@@ -401,6 +402,21 @@ pub enum PRecord<'a> {
     IndentOpen(Row, Col),
     IndentColon(Row, Col),
     IndentOptional(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PInParens<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+    ///
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    ///
+    Space(BadInputError, Row, Col),
+    ///
+    IndentOpen(Row, Col),
     IndentEnd(Row, Col),
 }
 
