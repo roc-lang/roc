@@ -1,17 +1,11 @@
-use crate::ast::{
-    AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
-};
-use crate::blankspace::{
-    line_comment, space0, space0_after, space0_around, space0_around_e, space0_before,
-    space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
-};
-use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
+use crate::ast::Pattern;
+use crate::blankspace::{space0_around_e, space0_before_e, space0_e};
+use crate::ident::{ident, lowercase_ident, Ident};
 use crate::number_literal::number_literal;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, backtrackable, map, newline_char, not, not_followed_by, optional, peek_utf8_char_e,
-    sep_by1, specialize, specialize_ref, unexpected, word1, BadInputError, EPattern, PApply,
-    PInParens, PRecord, ParseResult, Parser, State, SyntaxError,
+    backtrackable, optional, specialize, specialize_ref, word1, BadInputError, EPattern, PInParens,
+    PRecord, ParseResult, Parser, State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -33,61 +27,59 @@ pub enum PatternType {
 pub fn loc_closure_param<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    move |arena, state| parse_closure_param(arena, state, min_indent)
+    specialize(
+        |e, _, _| SyntaxError::Pattern(e),
+        move |arena, state| parse_closure_param(arena, state, min_indent),
+    )
 }
-
-use crate::parser::ascii_char;
 
 fn parse_closure_param<'a>(
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u16,
-) -> ParseResult<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
+) -> ParseResult<'a, Located<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         // An ident is the most common param, e.g. \foo -> ...
-        loc_ident_pattern(min_indent, true),
+        loc_ident_pattern_help(min_indent, true),
         // Underscore is also common, e.g. \_ -> ...
-        loc!(underscore_pattern()),
+        loc!(underscore_pattern_help()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
-        loc!(crate::pattern::record_pattern(min_indent)),
+        loc!(specialize(
+            EPattern::Record,
+            crate::pattern::record_pattern_help(min_indent)
+        )),
         // If you wrap it in parens, you can match any arbitrary pattern at all.
         // e.g. \User.UserId userId -> ...
-        between!(
-            ascii_char(b'('),
-            space0_around(loc_pattern(min_indent), min_indent),
-            ascii_char(b')')
-        )
+        specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent))
     )
     .parse(arena, state)
 }
 
 pub fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    one_of!(
-        loc_pattern_in_parens(min_indent),
-        loc!(underscore_pattern()),
-        loc_ident_pattern(min_indent, true),
-        loc!(crate::pattern::record_pattern(min_indent)),
-        loc!(string_pattern()),
-        loc!(number_pattern())
+    specialize(
+        |e, _, _| SyntaxError::Pattern(e),
+        loc_pattern_help(min_indent),
     )
 }
 
-fn loc_tag_pattern_args<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Pattern(EPattern::Apply(e, r, c)),
-        loc_tag_pattern_args_help(min_indent),
+fn loc_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+    one_of!(
+        specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
+        loc!(underscore_pattern_help()),
+        loc_ident_pattern_help(min_indent, true),
+        loc!(specialize(
+            EPattern::Record,
+            crate::pattern::record_pattern_help(min_indent)
+        )),
+        loc!(string_pattern_help()),
+        loc!(number_pattern_help())
     )
 }
 
 fn loc_tag_pattern_args_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>, PApply<'a>> {
-    debug!(zero_or_more!(specialize_ref(
-        PApply::Pattern,
-        loc_tag_pattern_arg(min_indent)
-    )))
+) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>, EPattern<'a>> {
+    zero_or_more!(loc_tag_pattern_arg(min_indent))
 }
 
 fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
@@ -134,26 +126,9 @@ fn loc_parse_tag_pattern_arg<'a>(
     .parse(arena, state)
 }
 
-fn loc_pattern_in_parens<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Pattern(EPattern::PInParens(e, r, c)),
-        loc_pattern_in_parens_help(min_indent),
-    )
-}
-
 fn loc_pattern_in_parens_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Pattern<'a>>, PInParens<'a>> {
-    //    between!(
-    //        ascii_char(b'('),
-    //        space0_around(
-    //            move |arena, state| loc_pattern(min_indent).parse(arena, state),
-    //            min_indent,
-    //        ),
-    //        ascii_char(b')')
-    //    )
     between!(
         word1(b'(', PInParens::Open),
         space0_around_e(
@@ -167,10 +142,6 @@ fn loc_pattern_in_parens_help<'a>(
     )
 }
 
-fn number_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Pattern(e), number_pattern_help())
-}
-
 fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     specialize(
         |_, r, c| EPattern::Start(r, c),
@@ -178,10 +149,6 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
             crate::expr::expr_to_pattern(arena, &expr).unwrap()
         }),
     )
-}
-
-fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Pattern(e), string_pattern_help())
 }
 
 fn string_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
@@ -195,19 +162,11 @@ fn loc_ident_pattern_help<'a>(
     min_indent: u16,
     can_have_arguments: bool,
 ) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
-    // TODO bad
-    specialize_ref(
-        |e, r, c| EPattern::PInParens(PInParens::Syntax(e, r, c), r, c),
-        loc_ident_pattern(min_indent, can_have_arguments),
-    )
-}
-
-fn loc_ident_pattern<'a>(
-    min_indent: u16,
-    can_have_arguments: bool,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let (_, loc_ident, state) = loc!(ident()).parse(arena, state)?;
+        let original_state = state.clone();
+
+        let (_, loc_ident, state) =
+            specialize(|_, r, c| EPattern::Start(r, c), loc!(ident())).parse(arena, state)?;
 
         match loc_ident.value {
             Ident::GlobalTag(tag) => {
@@ -219,7 +178,7 @@ fn loc_ident_pattern<'a>(
                 // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
                 if can_have_arguments {
                     let (_, loc_args, state) =
-                        loc_tag_pattern_args(min_indent).parse(arena, state)?;
+                        loc_tag_pattern_args_help(min_indent).parse(arena, state)?;
 
                     if loc_args.is_empty() {
                         Ok((MadeProgress, loc_tag, state))
@@ -246,7 +205,7 @@ fn loc_ident_pattern<'a>(
                 // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
                 if can_have_arguments {
                     let (_, loc_args, state) =
-                        loc_tag_pattern_args(min_indent).parse(arena, state)?;
+                        loc_tag_pattern_args_help(min_indent).parse(arena, state)?;
 
                     if loc_args.is_empty() {
                         Ok((MadeProgress, loc_tag, state))
@@ -267,7 +226,14 @@ fn loc_ident_pattern<'a>(
             Ident::Access { module_name, parts } => {
                 // Plain identifiers (e.g. `foo`) are allowed in patterns, but
                 // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
-                if module_name.is_empty() && parts.len() == 1 {
+                dbg!(&parts[0]);
+                if crate::keyword::KEYWORDS.contains(&parts[0]) {
+                    Err((
+                        NoProgress,
+                        EPattern::End(original_state.line, original_state.column),
+                        original_state,
+                    ))
+                } else if module_name.is_empty() && parts.len() == 1 {
                     Ok((
                         MadeProgress,
                         Located {
@@ -305,7 +271,11 @@ fn loc_ident_pattern<'a>(
             Ident::Malformed(malformed) => {
                 debug_assert!(!malformed.is_empty());
 
-                Err((MadeProgress, SyntaxError::InvalidPattern, state))
+                Err((
+                    MadeProgress,
+                    EPattern::Start(state.line, state.column),
+                    state,
+                ))
             }
         }
     }
@@ -331,50 +301,12 @@ fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 
 fn lowercase_ident_pattern<'a>(
     arena: &'a Bump,
-    mut state: State<'a>,
+    state: State<'a>,
 ) -> ParseResult<'a, &'a str, EPattern<'a>> {
-    let mut buf = String::new_in(arena);
+    let row = state.line;
+    let col = state.column;
 
-    let start_bytes_len = state.bytes.len();
-
-    match peek_utf8_char_e(&state, EPattern::Start, EPattern::Space) {
-        Ok((first_letter, bytes_parsed)) => {
-            // Type variables must start with a lowercase letter.
-            if first_letter.is_alphabetic() && first_letter.is_lowercase() {
-                buf.push(first_letter);
-            } else {
-                return Err((NoProgress, EPattern::Start(state.line, state.column), state));
-            }
-
-            state = state.advance_without_indenting_e(arena, bytes_parsed, EPattern::Space)?;
-        }
-        Err(reason) => return Err((NoProgress, reason, state)),
-    }
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char_e(&state, EPattern::End, EPattern::Space) {
-            Ok((ch, bytes_parsed)) => {
-                // After the first character, only these are allowed:
-                //
-                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                if ch.is_alphabetic() || ch.is_ascii_digit() {
-                    buf.push(ch);
-                } else {
-                    // This must be the end of the type. We're done!
-                    break;
-                }
-
-                state = state.advance_without_indenting_e(arena, bytes_parsed, EPattern::Space)?;
-            }
-            Err(reason) => {
-                return state.fail(arena, MadeProgress, reason);
-            }
-        }
-    }
-
-    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-    Ok((progress, buf.into_bump_str(), state))
+    specialize(move |_, _, _| EPattern::End(row, col), lowercase_ident()).parse(arena, state)
 }
 
 pub fn record_pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {

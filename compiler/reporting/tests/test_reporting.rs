@@ -4774,4 +4774,58 @@ mod test_reporting {
             ),
         )
     }
+    #[test]
+    fn if_guard_without_condition() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just if ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                
+                Unexpected token :
+                
+                2│      Just if ->
+                                ^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn pattern_binds_keyword() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just when ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                
+                Unexpected token :
+                
+                2│      Just if ->
+                                ^
+            "#
+            ),
+        )
+    }
 }

@@ -24,6 +24,10 @@ fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuil
     alloc.note("I may be confused by indentation")
 }
 
+fn note_for_record_pattern_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.note("I may be confused by indentation")
+}
+
 fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.note("I may be confused by indentation")
 }
@@ -47,6 +51,14 @@ fn hint_for_private_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilde
         alloc.text(" or "),
         alloc.parser_suggestion("@SecretKey"),
         alloc.text("."),
+    ])
+}
+
+fn record_patterns_look_like<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.concat(vec![
+        alloc.reflow(r"Record pattern look like "),
+        alloc.parser_suggestion("{ name, age: currentAge },"),
+        alloc.reflow(" so I was expecting to see a field name next."),
     ])
 }
 
@@ -141,128 +153,248 @@ fn to_pattern_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EPattern<'a>,
-    start_row: Row,
-    start_col: Col,
+    _start_row: Row,
+    _start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::EPattern;
 
     match parse_problem {
-        EPattern::Apply(tag_apply, row, col) => {
-            to_papply_report(alloc, filename, &tag_apply, *row, *col)
+        EPattern::Record(record, row, col) => {
+            to_precord_report(alloc, filename, &record, *row, *col)
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
 
-fn to_papply_report<'a>(
+fn to_precord_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::PApply<'a>,
-    _start_row: Row,
-    _start_col: Col,
+    parse_problem: &roc_parse::parser::PRecord<'a>,
+    start_row: Row,
+    start_col: Col,
 ) -> Report<'a> {
-    use roc_parse::parser::PApply;
+    use roc_parse::parser::PRecord;
 
     match *parse_problem {
-        PApply::DoubleDot(row, col) => {
-            let region = Region::from_row_col(row, col);
+        PRecord::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Keyword(keyword) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = to_keyword_region(row, col, keyword);
 
-            let doc = alloc.stack(vec![
-                alloc.reflow(r"I encountered two dots in a row:"),
-                alloc.region(region),
-                alloc.concat(vec![alloc.reflow("Try removing one of them.")]),
-            ]);
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Looks like you are trying to use "),
+                        alloc.keyword(keyword),
+                        alloc.reflow(" as a field name, but that is a reserved word. Try using a different name!"),
+                    ]),
+                ]);
 
-            Report {
-                filename,
-                doc,
-                title: "DOUBLE DOT".to_string(),
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                }
             }
-        }
-        PApply::TrailingDot(row, col) => {
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    record_patterns_look_like(alloc),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                }
+            }
+        },
+
+        PRecord::End(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
-            let doc = alloc.stack(vec![
-                alloc.reflow(r"I encountered a dot with nothing after it:"),
-                alloc.region(region),
+            match what_is_next(alloc.src_lines, row, col) {
+                Next::Other(Some(c)) if c.is_alphabetic() => {
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(
+                                r"I was expecting to see a colon, question mark, comma or closing curly brace.",
+                            ),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                    }
+                }
+                _ => {
+                    let doc = alloc.stack(vec![
+                alloc.reflow("I am partway through parsing a record pattern, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
-                    alloc.reflow("Dots are used to refer to a type in a qualified way, like "),
-                    alloc.parser_suggestion("Num.I64"),
-                    alloc.text(" or "),
-                    alloc.parser_suggestion("List.List a"),
-                    alloc.reflow(". Try adding a type name next."),
+                    alloc.reflow(
+                        r"I was expecting to see a closing curly brace before this, so try adding a ",
+                    ),
+                    alloc.parser_suggestion("}"),
+                    alloc.reflow(" and see if that helps?"),
                 ]),
             ]);
 
-            Report {
-                filename,
-                doc,
-                title: "TRAILING DOT".to_string(),
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                    }
+                }
             }
         }
-        PApply::StartIsNumber(row, col) => {
+
+        PRecord::Field(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Keyword(keyword) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = to_keyword_region(row, col, keyword);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Looks like you are trying to use "),
+                        alloc.keyword(keyword),
+                        alloc.reflow(" as a field name, but that is a reserved word. Try using a different name!"),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                }
+            }
+            Next::Other(Some(',')) => todo!(),
+            Next::Other(Some('}')) => unreachable!("or is it?"),
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"I was expecting to see another record field defined next, so I am looking for a name like "),
+                        alloc.parser_suggestion("userName"),
+                        alloc.reflow(" or "),
+                        alloc.parser_suggestion("plantHight"),
+                        alloc.reflow("."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "PROBLEM IN RECORD PATTERN".to_string(),
+                }
+            }
+        },
+
+        PRecord::Colon(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+        }
+        PRecord::Optional(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+        }
+
+        PRecord::Pattern(pattern, row, col) => {
+            to_pattern_report(alloc, filename, pattern, row, col)
+        }
+        PRecord::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+
+        PRecord::IndentOpen(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I encountered a number at the start of a qualified name segment:"),
-                alloc.region(region),
-                alloc.concat(vec![
-                    alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
-                    alloc.parser_suggestion("Num.I64"),
-                    alloc.text(" or "),
-                    alloc.parser_suggestion("List.List a"),
-                    alloc.text("."),
-                ]),
+                alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                record_patterns_look_like(alloc),
+                note_for_record_pattern_indent(alloc),
             ]);
 
             Report {
                 filename,
                 doc,
-                title: "WEIRD QUALIFIED NAME".to_string(),
-            }
-        }
-        PApply::StartNotUppercase(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            let doc = alloc.stack(vec![
-                alloc.reflow(r"I encountered a lowercase letter at the start of a qualified name segment:"),
-                alloc.region(region),
-                alloc.concat(vec![
-                    alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
-                    alloc.parser_suggestion("Num.I64"),
-                    alloc.text(" or "),
-                    alloc.parser_suggestion("List.List a"),
-                    alloc.text("."),
-                ]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "WEIRD QUALIFIED NAME".to_string(),
+                title: "UNFINISHED RECORD PATTERN".to_string(),
             }
         }
 
-        PApply::End(row, col) => {
-            let region = Region::from_row_col(row, col);
+        PRecord::IndentEnd(row, col) => {
+            match next_line_starts_with_close_curly(alloc.src_lines, row.saturating_sub(1)) {
+                Some((curly_row, curly_col)) => {
+                    let surroundings =
+                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
+                    let region = Region::from_row_col(curly_row, curly_col);
 
-            let doc = alloc.stack(vec![
-                alloc.reflow(
-                    r"I reached the end of the input file while parsing a qualified type name",
-                ),
-                alloc.region(region),
-            ]);
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            "I am partway through parsing a record pattern, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
+                        ]),
+                    ]);
 
-            Report {
-                filename,
-                doc,
-                title: "END OF FILE".to_string(),
+                    Report {
+                        filename,
+                        doc,
+                        title: "NEED MORE INDENTATION".to_string(),
+                    }
+                }
+                None => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a record pattern, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I was expecting to see a closing curly "),
+                            alloc.reflow("brace before this, so try adding a "),
+                            alloc.parser_suggestion("}"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                        note_for_record_pattern_indent(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                    }
+                }
             }
         }
 
-        PApply::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
-        PApply::Pattern(pat, row, col) => to_pattern_report(alloc, filename, pat, row, col),
-        PApply::IndentStart(_, _) => todo!(),
+        PRecord::IndentColon(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+        }
+
+        PRecord::IndentOptional(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+        }
+
+        PRecord::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
     }
 }
 
