@@ -651,7 +651,10 @@ impl<'a> Layout<'a> {
             Union(variant) => {
                 use UnionLayout::*;
 
-                matches!(variant, Recursive(_)| NullableWrapped { .. } | NullableUnwrapped { .. })
+                matches!(
+                    variant,
+                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. }
+                )
             }
 
             RecursivePointer => true,
