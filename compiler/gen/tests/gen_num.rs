@@ -1343,4 +1343,29 @@ mod gen_num {
             f64
         );
     }
+
+    #[test]
+    fn shift_left_by() {
+        assert_evals_to!("Num.shiftLeftBy 0 0b0000_0001", 0b0000_0001, i64);
+        assert_evals_to!("Num.shiftLeftBy 1 0b0000_0001", 0b0000_0010, i64);
+        assert_evals_to!("Num.shiftLeftBy 2 0b0000_0011", 0b0000_1100, i64);
+    }
+
+    #[test]
+    #[ignore]
+    fn shift_right_by() {
+        // Sign Extended Right Shift
+        assert_evals_to!("Num.shiftRightBy 0 0b0100_0000i8", 0b0001_0000, i8);
+        assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8 as i8, i8);
+        assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8 as i8, i8);
+    }
+
+    #[test]
+    #[ignore]
+    fn shift_right_zf_by() {
+        // Logical Right Shift
+        assert_evals_to!("Num.shiftRightBy 1 0b1100_0000u8", 0b0011_0000, i64);
+        assert_evals_to!("Num.shiftRightBy 2 0b0000_0010u8", 0b0000_0001, i64);
+        assert_evals_to!("Num.shiftRightBy 3 0b0000_1100u8", 0b0000_0011, i64);
+    }
 }
