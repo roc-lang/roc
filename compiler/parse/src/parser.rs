@@ -321,6 +321,8 @@ pub enum SyntaxError<'a> {
     NotYetImplemented(String),
     TODO,
     Type(Type<'a>),
+    Pattern(EPattern<'a>),
+    Expr(EExpr<'a>),
     Space(BadInputError),
 }
 
@@ -367,6 +369,95 @@ impl<'a> SyntaxError<'a> {
 
 pub type Row = u32;
 pub type Col = u16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EExpr<'a> {
+    // Record(PRecord<'a>, Row, Col),
+    Start(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+
+    When(When<'a>, Row, Col),
+
+    // EInParens(PInParens<'a>, Row, Col),
+    IndentStart(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum When<'a> {
+    Space(BadInputError, Row, Col),
+    When(Row, Col),
+    Is(Row, Col),
+    Pattern(EPattern<'a>, Row, Col),
+    Arrow(Row, Col),
+    Bar(Row, Col),
+    IfToken(Row, Col),
+    // TODO make EEXpr
+    IfGuard(&'a SyntaxError<'a>, Row, Col),
+    Condition(&'a EExpr<'a>, Row, Col),
+    Branch(&'a EExpr<'a>, Row, Col),
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    IndentIs(Row, Col),
+    IndentCondition(Row, Col),
+    IndentPattern(Row, Col),
+    IndentArrow(Row, Col),
+    IndentBranch(Row, Col),
+    IndentIfGuard(Row, Col),
+    PatternAlignment(u16, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPattern<'a> {
+    Record(PRecord<'a>, Row, Col),
+    Underscore(Row, Col),
+
+    Start(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+
+    PInParens(PInParens<'a>, Row, Col),
+
+    IndentStart(Row, Col),
+    IndentEnd(Row, Col),
+    AsIndentStart(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PRecord<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+
+    Field(Row, Col),
+    Colon(Row, Col),
+    Optional(Row, Col),
+    Pattern(&'a EPattern<'a>, Row, Col),
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    Space(BadInputError, Row, Col),
+
+    IndentOpen(Row, Col),
+    IndentColon(Row, Col),
+    IndentOptional(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PInParens<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+    ///
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    ///
+    Space(BadInputError, Row, Col),
+    ///
+    IndentOpen(Row, Col),
+    IndentEnd(Row, Col),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type<'a> {
@@ -882,16 +973,17 @@ pub fn keyword<'a>(
     }
 }
 
-pub fn keyword_e<'a, E>(keyword: &'static str, if_error: E) -> impl Parser<'a, (), E>
+pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
 where
-    E: 'a + Clone,
+    ToError: Fn(Row, Col) -> E,
+    E: 'a,
 {
     move |arena, state: State<'a>| {
         let initial_state = state.clone();
         // first parse the keyword characters
         let (_, _, after_keyword_state) = ascii_string(keyword)
             .parse(arena, state)
-            .map_err(|(_, _, state)| (NoProgress, if_error.clone(), state))?;
+            .map_err(|(_, _, state)| (NoProgress, if_error(state.line, state.column), state))?;
 
         // then we must have at least one space character
         // TODO this is potentially wasteful if there are a lot of spaces
@@ -905,7 +997,11 @@ where
                 // this is not a keyword, maybe it's `whence` or `iffy`
                 // anyway, make no progress and return the initial state
                 // so we can try something else
-                Err((NoProgress, if_error.clone(), initial_state))
+                Err((
+                    NoProgress,
+                    if_error(initial_state.line, initial_state.column),
+                    initial_state,
+                ))
             }
         }
     }

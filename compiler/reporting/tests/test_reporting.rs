@@ -4774,4 +4774,179 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn if_guard_without_condition() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just if ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── IF GUARD NO CONDITION ───────────────────────────────────────────────────────
+
+                I just started parsing an if guard, but there is no guard condition:
+
+                1│  when Just 4 is
+                2│      Just if ->
+                                ^
+
+                Try adding an expression before the arrow!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn empty_or_pattern() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just 4 | ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                
+                Unexpected token :
+                
+                2│      Just 4 | ->
+                                 ^
+                "#
+            ),
+            //            indoc!(
+            //                r#"
+            //                ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
+            //
+            //                I just started parsing a pattern, but I got stuck here:
+            //
+            //                2│      Just 4 | ->
+            //                                 ^
+            //
+            //                Note: I may be confused by indentation
+            //            "#
+            //            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn pattern_binds_keyword() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just when ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+
+                Unexpected token :
+
+                2│      Just if ->
+                                ^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_missing_arrow() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when 5 is
+                    1 -> 2
+                    _ 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MISSING ARROW ───────────────────────────────────────────────────────────────
+                
+                I am partway through parsing a `when` expression, but got stuck here:
+                
+                2│      1 -> 2
+                3│      _ 
+                         ^
+                
+                I was expecting to see an arrow next.
+                
+                Note: Sometimes I get confused by indentation, so try to make your `when`
+                look something like this:
+                
+                    when List.first plants is
+                      Ok n ->
+                        n
+                
+                      Err _ ->
+                        200
+                
+                Notice the indentation. All patterns are aligned, and each branch is
+                indented a bit more than the corresponding pattern. That is important!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_outdented_branch() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when 4 is
+                    5 -> 2
+                  _ -> 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED WHEN ─────────────────────────────────────────────────────────────
+                
+                I was partway through parsing a `when` expression, but I got stuck here:
+                
+                3│    _ -> 2
+                        ^
+                
+                I suspect this is a pattern that is not indented enough? (by 2 spaces)
+                
+                Note: Here is an example of a valid `when` expression for reference.
+                
+                    when List.first plants is
+                      Ok n ->
+                        n
+                
+                      Err _ ->
+                        200
+                
+                Notice the indentation. All patterns are aligned, and each branch is
+                indented a bit more than the corresponding pattern. That is important!
+            "#
+            ),
+        )
+    }
 }
