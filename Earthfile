@@ -1,4 +1,4 @@
-FROM rust:1.49-slim-buster
+FROM rust:1.50-slim-buster
 WORKDIR /earthbuild
 
 prep-debian:
@@ -40,7 +40,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # rustfmt
     RUN rustup component add rustfmt
     # sccache
-    RUN apt install libssl-dev
+    RUN apt -y install libssl-dev
     RUN cargo install sccache
     RUN sccache -V
 
@@ -86,6 +86,7 @@ test-rust:
     FROM +build-rust
     ARG RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ARG SCCACHE_DIR=/earthbuild/sccache_dir
+    ARG RUST_BACKTRACE=1
     RUN cargo test --release 
 
 test-all:

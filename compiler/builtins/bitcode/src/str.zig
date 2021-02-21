@@ -1,3 +1,4 @@
+const utils = @import("utils.zig");
 const std = @import("std");
 const mem = std.mem;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
@@ -47,18 +48,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn initBig(allocator: *Allocator, in_place: InPlace, number_of_chars: u64) RocStr {
-        const length = @sizeOf(usize) + number_of_chars;
-        var new_bytes: []usize = allocator.alloc(usize, length) catch unreachable;
-
-        if (in_place == InPlace.InPlace) {
-            new_bytes[0] = @intCast(usize, number_of_chars);
-        } else {
-            const v: isize = std.math.minInt(isize);
-            new_bytes[0] = @bitCast(usize, v);
-        }
-
-        var first_element = @ptrCast([*]align(@alignOf(usize)) u8, new_bytes);
-        first_element += @sizeOf(usize);
+        const first_element = utils.allocateWithRefcount(allocator, @sizeOf(usize), number_of_chars);
 
         return RocStr{
             .str_bytes = first_element,
@@ -833,8 +823,10 @@ pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv
 
 fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
+        // the second argument is borrowed, so we must increment its refcount before returning
         return RocStr.clone(allocator, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
+        // the first argument is owned, so we can return it without cloning
         return RocStr.clone(allocator, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();

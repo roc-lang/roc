@@ -751,7 +751,6 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-        passed_by_pointer: MutMap<(Symbol, Layout<'a>), Symbol>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -782,7 +781,6 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-    pub passed_by_pointer: MutMap<(Symbol, Layout<'a>), Symbol>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -1405,7 +1403,6 @@ where
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
-                passed_by_pointer: MutMap::default(),
                 exposed_to_host: MutMap::default(),
                 exposed_types,
                 headers_parsed,
@@ -1934,7 +1931,6 @@ fn update<'a>(
             mut ident_ids,
             subs,
             procedures,
-            passed_by_pointer,
             external_specializations_requested,
             problems,
             module_timing,
@@ -1949,17 +1945,12 @@ fn update<'a>(
                 .notify(module_id, Phase::MakeSpecializations);
 
             state.procedures.extend(procedures);
-            state.passed_by_pointer.extend(passed_by_pointer);
             state.timings.insert(module_id, module_timing);
 
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
                 debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
 
-                Proc::insert_refcount_operations(
-                    arena,
-                    &mut state.procedures,
-                    &state.passed_by_pointer,
-                );
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 Proc::optimize_refcount_operations(
                     arena,
@@ -2212,7 +2203,7 @@ fn load_pkg_config<'a>(
                         &header,
                         pkg_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     let effects_module_msg = fabricate_effects_module(
                         arena,
@@ -2223,7 +2214,7 @@ fn load_pkg_config<'a>(
                         header,
                         effect_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
@@ -2465,7 +2456,7 @@ fn parse_header<'a>(
                 },
             }
         }
-        Ok((_, ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+        Ok((_, ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
             arena,
             &"",
             module_ids,
@@ -2473,7 +2464,7 @@ fn parse_header<'a>(
             mode,
             header,
             module_timing,
-        ),
+        )),
         Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
             fail.into_parse_problem(filename, src_bytes),
         )),
@@ -3093,11 +3084,11 @@ fn fabricate_pkg_config_module<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
         header.provides.clone().into_bump_slice();
 
-    Ok(send_header_two(
+    send_header_two(
         arena,
         filename,
         shorthand,
@@ -3110,7 +3101,7 @@ fn fabricate_pkg_config_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_timing,
-    ))
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3122,7 +3113,7 @@ fn fabricate_effects_module<'a>(
     mode: Mode,
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
@@ -3350,7 +3341,7 @@ fn fabricate_effects_module<'a>(
         module_timing,
     };
 
-    Ok((
+    (
         module_id,
         Msg::MadeEffectModule {
             type_shortname: effects.effect_shortname,
@@ -3358,7 +3349,7 @@ fn fabricate_effects_module<'a>(
             canonicalization_problems: module_output.problems,
             module_docs,
         },
-    ))
+    )
 }
 
 fn unpack_exposes_entries<'a>(
@@ -3393,6 +3384,7 @@ fn unpack_exposes_entries<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
@@ -3630,7 +3622,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let (procedures, passed_by_pointer) = procs.get_specialized_procs_without_rc(mono_env.arena);
+    let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
 
     let make_specializations_end = SystemTime::now();
     module_timing.make_specializations = make_specializations_end
@@ -3642,7 +3634,6 @@ fn make_specializations<'a>(
         ident_ids,
         layout_cache,
         procedures,
-        passed_by_pointer,
         problems: mono_problems,
         subs,
         external_specializations_requested,

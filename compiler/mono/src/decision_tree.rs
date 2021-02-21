@@ -229,7 +229,11 @@ fn flatten<'a>(
             tag_name,
             layout,
         } if union.alternatives.len() == 1
-            && !matches!(layout, Layout::Union(UnionLayout::NullableWrapped { .. })| Layout::Union(UnionLayout::NullableUnwrapped { .. })) =>
+            && !matches!(
+                layout,
+                Layout::Union(UnionLayout::NullableWrapped { .. })
+                    | Layout::Union(UnionLayout::NullableUnwrapped { .. })
+            ) =>
         {
             // TODO ^ do we need to check that guard.is_none() here?
 

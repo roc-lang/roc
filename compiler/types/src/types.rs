@@ -648,17 +648,16 @@ impl Type {
                 // attribute on the recursion variable must match the uniqueness of the whole tag
                 // union. We enforce that here.
 
-                if let Some(rec_uvar) = find_rec_var_uniqueness(base_type, aliases) {
-                    if let Bool::Container(unbound_cvar, mvars1) = rec_uvar {
-                        if let Type::Boolean(Bool::Container(bound_cvar, mvars2)) = uniqueness_type
-                        {
-                            debug_assert!(mvars1.is_empty());
-                            debug_assert!(mvars2.is_empty());
+                if let Some(Bool::Container(unbound_cvar, mvars1)) =
+                    find_rec_var_uniqueness(base_type, aliases)
+                {
+                    if let Type::Boolean(Bool::Container(bound_cvar, mvars2)) = uniqueness_type {
+                        debug_assert!(mvars1.is_empty());
+                        debug_assert!(mvars2.is_empty());
 
-                            let mut substitution = ImMap::default();
-                            substitution.insert(unbound_cvar, Type::Variable(*bound_cvar));
-                            base_type.substitute(&substitution);
-                        }
+                        let mut substitution = ImMap::default();
+                        substitution.insert(unbound_cvar, Type::Variable(*bound_cvar));
+                        base_type.substitute(&substitution);
                     }
                 }
             }

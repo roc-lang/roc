@@ -7,6 +7,9 @@ const Allocator = mem.Allocator;
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const Opaque = ?[*]u8;
 
+const Inc = fn (?[*]u8) callconv(.C) void;
+const Dec = fn (?[*]u8) callconv(.C) void;
+
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
@@ -58,7 +61,7 @@ pub const RocList = extern struct {
         }
 
         // unfortunately, we have to clone
-        var new_list = RocList.allocate(allocator, self.length, alignment, element_width);
+        var new_list = RocList.allocate(allocator, alignment, self.length, element_width);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, self.bytes);
         var new_bytes: [*]u8 = @ptrCast([*]u8, new_list.bytes);
@@ -149,7 +152,7 @@ pub fn listMapWithIndex(list: RocList, transform: Opaque, caller: Caller2, align
     }
 }
 
-pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, element_width: usize) callconv(.C) RocList {
+pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, element_width: usize, inc: Inc, dec: Dec) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
@@ -160,6 +163,7 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
         while (i < size) : (i += 1) {
             var keep = false;
             const element = source_ptr + (i * element_width);
+            inc(element);
             caller(transform, element, @ptrCast(?[*]u8, &keep));
 
             if (keep) {
@@ -167,29 +171,36 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
 
                 kept += 1;
             } else {
-                // TODO decrement the value?
+                dec(element);
             }
         }
 
-        output.length = kept;
-
+        // consume the input list
         utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
 
-        return output;
+        if (kept == 0) {
+            // if the output is empty, deallocate the space we made for the result
+            utils.decref(std.heap.c_allocator, alignment, output.bytes, size * element_width);
+            return RocList.empty();
+        } else {
+            output.length = kept;
+
+            return output;
+        }
     } else {
         return RocList.empty();
     }
 }
 
-pub fn listKeepOks(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize) callconv(.C) RocList {
-    return listKeepResult(list, RocResult.isOk, transform, caller, alignment, before_width, result_width, after_width);
+pub fn listKeepOks(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) callconv(.C) RocList {
+    return listKeepResult(list, RocResult.isOk, transform, caller, alignment, before_width, result_width, after_width, inc_closure, dec_result);
 }
 
-pub fn listKeepErrs(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize) callconv(.C) RocList {
-    return listKeepResult(list, RocResult.isErr, transform, caller, alignment, before_width, result_width, after_width);
+pub fn listKeepErrs(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) callconv(.C) RocList {
+    return listKeepResult(list, RocResult.isErr, transform, caller, alignment, before_width, result_width, after_width, inc_closure, dec_result);
 }
 
-pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize) RocList {
+pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
@@ -200,23 +211,31 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
 
         var kept: usize = 0;
         while (i < size) : (i += 1) {
-            const element = source_ptr + (i * before_width);
-            caller(transform, element, temporary);
+            const before_element = source_ptr + (i * before_width);
+            inc_closure(transform);
+            caller(transform, before_element, temporary);
 
             const result = utils.RocResult{ .bytes = temporary };
 
+            const after_element = temporary + @sizeOf(i64);
             if (is_good_constructor(result)) {
-                @memcpy(target_ptr + (kept * after_width), temporary + @sizeOf(i64), after_width);
-
+                @memcpy(target_ptr + (kept * after_width), after_element, after_width);
                 kept += 1;
+            } else {
+                dec_result(temporary);
             }
         }
 
-        output.length = kept;
-
         utils.decref(std.heap.c_allocator, alignment, list.bytes, size * before_width);
+        std.heap.c_allocator.free(temporary[0..result_width]);
 
-        return output;
+        if (kept == 0) {
+            utils.decref(std.heap.c_allocator, alignment, output.bytes, size * after_width);
+            return RocList.empty();
+        } else {
+            output.length = kept;
+            return output;
+        }
     } else {
         return RocList.empty();
     }
@@ -277,4 +296,31 @@ pub fn listContains(list: RocList, key: Opaque, key_width: usize, is_eq: EqFn) c
     }
 
     return false;
+}
+
+pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width: usize, inc_n_element: Inc) callconv(.C) RocList {
+    if (count == 0) {
+        return RocList.empty();
+    }
+
+    const allocator = std.heap.c_allocator;
+    var output = RocList.allocate(allocator, alignment, count, element_width);
+
+    if (output.bytes) |target_ptr| {
+        var i: usize = 0;
+        const source = element orelse unreachable;
+        while (i < count) : (i += 1) {
+            @memcpy(target_ptr + i * element_width, source, element_width);
+        }
+
+        // TODO do all increments at once!
+        i = 0;
+        while (i < count) : (i += 1) {
+            inc_n_element(element);
+        }
+
+        return output;
+    } else {
+        unreachable;
+    }
 }
