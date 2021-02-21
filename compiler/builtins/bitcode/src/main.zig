@@ -68,6 +68,7 @@ comptime {
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
     exportStrFn(str.validateUtf8Bytes, "validate_utf8_bytes");
+    exportStrFn(str.strToBytesC, "to_bytes");
 }
 
 // Export helpers - Must be run inside a comptime

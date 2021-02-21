@@ -1,4 +1,5 @@
 const utils = @import("utils.zig");
+const RocList = @import("list.zig").RocList;
 const std = @import("std");
 const mem = std.mem;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
@@ -959,6 +960,26 @@ test "RocStr.joinWith: result is big" {
     defer result.deinit(testing.allocator);
 
     expect(roc_result.eq(result));
+}
+
+// Str.toBytes
+pub fn strToBytesC(arg: RocStr) callconv(.C) RocList {
+    return @call(.{ .modifier = always_inline }, strToBytes, .{ std.heap.c_allocator, arg });
+}
+
+fn strToBytes(allocator: *Allocator, arg: RocStr) RocList {
+    if (arg.isEmpty()) {
+        return RocList.empty();
+    } else if (arg.isSmallStr()) {
+        const length = arg.len();
+        const ptr = utils.allocateWithRefcount(allocator, @alignOf(usize), length);
+
+        @memcpy(ptr, arg.asU8ptr(), length);
+
+        return RocList{ .length = length, .bytes = ptr };
+    } else {
+        return RocList{ .length = arg.len(), .bytes = arg.str_bytes };
+    }
 }
 
 pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {

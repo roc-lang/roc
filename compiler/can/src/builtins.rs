@@ -62,6 +62,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
         STR_FROM_UTF8 => str_from_utf8,
+        STR_TO_BYTES => str_to_bytes,
         STR_FROM_FLOAT=> str_from_float,
         LIST_LEN => list_len,
         LIST_GET => list_get,
@@ -196,6 +197,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::STR_FROM_INT => str_from_int,
         Symbol::STR_FROM_UTF8 => str_from_utf8,
+        Symbol::STR_TO_BYTES => str_to_bytes,
         Symbol::STR_FROM_FLOAT=> str_from_float,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
@@ -1653,6 +1655,11 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+/// Str.toBytes : Str -> List U8
+fn str_to_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrToBytes, var_store)
 }
 
 /// Str.fromFloat : Float * -> Str

@@ -623,6 +623,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // toBytes : Str -> List U8
+    add_type(
+        Symbol::STR_TO_BYTES,
+        top_level_function(vec![str_type()], Box::new(list_type(u8_type()))),
+    );
+
     // fromFloat : Float a -> Str
     add_type(
         Symbol::STR_FROM_FLOAT,

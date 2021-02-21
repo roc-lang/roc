@@ -12,6 +12,7 @@ pub enum LowLevel {
     StrCountGraphemes,
     StrFromInt,
     StrFromUtf8,
+    StrToBytes,
     StrFromFloat,
     ListLen,
     ListGetUnsafe,

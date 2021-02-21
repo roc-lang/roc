@@ -275,6 +275,28 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     zig_str_to_struct(env, zig_result).into()
 }
 
+/// Str.toBytes : Str -> List U8
+pub fn str_to_bytes<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let string = complex_bitcast(
+        env.builder,
+        original_wrapper.into(),
+        env.context.i128_type().into(),
+        "to_bytes",
+    );
+
+    let zig_result = call_bitcode_fn(env, &[string], &bitcode::STR_TO_BYTES);
+
+    complex_bitcast(
+        env.builder,
+        zig_result,
+        collection(env.context, env.ptr_bytes).into(),
+        "to_bytes",
+    )
+}
+
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
 pub fn str_from_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

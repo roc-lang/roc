@@ -882,6 +882,7 @@ define_builtins! {
         12 STR_FROM_UTF8: "fromUtf8"
         13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
+        15 STR_TO_BYTES: "toBytes"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

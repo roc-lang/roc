@@ -12,7 +12,7 @@ use crate::llvm::build_list::{
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
-    str_join_with, str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
+    str_join_with, str_number_of_bytes, str_split, str_starts_with, str_to_bytes, CHAR_LAYOUT,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -3611,12 +3611,22 @@ fn run_low_level<'a, 'ctx, 'env>(
             str_from_float(env, scope, args[0])
         }
         StrFromUtf8 => {
-            // Str.fromInt : Int -> Str
+            // Str.fromUtf8 : List U8 -> Result Str Utf8Problem
             debug_assert_eq!(args.len(), 1);
 
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
 
             str_from_utf8(env, parent, original_wrapper)
+        }
+        StrToBytes => {
+            // Str.fromInt : Str -> List U8
+            debug_assert_eq!(args.len(), 1);
+
+            // this is an identity conversion
+            // we just implement it here to subvert the type system
+            let string = load_symbol(scope, &args[0]);
+
+            str_to_bytes(env, string.into_struct_value())
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
