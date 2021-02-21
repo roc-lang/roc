@@ -854,6 +854,8 @@ define_builtins! {
         93 NUM_AT_NATURAL: "@Natural"
         94 NUM_NATURAL: "Natural" imported
         95 NUM_NAT: "Nat" imported
+        96 NUM_INT_CAST: "intCast"
+
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

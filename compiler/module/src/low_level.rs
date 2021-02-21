@@ -83,6 +83,7 @@ pub enum LowLevel {
     NumShiftLeftBy,
     NumShiftRightBy,
     NumShiftRightZfBy,
+    NumIntCast,
     Eq,
     NotEq,
     And,

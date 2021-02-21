@@ -156,6 +156,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_LEFT=> num_shift_left_by,
         NUM_SHIFT_RIGHT => num_shift_right_by,
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
+        NUM_INT_CAST=> num_int_cast,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
         RESULT_WITH_DEFAULT => result_with_default,
@@ -285,6 +286,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_SHIFT_LEFT => num_shift_left_by,
         Symbol::NUM_SHIFT_RIGHT => num_shift_right_by,
         Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
+        Symbol::NUM_INT_CAST=> num_int_cast,
         Symbol::RESULT_MAP => result_map,
         Symbol::RESULT_MAP_ERR => result_map_err,
         Symbol::RESULT_WITH_DEFAULT => result_with_default,
@@ -1329,6 +1331,11 @@ fn num_shift_right_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.shiftRightZfBy: Nat, Int a -> Int a
 fn num_shift_right_zf_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::NumShiftRightZfBy, var_store)
+}
+
+/// Num.intCast: Int a -> Int b
+fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
 /// List.isEmpty : List * -> Bool

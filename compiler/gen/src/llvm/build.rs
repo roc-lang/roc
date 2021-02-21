@@ -3983,6 +3983,16 @@ fn run_low_level<'a, 'ctx, 'env>(
                 op,
             )
         }
+        NumIntCast => {
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = load_symbol(scope, &args[0]).into_int_value();
+
+            let to = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
+                .into_int_type();
+
+            env.builder.build_int_cast(arg, to, "inc_cast").into()
+        }
         Eq => {
             debug_assert_eq!(args.len(), 2);
 

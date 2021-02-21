@@ -360,6 +360,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // intCast : Int a -> Int b
+    add_type(
+        Symbol::NUM_INT_CAST,
+        top_level_function(vec![int_type(flex(TVAR1))], Box::new(int_type(flex(TVAR2)))),
+    );
+
     // rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_type(
         Symbol::NUM_REM,
