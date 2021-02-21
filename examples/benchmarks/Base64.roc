@@ -1,11 +1,11 @@
 app "base64"
     packages { base: "platform" }
-    imports [base.Task, BytesDecode.{Decoder} ]
+    imports [base.Task, Bytes.Decode.{Decoder} ]
     provides [ main ] to base
 
 IO a : Task.Task a []
 
-Decoder a : BytesDecode.Decoder a
+Decoder a : Bytes.Decode.Decoder a
 
 main : IO {}
 main =
@@ -24,15 +24,15 @@ main =
 # ------
 
 
-fromBytes : List U8 -> Result Str BytesDecode.DecodeError
+fromBytes : List U8 -> Result Str Bytes.Decode.DecodeError
 fromBytes = \bytes ->
-    BytesDecode.decode  bytes (decodeBase64 (List.len bytes))
+    Bytes.Decode.decode  bytes (decodeBase64 (List.len bytes))
 
 
-decodeBase64 : Nat -> BytesDecode.Decoder Str
-decodeBase64 = \width -> BytesDecode.loop loopHelp { remaining: width, string:  "" }
+decodeBase64 : Nat -> Bytes.Decode.Decoder Str
+decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string:  "" }
 
-loopHelp : { remaining : Nat, string : Str } -> Decoder (BytesDecode.Step { remaining : Nat, string : Str } Str)
+loopHelp : { remaining : Nat, string : Str } -> Decoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
 loopHelp = \{ remaining, string } ->
     if remaining >= 3 then
         helper = \x, y, z ->
@@ -49,13 +49,13 @@ loopHelp = \{ remaining, string } ->
                     string: Str.concat string (bitsToChars combined 0)
                 }
 
-        BytesDecode.map3 helper
-            BytesDecode.u8
-            BytesDecode.u8
-            BytesDecode.u8
+        Bytes.Decode.map3 helper
+            Bytes.Decode.u8
+            Bytes.Decode.u8
+            Bytes.Decode.u8
 
     else if remaining == 0 then
-        BytesDecode.succeed (Done string)
+        Bytes.Decode.succeed (Done string)
 
     else if remaining == 2 then
         helperX = \x, y ->
@@ -66,13 +66,13 @@ loopHelp = \{ remaining, string } ->
             combined = Num.bitwiseOr (Num.shiftLeftBy 16 a) (Num.shiftLeftBy 8 b)
             Done (Str.concat string (bitsToChars combined 1))
 
-        BytesDecode.map2 helperX
-            BytesDecode.u8
-            BytesDecode.u8
+        Bytes.Decode.map2 helperX
+            Bytes.Decode.u8
+            Bytes.Decode.u8
     else
         # remaining = 1
-            BytesDecode.u8
-                |> BytesDecode.map (\x -> 
+            Bytes.Decode.u8
+                |> Bytes.Decode.map (\x -> 
                     a : U32
                     a = Num.intCast x
                     Done (Str.concat string (bitsToChars (Num.shiftLeftBy 16 a) 2)))
