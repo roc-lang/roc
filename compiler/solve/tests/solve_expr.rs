@@ -219,7 +219,7 @@ mod solve_expr {
                 Str.fromInt
                 "#
             ),
-            "Int -> Str",
+            "Int * -> Str",
         );
     }
 
@@ -231,7 +231,7 @@ mod solve_expr {
                 Str.fromUtf8
                 "#
             ),
-            "List U8 -> Result Str [ BadUtf8 Utf8Problem ]*",
+            "List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*",
         );
     }
 
