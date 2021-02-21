@@ -2,17 +2,19 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_around, space0_before, space1, space1_around,
-    space1_before, spaces_exactly,
+    line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_e,
+    space0_before, space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
-    fail, map, newline_char, not, not_followed_by, optional, sep_by1, then, unexpected,
-    unexpected_eof, Either, ParseResult, Parser, State, SyntaxError,
+    fail, map, newline_char, not, not_followed_by, optional, sep_by1, specialize, specialize_ref,
+    then, unexpected, unexpected_eof, word1, word2, EExpr, Either, ParseResult, Parser, State,
+    SyntaxError, When,
 };
+use crate::pattern::loc_closure_param;
 use crate::type_annotation;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -243,7 +245,10 @@ fn parse_expr<'a>(
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
-fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, SyntaxError<'a>> {
+pub fn expr_to_pattern<'a>(
+    arena: &'a Bump,
+    expr: &Expr<'a>,
+) -> Result<Pattern<'a>, SyntaxError<'a>> {
     match expr {
         Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
@@ -1008,343 +1013,40 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     )
 }
 
-fn loc_closure_param<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    move |arena, state| parse_closure_param(arena, state, min_indent)
-}
-
-fn parse_closure_param<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u16,
-) -> ParseResult<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    one_of!(
-        // An ident is the most common param, e.g. \foo -> ...
-        loc_ident_pattern(min_indent, true),
-        // Underscore is also common, e.g. \_ -> ...
-        loc!(underscore_pattern()),
-        // You can destructure records in params, e.g. \{ x, y } -> ...
-        loc!(record_destructure(min_indent)),
-        // If you wrap it in parens, you can match any arbitrary pattern at all.
-        // e.g. \User.UserId userId -> ...
-        between!(
-            ascii_char(b'('),
-            space0_around(loc_pattern(min_indent), min_indent),
-            ascii_char(b')')
-        )
-    )
-    .parse(arena, state)
-}
-
-fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    skip_first!(
-        // If this is a reserved keyword ("if", "then", "case, "when"), then
-        // it is not a pattern!
-        not(reserved_keyword()),
-        one_of!(
-            loc_parenthetical_pattern(min_indent),
-            loc!(underscore_pattern()),
-            loc_ident_pattern(min_indent, true),
-            loc!(record_destructure(min_indent)),
-            loc!(string_pattern()),
-            loc!(number_pattern())
-        )
-    )
-}
-
-fn loc_tag_pattern_args<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>, SyntaxError<'a>> {
-    zero_or_more!(space1_before(loc_tag_pattern_arg(min_indent), min_indent))
-}
-
-fn loc_tag_pattern_arg<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    skip_first!(
-        // If this is a reserved keyword ("if", "then", "case, "when"), then
-        // it is not a function argument!
-        not(reserved_keyword()),
-        // Don't parse operators, because they have a higher precedence than function application.
-        // If we encounter one, we're done parsing function args!
-        move |arena, state| loc_parse_tag_pattern_arg(min_indent, arena, state)
-    )
-}
-
-fn loc_parse_tag_pattern_arg<'a>(
-    min_indent: u16,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    one_of!(
-        loc_parenthetical_pattern(min_indent),
-        loc!(underscore_pattern()),
-        // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-        loc_ident_pattern(min_indent, false),
-        loc!(record_destructure(min_indent)),
-        loc!(string_pattern()),
-        loc!(number_pattern())
-    )
-    .parse(arena, state)
-}
-
-fn loc_parenthetical_pattern<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    between!(
-        ascii_char(b'('),
-        space0_around(
-            move |arena, state| loc_pattern(min_indent).parse(arena, state),
-            min_indent,
-        ),
-        ascii_char(b')')
-    )
-}
-
-fn number_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    map_with_arena!(number_literal(), |arena, expr| {
-        expr_to_pattern(arena, &expr).unwrap()
-    })
-}
-
-fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    map!(crate::string_literal::parse(), Pattern::StrLiteral)
-}
-
-fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
-        let (_, _, next_state) = ascii_char(b'_').parse(arena, state)?;
-
-        let (_, output, final_state) = optional(lowercase_ident()).parse(arena, next_state)?;
-
-        match output {
-            Some(name) => Ok((MadeProgress, Pattern::Underscore(name), final_state)),
-            None => Ok((MadeProgress, Pattern::Underscore(&""), final_state)),
-        }
-    }
-}
-
-fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    then(
-        collection!(
-            ascii_char(b'{'),
-            move |arena: &'a bumpalo::Bump,
-                  state: crate::parser::State<'a>|
-                  -> crate::parser::ParseResult<
-                'a,
-                Located<crate::ast::Pattern<'a>>,
-                SyntaxError,
-            > {
-                use crate::blankspace::{space0, space0_before};
-                use crate::ident::lowercase_ident;
-                use crate::parser::Either::*;
-                use roc_region::all::Region;
-
-                // You must have a field name, e.g. "email"
-                let (p1, loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
-
-                let (p2, spaces, state) = space0(min_indent).parse(arena, state)?;
-
-                // Having a value is optional; both `{ email }` and `{ email: blah }` work.
-                // (This is true in both literals and types.)
-                let (p3, opt_loc_val, state) = crate::parser::optional(either!(
-                    skip_first!(
-                        ascii_char(b':'),
-                        space0_before(loc_pattern(min_indent), min_indent)
-                    ),
-                    skip_first!(
-                        ascii_char(b'?'),
-                        space0_before(loc!(expr(min_indent)), min_indent)
-                    )
-                ))
-                .parse(arena, state)?;
-
-                let answer = match opt_loc_val {
-                    Some(either) => match either {
-                        First(loc_val) => Located {
-                            region: Region::span_across(&loc_label.region, &loc_val.region),
-                            value: Pattern::RequiredField(loc_label.value, arena.alloc(loc_val)),
-                        },
-                        Second(loc_val) => Located {
-                            region: Region::span_across(&loc_label.region, &loc_val.region),
-                            value: Pattern::OptionalField(loc_label.value, arena.alloc(loc_val)),
-                        },
-                    },
-                    // If no value was provided, record it as a Var.
-                    // Canonicalize will know what to do with a Var later.
-                    None => {
-                        if !spaces.is_empty() {
-                            Located {
-                                region: loc_label.region,
-                                value: Pattern::SpaceAfter(
-                                    arena.alloc(Pattern::Identifier(loc_label.value)),
-                                    spaces,
-                                ),
-                            }
-                        } else {
-                            Located {
-                                region: loc_label.region,
-                                value: Pattern::Identifier(loc_label.value),
-                            }
-                        }
-                    }
-                };
-
-                let progress = p1.or(p2).or(p3);
-                debug_assert_eq!(progress, MadeProgress);
-                Ok((MadeProgress, answer, state))
-            },
-            ascii_char(b','),
-            ascii_char(b'}'),
-            min_indent
-        ),
-        move |_arena, state, progress, loc_patterns| {
-            Ok((
-                progress,
-                Pattern::RecordDestructure(loc_patterns.into_bump_slice()),
-                state,
-            ))
-        },
-    )
-}
-
-fn loc_ident_pattern<'a>(
-    min_indent: u16,
-    can_have_arguments: bool,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
-        let (_, loc_ident, state) = loc!(ident()).parse(arena, state)?;
-
-        match loc_ident.value {
-            Ident::GlobalTag(tag) => {
-                let loc_tag = Located {
-                    region: loc_ident.region,
-                    value: Pattern::GlobalTag(tag),
-                };
-
-                // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-                if can_have_arguments {
-                    let (_, loc_args, state) =
-                        loc_tag_pattern_args(min_indent).parse(arena, state)?;
-
-                    if loc_args.is_empty() {
-                        Ok((MadeProgress, loc_tag, state))
-                    } else {
-                        let region = Region::across_all(
-                            std::iter::once(&loc_ident.region)
-                                .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                        );
-                        let value =
-                            Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
-
-                        Ok((MadeProgress, Located { region, value }, state))
-                    }
-                } else {
-                    Ok((MadeProgress, loc_tag, state))
-                }
-            }
-            Ident::PrivateTag(tag) => {
-                let loc_tag = Located {
-                    region: loc_ident.region,
-                    value: Pattern::PrivateTag(tag),
-                };
-
-                // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-                if can_have_arguments {
-                    let (_, loc_args, state) =
-                        loc_tag_pattern_args(min_indent).parse(arena, state)?;
-
-                    if loc_args.is_empty() {
-                        Ok((MadeProgress, loc_tag, state))
-                    } else {
-                        let region = Region::across_all(
-                            std::iter::once(&loc_ident.region)
-                                .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                        );
-                        let value =
-                            Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
-
-                        Ok((MadeProgress, Located { region, value }, state))
-                    }
-                } else {
-                    Ok((MadeProgress, loc_tag, state))
-                }
-            }
-            Ident::Access { module_name, parts } => {
-                // Plain identifiers (e.g. `foo`) are allowed in patterns, but
-                // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
-                if module_name.is_empty() && parts.len() == 1 {
-                    Ok((
-                        MadeProgress,
-                        Located {
-                            region: loc_ident.region,
-                            value: Pattern::Identifier(parts[0]),
-                        },
-                        state,
-                    ))
-                } else {
-                    let malformed_str = if module_name.is_empty() {
-                        parts.join(".")
-                    } else {
-                        format!("{}.{}", module_name, parts.join("."))
-                    };
-                    Ok((
-                        MadeProgress,
-                        Located {
-                            region: loc_ident.region,
-                            value: Pattern::Malformed(
-                                String::from_str_in(&malformed_str, &arena).into_bump_str(),
-                            ),
-                        },
-                        state,
-                    ))
-                }
-            }
-            Ident::AccessorFunction(string) => Ok((
-                MadeProgress,
-                Located {
-                    region: loc_ident.region,
-                    value: Pattern::Malformed(string),
-                },
-                state,
-            )),
-            Ident::Malformed(malformed) => {
-                debug_assert!(!malformed.is_empty());
-
-                Err((MadeProgress, SyntaxError::InvalidPattern, state))
-            }
-        }
-    }
-}
-
 mod when {
     use super::*;
     use crate::ast::WhenBranch;
 
     /// Parser for when expressions.
     pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+        specialize(
+            |e, r, c| SyntaxError::Expr(EExpr::When(e, r, c)),
+            expr_help(min_indent),
+        )
+    }
+    pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, When<'a>> {
         then(
             and!(
-                when_with_indent(min_indent),
-                attempt!(
-                    Attempting::WhenCondition,
-                    skip_second!(
-                        space1_around(
-                            loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                            min_indent,
-                        ),
-                        parser::keyword(keyword::IS, min_indent)
-                    )
+                when_with_indent(),
+                skip_second!(
+                    space0_around_e(
+                        loc!(specialize_ref(
+                            When::Syntax,
+                            move |arena, state| parse_expr(min_indent, arena, state)
+                        )),
+                        min_indent,
+                        When::Space,
+                        When::IndentCondition
+                    ),
+                    parser::keyword_e(keyword::IS, When::Is)
                 )
             ),
             move |arena, state, progress, (case_indent, loc_condition)| {
                 if case_indent < min_indent {
                     return Err((
                         progress,
-                        SyntaxError::NotYetImplemented(
-                            "TODO case wasn't indented enough".to_string(),
-                        ),
+                        // TODO maybe pass case_indent here?
+                        When::PatternAlignment(5, state.line, state.column),
                         state,
                     ));
                 }
@@ -1352,8 +1054,7 @@ mod when {
                 // Everything in the branches must be indented at least as much as the case itself.
                 let min_indent = case_indent;
 
-                let (p1, branches, state) =
-                    attempt!(Attempting::WhenBranch, branches(min_indent)).parse(arena, state)?;
+                let (p1, branches, state) = branches(min_indent).parse(arena, state)?;
 
                 Ok((
                     progress.or(p1),
@@ -1365,18 +1066,15 @@ mod when {
     }
 
     /// Parsing when with indentation.
-    fn when_with_indent<'a>(min_indent: u16) -> impl Parser<'a, u16, SyntaxError<'a>> {
+    fn when_with_indent<'a>() -> impl Parser<'a, u16, When<'a>> {
         move |arena, state: State<'a>| {
-            parser::keyword(keyword::WHEN, min_indent)
+            parser::keyword_e(keyword::WHEN, When::When)
                 .parse(arena, state)
                 .map(|(progress, (), state)| (progress, state.indent_col, state))
         }
     }
 
-    /// Parsing branches of when conditional.
-    fn branches<'a>(
-        min_indent: u16,
-    ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, SyntaxError<'a>> {
+    fn branches<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, When<'a>> {
         move |arena, state| {
             let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
 
@@ -1405,17 +1103,13 @@ mod when {
                     then(
                         branch_alternatives(min_indent),
                         move |_arena, state, _, (loc_patterns, loc_guard)| {
-                            if alternatives_indented_correctly(&loc_patterns, original_indent) {
-                                Ok((MadeProgress, (loc_patterns, loc_guard), state))
-                            } else {
-                                Err((
-                                        MadeProgress,
-                                        SyntaxError::NotYetImplemented(
-                                            "TODO additional branch didn't have same indentation as first branch".to_string(),
-                                        ),
-
+                            match alternatives_indented_correctly(&loc_patterns, original_indent) {
+                                Ok(()) => Ok((MadeProgress, (loc_patterns, loc_guard), state)),
+                                Err(indent) => Err((
+                                    MadeProgress,
+                                    When::PatternAlignment(indent, state.line, state.column),
                                     state,
-                                ))
+                                )),
                             }
                         },
                     ),
@@ -1438,7 +1132,10 @@ mod when {
 
                         branches.push(arena.alloc(next_output));
                     }
-                    Err((_, _, old_state)) => {
+                    Err((MadeProgress, problem, old_state)) => {
+                        return Err((MadeProgress, problem, old_state));
+                    }
+                    Err((NoProgress, _, old_state)) => {
                         state = old_state;
 
                         break;
@@ -1453,21 +1150,51 @@ mod when {
     /// Parsing alternative patterns in when branches.
     fn branch_alternatives<'a>(
         min_indent: u16,
-    ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>), SyntaxError<'a>>
-    {
+    ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>), When<'a>> {
         and!(
-            sep_by1(
-                ascii_char(b'|'),
-                space0_around(loc_pattern(min_indent), min_indent),
-            ),
-            optional(skip_first!(
-                parser::keyword(keyword::IF, min_indent),
-                // TODO we should require space before the expression but not after
-                space1_around(
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent
+            sep_by1(word1(b'|', When::Bar), |arena, state| {
+                let (_, spaces, state) =
+                    backtrackable(space0_e(min_indent, When::Space, When::IndentPattern))
+                        .parse(arena, state)?;
+
+                let (_, loc_pattern, state) = space0_after_e(
+                    specialize(When::Pattern, crate::pattern::loc_pattern_help(min_indent)),
+                    min_indent,
+                    When::Space,
+                    When::IndentPattern,
                 )
-            ))
+                .parse(arena, state)?;
+
+                Ok((
+                    MadeProgress,
+                    if spaces.is_empty() {
+                        loc_pattern
+                    } else {
+                        arena
+                            .alloc(loc_pattern.value)
+                            .with_spaces_before(spaces, loc_pattern.region)
+                    },
+                    state,
+                ))
+            }),
+            one_of![
+                map!(
+                    skip_first!(
+                        parser::keyword_e(keyword::IF, When::IfToken),
+                        // TODO we should require space before the expression but not after
+                        space0_around_e(
+                            loc!(specialize_ref(When::IfGuard, move |arena, state| {
+                                parse_expr(min_indent, arena, state)
+                            })),
+                            min_indent,
+                            When::Space,
+                            When::IndentIfGuard,
+                        )
+                    ),
+                    Some
+                ),
+                |_, s| Ok((NoProgress, None, s))
+            ]
         )
     }
 
@@ -1475,22 +1202,33 @@ mod when {
     fn alternatives_indented_correctly<'a>(
         loc_patterns: &'a Vec<'a, Located<Pattern<'a>>>,
         original_indent: u16,
-    ) -> bool {
+    ) -> Result<(), u16> {
         let (first, rest) = loc_patterns.split_first().unwrap();
         let first_indented_correctly = first.region.start_col == original_indent;
-        let rest_indented_correctly = rest
-            .iter()
-            .all(|when_pattern| when_pattern.region.start_col >= original_indent);
-        first_indented_correctly && rest_indented_correctly
+        if first_indented_correctly {
+            for when_pattern in rest.iter() {
+                if when_pattern.region.start_col < original_indent {
+                    return Err(original_indent - when_pattern.region.start_col);
+                }
+            }
+            Ok(())
+        } else {
+            Err(original_indent - first.region.start_col)
+        }
     }
 
     /// Parsing the righthandside of a branch in a when conditional.
-    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
+    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, When<'a>> {
         skip_first!(
-            ascii_string("->"),
-            space0_before(
-                loc!(move |arena, state| parse_expr(indent, arena, state)),
+            word2(b'-', b'>', When::Arrow),
+            space0_before_e(
+                specialize_ref(
+                    When::Syntax,
+                    loc!(move |arena, state| parse_expr(indent, arena, state))
+                ),
                 indent,
+                When::Space,
+                When::IndentBranch,
             )
         )
     }

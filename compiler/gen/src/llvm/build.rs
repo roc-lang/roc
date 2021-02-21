@@ -928,7 +928,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_layout: Layout::Union(UnionLayout::NonRecursive(fields)),
             union_size,
             tag_id,
-            tag_name,
             ..
         } => {
             let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
@@ -944,15 +943,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
-                // closures ignore (and do not store) the discriminant
-                &fields[*tag_id as usize][1..]
-            } else {
-                &fields[*tag_id as usize]
-            };
+            let tag_field_layouts = &fields[*tag_id as usize];
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, val_layout) = load_symbol_and_layout(scope, field_symbol);
+                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -968,7 +962,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         );
                     } else {
                         // this check fails for recursive tag unions, but can be helpful while debugging
-                        debug_assert_eq!(tag_field_layout, val_layout);
+                        // debug_assert_eq!(tag_field_layout, val_layout);
 
                         field_vals.push(val);
                     }
@@ -1025,7 +1019,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_layout: Layout::Union(UnionLayout::Recursive(fields)),
             union_size,
             tag_id,
-            tag_name,
             ..
         } => {
             let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
@@ -1041,12 +1034,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
-                // closures ignore (and do not store) the discriminant
-                &fields[*tag_id as usize][1..]
-            } else {
-                &fields[*tag_id as usize]
-            };
+            let tag_field_layouts = &fields[*tag_id as usize];
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
                 let (val, val_layout) = load_symbol_and_layout(scope, field_symbol);
@@ -1189,7 +1177,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }),
             union_size,
             tag_id,
-            tag_name,
             ..
         } => {
             let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
@@ -1212,10 +1199,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = if let TagName::Closure(_) = tag_name {
-                // closures ignore (and do not store) the discriminant
-                &fields[*tag_id as usize][1..]
-            } else {
+            let tag_field_layouts = {
                 use std::cmp::Ordering::*;
                 match tag_id.cmp(&(*nullable_id as u8)) {
                     Equal => &[] as &[_],
@@ -2225,31 +2209,21 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             match modify {
                 Inc(symbol, inc_amount) => {
-                    match cont {
-                        Refcounting(ModifyRc::Dec(symbol1), contcont)
-                            if *inc_amount == 1 && symbol == symbol1 =>
-                        {
-                            // the inc and dec cancel out
-                            build_exp_stmt(env, layout_ids, scope, parent, contcont)
-                        }
-                        _ => {
-                            let (value, layout) = load_symbol_and_layout(scope, symbol);
-                            let layout = layout.clone();
+                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+                    let layout = layout.clone();
 
-                            if layout.contains_refcounted() {
-                                increment_refcount_layout(
-                                    env,
-                                    parent,
-                                    layout_ids,
-                                    *inc_amount,
-                                    value,
-                                    &layout,
-                                );
-                            }
-
-                            build_exp_stmt(env, layout_ids, scope, parent, cont)
-                        }
+                    if layout.contains_refcounted() {
+                        increment_refcount_layout(
+                            env,
+                            parent,
+                            layout_ids,
+                            *inc_amount,
+                            value,
+                            &layout,
+                        );
                     }
+
+                    build_exp_stmt(env, layout_ids, scope, parent, cont)
                 }
                 Dec(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
@@ -3455,9 +3429,16 @@ fn function_value_by_name<'a, 'ctx, 'env>(
         if symbol.is_builtin() {
             panic!("Unrecognized builtin function: {:?}", fn_name)
         } else {
-            panic!(
-                "Unrecognized non-builtin function: {:?} (symbol: {:?}, layout: {:?})",
+            // Unrecognized non-builtin function:
+            eprintln!(
+                "Unrecognized non-builtin function: {:?}\n\nSymbol: {:?}\nLayout: {:?}\n",
                 fn_name, symbol, layout
+            );
+            eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
+
+            panic!(
+                "Unrecognized non-builtin function: {:?} (symbol: {:?})",
+                fn_name, symbol,
             )
         }
     })

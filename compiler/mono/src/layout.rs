@@ -79,7 +79,7 @@ impl<'a> UnionLayout<'a> {
                 let tags_doc = tags.iter().map(|fields| {
                     alloc.text("C ").append(alloc.intersperse(
                         fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
-                        ", ",
+                        " ",
                     ))
                 });
 
@@ -316,16 +316,16 @@ impl<'a> ClosureLayout<'a> {
         &self,
         original: Symbol,
         symbols: &'a [Symbol],
-    ) -> Result<crate::ir::Expr<'a>, Symbol> {
+    ) -> BuildClosureData<'a> {
         use crate::ir::Expr;
 
         match self.layout {
-            Layout::Struct(fields) if fields.len() == 1 => Err(symbols[0]),
+            Layout::Struct(fields) if fields.len() == 1 => BuildClosureData::Alias(symbols[0]),
             Layout::Struct(fields) => {
                 debug_assert!(fields.len() > 1);
                 debug_assert_eq!(fields.len(), symbols.len());
 
-                Ok(Expr::Struct(symbols))
+                BuildClosureData::Struct(Expr::Struct(symbols))
             }
             Layout::Union(UnionLayout::NonRecursive(tags)) => {
                 // NOTE it's very important that this Union consists of Closure tags
@@ -337,20 +337,17 @@ impl<'a> ClosureLayout<'a> {
                     .position(|(tn, _)| *tn == TagName::Closure(original))
                     .unwrap() as _;
 
-                let expr = Expr::Tag {
+                BuildClosureData::Union {
                     tag_layout: Layout::Union(UnionLayout::NonRecursive(tags)),
                     tag_name: TagName::Closure(original),
                     tag_id,
                     union_size: tags.len() as u8,
-                    arguments: symbols,
-                };
-
-                Ok(expr)
+                }
             }
             Layout::PhantomEmptyStruct => {
                 debug_assert_eq!(symbols.len(), 1);
 
-                Ok(Expr::Struct(&[]))
+                BuildClosureData::Struct(Expr::Struct(&[]))
             }
 
             _ => {
@@ -362,10 +359,21 @@ impl<'a> ClosureLayout<'a> {
                     &self.layout
                 );
 
-                Err(symbols[0])
+                BuildClosureData::Alias(symbols[0])
             }
         }
     }
+}
+
+pub enum BuildClosureData<'a> {
+    Alias(Symbol),
+    Struct(crate::ir::Expr<'a>),
+    Union {
+        tag_layout: Layout<'a>,
+        tag_name: TagName,
+        tag_id: u8,
+        union_size: u8,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
