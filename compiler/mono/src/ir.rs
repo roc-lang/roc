@@ -5751,8 +5751,13 @@ fn call_by_pointer<'a>(
     let is_specialized = procs.specialized.keys().any(|(s, _)| *s == symbol);
     if env.is_imported_symbol(symbol) || procs.partial_procs.contains_key(&symbol) || is_specialized
     {
+        // TODO we should be able to call by name in this wrapper for "normal" functions
+        // but closures, specifically top-level values that are closures (by unification)
+        // cause issues. The caller (which is here) doesn't know whether the called is a closure
+        // so we're safe rather than sorry for now. Hopefully we can figure out how to call by name
+        // more in the future
         match layout {
-            Layout::FunctionPointer(arg_layouts, ret_layout) => {
+            Layout::FunctionPointer(arg_layouts, ret_layout) if false => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
                     let name = env.unique_symbol();
                     let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
@@ -5766,6 +5771,7 @@ fn call_by_pointer<'a>(
                     let args = args.into_bump_slice();
 
                     let call_symbol = env.unique_symbol();
+                    debug_assert_eq!(arg_layouts.len(), arg_symbols.len());
                     let call_type = CallType::ByName {
                         name: symbol,
                         full_layout: layout.clone(),
@@ -5781,6 +5787,63 @@ fn call_by_pointer<'a>(
                     let mut body = Stmt::Ret(call_symbol);
 
                     body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
+
+                    let closure_data_layout = None;
+                    let proc = Proc {
+                        name,
+                        args,
+                        body,
+                        closure_data_layout,
+                        ret_layout: ret_layout.clone(),
+                        is_self_recursive: SelfRecursive::NotSelfRecursive,
+                        must_own_arguments: true,
+                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                    };
+
+                    procs
+                        .specialized
+                        .insert((name, layout.clone()), InProgressProc::Done(proc));
+                    Expr::FunctionPointer(name, layout)
+                } else {
+                    // if none of the arguments is refcounted, then owning the arguments has no
+                    // meaning
+                    Expr::FunctionPointer(symbol, layout)
+                }
+            }
+            Layout::FunctionPointer(arg_layouts, ret_layout) => {
+                if arg_layouts.iter().any(|l| l.contains_refcounted()) {
+                    let name = env.unique_symbol();
+                    let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+                    let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+
+                    for layout in arg_layouts {
+                        let symbol = env.unique_symbol();
+                        args.push((layout.clone(), symbol));
+                        arg_symbols.push(symbol);
+                    }
+                    let args = args.into_bump_slice();
+
+                    let call_symbol = env.unique_symbol();
+                    let fpointer_symbol = env.unique_symbol();
+                    debug_assert_eq!(arg_layouts.len(), arg_symbols.len());
+                    let call_type = CallType::ByPointer {
+                        name: fpointer_symbol,
+                        full_layout: layout.clone(),
+                        ret_layout: ret_layout.clone(),
+                        arg_layouts,
+                    };
+                    let call = Call {
+                        call_type,
+                        arguments: arg_symbols.into_bump_slice(),
+                    };
+                    let expr = Expr::Call(call);
+
+                    let mut body = Stmt::Ret(call_symbol);
+
+                    body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
+
+                    let expr = Expr::FunctionPointer(symbol, layout.clone());
+                    body = Stmt::Let(fpointer_symbol, expr, layout.clone(), env.arena.alloc(body));
 
                     let closure_data_layout = None;
                     let proc = Proc {
