@@ -705,6 +705,7 @@ fn x86_64_generic_setup_stack<'a>(
 }
 
 #[inline(always)]
+#[allow(clippy::unnecessary_wraps)]
 fn x86_64_generic_cleanup_stack<'a>(
     buf: &mut Vec<'a, u8>,
     saved_regs: &[X86_64GeneralReg],
