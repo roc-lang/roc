@@ -12,4 +12,3 @@ main =
 
     Task.succeed {}
         |> Task.after (\_ -> Task.succeed x |> Task.map (\_ -> {}))
-        

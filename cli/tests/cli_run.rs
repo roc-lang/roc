@@ -199,7 +199,7 @@ mod cli_run {
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
-            false,
+            true,
         );
     }
 
@@ -254,7 +254,6 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
     #[serial(closure2)]
     fn closure2() {
@@ -267,7 +266,6 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
     #[serial(closure3)]
     fn closure3() {
@@ -280,7 +278,6 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
     #[serial(closure4)]
     fn closure4() {
