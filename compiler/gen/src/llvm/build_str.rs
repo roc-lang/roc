@@ -1,13 +1,12 @@
-use crate::llvm::build::{
-    call_bitcode_fn, call_void_bitcode_fn, complex_bitcast, Env, InPlace, Scope,
-};
+use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
+use crate::llvm::build::{complex_bitcast, Env, InPlace, Scope};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_polymorphic_list, list_len, load_list_ptr, store_list,
 };
 use crate::llvm::convert::{collection, get_ptr_type};
 use inkwell::builder::Builder;
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
@@ -71,7 +70,7 @@ fn str_symbol_to_i128<'a, 'ctx, 'env>(
     complex_bitcast(&env.builder, string, i128_type, "str_to_i128").into_int_value()
 }
 
-fn str_to_i128<'a, 'ctx, 'env>(
+pub fn str_to_i128<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: BasicValueEnum<'ctx>,
 ) -> IntValue<'ctx> {
@@ -126,6 +125,24 @@ fn zig_str_to_struct<'a, 'ctx, 'env>(
         .into_pointer_value();
 
     builder.build_load(ptr4, "load").into_struct_value()
+}
+
+pub fn destructure<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+    let length = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
+        .unwrap()
+        .into_int_value();
+
+    // a `*mut u8` pointer
+    let generic_ptr = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    (generic_ptr, length)
 }
 
 /// Str.concat : Str, Str -> Str
@@ -380,6 +397,19 @@ fn build_struct<'env, 'ctx>(
             .unwrap();
     }
     val.into_struct_value()
+}
+
+/// Str.fromInt : Int -> Str
+pub fn str_from_float<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    int_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let float = load_symbol(scope, &int_symbol);
+
+    let zig_result = call_bitcode_fn(env, &[float], &bitcode::STR_FROM_FLOAT).into_struct_value();
+
+    zig_str_to_struct(env, zig_result).into()
 }
 
 /// Str.equal : Str, Str -> Bool

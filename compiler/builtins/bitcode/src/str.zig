@@ -1,3 +1,4 @@
+const utils = @import("utils.zig");
 const std = @import("std");
 const mem = std.mem;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
@@ -41,8 +42,6 @@ pub const RocStr = extern struct {
     // This clones the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn init(allocator: *Allocator, bytes_ptr: [*]const u8, length: usize) RocStr {
-        const roc_str_size = @sizeOf(RocStr);
-
         var result = RocStr.allocate(allocator, InPlace.Clone, length);
         @memcpy(result.asU8ptr(), bytes_ptr, length);
 
@@ -50,18 +49,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn initBig(allocator: *Allocator, in_place: InPlace, number_of_chars: u64) RocStr {
-        const length = @sizeOf(usize) + number_of_chars;
-        var new_bytes: []usize = allocator.alloc(usize, length) catch unreachable;
-
-        if (in_place == InPlace.InPlace) {
-            new_bytes[0] = @intCast(usize, number_of_chars);
-        } else {
-            const v: isize = std.math.minInt(isize);
-            new_bytes[0] = @bitCast(usize, v);
-        }
-
-        var first_element = @ptrCast([*]align(@alignOf(usize)) u8, new_bytes);
-        first_element += @sizeOf(usize);
+        const first_element = utils.allocateWithRefcount(allocator, @sizeOf(usize), number_of_chars);
 
         return RocStr{
             .str_bytes = first_element,
@@ -313,6 +301,23 @@ fn strFromIntHelp(allocator: *Allocator, comptime T: type, int: T) RocStr {
     const result = std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
 
     return RocStr.init(allocator, &buf, result.len);
+}
+
+// Str.fromFloat
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
+pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
+    // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
+    // hopefully we can use zig instead of snprintf in the future when we upgrade
+    const c = @cImport({
+        // See https://github.com/ziglang/zig/issues/515
+        @cDefine("_NO_CRT_STDIO_INLINE", "1");
+        @cInclude("stdio.h");
+    });
+    var buf: [100]u8 = undefined;
+
+    const result = c.snprintf(&buf, 100, "%f", float);
+
+    return RocStr.init(std.heap.c_allocator, &buf, @intCast(usize, result));
 }
 
 // Str.split
@@ -829,8 +834,10 @@ pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv
 
 fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
+        // the second argument is borrowed, so we must increment its refcount before returning
         return RocStr.clone(allocator, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
+        // the first argument is owned, so we can return it without cloning
         return RocStr.clone(allocator, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();

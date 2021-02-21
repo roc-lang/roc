@@ -12,6 +12,7 @@ use inlinable_string::InlinableString;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::ident::ModuleName;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -19,7 +20,7 @@ use roc_parse::ast::StrLiteral;
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::expr::expr;
-use roc_parse::parser::{loc, Fail, Parser, State};
+use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -45,6 +46,7 @@ impl Output {
     }
 }
 
+#[derive(Debug)]
 pub struct Env<'a> {
     pub home: ModuleId,
     pub var_store: &'a mut VarStore,
@@ -105,7 +107,7 @@ impl<'a> Env<'a> {
     }
 
     pub fn set_region<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
-        todo!();
+        dbg!("Don't Forget to set the region eventually");
     }
 
     pub fn register_closure(&mut self, symbol: Symbol, references: References) {
@@ -178,7 +180,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::ValueNotExposed {
-                            module_name,
+                            module_name: ModuleName::from(module_name),
                             ident,
                             region,
                         }),
@@ -232,15 +234,15 @@ pub fn str_to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,
-) -> Result<(Expr2, self::Output), Fail> {
-    let state = State::new(input.trim().as_bytes(), Attempting::Module);
+) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
+    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(expr(0)), 0);
     let parse_res = parser.parse(&arena, state);
 
     parse_res
-        .map(|(loc_expr, _)| arena.alloc(loc_expr.value))
+        .map(|(_, loc_expr, _)| arena.alloc(loc_expr.value))
         .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
-        .map_err(|(fail, _)| fail)
+        .map_err(|(_, fail, _)| fail)
 }
 
 pub fn to_expr2<'a>(
@@ -257,6 +259,7 @@ pub fn to_expr2<'a>(
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
+                        text: PoolStr::new(string, &mut env.pool),
                     };
 
                     (expr, Output::default())
@@ -805,6 +808,7 @@ pub fn to_expr2<'a>(
             todo!()
         }
         Nested(sub_expr) => to_expr2(env, scope, sub_expr, region),
+        Var { module_name, ident } => canonicalize_lookup(env, scope, module_name, ident, region),
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
@@ -839,7 +843,7 @@ pub fn to_expr2<'a>(
             );
         }
 
-        _ => todo!(),
+        rest => todo!("not yet implemented {:?}", rest),
     }
 }
 
@@ -1177,4 +1181,56 @@ fn canonicalize_when_branch<'a>(
         },
         references,
     )
+}
+
+fn canonicalize_lookup(
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+    module_name: &str,
+    ident: &str,
+    region: Region,
+) -> (Expr2, Output) {
+    use Expr2::*;
+
+    let mut output = Output::default();
+    let can_expr = if module_name.is_empty() {
+        // Since module_name was empty, this is an unqualified var.
+        // Look it up in scope!
+        match scope.lookup(&(*ident).into(), region) {
+            Ok(symbol) => {
+                output.references.lookups.insert(symbol);
+
+                Var(symbol)
+            }
+            Err(_problem) => {
+                // env.problem(Problem::RuntimeError(problem.clone()));
+
+                // RuntimeError(problem)
+                todo!()
+            }
+        }
+    } else {
+        // Since module_name was nonempty, this is a qualified var.
+        // Look it up in the env!
+        match env.qualified_lookup(module_name, ident, region) {
+            Ok(symbol) => {
+                output.references.lookups.insert(symbol);
+
+                Var(symbol)
+            }
+            Err(_problem) => {
+                // Either the module wasn't imported, or
+                // it was imported but it doesn't expose this ident.
+                // env.problem(Problem::RuntimeError(problem.clone()));
+
+                // RuntimeError(problem)
+
+                todo!()
+            }
+        }
+    };
+
+    // If it's valid, this ident should be in scope already.
+
+    (can_expr, output)
 }

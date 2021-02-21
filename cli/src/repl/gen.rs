@@ -3,11 +3,13 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
+use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
-use roc_parse::parser::Fail;
+use roc_load::file::LoadingProblem;
+use roc_parse::parser::SyntaxError;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
@@ -18,7 +20,11 @@ pub enum ReplOutput {
     NoProblems { expr: String, expr_type: String },
 }
 
-pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fail> {
+pub fn gen_and_eval<'a>(
+    src: &[u8],
+    target: Triple,
+    opt_level: OptLevel,
+) -> Result<ReplOutput, SyntaxError<'a>> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
@@ -46,9 +52,18 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         src_dir,
         exposed_types,
         ptr_bytes,
+        builtin_defs_map,
     );
 
-    let mut loaded = loaded.expect("failed to load module");
+    let mut loaded = match loaded {
+        Ok(v) => v,
+        Err(LoadingProblem::ParsingFailedReport(report)) => {
+            return Ok(ReplOutput::Problems(vec![report]));
+        }
+        Err(e) => {
+            panic!("error while loading module: {:?}", e)
+        }
+    };
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
@@ -112,6 +127,9 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
+
+        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
         let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
         let builder = context.create_builder();
 
@@ -143,8 +161,6 @@ pub fn gen_and_eval(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<R
                 });
             }
         };
-
-        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
         let module = arena.alloc(module);
         let (module_pass, function_pass) =

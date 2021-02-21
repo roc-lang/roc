@@ -12,7 +12,6 @@ roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
-roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }

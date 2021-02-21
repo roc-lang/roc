@@ -3,12 +3,13 @@
 #![allow(clippy::large_enum_variant)]
 
 use bumpalo::{collections::Vec, Bump};
+use roc_builtins::bitcode;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::TagName;
+use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, Stmt};
+use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use target_lexicon::Triple;
 
 mod generic64;
@@ -23,18 +24,11 @@ pub struct Env<'a> {
     pub lazy_literals: bool,
 }
 
-// INLINED_SYMBOLS is a set of all of the functions we automatically inline if seen.
-const INLINED_SYMBOLS: [Symbol; 4] = [
-    Symbol::NUM_ABS,
-    Symbol::NUM_ADD,
-    Symbol::NUM_SUB,
-    Symbol::BOOL_EQ,
-];
-
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
+#[derive(Debug)]
 #[allow(dead_code)]
-pub enum Relocation<'a> {
+pub enum Relocation {
     LocalData {
         offset: u64,
         // This should probably technically be a bumpalo::Vec.
@@ -43,11 +37,11 @@ pub enum Relocation<'a> {
     },
     LinkedFunction {
         offset: u64,
-        name: &'a str,
+        name: String,
     },
     LinkedData {
         offset: u64,
-        name: &'a str,
+        name: String,
     },
 }
 
@@ -67,12 +61,16 @@ where
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pionter and setup stack space.
     /// finalize is run at the end of build_proc when all internal code is finalized.
-    fn finalize(&mut self) -> Result<(&'a [u8], &[&Relocation]), String>;
+    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String>;
+
+    // load_args is used to let the backend know what the args are.
+    // The backend should track these args so it can use them as needed.
+    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String>;
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[&Relocation]), String> {
+    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
-        // TODO: let the backend know of all the arguments.
+        self.load_args(&proc.args)?;
         // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
@@ -110,9 +108,36 @@ where
                 let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
                 self.build_stmt(&stmt)
             }
+            Stmt::Switch {
+                cond_symbol,
+                cond_layout,
+                branches,
+                default_branch,
+                ret_layout,
+            } => {
+                self.load_literal_symbols(&[*cond_symbol])?;
+                self.build_switch(
+                    cond_symbol,
+                    cond_layout,
+                    branches,
+                    default_branch,
+                    ret_layout,
+                )?;
+                self.free_symbols(stmt);
+                Ok(())
+            }
             x => Err(format!("the statement, {:?}, is not yet implemented", x)),
         }
     }
+    // build_switch generates a instructions for a switch statement.
+    fn build_switch(
+        &mut self,
+        cond_symbol: &Symbol,
+        cond_layout: &Layout<'a>,
+        branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
+        default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be refered to later.
@@ -136,23 +161,51 @@ where
                 arguments,
             }) => {
                 match call_type {
-                    CallType::ByName { name: func_sym, .. } => {
+                    CallType::ByName {
+                        name: func_sym,
+                        arg_layouts,
+                        ret_layout,
+                        ..
+                    } => {
+                        // For most builtins instead of calling a function, we can just inline the low level.
                         match *func_sym {
                             Symbol::NUM_ABS => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumAbs, arguments, layout)
                             }
                             Symbol::NUM_ADD => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumAdd, arguments, layout)
                             }
+                            Symbol::NUM_ACOS => {
+                                self.build_run_low_level(sym, &LowLevel::NumAcos, arguments, layout)
+                            }
+                            Symbol::NUM_ASIN => {
+                                self.build_run_low_level(sym, &LowLevel::NumAsin, arguments, layout)
+                            }
+                            Symbol::NUM_ATAN => {
+                                self.build_run_low_level(sym, &LowLevel::NumAtan, arguments, layout)
+                            }
+                            Symbol::NUM_POW_INT => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumPowInt,
+                                arguments,
+                                layout,
+                            ),
                             Symbol::NUM_SUB => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
                             }
                             Symbol::BOOL_EQ => {
-                                // Instead of calling the function, just inline it.
                                 self.build_run_low_level(sym, &LowLevel::Eq, arguments, layout)
+                            }
+                            x if x
+                                .module_string(&self.env().interns)
+                                .starts_with(ModuleName::APP) =>
+                            {
+                                let fn_name = LayoutIds::default()
+                                    .get(*func_sym, layout)
+                                    .to_symbol_string(*func_sym, &self.env().interns);
+                                // Now that the arguments are needed, load them if they are literals.
+                                self.load_literal_symbols(arguments)?;
+                                self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                             }
                             x => Err(format!("the function, {:?}, is not yet implemented", x)),
                         }
@@ -199,6 +252,34 @@ where
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
+            LowLevel::NumAcos => self.build_fn_call(
+                sym,
+                bitcode::NUM_ACOS.to_string(),
+                args,
+                &[layout.clone()],
+                layout,
+            ),
+            LowLevel::NumAsin => self.build_fn_call(
+                sym,
+                bitcode::NUM_ASIN.to_string(),
+                args,
+                &[layout.clone()],
+                layout,
+            ),
+            LowLevel::NumAtan => self.build_fn_call(
+                sym,
+                bitcode::NUM_ATAN.to_string(),
+                args,
+                &[layout.clone()],
+                layout,
+            ),
+            LowLevel::NumPowInt => self.build_fn_call(
+                sym,
+                bitcode::NUM_POW_INT.to_string(),
+                args,
+                &[layout.clone(), layout.clone()],
+                layout,
+            ),
             LowLevel::NumSub => {
                 // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
                 match layout {
@@ -217,6 +298,17 @@ where
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
+
+    /// build_fn_call creates a call site for a function.
+    /// This includes dealing with things like saving regs and propagating the returned value.
+    fn build_fn_call(
+        &mut self,
+        dst: &Symbol,
+        fn_name: String,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
 
     /// build_num_abs_i64 stores the absolute value of src into dst.
     /// It only deals with inputs and outputs of i64 type.
@@ -312,11 +404,7 @@ where
     /// set_free_map sets the free map to the given map.
     fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>);
 
-    /// set_not_leaf_function lets the backend know that it is not a leaf function.
-    fn set_not_leaf_function(&mut self);
-
     /// scan_ast runs through the ast and fill the last seen map.
-    /// It also checks if the function is a leaf function or not.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
     fn scan_ast(&mut self, stmt: &Stmt<'a>) {
         match stmt {
@@ -443,18 +531,12 @@ where
         }
 
         match call_type {
-            CallType::ByName { name: sym, .. } => {
-                // For functions that we won't inline, we should not be a leaf function.
-                if !INLINED_SYMBOLS.contains(sym) {
-                    self.set_not_leaf_function();
-                }
-            }
+            CallType::ByName { .. } => {}
             CallType::ByPointer { name: sym, .. } => {
-                self.set_not_leaf_function();
                 self.set_last_seen(*sym, stmt);
             }
             CallType::LowLevel { .. } => {}
-            CallType::Foreign { .. } => self.set_not_leaf_function(),
+            CallType::Foreign { .. } => {}
         }
     }
 }

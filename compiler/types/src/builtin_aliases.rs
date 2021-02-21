@@ -398,6 +398,18 @@ fn nat_alias_content() -> SolvedType {
     int_alias_content(natural_type())
 }
 
+// U64
+
+#[inline(always)]
+pub fn u64_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_U64, vec![], Box::new(u64_alias_content()))
+}
+
+#[inline(always)]
+fn u64_alias_content() -> SolvedType {
+    int_alias_content(unsigned64_type())
+}
+
 // INT
 
 #[inline(always)]

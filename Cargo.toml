@@ -8,7 +8,6 @@ members = [
     "compiler/can",
     "compiler/problem",
     "compiler/types",
-    "compiler/uniq",
     "compiler/builtins",
     "compiler/constrain",
     "compiler/unify",
@@ -32,8 +31,10 @@ members = [
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
-lto = "fat"
+lto = "thin"
 codegen-units = 1
 # debug = true # enable when profiling
 
-
+[profile.bench]
+lto = "thin"
+codegen-units = 1

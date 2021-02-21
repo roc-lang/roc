@@ -3,4 +3,3 @@
 #![allow(clippy::large_enum_variant)]
 pub mod bitcode;
 pub mod std;
-pub mod unique;

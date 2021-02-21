@@ -17,7 +17,7 @@ use std::path::Path;
 pub struct TextBuffer {
     pub text_rope: Rope,
     pub path_str: String,
-    pub mem_arena: Bump,
+    pub arena: Bump,
 }
 
 impl TextBuffer {
@@ -65,7 +65,7 @@ impl TextBuffer {
         } else {
             // happens very rarely
             let line_str = rope_slice.chunks().collect::<String>();
-            let arena_str_ref = self.mem_arena.alloc(line_str);
+            let arena_str_ref = self.arena.alloc(line_str);
             Ok(arena_str_ref)
         }
     }
@@ -92,7 +92,7 @@ impl TextBuffer {
             } else {
                 // happens very rarely
                 let line_str = rope_slice.chunks().collect::<String>();
-                let arena_str_ref = self.mem_arena.alloc(line_str);
+                let arena_str_ref = self.arena.alloc(line_str);
                 Some(arena_str_ref)
             }
         } else {
@@ -116,6 +116,10 @@ impl TextBuffer {
         self.text_rope.len_lines()
     }
 
+    pub fn nr_of_chars(&self) -> usize {
+        self.text_rope.len_chars()
+    }
+
     // expensive function, don't use it if it can be done with a specialized, more efficient function
     // TODO use pool allocation here
     pub fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a> {
@@ -132,6 +136,16 @@ impl TextBuffer {
         self.text_rope.line_to_char(pos.line) + pos.column
     }
 
+    fn char_indx_to_pos(&self, char_indx: usize) -> Position {
+        let line = self.text_rope.char_to_line(char_indx);
+
+        let char_idx_line_start = self.pos_to_char_indx(Position { line, column: 0 });
+
+        let column = char_indx - char_idx_line_start;
+
+        Position { line, column }
+    }
+
     fn sel_to_tup(&self, raw_sel: RawSelection) -> EdResult<(usize, usize)> {
         let valid_sel = validate_selection(raw_sel)?;
         let start_char_indx = self.pos_to_char_indx(valid_sel.selection.start_pos);
@@ -139,17 +153,21 @@ impl TextBuffer {
 
         Ok((start_char_indx, end_char_indx))
     }
+
+    pub fn last_position(&self) -> Position {
+        self.char_indx_to_pos(self.nr_of_chars())
+    }
 }
 
 pub fn from_path(path: &Path) -> EdResult<TextBuffer> {
     let text_rope = rope_from_path(path)?;
     let path_str = path_to_string(path);
-    let mem_arena = Bump::new();
+    let arena = Bump::new();
 
     Ok(TextBuffer {
         text_rope,
         path_str,
-        mem_arena,
+        arena,
     })
 }
 

@@ -157,6 +157,34 @@ impl<'a, 'i> Env<'a, 'i> {
         }
     }
 
+    fn try_insert_struct_info(&mut self, symbol: Symbol, layout: &Layout<'a>) {
+        use Layout::*;
+
+        match layout {
+            Struct(fields) => {
+                self.constructor_map.insert(symbol, 0);
+                self.layout_map.insert(symbol, Layout::Struct(fields));
+            }
+            Closure(arguments, closure_layout, result) => {
+                let fpointer = Layout::FunctionPointer(arguments, result);
+                let fields = self.arena.alloc([fpointer, closure_layout.layout.clone()]);
+                self.constructor_map.insert(symbol, 0);
+                self.layout_map.insert(symbol, Layout::Struct(fields));
+            }
+            _ => {}
+        }
+    }
+
+    fn insert_struct_info(&mut self, symbol: Symbol, fields: &'a [Layout<'a>]) {
+        self.constructor_map.insert(symbol, 0);
+        self.layout_map.insert(symbol, Layout::Struct(fields));
+    }
+
+    fn remove_struct_info(&mut self, symbol: Symbol) {
+        self.constructor_map.remove(&symbol);
+        self.layout_map.remove(&symbol);
+    }
+
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
@@ -175,7 +203,7 @@ impl<'a, 'i> Env<'a, 'i> {
 }
 
 fn layout_for_constructor<'a>(
-    _arena: &'a Bump,
+    arena: &'a Bump,
     layout: &Layout<'a>,
     constructor: u64,
 ) -> ConstructorLayout<&'a [Layout<'a>]> {
@@ -213,7 +241,16 @@ fn layout_for_constructor<'a>(
                 }
             }
         }
-        _ => unreachable!(),
+        Struct(fields) => {
+            debug_assert_eq!(constructor, 0);
+            HasFields(fields)
+        }
+        Closure(arguments, closure_layout, result) => {
+            let fpointer = Layout::FunctionPointer(arguments, result);
+            let fields = arena.alloc([fpointer, closure_layout.layout.clone()]);
+            HasFields(fields)
+        }
+        other => unreachable!("weird layout {:?}", other),
     }
 }
 
@@ -239,11 +276,11 @@ fn work_for_constructor<'a>(
     match layout_for_constructor(env.arena, full_layout, constructor) {
         Unknown => Unknown,
         IsNull => IsNull,
-        HasFields(cons_layout) => {
+        HasFields(constructor_layout) => {
             // figure out if there is at least one aliased refcounted field. Only then
             // does it make sense to inline the decrement
             let at_least_one_aliased = (|| {
-                for (i, field_layout) in cons_layout.iter().enumerate() {
+                for (i, field_layout) in constructor_layout.iter().enumerate() {
                     if field_layout.contains_refcounted()
                         && field_aliases.and_then(|map| map.get(&(i as u64))).is_some()
                     {
@@ -255,7 +292,7 @@ fn work_for_constructor<'a>(
 
             // for each field, if it has refcounted content, check if it has an alias
             // if so, use the alias, otherwise load the field.
-            for (i, field_layout) in cons_layout.iter().enumerate() {
+            for (i, field_layout) in constructor_layout.iter().enumerate() {
                 if field_layout.contains_refcounted() {
                     match field_aliases.and_then(|map| map.get(&(i as u64))) {
                         Some(alias_symbol) => {
@@ -269,7 +306,7 @@ fn work_for_constructor<'a>(
 
                             let expr = Expr::AccessAtIndex {
                                 index: i as u64,
-                                field_layouts: cons_layout,
+                                field_layouts: constructor_layout,
                                 structure: *symbol,
                                 wrapped: Wrapped::MultiTagUnion,
                             };
@@ -322,7 +359,40 @@ enum ConstructorLayout<T> {
     Unknown,
 }
 
-pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
+pub fn expand_and_cancel_proc<'a>(
+    env: &mut Env<'a, '_>,
+    stmt: &'a Stmt<'a>,
+    arguments: &'a [(Layout<'a>, Symbol)],
+) -> &'a Stmt<'a> {
+    let mut introduced = Vec::new_in(env.arena);
+
+    for (layout, symbol) in arguments {
+        match layout {
+            Layout::Struct(fields) => {
+                env.insert_struct_info(*symbol, fields);
+
+                introduced.push(*symbol);
+            }
+            Layout::Closure(arguments, closure_layout, result) => {
+                let fpointer = Layout::FunctionPointer(arguments, result);
+                let fields = env.arena.alloc([fpointer, closure_layout.layout.clone()]);
+                env.insert_struct_info(*symbol, fields);
+                introduced.push(*symbol);
+            }
+            _ => {}
+        }
+    }
+
+    let result = expand_and_cancel(env, stmt);
+
+    for symbol in introduced {
+        env.remove_struct_info(symbol);
+    }
+
+    result
+}
+
+fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
     use Stmt::*;
 
     let mut deferred_default = Deferred {
@@ -351,7 +421,7 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
                 // prevent long chains of `Let`s from blowing the stack
                 let mut literal_stack = Vec::new_in(env.arena);
 
-                while !matches!(&expr, Expr::AccessAtIndex { .. } ) {
+                while !matches!(&expr, Expr::AccessAtIndex { .. } | Expr::Struct(_)) {
                     if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
                         literal_stack.push((symbol, expr.clone(), layout.clone()));
 
@@ -366,25 +436,47 @@ pub fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a S
 
                 let new_cont;
 
-                if let Expr::AccessAtIndex {
-                    structure, index, ..
-                } = &expr
-                {
-                    let entry = env
-                        .alias_map
-                        .entry(*structure)
-                        .or_insert_with(MutMap::default);
+                match &expr {
+                    Expr::AccessAtIndex {
+                        structure,
+                        index,
+                        field_layouts,
+                        ..
+                    } => {
+                        let entry = env
+                            .alias_map
+                            .entry(*structure)
+                            .or_insert_with(MutMap::default);
 
-                    entry.insert(*index, symbol);
+                        entry.insert(*index, symbol);
 
-                    new_cont = expand_and_cancel(env, cont);
+                        // if the field is a struct, we know its constructor too!
+                        let field_layout = &field_layouts[*index as usize];
+                        env.try_insert_struct_info(symbol, field_layout);
 
-                    // make sure to remove the alias, so other branches don't use it by accident
-                    env.alias_map
-                        .get_mut(structure)
-                        .and_then(|map| map.remove(index));
-                } else {
-                    new_cont = expand_and_cancel(env, cont);
+                        new_cont = expand_and_cancel(env, cont);
+
+                        env.remove_struct_info(symbol);
+
+                        // make sure to remove the alias, so other branches don't use it by accident
+                        env.alias_map
+                            .get_mut(structure)
+                            .and_then(|map| map.remove(index));
+                    }
+                    Expr::Struct(_) => {
+                        if let Layout::Struct(fields) = layout {
+                            env.insert_struct_info(symbol, fields);
+
+                            new_cont = expand_and_cancel(env, cont);
+
+                            env.remove_struct_info(symbol);
+                        } else {
+                            new_cont = expand_and_cancel(env, cont);
+                        }
+                    }
+                    _ => {
+                        new_cont = expand_and_cancel(env, cont);
+                    }
                 }
 
                 let stmt = Let(symbol, expr.clone(), layout.clone(), new_cont);

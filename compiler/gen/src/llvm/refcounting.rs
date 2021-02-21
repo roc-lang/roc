@@ -1,3 +1,4 @@
+use crate::debug_info_init;
 use crate::llvm::build::{
     cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
     LLVM_SADD_WITH_OVERFLOW_I64,
@@ -8,11 +9,11 @@ use crate::llvm::convert::{
 };
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
-use inkwell::debug_info::AsDIScope;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode, UnionLayout};
 
@@ -192,23 +193,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let entry = ctx.append_basic_block(parent, "entry");
         builder.position_at_end(entry);
 
-        let subprogram = parent.get_subprogram().unwrap();
-        let lexical_block = env.dibuilder.create_lexical_block(
-            /* scope */ subprogram.as_debug_info_scope(),
-            /* file */ env.compile_unit.get_file(),
-            /* line_no */ 0,
-            /* column_no */ 0,
-        );
-
-        let loc = env.dibuilder.create_debug_location(
-            &ctx,
-            /* line */ 0,
-            /* column */ 0,
-            /* current_scope */ lexical_block.as_debug_info_scope(),
-            /* inlined_at */ None,
-        );
-
-        env.builder.set_current_debug_location(&ctx, loc);
+        debug_info_init!(env, parent);
 
         let refcount_ptr = {
             let raw_refcount_ptr = parent.get_nth_param(0).unwrap();
@@ -300,6 +285,7 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     layouts: &[Layout<'a>],
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
 ) {
     let wrapper_struct = value.into_struct_value();
 
@@ -310,7 +296,15 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
                 .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                 .unwrap();
 
-            modify_refcount_layout(env, parent, layout_ids, mode, field_ptr, field_layout);
+            modify_refcount_layout_help(
+                env,
+                parent,
+                layout_ids,
+                mode,
+                when_recursive,
+                field_ptr,
+                field_layout,
+            );
         }
     }
 }
@@ -345,9 +339,9 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
 
 fn modify_refcount_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
     builtin: &Builtin<'a>,
@@ -357,30 +351,17 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     match builtin {
         List(memory_mode, element_layout) => {
             let wrapper_struct = value.into_struct_value();
-            if element_layout.contains_refcounted() {
-                let ptr_type =
-                    basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
-                        .ptr_type(AddressSpace::Generic);
-
-                let (len, ptr) = load_list(env.builder, wrapper_struct, ptr_type);
-
-                let loop_fn = |_index, element| {
-                    modify_refcount_layout(env, parent, layout_ids, mode, element, element_layout);
-                };
-
-                incrementing_elem_loop(
-                    env.builder,
-                    env.context,
-                    parent,
-                    ptr,
-                    len,
-                    "modify_rc_index",
-                    loop_fn,
-                );
-            }
 
             if let MemoryMode::Refcounted = memory_mode {
-                modify_refcount_list(env, layout_ids, mode, layout, wrapper_struct);
+                modify_refcount_list(
+                    env,
+                    layout_ids,
+                    mode,
+                    when_recursive,
+                    layout,
+                    element_layout,
+                    wrapper_struct,
+                );
             }
         }
         Set(element_layout) => {
@@ -390,12 +371,19 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
             todo!();
         }
         Dict(key_layout, value_layout) => {
-            if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
-                // TODO decrement all values
-            }
-
-            todo!();
+            let wrapper_struct = value.into_struct_value();
+            modify_refcount_dict(
+                env,
+                layout_ids,
+                mode,
+                when_recursive,
+                layout,
+                key_layout,
+                value_layout,
+                wrapper_struct,
+            );
         }
+
         Str => {
             let wrapper_struct = value.into_struct_value();
             modify_refcount_str(env, layout_ids, mode, layout, wrapper_struct);
@@ -414,12 +402,44 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
+    modify_refcount_layout_help(
+        env,
+        parent,
+        layout_ids,
+        mode,
+        &WhenRecursive::Unreachable,
+        value,
+        layout,
+    );
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum WhenRecursive<'a> {
+    Unreachable,
+    Loop(UnionLayout<'a>),
+}
+
+fn modify_refcount_layout_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
+    value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+) {
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => {
-            modify_refcount_builtin(env, parent, layout_ids, mode, value, layout, builtin)
-        }
+        Builtin(builtin) => modify_refcount_builtin(
+            env,
+            layout_ids,
+            mode,
+            when_recursive,
+            value,
+            layout,
+            builtin,
+        ),
 
         Union(variant) => {
             use UnionLayout::*;
@@ -434,6 +454,7 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
+                        &WhenRecursive::Loop(variant.clone()),
                         tags,
                         value.into_pointer_value(),
                         true,
@@ -449,6 +470,7 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
+                        &WhenRecursive::Loop(variant.clone()),
                         &*env.arena.alloc([other_fields]),
                         value.into_pointer_value(),
                         true,
@@ -462,6 +484,7 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
+                        &WhenRecursive::Loop(variant.clone()),
                         &*env.arena.alloc([*fields]),
                         value.into_pointer_value(),
                         true,
@@ -474,13 +497,16 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
+                        &WhenRecursive::Loop(variant.clone()),
                         tags,
                         value.into_pointer_value(),
                         false,
                     );
                 }
 
-                NonRecursive(tags) => modify_refcount_union(env, layout_ids, mode, tags, value),
+                NonRecursive(tags) => {
+                    modify_refcount_union(env, layout_ids, mode, when_recursive, tags, value)
+                }
             }
         }
         Closure(_, closure_layout, _) => {
@@ -489,14 +515,15 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
 
                 let field_ptr = env
                     .builder
-                    .build_extract_value(wrapper_struct, 1, "increment_closure_data")
+                    .build_extract_value(wrapper_struct, 1, "modify_rc_closure_data")
                     .unwrap();
 
-                modify_refcount_layout(
+                modify_refcount_layout_help(
                     env,
                     parent,
                     layout_ids,
                     mode,
+                    when_recursive,
                     field_ptr,
                     &closure_layout.as_block_of_memory_layout(),
                 )
@@ -504,12 +531,45 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
         }
 
         Struct(layouts) => {
-            modify_refcount_struct(env, parent, layout_ids, value, layouts, mode);
+            modify_refcount_struct(
+                env,
+                parent,
+                layout_ids,
+                value,
+                layouts,
+                mode,
+                when_recursive,
+            );
         }
 
         PhantomEmptyStruct => {}
 
-        RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
+        Layout::RecursivePointer => match when_recursive {
+            WhenRecursive::Unreachable => {
+                unreachable!("recursion pointers should never be hashed directly")
+            }
+            WhenRecursive::Loop(union_layout) => {
+                let layout = Layout::Union(union_layout.clone());
+
+                let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+
+                // cast the i64 pointer to a pointer to block of memory
+                let field_cast = env
+                    .builder
+                    .build_bitcast(value, bt, "i64_to_opaque")
+                    .into_pointer_value();
+
+                modify_refcount_layout_help(
+                    env,
+                    parent,
+                    layout_ids,
+                    mode,
+                    when_recursive,
+                    field_cast.into(),
+                    &layout,
+                )
+            }
+        },
 
         FunctionPointer(_, _) | Pointer(_) => {}
     }
@@ -519,20 +579,22 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
     layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     original_wrapper: StructValue<'ctx>,
 ) {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_list", Symbol::INC),
-        Mode::Dec => ("decrement_list", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_list",
+        "decrement_list",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -540,7 +602,15 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
             let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            modify_refcount_list_help(env, mode, layout, function_value);
+            modify_refcount_list_help(
+                env,
+                layout_ids,
+                mode,
+                when_recursive,
+                layout,
+                element_layout,
+                function_value,
+            );
 
             function_value
         }
@@ -562,8 +632,11 @@ fn mode_to_call_mode(function: FunctionValue<'_>, mode: Mode) -> CallMode<'_> {
 
 fn modify_refcount_list_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
     layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     let builder = env.builder;
@@ -574,22 +647,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        ctx,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&ctx, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
@@ -617,6 +675,36 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(modification_block);
 
+    if element_layout.contains_refcounted() {
+        let ptr_type =
+            basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic);
+
+        let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
+
+        let loop_fn = |_index, element| {
+            modify_refcount_layout_help(
+                env,
+                parent,
+                layout_ids,
+                mode,
+                when_recursive,
+                element,
+                element_layout,
+            );
+        };
+
+        incrementing_elem_loop(
+            env.builder,
+            env.context,
+            parent,
+            ptr,
+            len,
+            "modify_rc_index",
+            loop_fn,
+        );
+    }
+
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env);
@@ -639,14 +727,14 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_str", Symbol::INC),
-        Mode::Dec => ("decrement_str", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_str",
+        "decrement_str",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -681,22 +769,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        ctx,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&ctx, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
@@ -729,6 +802,142 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.position_at_end(modification_block);
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, str_wrapper);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+    refcount_ptr.modify(call_mode, layout, env);
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn modify_refcount_dict<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
+    layout: &Layout<'a>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_dict",
+        "decrement_dict",
+        &layout,
+        mode,
+    );
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let function_value = build_header(env, basic_type, mode, &fn_name);
+
+            modify_refcount_dict_help(
+                env,
+                layout_ids,
+                mode,
+                when_recursive,
+                layout,
+                key_layout,
+                value_layout,
+                function_value,
+            );
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    call_help(env, function, mode, original_wrapper.into(), call_name);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn modify_refcount_dict_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
+    layout: &Layout<'a>,
+    key_layout: &Layout<'a>,
+    value_layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    debug_assert_eq!(
+        when_recursive,
+        &WhenRecursive::Unreachable,
+        "TODO pipe when_recursive through the dict key/value inc/dec"
+    );
+
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let parent = fn_val;
+
+    let wrapper_struct = arg_val.into_struct_value();
+
+    let len = builder
+        .build_extract_value(wrapper_struct, 1, "read_dict_len")
+        .unwrap()
+        .into_int_value();
+
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "modify_rc_dict_cont");
+    let modification_block = ctx.append_basic_block(parent, "modify_rc");
+
+    let is_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        "is_non_empty",
+    );
+
+    builder.build_conditional_branch(is_non_empty, modification_block, cont_block);
+    builder.position_at_end(modification_block);
+
+    if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
+        crate::llvm::build_dict::dict_elements_rc(
+            env,
+            layout_ids,
+            wrapper_struct.into(),
+            key_layout,
+            value_layout,
+            mode,
+        );
+    }
+
+    let data_ptr = env
+        .builder
+        .build_extract_value(wrapper_struct, 0, "get_data_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, data_ptr);
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env);
 
@@ -793,7 +1002,7 @@ pub fn build_header_help<'a, 'ctx, 'env>(
 }
 
 #[derive(Clone, Copy)]
-enum Mode {
+pub enum Mode {
     Inc(u64),
     Dec,
 }
@@ -808,20 +1017,21 @@ fn build_rec_union<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
     fields: &'a [&'a [Layout<'a>]],
     value: PointerValue<'ctx>,
     is_nullable: bool,
 ) {
     let layout = Layout::Union(UnionLayout::Recursive(fields));
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_rec_union", Symbol::INC),
-        Mode::Dec => ("decrement_rec_union", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_rec_union",
+        "decrement_rec_union",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -834,7 +1044,15 @@ fn build_rec_union<'a, 'ctx, 'env>(
                 .into();
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            build_rec_union_help(env, layout_ids, mode, fields, function_value, is_nullable);
+            build_rec_union_help(
+                env,
+                layout_ids,
+                mode,
+                when_recursive,
+                fields,
+                function_value,
+                is_nullable,
+            );
 
             env.builder.position_at_end(block);
             env.builder
@@ -851,6 +1069,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
     tags: &[&[Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
     is_nullable: bool,
@@ -867,22 +1086,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&context, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
@@ -937,8 +1141,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
-
-    builder.set_current_debug_location(&context, loc);
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
@@ -1024,7 +1226,15 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
         refcount_ptr.modify(call_mode, &layout, env);
 
         for (field, field_layout) in deferred_nonrec {
-            modify_refcount_layout(env, parent, layout_ids, mode, field, field_layout);
+            modify_refcount_layout_help(
+                env,
+                parent,
+                layout_ids,
+                mode,
+                when_recursive,
+                field,
+                field_layout,
+            );
         }
 
         let call_name = pick("recursive_tag_increment", "recursive_tag_decrement");
@@ -1115,10 +1325,31 @@ fn call_help<'a, 'ctx, 'env>(
     call
 }
 
+fn function_name_from_mode<'a>(
+    layout_ids: &mut LayoutIds<'a>,
+    interns: &Interns,
+    if_inc: &'static str,
+    if_dec: &'static str,
+    layout: &Layout<'a>,
+    mode: Mode,
+) -> (&'static str, String) {
+    // NOTE this is not a typo, we always determine the layout ID
+    // using the DEC symbol. Anything that is incrementing must also be
+    // decremented, so `dec` is used on more layouts. That can cause the
+    // layout ids of the inc and dec versions to be different, which is
+    // rather confusing, so now `inc_x` always corresponds to `dec_x`
+    let layout_id = layout_ids.get(Symbol::DEC, layout);
+    match mode {
+        Mode::Inc(_) => (if_inc, layout_id.to_symbol_string(Symbol::INC, interns)),
+        Mode::Dec => (if_dec, layout_id.to_symbol_string(Symbol::DEC, interns)),
+    }
+}
+
 fn modify_refcount_union<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
     fields: &'a [&'a [Layout<'a>]],
     value: BasicValueEnum<'ctx>,
 ) {
@@ -1127,14 +1358,14 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let (call_name, symbol) = match mode {
-        Mode::Inc(_) => ("increment_union", Symbol::INC),
-        Mode::Dec => ("decrement_union", Symbol::DEC),
-    };
-
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let (call_name, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_union",
+        "decrement_union",
+        &layout,
+        mode,
+    );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -1142,7 +1373,14 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
             let basic_type = block_of_memory(env.context, &layout, env.ptr_bytes);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            modify_refcount_union_help(env, layout_ids, mode, fields, function_value);
+            modify_refcount_union_help(
+                env,
+                layout_ids,
+                mode,
+                when_recursive,
+                fields,
+                function_value,
+            );
 
             function_value
         }
@@ -1159,6 +1397,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
+    when_recursive: &WhenRecursive<'a>,
     tags: &[&[Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
 ) {
@@ -1172,22 +1411,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let func_scope = fn_val.get_subprogram().unwrap();
-    let lexical_block = env.dibuilder.create_lexical_block(
-        /* scope */ func_scope.as_debug_info_scope(),
-        /* file */ env.compile_unit.get_file(),
-        /* line_no */ 0,
-        /* column_no */ 0,
-    );
-
-    let loc = env.dibuilder.create_debug_location(
-        context,
-        /* line */ 0,
-        /* column */ 0,
-        /* current_scope */ lexical_block.as_debug_info_scope(),
-        /* inlined_at */ None,
-    );
-    builder.set_current_debug_location(&context, loc);
+    debug_info_init!(env, fn_val);
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
@@ -1258,7 +1482,15 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                     .build_extract_value(wrapper_struct, i as u32, "modify_tag_field")
                     .unwrap();
 
-                modify_refcount_layout(env, parent, layout_ids, mode, field_ptr, field_layout);
+                modify_refcount_layout_help(
+                    env,
+                    parent,
+                    layout_ids,
+                    mode,
+                    when_recursive,
+                    field_ptr,
+                    field_layout,
+                );
             }
         }
 

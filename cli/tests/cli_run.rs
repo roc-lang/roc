@@ -13,6 +13,7 @@ mod helpers;
 mod cli_run {
     use crate::helpers::{
         example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
+        ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
     use std::path::Path;
@@ -60,7 +61,24 @@ mod cli_run {
                 });
 
                 if !memory_errors.is_empty() {
-                    panic!("{:?}", memory_errors);
+                    for error in memory_errors {
+                        let ValgrindError {
+                            kind,
+                            what: _,
+                            xwhat,
+                        } = error;
+                        println!("Valgrind Error: {}\n", kind);
+
+                        if let Some(ValgrindErrorXWhat {
+                            text,
+                            leakedbytes: _,
+                            leakedblocks: _,
+                        }) = xwhat
+                        {
+                            println!("    {}", text);
+                        }
+                    }
+                    panic!("Valgrind reported memory errors");
                 }
             } else {
                 let exit_code = match valgrind_out.status.code() {
@@ -96,7 +114,7 @@ mod cli_run {
             "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
-            false,
+            true,
         );
     }
 
@@ -108,7 +126,7 @@ mod cli_run {
             "hello-world",
             &[],
             "Hello, World!!!!!!!!!!!!!\n",
-            false,
+            true,
         );
     }
 
@@ -120,7 +138,7 @@ mod cli_run {
             "quicksort",
             &[],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            false,
+            true,
         );
     }
 
@@ -132,59 +150,15 @@ mod cli_run {
             "quicksort",
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            false,
-        );
-    }
-
-    #[test]
-    #[serial(quicksort)]
-    // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
-    #[ignore]
-    fn run_quicksort_valgrind() {
-        check_output(
-            &example_file("quicksort", "Quicksort.roc"),
-            "quicksort",
-            &[],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             true,
         );
     }
 
     #[test]
     #[serial(quicksort)]
-    // TODO: Stop ignoring this test once valgrind supports AVX512.
-    #[ignore]
     fn run_quicksort_optimized_valgrind() {
         check_output(
             &example_file("quicksort", "Quicksort.roc"),
-            "quicksort",
-            &["--optimize"],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            true,
-        );
-    }
-
-    #[test]
-    #[serial(multi_module)]
-    // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
-    #[ignore]
-    fn run_multi_module_valgrind() {
-        check_output(
-            &example_file("multi-module", "Quicksort.roc"),
-            "quicksort",
-            &[],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            true,
-        );
-    }
-
-    #[test]
-    #[serial(multi_module)]
-    // TODO: Stop ignoring this test once valgrind supports AVX512.
-    #[ignore]
-    fn run_multi_module_optimized_valgrind() {
-        check_output(
-            &example_file("multi-module", "Quicksort.roc"),
             "quicksort",
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
@@ -201,7 +175,7 @@ mod cli_run {
             "nqueens",
             &[],
             "4\n",
-            false,
+            true,
         );
     }
 
@@ -213,7 +187,7 @@ mod cli_run {
             "cfold",
             &[],
             "11 & 11\n",
-            false,
+            true,
         );
     }
 
@@ -225,7 +199,7 @@ mod cli_run {
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
-            false,
+            true,
         );
     }
 
@@ -237,7 +211,7 @@ mod cli_run {
             "rbtree-insert",
             &[],
             "Node Black 0 {} Empty Empty\n",
-            false,
+            true,
         );
     }
 
@@ -249,7 +223,69 @@ mod cli_run {
             "rbtree-del",
             &[],
             "30\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(astar)]
+    fn run_astar_optimized_1() {
+        check_output_with_stdin(
+            &example_file("benchmarks", "AStarTests.roc"),
+            "1",
+            "astar-tests",
+            &[],
+            "True\n",
             false,
+        );
+    }
+
+    #[ignore]
+    #[test]
+    #[serial(closure1)]
+    fn closure1() {
+        check_output(
+            &example_file("benchmarks", "Closure1.roc"),
+            "closure1",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure2)]
+    fn closure2() {
+        check_output(
+            &example_file("benchmarks", "Closure2.roc"),
+            "closure2",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure3)]
+    fn closure3() {
+        check_output(
+            &example_file("benchmarks", "Closure3.roc"),
+            "closure3",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure)]
+    fn closure() {
+        check_output(
+            &example_file("benchmarks", "Closure.roc"),
+            "closure",
+            &[],
+            "",
+            true,
         );
     }
 
@@ -272,7 +308,7 @@ mod cli_run {
             "multi-dep-str",
             &[],
             "I am Dep2.str2\n",
-            false,
+            true,
         );
     }
 
@@ -284,7 +320,7 @@ mod cli_run {
             "multi-dep-str",
             &["--optimize"],
             "I am Dep2.str2\n",
-            false,
+            true,
         );
     }
 
@@ -296,7 +332,7 @@ mod cli_run {
             "multi-dep-thunk",
             &[],
             "I am Dep2.value2\n",
-            false,
+            true,
         );
     }
 
@@ -308,7 +344,7 @@ mod cli_run {
             "multi-dep-thunk",
             &["--optimize"],
             "I am Dep2.value2\n",
-            false,
+            true,
         );
     }
 }

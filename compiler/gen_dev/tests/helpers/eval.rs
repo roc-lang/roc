@@ -1,5 +1,7 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
+use roc_builtins::bitcode;
+use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use tempfile::tempdir;
 
@@ -51,6 +53,7 @@ pub fn helper<'a>(
         src_dir,
         exposed_types,
         8,
+        builtin_defs_map,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -173,10 +176,14 @@ pub fn helper<'a>(
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
+    // std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+
     let (mut child, dylib_path) = link(
         &target,
         app_o_file.clone(),
-        &[app_o_file.to_str().unwrap()],
+        // Long term we probably want a smarter way to link in zig builtins.
+        // With the current method all methods are kept and it adds about 100k to all outputs.
+        &[app_o_file.to_str().unwrap(), bitcode::OBJ_PATH],
         LinkType::Dylib,
     )
     .expect("failed to link dynamic library");
@@ -186,7 +193,6 @@ pub fn helper<'a>(
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();
 
-    // std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
     // std::fs::copy(&path, "/tmp/libapp.so").unwrap();
 
     let lib = Library::new(path).expect("failed to load shared library");

@@ -65,6 +65,7 @@ impl<T> PartialEq for NodeId<T> {
 
 impl<T> Copy for NodeId<T> {}
 
+#[derive(Debug)]
 pub struct Pool {
     nodes: *mut [u8; NODE_BYTES],
     num_nodes: u32,
@@ -141,7 +142,7 @@ impl Pool {
         }
     }
 
-    pub fn get<T>(&self, node_id: NodeId<T>) -> &T {
+    pub fn get<'a, 'b, T>(&'a self, node_id: NodeId<T>) -> &'b T {
         unsafe {
             let node_ptr = self.nodes.offset(node_id.index as isize) as *const T;
 
@@ -154,6 +155,16 @@ impl Pool {
             let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
 
             &mut *node_ptr
+        }
+    }
+
+    pub fn get_str(&self, pool_str: &PoolStr) -> &str {
+        unsafe {
+            let node_ptr = self.nodes.offset(pool_str.first_node_id.index as isize);
+
+            let node_slice: &[u8] = &*node_ptr;
+
+            std::str::from_utf8_unchecked(&node_slice[0..pool_str.len as usize])
         }
     }
 
@@ -238,7 +249,7 @@ impl PoolStr {
 
             PoolStr {
                 first_node_id,
-                len: number_of_nodes,
+                len: string.len() as u32,
             }
         } else {
             PoolStr {
@@ -281,7 +292,7 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     }
 
     pub fn with_capacity(len: u32, pool: &mut Pool) -> Self {
-        debug_assert!(size_of::<T>() <= NODE_BYTES);
+        debug_assert!(size_of::<T>() <= NODE_BYTES, "{}", size_of::<T>());
 
         if len == 0 {
             Self::empty(pool)

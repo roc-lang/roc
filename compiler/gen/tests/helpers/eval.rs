@@ -1,7 +1,11 @@
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
+use roc_can::builtins::{builtin_defs_map, dict_hash_test_only};
+use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::symbol::Symbol;
+use roc_types::subs::VarStore;
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -14,6 +18,15 @@ fn promote_expr_to_module(src: &str) -> String {
     }
 
     buffer
+}
+pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
+    match builtin_defs_map(symbol, var_store) {
+        Some(def) => Some(def),
+        None => match symbol {
+            Symbol::DICT_TEST_HASH => Some(dict_hash_test_only(symbol, var_store)),
+            _ => None,
+        },
+    }
 }
 
 pub fn helper<'a>(
@@ -53,6 +66,7 @@ pub fn helper<'a>(
         src_dir,
         exposed_types,
         ptr_bytes,
+        test_builtin_defs,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -179,11 +193,21 @@ pub fn helper<'a>(
     let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
 
     // mark our zig-defined builtins as internal
+    use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::module::Linkage;
+
+    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    debug_assert!(kind_id > 0);
+    let attr = context.create_enum_attribute(kind_id, 1);
+
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
         if name.starts_with("roc_builtins") {
             function.set_linkage(Linkage::Internal);
+        }
+
+        if name.starts_with("roc_builtins.dict") {
+            function.add_attribute(AttributeLoc::Function, attr);
         }
     }
 
@@ -251,7 +275,7 @@ pub fn helper<'a>(
                 mode,
             );
 
-            fn_val.print_to_stderr();
+            // fn_val.print_to_stderr();
             // module.print_to_stderr();
 
             panic!(

@@ -2,6 +2,46 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// List Module
+const list = @import("list.zig");
+
+comptime {
+    exportListFn(list.listMap, "map");
+    exportListFn(list.listMapWithIndex, "map_with_index");
+    exportListFn(list.listKeepIf, "keep_if");
+    exportListFn(list.listWalk, "walk");
+    exportListFn(list.listWalkBackwards, "walk_backwards");
+    exportListFn(list.listKeepOks, "keep_oks");
+    exportListFn(list.listKeepErrs, "keep_errs");
+    exportListFn(list.listContains, "contains");
+    exportListFn(list.listRepeat, "repeat");
+}
+
+// Dict Module
+const dict = @import("dict.zig");
+const hash = @import("hash.zig");
+
+comptime {
+    exportDictFn(dict.dictLen, "len");
+    exportDictFn(dict.dictEmpty, "empty");
+    exportDictFn(dict.dictInsert, "insert");
+    exportDictFn(dict.dictRemove, "remove");
+    exportDictFn(dict.dictContains, "contains");
+    exportDictFn(dict.dictGet, "get");
+    exportDictFn(dict.elementsRc, "elementsRc");
+    exportDictFn(dict.dictKeys, "keys");
+    exportDictFn(dict.dictValues, "values");
+    exportDictFn(dict.dictUnion, "union");
+    exportDictFn(dict.dictIntersection, "intersection");
+    exportDictFn(dict.dictDifference, "difference");
+    exportDictFn(dict.dictWalk, "walk");
+
+    exportDictFn(dict.setFromList, "set_from_list");
+
+    exportDictFn(hash.wyhash, "hash");
+    exportDictFn(hash.wyhash_rocstr, "hash_str");
+}
+
 // Num Module
 const num = @import("num.zig");
 comptime {
@@ -25,6 +65,7 @@ comptime {
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strFromIntC, "from_int");
+    exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
     exportStrFn(str.validateUtf8Bytes, "validate_utf8_bytes");
 }
@@ -38,6 +79,13 @@ fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "str." ++ func_name);
+}
+fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "dict." ++ func_name);
+}
+
+fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "list." ++ func_name);
 }
 
 // Run all tests in imported modules

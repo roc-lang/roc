@@ -33,7 +33,6 @@ use cgmath::Vector2;
 use ed_model::Position;
 use lang::{pool::Pool, scope::Scope};
 use pipelines::RectResources;
-use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
@@ -167,7 +166,10 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
+    // This arena is never cleared and should only be used for allocations that occur rarely
     let arena = Bump::new();
+
+    let mut rects_arena = Bump::new();
 
     // Render loop
     window.request_redraw();
@@ -277,9 +279,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 } else {
                     // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
 
-                    let mut pool = Pool::with_capacity(12);
+                    let mut pool = Pool::with_capacity(1024);
                     let mut var_store = VarStore::default();
-                    let dep_idents = MutMap::default();
+                    let dep_idents = IdentIds::exposed_builtins(8);
                     let mut module_ids = ModuleIds::default();
                     let exposed_ident_ids = IdentIds::default();
 
@@ -300,22 +302,28 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     let region = Region::new(0, 0, 0, 0);
 
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
-                        &arena, "2.0", &mut env, &mut scope, region,
+                        &arena,
+                        "Num.add 1 1",
+                        &mut env,
+                        &mut scope,
+                        region,
                     )
                     .unwrap();
 
                     render::render_expr2(
-                        &arena,
-                        &size,
+                        &mut env,
                         &expr2,
+                        &size,
                         CODE_TXT_XY.into(),
                         &mut glyph_brush,
                     );
                 }
 
+                rects_arena.reset();
+
                 match draw_all_rects(
                     &app_model.ed_model_opt,
-                    &arena,
+                    &rects_arena,
                     &mut encoder,
                     &frame.view,
                     &gpu_device,
@@ -423,16 +431,19 @@ fn queue_editor_text(
         position: code_coords,
         area_bounds,
         color: CODE_COLOR.into(),
-        text: editor_lines.to_owned(),
+        text: editor_lines,
         size: CODE_FONT_SIZE,
         ..Default::default()
     };
+
+    let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
+    let text = s.as_str();
 
     let caret_pos_label = Text {
         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
         area_bounds,
         color: TXT_COLOR.into(),
-        text: format!("Ln {}, Col {}", caret_pos.line, caret_pos.column),
+        text,
         size: 25.0,
         ..Default::default()
     };
@@ -454,7 +465,7 @@ fn _queue_no_file_text(
         position: text_coords,
         area_bounds,
         color: CODE_COLOR.into(),
-        text: text.to_owned(),
+        text,
         size: CODE_FONT_SIZE,
         ..Default::default()
     };

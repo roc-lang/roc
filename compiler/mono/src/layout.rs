@@ -1,3 +1,4 @@
+use crate::ir::Parens;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -6,6 +7,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::HashMap;
+use ven_pretty::{DocAllocator, DocBuilder};
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 const GENERATE_NULLABLE: bool = true;
@@ -63,6 +65,34 @@ pub enum UnionLayout<'a> {
     },
 }
 
+impl<'a> UnionLayout<'a> {
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use UnionLayout::*;
+
+        match self {
+            NonRecursive(tags) => {
+                let tags_doc = tags.iter().map(|fields| {
+                    alloc.text("C ").append(alloc.intersperse(
+                        fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                        " ",
+                    ))
+                });
+
+                alloc
+                    .text("[")
+                    .append(alloc.intersperse(tags_doc, ", "))
+                    .append(alloc.text("]"))
+            }
+            _ => alloc.text("TODO"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClosureLayout<'a> {
     /// the layout that this specific closure captures
@@ -70,7 +100,9 @@ pub struct ClosureLayout<'a> {
     /// the vec is likely to be small, so linear search is fine
     captured: &'a [(TagName, &'a [Layout<'a>])],
 
-    layout: &'a Layout<'a>,
+    /// use with care; there is some stuff happening here re. unwrapping
+    /// one-element records that might cause issues
+    pub layout: &'a Layout<'a>,
 }
 
 impl<'a> ClosureLayout<'a> {
@@ -284,16 +316,16 @@ impl<'a> ClosureLayout<'a> {
         &self,
         original: Symbol,
         symbols: &'a [Symbol],
-    ) -> Result<crate::ir::Expr<'a>, Symbol> {
+    ) -> BuildClosureData<'a> {
         use crate::ir::Expr;
 
         match self.layout {
-            Layout::Struct(fields) if fields.len() == 1 => Err(symbols[0]),
+            Layout::Struct(fields) if fields.len() == 1 => BuildClosureData::Alias(symbols[0]),
             Layout::Struct(fields) => {
                 debug_assert!(fields.len() > 1);
                 debug_assert_eq!(fields.len(), symbols.len());
 
-                Ok(Expr::Struct(symbols))
+                BuildClosureData::Struct(Expr::Struct(symbols))
             }
             Layout::Union(UnionLayout::NonRecursive(tags)) => {
                 // NOTE it's very important that this Union consists of Closure tags
@@ -305,20 +337,17 @@ impl<'a> ClosureLayout<'a> {
                     .position(|(tn, _)| *tn == TagName::Closure(original))
                     .unwrap() as _;
 
-                let expr = Expr::Tag {
+                BuildClosureData::Union {
                     tag_layout: Layout::Union(UnionLayout::NonRecursive(tags)),
                     tag_name: TagName::Closure(original),
                     tag_id,
                     union_size: tags.len() as u8,
-                    arguments: symbols,
-                };
-
-                Ok(expr)
+                }
             }
             Layout::PhantomEmptyStruct => {
                 debug_assert_eq!(symbols.len(), 1);
 
-                Ok(Expr::Struct(&[]))
+                BuildClosureData::Struct(Expr::Struct(&[]))
             }
 
             _ => {
@@ -330,10 +359,21 @@ impl<'a> ClosureLayout<'a> {
                     &self.layout
                 );
 
-                Err(symbols[0])
+                BuildClosureData::Alias(symbols[0])
             }
         }
     }
+}
+
+pub enum BuildClosureData<'a> {
+    Alias(Symbol),
+    Struct(crate::ir::Expr<'a>),
+    Union {
+        tag_layout: Layout<'a>,
+        tag_name: TagName,
+        tag_id: u8,
+        union_size: u8,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
@@ -392,7 +432,6 @@ impl<'a> Layout<'a> {
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
-
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
@@ -653,6 +692,51 @@ impl<'a> Layout<'a> {
             FunctionPointer(_, _) | Pointer(_) => false,
         }
     }
+
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: Parens) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use Layout::*;
+
+        match self {
+            Builtin(builtin) => builtin.to_doc(alloc, parens),
+            PhantomEmptyStruct => alloc.text("{}"),
+            Struct(fields) => {
+                let fields_doc = fields.iter().map(|x| x.to_doc(alloc, parens));
+
+                alloc
+                    .text("{")
+                    .append(alloc.intersperse(fields_doc, ", "))
+                    .append(alloc.text("}"))
+            }
+            Union(union_layout) => union_layout.to_doc(alloc, parens),
+            RecursivePointer => alloc.text("*self"),
+            FunctionPointer(args, result) => {
+                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
+
+                alloc
+                    .intersperse(args_doc, ", ")
+                    .append(alloc.text(" -> "))
+                    .append(result.to_doc(alloc, Parens::InFunction))
+            }
+            Closure(args, closure_layout, result) => {
+                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
+
+                let bom = closure_layout.layout.to_doc(alloc, Parens::NotNeeded);
+
+                alloc
+                    .intersperse(args_doc, ", ")
+                    .append(alloc.text(" {| "))
+                    .append(bom)
+                    .append(" |} -> ")
+                    .append(result.to_doc(alloc, Parens::InFunction))
+            }
+            Pointer(_) => todo!(),
+        }
+    }
 }
 
 /// Avoid recomputing Layout from Variable multiple times.
@@ -793,7 +877,7 @@ impl<'a> Builtin<'a> {
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
-    pub const DICT_WORDS: u32 = 6;
+    pub const DICT_WORDS: u32 = 3;
     pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Dict with {} for value
     pub const LIST_WORDS: u32 = 2;
 
@@ -875,6 +959,47 @@ impl<'a> Builtin<'a> {
             },
 
             Str | Dict(_, _) | Set(_) => true,
+        }
+    }
+
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use Builtin::*;
+
+        match self {
+            Int128 => alloc.text("Int128"),
+            Int64 => alloc.text("Int64"),
+            Int32 => alloc.text("Int32"),
+            Int16 => alloc.text("Int16"),
+            Int8 => alloc.text("Int8"),
+            Int1 => alloc.text("Int1"),
+            Usize => alloc.text("Usize"),
+            Float128 => alloc.text("Float128"),
+            Float64 => alloc.text("Float64"),
+            Float32 => alloc.text("Float32"),
+            Float16 => alloc.text("Float16"),
+
+            EmptyStr => alloc.text("EmptyStr"),
+            EmptyList => alloc.text("EmptyList"),
+            EmptyDict => alloc.text("EmptyDict"),
+            EmptySet => alloc.text("EmptySet"),
+
+            Str => alloc.text("Str"),
+            List(_, layout) => alloc
+                .text("List ")
+                .append(layout.to_doc(alloc, Parens::InTypeParam)),
+            Set(layout) => alloc
+                .text("Set ")
+                .append(layout.to_doc(alloc, Parens::InTypeParam)),
+            Dict(key_layout, value_layout) => alloc
+                .text("Dict ")
+                .append(key_layout.to_doc(alloc, Parens::InTypeParam))
+                .append(" ")
+                .append(value_layout.to_doc(alloc, Parens::InTypeParam)),
         }
     }
 }
@@ -961,6 +1086,7 @@ fn layout_from_flat_type<'a>(
 
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
+                Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
                 Symbol::ATTR_ATTR => {
                     debug_assert_eq!(args.len(), 2);
 
@@ -986,6 +1112,7 @@ fn layout_from_flat_type<'a>(
                         other => Ok(other),
                     }
                 }
+                Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
                 }
@@ -1324,7 +1451,11 @@ impl<'a> WrappedVariant<'a> {
     }
 }
 
-pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
+pub fn union_sorted_tags<'a>(
+    arena: &'a Bump,
+    var: Variable,
+    subs: &Subs,
+) -> Result<UnionVariant<'a>, LayoutProblem> {
     let var =
         if let Content::RecursionVar { structure, .. } = subs.get_without_compacting(var).content {
             structure
@@ -1338,10 +1469,11 @@ pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> Uni
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs)
         }
+        Err((_, Content::Error)) => return Err(LayoutProblem::Erroneous),
         Err(other) => panic!("invalid content in tag union variable: {:?}", other),
     };
 
-    result
+    Ok(result)
 }
 
 fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
@@ -1787,6 +1919,47 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
         }
         other => {
             todo!("TODO non structure Num.@Num flat_type {:?}", other);
+        }
+    }
+}
+
+fn dict_layout_from_key_value<'a>(
+    env: &mut Env<'a, '_>,
+    key_var: Variable,
+    value_var: Variable,
+) -> Result<Layout<'a>, LayoutProblem> {
+    match env.subs.get_without_compacting(key_var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, key_args)) => {
+            debug_assert_eq!(key_args.len(), 2);
+
+            let var = *key_args.get(1).unwrap();
+
+            dict_layout_from_key_value(env, var, value_var)
+        }
+        Content::FlexVar(_) | Content::RigidVar(_) => {
+            // If this was still a (Dict * *) then it must have been an empty dict
+            Ok(Layout::Builtin(Builtin::EmptyDict))
+        }
+        key_content => {
+            match env.subs.get_without_compacting(value_var).content {
+                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, value_args)) => {
+                    debug_assert_eq!(value_args.len(), 2);
+
+                    let var = *value_args.get(1).unwrap();
+
+                    dict_layout_from_key_value(env, key_var, var)
+                }
+                value_content => {
+                    let key_layout = Layout::new_help(env, key_var, key_content)?;
+                    let value_layout = Layout::new_help(env, value_var, value_content)?;
+
+                    // This is a normal list.
+                    Ok(Layout::Builtin(Builtin::Dict(
+                        env.arena.alloc(key_layout),
+                        env.arena.alloc(value_layout),
+                    )))
+                }
+            }
         }
     }
 }

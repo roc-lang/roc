@@ -4,11 +4,35 @@ use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
     bool_type, dict_type, float_type, int_type, list_type, nat_type, num_type, ordering_type,
-    result_type, set_type, str_type, str_utf8_byte_problem_type, u8_type,
+    result_type, set_type, str_type, str_utf8_byte_problem_type, u64_type, u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
 use std::collections::HashMap;
+
+/// Example:
+///
+///     let_tvars! { a, b, c }
+///
+/// This is equivalent to:
+///
+///     let a = VarId::from_u32(1);
+///     let b = VarId::from_u32(2);
+///     let c = VarId::from_u32(3);
+///
+/// The idea is that this is less error-prone than assigning hardcoded IDs by hand.
+macro_rules! let_tvars {
+    ($($name:ident,)+) => { let_tvars!($($name),+) };
+    ($($name:ident),*) => {
+        let mut _current_tvar = 0;
+
+        $(
+            _current_tvar += 1;
+
+            let $name = VarId::from_u32(_current_tvar);
+        )*
+    };
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Mode {
@@ -557,6 +581,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // fromFloat : Float a -> Str
+    add_type(
+        Symbol::STR_FROM_FLOAT,
+        top_level_function(vec![float_type(flex(TVAR1))], Box::new(str_type())),
+    );
+
     // List module
 
     // get : List elem, Nat -> Result elem [ OutOfBounds ]*
@@ -670,6 +700,38 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // keepOks : List before, (before -> Result after *) -> List after
+    add_type(Symbol::LIST_KEEP_OKS, {
+        let_tvars! { star, cvar, before, after};
+        top_level_function(
+            vec![
+                list_type(flex(before)),
+                closure(
+                    vec![flex(before)],
+                    cvar,
+                    Box::new(result_type(flex(after), flex(star))),
+                ),
+            ],
+            Box::new(list_type(flex(after))),
+        )
+    });
+
+    // keepOks : List before, (before -> Result * after) -> List after
+    add_type(Symbol::LIST_KEEP_ERRS, {
+        let_tvars! { star, cvar, before, after};
+        top_level_function(
+            vec![
+                list_type(flex(before)),
+                closure(
+                    vec![flex(before)],
+                    cvar,
+                    Box::new(result_type(flex(star), flex(after))),
+                ),
+            ],
+            Box::new(list_type(flex(after))),
+        )
+    });
+
     // map : List before, (before -> after) -> List after
     add_type(
         Symbol::LIST_MAP,
@@ -681,6 +743,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             Box::new(list_type(flex(TVAR2))),
         ),
     );
+
+    // mapWithIndex : List before, (Nat, before -> after) -> List after
+    add_type(Symbol::LIST_MAP_WITH_INDEX, {
+        let_tvars! { cvar, before, after};
+        top_level_function(
+            vec![
+                list_type(flex(before)),
+                closure(vec![nat_type(), flex(before)], cvar, Box::new(flex(after))),
+            ],
+            Box::new(list_type(flex(after))),
+        )
+    });
 
     // append : List elem, elem -> List elem
     add_type(
@@ -719,7 +793,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_REPEAT,
         top_level_function(
-            vec![nat_type(), flex(TVAR2)],
+            vec![nat_type(), flex(TVAR1)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );
@@ -747,7 +821,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
-    // empty : Dict k v
+    // Dict.hashTestOnly : Nat, v -> Nat
+    add_type(
+        Symbol::DICT_TEST_HASH,
+        top_level_function(vec![u64_type(), flex(TVAR2)], Box::new(nat_type())),
+    );
+
+    // len : Dict * * -> Nat
+    add_type(
+        Symbol::DICT_LEN,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2))],
+            Box::new(nat_type()),
+        ),
+    );
+
+    // empty : Dict * *
     add_type(Symbol::DICT_EMPTY, dict_type(flex(TVAR1), flex(TVAR2)));
 
     // singleton : k, v -> Dict k v
@@ -773,6 +862,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // Dict.insert : Dict k v, k, v -> Dict k v
     add_type(
         Symbol::DICT_INSERT,
         top_level_function(
@@ -782,6 +872,95 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 flex(TVAR2),
             ],
             Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.remove : Dict k v, k -> Dict k v
+    add_type(
+        Symbol::DICT_REMOVE,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1)],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.contains : Dict k v, k -> Bool
+    add_type(
+        Symbol::DICT_CONTAINS,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1)],
+            Box::new(bool_type()),
+        ),
+    );
+
+    // Dict.keys : Dict k v -> List k
+    add_type(
+        Symbol::DICT_KEYS,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // Dict.values : Dict k v -> List v
+    add_type(
+        Symbol::DICT_VALUES,
+        top_level_function(
+            vec![dict_type(flex(TVAR1), flex(TVAR2))],
+            Box::new(list_type(flex(TVAR2))),
+        ),
+    );
+
+    // Dict.union : Dict k v, Dict k v -> Dict k v
+    add_type(
+        Symbol::DICT_UNION,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                dict_type(flex(TVAR1), flex(TVAR2)),
+            ],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.intersection : Dict k v, Dict k v -> Dict k v
+    add_type(
+        Symbol::DICT_INTERSECTION,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                dict_type(flex(TVAR1), flex(TVAR2)),
+            ],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.difference : Dict k v, Dict k v -> Dict k v
+    add_type(
+        Symbol::DICT_DIFFERENCE,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                dict_type(flex(TVAR1), flex(TVAR2)),
+            ],
+            Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+    add_type(
+        Symbol::DICT_WALK,
+        top_level_function(
+            vec![
+                dict_type(flex(TVAR1), flex(TVAR2)),
+                closure(
+                    vec![flex(TVAR1), flex(TVAR2), flex(TVAR3)],
+                    TVAR4,
+                    Box::new(flex(TVAR3)),
+                ),
+                flex(TVAR3),
+            ],
+            Box::new(flex(TVAR3)),
         ),
     );
 
@@ -796,6 +975,30 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![flex(TVAR1)], Box::new(set_type(flex(TVAR1)))),
     );
 
+    // len : Set * -> Nat
+    add_type(
+        Symbol::SET_LEN,
+        top_level_function(vec![set_type(flex(TVAR1))], Box::new(nat_type())),
+    );
+
+    // toList : Set a -> List a
+    add_type(
+        Symbol::SET_TO_LIST,
+        top_level_function(
+            vec![set_type(flex(TVAR1))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // fromList : Set a -> List a
+    add_type(
+        Symbol::SET_FROM_LIST,
+        top_level_function(
+            vec![list_type(flex(TVAR1))],
+            Box::new(set_type(flex(TVAR1))),
+        ),
+    );
+
     // union : Set a, Set a -> Set a
     add_type(
         Symbol::SET_UNION,
@@ -805,18 +1008,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // diff : Set a, Set a -> Set a
+    // difference : Set a, Set a -> Set a
     add_type(
-        Symbol::SET_DIFF,
+        Symbol::SET_DIFFERENCE,
         top_level_function(
             vec![set_type(flex(TVAR1)), set_type(flex(TVAR1))],
             Box::new(set_type(flex(TVAR1))),
         ),
     );
 
-    // foldl : Set a, (a -> b -> b), b -> b
+    // intersection : Set a, Set a -> Set a
     add_type(
-        Symbol::SET_FOLDL,
+        Symbol::SET_INTERSECTION,
+        top_level_function(
+            vec![set_type(flex(TVAR1)), set_type(flex(TVAR1))],
+            Box::new(set_type(flex(TVAR1))),
+        ),
+    );
+
+    // Set.walk : Set a, (a, b -> b), b -> b
+    add_type(
+        Symbol::SET_WALK,
         top_level_function(
             vec![
                 set_type(flex(TVAR1)),
@@ -843,6 +1055,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    add_type(
+        Symbol::SET_CONTAINS,
+        top_level_function(
+            vec![set_type(flex(TVAR1)), flex(TVAR1)],
+            Box::new(bool_type()),
+        ),
+    );
+
     // Result module
 
     // map : Result a err, (a -> b) -> Result b err
@@ -854,6 +1074,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 closure(vec![flex(TVAR1)], TVAR4, Box::new(flex(TVAR2))),
             ],
             Box::new(result_type(flex(TVAR2), flex(TVAR3))),
+        ),
+    );
+
+    // mapErr : Result a x, (x -> y) -> Result a x
+    add_type(
+        Symbol::RESULT_MAP_ERR,
+        top_level_function(
+            vec![
+                result_type(flex(TVAR1), flex(TVAR3)),
+                closure(vec![flex(TVAR3)], TVAR4, Box::new(flex(TVAR2))),
+            ],
+            Box::new(result_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // withDefault : Result a x, a -> a
+    add_type(
+        Symbol::RESULT_WITH_DEFAULT,
+        top_level_function(
+            vec![result_type(flex(TVAR1), flex(TVAR3)), flex(TVAR1)],
+            Box::new(flex(TVAR1)),
         ),
     );
 

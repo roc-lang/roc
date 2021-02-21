@@ -18,6 +18,7 @@ mod test_load {
     use crate::helpers::fixtures_dir;
     use bumpalo::Bump;
     use inlinable_string::InlinableString;
+    use roc_can::builtins::builtin_defs_map;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
@@ -86,6 +87,7 @@ mod test_load {
                     dir.path(),
                     exposed_types,
                     8,
+                    builtin_defs_map,
                 )
             };
 
@@ -124,10 +126,11 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            &roc_builtins::std::standard_stdlib(),
+            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             8,
+            builtin_defs_map,
         );
         let mut loaded_module = loaded.expect("Test module failed to load");
 
@@ -287,10 +290,11 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            &roc_builtins::std::standard_stdlib(),
+            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             8,
+            builtin_defs_map,
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");

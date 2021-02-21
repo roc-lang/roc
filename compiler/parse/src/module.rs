@@ -7,9 +7,10 @@ use crate::header::{
     TypedIdent,
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
+use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
-    unexpected_eof, Either, ParseResult, Parser, State,
+    self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
+    peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -17,29 +18,29 @@ use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_region::all::Located;
 
-pub fn header<'a>() -> impl Parser<'a, Module<'a>> {
+pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     one_of!(interface_module(), app_module(), platform_module())
 }
 
 #[inline(always)]
-fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
+fn app_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     map!(app_header(), |header| { Module::App { header } })
 }
 
 #[inline(always)]
-fn platform_module<'a>() -> impl Parser<'a, Module<'a>> {
+fn platform_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     map!(platform_header(), |header| { Module::Platform { header } })
 }
 
 #[inline(always)]
-fn interface_module<'a>() -> impl Parser<'a, Module<'a>> {
+fn interface_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
     map!(interface_header(), |header| {
         Module::Interface { header }
     })
 }
 
 #[inline(always)]
-pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
+pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError<'a>> {
     parser::map(
         and!(
             skip_first!(
@@ -70,7 +71,7 @@ pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
 }
 
 #[inline(always)]
-pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>> {
+pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
     // e.g. rtfeldman/blah
     //
     // Package names and accounts can be capitalized and can contain dashes.
@@ -86,7 +87,10 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>> {
     )
 }
 
-pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseResult<'a, &'a str> {
+pub fn parse_package_part<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+) -> ParseResult<'a, &'a str, SyntaxError<'a>> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
 
     while !state.bytes.is_empty() {
@@ -95,32 +99,36 @@ pub fn parse_package_part<'a>(arena: &'a Bump, mut state: State<'a>) -> ParseRes
                 if ch == '-' || ch.is_ascii_alphanumeric() {
                     part_buf.push(ch);
 
-                    state = state.advance_without_indenting(bytes_parsed)?;
+                    state = state.advance_without_indenting(arena, bytes_parsed)?;
                 } else {
-                    return Ok((part_buf.into_bump_str(), state));
+                    let progress = Progress::progress_when(!part_buf.is_empty());
+                    return Ok((progress, part_buf.into_bump_str(), state));
                 }
             }
-            Err(reason) => return state.fail(reason),
+            Err(reason) => {
+                let progress = Progress::progress_when(!part_buf.is_empty());
+                return state.fail(arena, progress, reason);
+            }
         }
     }
 
-    Err(unexpected_eof(0, state.attempting, state))
+    Err(unexpected_eof(arena, state, 0))
 }
 
 #[inline(always)]
-pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
+pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
     move |arena, mut state: State<'a>| {
         match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !first_letter.is_uppercase() {
-                    return Err(unexpected(0, state, Attempting::Module));
+                    return Err(unexpected(arena, 0, Attempting::Module, state));
                 };
 
                 let mut buf = String::with_capacity_in(4, arena);
 
                 buf.push(first_letter);
 
-                state = state.advance_without_indenting(bytes_parsed)?;
+                state = state.advance_without_indenting(arena, bytes_parsed)?;
 
                 while !state.bytes.is_empty() {
                     match peek_utf8_char(&state) {
@@ -131,7 +139,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                             // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
                             // * A '.' separating module parts
                             if ch.is_alphabetic() || ch.is_ascii_digit() {
-                                state = state.advance_without_indenting(bytes_parsed)?;
+                                state = state.advance_without_indenting(arena, bytes_parsed)?;
 
                                 buf.push(ch);
                             } else if ch == '.' {
@@ -143,6 +151,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                                             buf.push(next);
 
                                             state = state.advance_without_indenting(
+                                                arena,
                                                 bytes_parsed + next_bytes_parsed,
                                             )?;
                                         } else {
@@ -151,31 +160,32 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                                             // There may be an identifier after this '.',
                                             // e.g. "baz" in `Foo.Bar.baz`
                                             return Ok((
+                                                MadeProgress,
                                                 ModuleName::new(buf.into_bump_str()),
                                                 state,
                                             ));
                                         }
                                     }
-                                    Err(reason) => return state.fail(reason),
+                                    Err(reason) => return state.fail(arena, MadeProgress, reason),
                                 }
                             } else {
                                 // This is the end of the module name. We're done!
                                 break;
                             }
                         }
-                        Err(reason) => return state.fail(reason),
+                        Err(reason) => return state.fail(arena, MadeProgress, reason),
                     }
                 }
 
-                Ok((ModuleName::new(buf.into_bump_str()), state))
+                Ok((MadeProgress, ModuleName::new(buf.into_bump_str()), state))
             }
-            Err(reason) => state.fail(reason),
+            Err(reason) => state.fail(arena, MadeProgress, reason),
         }
     }
 }
 
 #[inline(always)]
-pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
+pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
     map_with_arena!(
         and!(
             skip_first!(
@@ -233,7 +243,7 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
 }
 
 #[inline(always)]
-pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
+pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError<'a>> {
     parser::map(
         and!(
             skip_first!(
@@ -289,8 +299,9 @@ pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>> {
 }
 
 #[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
-    zero_or_more!(space0_around(loc(def(0)), 0))
+pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
+    // force that we pare until the end of the input
+    skip_second!(zero_or_more!(space0_around(loc(def(0)), 0)), end_of_file())
 }
 
 struct ProvidesTo<'a> {
@@ -304,10 +315,13 @@ struct ProvidesTo<'a> {
 }
 
 #[inline(always)]
-fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>> {
+fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, SyntaxError<'a>> {
     map!(
         and!(
-            and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
+            and!(
+                skip_second!(backtrackable(space1(1)), ascii_string("provides")),
+                space1(1)
+            ),
             and!(
                 collection!(
                     ascii_char(b'['),
@@ -361,6 +375,7 @@ fn provides_without_to<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
@@ -381,6 +396,7 @@ fn requires<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<TypedIdent<'a>>>,
     ),
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("requires")), space1(1)),
@@ -401,6 +417,7 @@ fn exposes_values<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
@@ -421,6 +438,7 @@ fn exposes_modules<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
     ),
+    SyntaxError<'a>,
 > {
     and!(
         and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
@@ -434,6 +452,7 @@ fn exposes_modules<'a>() -> impl Parser<
     )
 }
 
+#[derive(Debug)]
 struct Packages<'a> {
     entries: Vec<'a, Located<PackageEntry<'a>>>,
 
@@ -442,10 +461,13 @@ struct Packages<'a> {
 }
 
 #[inline(always)]
-fn packages<'a>() -> impl Parser<'a, Packages<'a>> {
+fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
     map!(
         and!(
-            and!(skip_second!(space1(1), ascii_string("packages")), space1(1)),
+            and!(
+                skip_second!(backtrackable(space1(1)), ascii_string("packages")),
+                space1(1)
+            ),
             collection!(
                 ascii_char(b'{'),
                 loc!(package_entry()),
@@ -471,9 +493,13 @@ fn imports<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ImportsEntry<'a>>>,
     ),
+    SyntaxError<'a>,
 > {
     and!(
-        and!(skip_second!(space1(1), ascii_string("imports")), space1(1)),
+        and!(
+            skip_second!(backtrackable(space1(1)), ascii_string("imports")),
+            space1(1)
+        ),
         collection!(
             ascii_char(b'['),
             loc!(imports_entry()),
@@ -485,19 +511,19 @@ fn imports<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
+fn effects<'a>() -> impl Parser<'a, Effects<'a>, SyntaxError<'a>> {
     move |arena, state| {
-        let (spaces_before_effects_keyword, state) =
+        let (_, spaces_before_effects_keyword, state) =
             skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
-        let (spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
+        let (_, spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
 
         // e.g. `fx.`
-        let (type_shortname, state) =
+        let (_, type_shortname, state) =
             skip_second!(lowercase_ident(), ascii_char(b'.')).parse(arena, state)?;
 
-        let ((type_name, spaces_after_type_name), state) =
+        let (_, (type_name, spaces_after_type_name), state) =
             and!(uppercase_ident(), space1(0)).parse(arena, state)?;
-        let (entries, state) = collection!(
+        let (_, entries, state) = collection!(
             ascii_char(b'{'),
             loc!(typed_ident()),
             ascii_char(b','),
@@ -507,6 +533,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
         .parse(arena, state)?;
 
         Ok((
+            MadeProgress,
             Effects {
                 spaces_before_effects_keyword,
                 spaces_after_effects_keyword,
@@ -521,14 +548,14 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>> {
 }
 
 #[inline(always)]
-fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
+fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError<'a>> {
     move |arena, state| {
         // You must have a field name, e.g. "email"
-        let (ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
+        let (_, ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
 
-        let (spaces_before_colon, state) = space0(0).parse(arena, state)?;
+        let (_, spaces_before_colon, state) = space0(0).parse(arena, state)?;
 
-        let (ann, state) = skip_first!(
+        let (_, ann, state) = skip_first!(
             ascii_char(b':'),
             space0_before(type_annotation::located(0), 0)
         )
@@ -539,6 +566,7 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
         // printLine : Str -> Effect {}
 
         Ok((
+            MadeProgress,
             TypedIdent::Entry {
                 ident,
                 spaces_before_colon,
@@ -551,7 +579,7 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>> {
 
 #[inline(always)]
 #[allow(clippy::type_complexity)]
-fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
+fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, SyntaxError<'a>> {
     map_with_arena!(
         and!(
             and!(
