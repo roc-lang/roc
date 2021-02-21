@@ -236,6 +236,43 @@ mod cli_run {
             "astar-tests",
             &[],
             "True\n",
+            false,
+        );
+    }
+
+    #[ignore]
+    #[test]
+    #[serial(closure1)]
+    fn closure1() {
+        check_output(
+            &example_file("benchmarks", "Closure1.roc"),
+            "closure1",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure2)]
+    fn closure2() {
+        check_output(
+            &example_file("benchmarks", "Closure2.roc"),
+            "closure2",
+            &[],
+            "",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure3)]
+    fn closure3() {
+        check_output(
+            &example_file("benchmarks", "Closure3.roc"),
+            "closure3",
+            &[],
+            "",
             true,
         );
     }

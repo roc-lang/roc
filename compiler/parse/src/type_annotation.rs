@@ -66,7 +66,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Typ
                     and!(
                         skip_second!(
                             backtrackable(space0_e(min_indent, Type::TSpace, Type::TIndentEnd)),
-                            crate::parser::keyword_e(keyword::AS, Type::TEnd(0, 0))
+                            crate::parser::keyword_e(keyword::AS, Type::TEnd)
                         ),
                         space0_before_e(
                             term(min_indent),
@@ -144,7 +144,6 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
 fn loc_type_in_parens<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, TInParens<'a>> {
-    // TODO what if the middle parser returns EOF?
     between!(
         word1(b'(', TInParens::Open),
         space0_around_e(
