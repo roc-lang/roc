@@ -348,16 +348,13 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
                 record_type,
                 vec![
                     (
-                        env.ptr_int().const_int(0 as u64, false).into(),
+                        env.ptr_int().const_int(0, false).into(),
                         "insert_zeroed_byte_index",
                     ),
                     (zig_str_to_struct(env, zig_str).into(), "insert_str"),
+                    (ctx.bool_type().const_int(1, false).into(), "insert_is_ok"),
                     (
-                        ctx.bool_type().const_int(1 as u64, false).into(),
-                        "insert_is_ok",
-                    ),
-                    (
-                        ctx.i8_type().const_int(0 as u64, false).into(),
+                        ctx.i8_type().const_int(0, false).into(),
                         "insert_zeroed_problem",
                     ),
                 ],
@@ -371,11 +368,8 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
                 record_type,
                 vec![
                     (byte_index.into(), "insert_byte_index"),
-                    (empty_polymorphic_list(env).into(), "insert_zeroed_str"),
-                    (
-                        ctx.bool_type().const_int(0 as u64, false).into(),
-                        "insert_is_ok",
-                    ),
+                    (empty_polymorphic_list(env), "insert_zeroed_str"),
+                    (ctx.bool_type().const_int(0, false).into(), "insert_is_ok"),
                     (problem_code.into(), "insert_problem"),
                 ],
             )
