@@ -843,15 +843,17 @@ define_builtins! {
         82 NUM_BITWISE_XOR: "bitwiseXor"
         83 NUM_BITWISE_OR: "bitwiseOr"
         84 NUM_SHIFT_LEFT: "shiftLeftBy"
-        85 NUM_SUB_WRAP: "subWrap"
-        86 NUM_SUB_CHECKED: "subChecked"
-        87 NUM_MUL_WRAP: "mulWrap"
-        88 NUM_MUL_CHECKED: "mulChecked"
-        89 NUM_INT: "Int" imported
-        90 NUM_FLOAT: "Float" imported
-        91 NUM_AT_NATURAL: "@Natural"
-        92 NUM_NATURAL: "Natural" imported
-        93 NUM_NAT: "Nat" imported
+        85 NUM_SHIFT_RIGHT: "shiftRightBy"
+        86 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
+        87 NUM_SUB_WRAP: "subWrap"
+        88 NUM_SUB_CHECKED: "subChecked"
+        89 NUM_MUL_WRAP: "mulWrap"
+        90 NUM_MUL_CHECKED: "mulChecked"
+        91 NUM_INT: "Int" imported
+        92 NUM_FLOAT: "Float" imported
+        93 NUM_AT_NATURAL: "@Natural"
+        94 NUM_NATURAL: "Natural" imported
+        95 NUM_NAT: "Nat" imported
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

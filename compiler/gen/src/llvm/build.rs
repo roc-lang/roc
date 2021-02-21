@@ -3967,7 +3967,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 op,
             )
         }
-        NumShiftLeftBy => {
+        NumShiftLeftBy | NumShiftRightBy | NumShiftRightZfBy => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -4614,7 +4614,17 @@ fn build_int_binop<'a, 'ctx, 'env>(
             // NOTE arguments are flipped;
             // we write `assert_eq!(0b0000_0001 << 0, 0b0000_0001);`
             // as `Num.shiftLeftBy 0 0b0000_0001
-            bd.build_left_shift(rhs, lhs, "int_bitwise_or").into()
+            bd.build_left_shift(rhs, lhs, "int_shift_left").into()
+        }
+        NumShiftRightBy => {
+            // NOTE arguments are flipped;
+            bd.build_right_shift(rhs, lhs, false, "int_shift_right")
+                .into()
+        }
+        NumShiftRightZfBy => {
+            // NOTE arguments are flipped;
+            bd.build_right_shift(rhs, lhs, true, "int_shift_right_zf")
+                .into()
         }
 
         _ => {

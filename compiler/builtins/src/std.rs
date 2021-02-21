@@ -333,9 +333,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // shiftLeftBy : Nat, Int a -> Int a
+    // shiftLeftBy : Int a, Int a -> Int a
     add_type(
         Symbol::NUM_SHIFT_LEFT,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
+    );
+
+    // shiftRightBy : Int a, Int a -> Int a
+    add_type(
+        Symbol::NUM_SHIFT_RIGHT,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
+    );
+
+    // shiftRightZfBy : Int a, Int a -> Int a
+    add_type(
+        Symbol::NUM_SHIFT_RIGHT_ZERO_FILL,
         top_level_function(
             vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
             Box::new(int_type(flex(TVAR1))),

@@ -81,6 +81,8 @@ pub enum LowLevel {
     NumBitwiseXor,
     NumBitwiseOr,
     NumShiftLeftBy,
+    NumShiftRightBy,
+    NumShiftRightZfBy,
     Eq,
     NotEq,
     And,
