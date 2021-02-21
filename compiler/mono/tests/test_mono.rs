@@ -646,13 +646,13 @@ mod test_mono {
                     let Test.4 = lowlevel DictEmpty ;
                     ret Test.4;
 
-                procedure Dict.6 (#Attr.2):
+                procedure Dict.8 (#Attr.2):
                     let Test.3 = lowlevel DictSize #Attr.2;
                     ret Test.3;
 
                 procedure Test.0 ():
                     let Test.2 = FunctionPointer Dict.2;
-                    let Test.1 = CallByName Dict.6 Test.2;
+                    let Test.1 = CallByName Dict.8 Test.2;
                     ret Test.1;
                 "#
             ),

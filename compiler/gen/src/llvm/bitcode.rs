@@ -207,6 +207,15 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     function_value
 }
 
+pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    n: u64,
+) -> FunctionValue<'ctx> {
+    build_rc_wrapper(env, layout_ids, layout, Mode::Inc(n))
+}
+
 pub fn build_inc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,

@@ -729,8 +729,12 @@ impl<'a> Context<'a> {
                 layout,
             } => {
                 // TODO this combines parts of Let and Switch. Did this happen correctly?
-                let mut case_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
+                let mut case_live_vars = collect_stmt(pass, &self.jp_live_vars, MutSet::default());
+                case_live_vars.extend(collect_stmt(fail, &self.jp_live_vars, MutSet::default()));
 
+                // the result of an invoke should not be touched in the fail branch
+                // but it should be present in the pass branch (otherwise it would be dead)
+                debug_assert!(case_live_vars.contains(symbol));
                 case_live_vars.remove(symbol);
 
                 let fail = {
@@ -758,9 +762,50 @@ impl<'a> Context<'a> {
                     layout: layout.clone(),
                 };
 
-                let stmt = self.arena.alloc(invoke);
+                let cont = self.arena.alloc(invoke);
 
-                (stmt, case_live_vars)
+                use crate::ir::CallType;
+                let stmt = match &call.call_type {
+                    CallType::LowLevel { op } => {
+                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+                    }
+
+                    CallType::Foreign { .. } => {
+                        let ps = crate::borrow::foreign_borrow_signature(
+                            self.arena,
+                            call.arguments.len(),
+                        );
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+                    }
+
+                    CallType::ByName {
+                        name, full_layout, ..
+                    } => {
+                        // get the borrow signature
+                        match self.param_map.get_symbol(*name, full_layout.clone()) {
+                            Some(ps) => self.add_dec_after_application(
+                                call.arguments,
+                                ps,
+                                cont,
+                                &case_live_vars,
+                            ),
+                            None => self.add_inc_before_consume_all(
+                                call.arguments,
+                                cont,
+                                &case_live_vars,
+                            ),
+                        }
+                    }
+                    CallType::ByPointer { .. } => {
+                        self.add_inc_before_consume_all(call.arguments, cont, &case_live_vars)
+                    }
+                };
+
+                let mut invoke_live_vars = case_live_vars;
+                occuring_variables_call(call, &mut invoke_live_vars);
+
+                (stmt, invoke_live_vars)
             }
             Join {
                 id: j,

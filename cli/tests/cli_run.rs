@@ -228,7 +228,6 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore]
     #[serial(astar)]
     fn run_astar_optimized_1() {
         check_output_with_stdin(
@@ -279,11 +278,11 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(closure4)]
-    fn closure4() {
+    #[serial(closure)]
+    fn closure() {
         check_output(
-            &example_file("benchmarks", "Closure4.roc"),
-            "closure4",
+            &example_file("benchmarks", "Closure.roc"),
+            "closure",
             &[],
             "",
             true,

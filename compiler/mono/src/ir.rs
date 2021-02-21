@@ -5183,10 +5183,7 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         AppliedTag {
-            arguments,
-            layout,
-            tag_name,
-            ..
+            arguments, layout, ..
         } => {
             let wrapped = Wrapped::from_layout(layout);
             let write_tag = wrapped == Wrapped::MultiTagUnion;
@@ -5241,12 +5238,6 @@ fn store_pattern_help<'a>(
                         match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
                             StorePattern::Productive(new) => {
                                 is_productive = true;
-                                println!(
-                                    "Access  {:?}.{:?} {:?}",
-                                    tag_name.clone(),
-                                    outer_symbol,
-                                    index
-                                );
                                 stmt = new;
                                 // only if we bind one of its (sub)fields to a used name should we
                                 // extract the field
@@ -5948,7 +5939,8 @@ fn call_by_name<'a>(
                 debug_assert_eq!(
                     arg_layouts.len(),
                     field_symbols.len(),
-                    "see call_by_name for background (scroll down a bit)"
+                    "see call_by_name for background (scroll down a bit), function is {:?}",
+                    proc_name,
                 );
 
                 let call = self::Call {
@@ -5999,7 +5991,8 @@ fn call_by_name<'a>(
                         debug_assert_eq!(
                             arg_layouts.len(),
                             field_symbols.len(),
-                            "see call_by_name for background (scroll down a bit)"
+                            "see call_by_name for background (scroll down a bit), function is {:?}",
+                            proc_name,
                         );
 
                         let call = self::Call {
@@ -6521,8 +6514,10 @@ fn from_can_pattern_help<'a>(
                             debug_assert_eq!(
                                 arguments.len(),
                                 argument_layouts[1..].len(),
-                                "{:?}",
-                                tag_name
+                                "The {:?} tag got {} arguments, but its layout expects {}!",
+                                tag_name,
+                                arguments.len(),
+                                argument_layouts[1..].len(),
                             );
                             let it = argument_layouts[1..].iter();
 

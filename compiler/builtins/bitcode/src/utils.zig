@@ -16,25 +16,25 @@ pub fn decref(
 
     var bytes = bytes_or_null orelse return;
 
-    const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));
+    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(8, bytes));
 
-    const refcount = (usizes - 1)[0];
+    const refcount = (isizes - 1)[0];
     const refcount_isize = @bitCast(isize, refcount);
 
     switch (alignment) {
         16 => {
-            if (refcount == REFCOUNT_ONE) {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
                 allocator.free((bytes - 16)[0 .. 16 + data_bytes]);
             } else if (refcount_isize < 0) {
-                (usizes - 1)[0] = refcount + 1;
+                (isizes - 1)[0] = refcount - 1;
             }
         },
         else => {
             // NOTE enums can currently have an alignment of < 8
-            if (refcount == REFCOUNT_ONE) {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
                 allocator.free((bytes - 8)[0 .. 8 + data_bytes]);
             } else if (refcount_isize < 0) {
-                (usizes - 1)[0] = refcount + 1;
+                (isizes - 1)[0] = refcount - 1;
             }
         },
     }
@@ -72,11 +72,11 @@ pub fn allocateWithRefcount(
 
             var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
 
-            var as_usize_array = @ptrCast([*]usize, new_bytes);
+            var as_usize_array = @ptrCast([*]isize, new_bytes);
             if (result_in_place) {
-                as_usize_array[0] = @intCast(usize, number_of_slots);
+                as_usize_array[0] = @intCast(isize, number_of_slots);
             } else {
-                as_usize_array[0] = REFCOUNT_ONE;
+                as_usize_array[0] = REFCOUNT_ONE_ISIZE;
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
