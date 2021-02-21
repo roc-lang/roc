@@ -747,6 +747,9 @@ pub fn dict_walk<'a, 'ctx, 'env>(
 
     let output_ptr = builder.build_alloca(accum_bt, "output_ptr");
 
+    let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
+    let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
+
     call_void_bitcode_fn(
         env,
         &[
@@ -758,6 +761,8 @@ pub fn dict_walk<'a, 'ctx, 'env>(
             key_width.into(),
             value_width.into(),
             accum_width.into(),
+            inc_key_fn.as_global_value().as_pointer_value().into(),
+            inc_value_fn.as_global_value().as_pointer_value().into(),
             env.builder.build_bitcast(output_ptr, u8_ptr, "to_opaque"),
         ],
         &bitcode::DICT_WALK,
