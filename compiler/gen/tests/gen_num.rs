@@ -751,6 +751,12 @@ mod gen_num {
     }
 
     #[test]
+    fn bitwise_or() {
+        assert_evals_to!("Num.bitwiseOr 1 1", 1, i64);
+        assert_evals_to!("Num.bitwiseOr 1 2", 3, i64);
+    }
+
+    #[test]
     fn lt_i64() {
         assert_evals_to!("1 < 2", true, bool);
         assert_evals_to!("1 < 1", false, bool);
