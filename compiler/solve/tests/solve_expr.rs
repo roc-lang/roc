@@ -4315,4 +4315,26 @@ mod solve_expr {
             "Str",
         );
     }
+
+    #[test]
+    fn int_type_let_polymorphism() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                x = 4
+
+                f : U8 -> U32
+                f = \z -> Num.intCast z
+
+                y = f x
+
+                main =
+                    x
+                "#
+            ),
+            "Num *",
+        );
+    }
 }
