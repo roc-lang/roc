@@ -2203,7 +2203,7 @@ fn load_pkg_config<'a>(
                         &header,
                         pkg_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     let effects_module_msg = fabricate_effects_module(
                         arena,
@@ -2214,7 +2214,7 @@ fn load_pkg_config<'a>(
                         header,
                         effect_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
@@ -2456,7 +2456,7 @@ fn parse_header<'a>(
                 },
             }
         }
-        Ok((_, ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+        Ok((_, ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
             arena,
             &"",
             module_ids,
@@ -2464,7 +2464,7 @@ fn parse_header<'a>(
             mode,
             header,
             module_timing,
-        ),
+        )),
         Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
             fail.into_parse_problem(filename, src_bytes),
         )),
@@ -3084,11 +3084,11 @@ fn fabricate_pkg_config_module<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
         header.provides.clone().into_bump_slice();
 
-    Ok(send_header_two(
+    send_header_two(
         arena,
         filename,
         shorthand,
@@ -3101,7 +3101,7 @@ fn fabricate_pkg_config_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_timing,
-    ))
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3113,7 +3113,7 @@ fn fabricate_effects_module<'a>(
     mode: Mode,
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
@@ -3341,7 +3341,7 @@ fn fabricate_effects_module<'a>(
         module_timing,
     };
 
-    Ok((
+    (
         module_id,
         Msg::MadeEffectModule {
             type_shortname: effects.effect_shortname,
@@ -3349,7 +3349,7 @@ fn fabricate_effects_module<'a>(
             canonicalization_problems: module_output.problems,
             module_docs,
         },
-    ))
+    )
 }
 
 fn unpack_exposes_entries<'a>(
@@ -3384,6 +3384,7 @@ fn unpack_exposes_entries<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,

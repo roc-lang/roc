@@ -61,6 +61,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
+        STR_FROM_UTF8 => str_from_utf8,
         STR_FROM_FLOAT=> str_from_float,
         LIST_LEN => list_len,
         LIST_GET => list_get,
@@ -191,6 +192,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_ENDS_WITH => str_ends_with,
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::STR_FROM_INT => str_from_int,
+        Symbol::STR_FROM_UTF8 => str_from_utf8,
         Symbol::STR_FROM_FLOAT=> str_from_float,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
@@ -1525,6 +1527,110 @@ fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         str_var,
+    )
+}
+
+/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bytes_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let record_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    // let arg_2 = RunLowLevel FromUtf8 arg_1
+    //
+    // arg_2 :
+    //   { a : Bool   -- isOk
+    //   , b : String -- result_str
+    //   , c : Nat    -- problem_byte_index
+    //   , d : I8     -- problem_code
+    //   }
+    //
+    // if arg_2.a then
+    //  # all is well
+    //  Ok arg_2.str
+    // else
+    //  # problem
+    //  Err (BadUtf8 { byteIndex: arg_2.byteIndex, problem : arg_2.problem })
+
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::StrFromUtf8,
+            args: vec![(bytes_var, Var(Symbol::ARG_1))],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_2.c -> Bool
+                Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "isOk".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                },
+            ),
+            // all is good
+            no_region(tag(
+                "Ok",
+                // arg_2.a -> Str
+                vec![Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "str".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                }],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // bad!!
+            no_region(tag(
+                "Err",
+                vec![tag(
+                    "BadUtf8",
+                    vec![
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "problem".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "byteIndex".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ],
+                    var_store,
+                )],
+                var_store,
+            )),
+        ),
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(bytes_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
     )
 }
 
@@ -3024,6 +3130,18 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
             .collect::<Vec<(Variable, Located<Expr>)>>(),
     }
 }
+
+// #[inline(always)]
+// fn record(fields: Vec<(Lowercase, Field)>, var_store: &mut VarStore) -> Expr {
+// let mut send_map = SendMap::default();
+// for (k, v) in fields {
+// send_map.insert(k, v);
+// }
+// Expr::Record {
+// record_var: var_store.fresh(),
+// fields: send_map,
+// }
+// }
 
 #[inline(always)]
 fn defn(

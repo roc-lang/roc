@@ -55,6 +55,7 @@ comptime {
 // Str Module
 const str = @import("str.zig");
 comptime {
+    exportStrFn(str.init, "init");
     exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
@@ -66,6 +67,7 @@ comptime {
     exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
+    exportStrFn(str.validateUtf8Bytes, "validate_utf8_bytes");
 }
 
 // Export helpers - Must be run inside a comptime

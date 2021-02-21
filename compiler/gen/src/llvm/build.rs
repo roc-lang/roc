@@ -11,8 +11,8 @@ use crate::llvm::build_list::{
     list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_join_with,
-    str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
+    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
+    str_join_with, str_number_of_bytes, str_split, str_starts_with, CHAR_LAYOUT,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -3542,6 +3542,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             str_from_float(env, scope, args[0])
+        }
+        StrFromUtf8 => {
+            // Str.fromInt : Int -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
+
+            str_from_utf8(env, parent, original_wrapper)
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
