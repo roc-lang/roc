@@ -91,9 +91,6 @@ lowest6BitsMask = 63
 
 bitsToCharsHelp : U32, Int * -> List U8
 bitsToCharsHelp = \bits, missing ->
-    # Performance Notes
-    # `String.cons` proved to be the fastest way of combining characters into a string
-    # see also https://github.com/danfishgold/base64-bytes/pull/3#discussion_r342321940
     # The input is 24 bits, which we have to partition into 4 6-bit segments. We achieve this by
     # shifting to the right by (a multiple of) 6 to remove unwanted bits on the right, then `Num.bitwiseAnd`
     # with `0b111111` (which is 2^6 - 1 or 63) (so, 6 1s) to remove unwanted bits on the left.
