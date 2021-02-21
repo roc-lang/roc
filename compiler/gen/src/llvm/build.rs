@@ -296,8 +296,10 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let void_type = ctx.void_type();
     let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
+    let i128_type = ctx.i128_type();
     let i64_type = ctx.i64_type();
     let i32_type = ctx.i32_type();
+    let i16_type = ctx.i16_type();
     let i8_type = ctx.i8_type();
     let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
 
@@ -377,10 +379,56 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         f64_type.fn_type(&[f64_type.into()], false),
     );
 
+    // add with overflow
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I8, {
+        let fields = [i8_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i8_type.into(), i8_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I16, {
+        let fields = [i16_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i16_type.into(), i16_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I32, {
+        let fields = [i32_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i32_type.into(), i32_type.into()], false)
+    });
+
     add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I64, {
         let fields = [i64_type.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I128, {
+        let fields = [i128_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i128_type.into(), i128_type.into()], false)
+    });
+
+    // sub with overflow
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I8, {
+        let fields = [i8_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i8_type.into(), i8_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I16, {
+        let fields = [i16_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i16_type.into(), i16_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I32, {
+        let fields = [i32_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i32_type.into(), i32_type.into()], false)
     });
 
     add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I64, {
@@ -388,6 +436,14 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I128, {
+        let fields = [i128_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i128_type.into(), i128_type.into()], false)
+    });
+
+    // mul with overflow
 
     add_intrinsic(module, LLVM_SMUL_WITH_OVERFLOW_I64, {
         let fields = [i64_type.into(), i1_type.into()];
@@ -406,8 +462,19 @@ static LLVM_COS_F64: &str = "llvm.cos.f64";
 static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
+
+pub static LLVM_SADD_WITH_OVERFLOW_I8: &str = "llvm.sadd.with.overflow.i8";
+pub static LLVM_SADD_WITH_OVERFLOW_I16: &str = "llvm.sadd.with.overflow.i16";
+pub static LLVM_SADD_WITH_OVERFLOW_I32: &str = "llvm.sadd.with.overflow.i32";
 pub static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
+pub static LLVM_SADD_WITH_OVERFLOW_I128: &str = "llvm.sadd.with.overflow.i128";
+
+pub static LLVM_SSUB_WITH_OVERFLOW_I8: &str = "llvm.ssub.with.overflow.i8";
+pub static LLVM_SSUB_WITH_OVERFLOW_I16: &str = "llvm.ssub.with.overflow.i16";
+pub static LLVM_SSUB_WITH_OVERFLOW_I32: &str = "llvm.ssub.with.overflow.i32";
 pub static LLVM_SSUB_WITH_OVERFLOW_I64: &str = "llvm.ssub.with.overflow.i64";
+pub static LLVM_SSUB_WITH_OVERFLOW_I128: &str = "llvm.ssub.with.overflow.i128";
+
 pub static LLVM_SMUL_WITH_OVERFLOW_I64: &str = "llvm.smul.with.overflow.i64";
 
 fn add_intrinsic<'ctx>(
@@ -4506,7 +4573,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     lhs: IntValue<'ctx>,
-    _lhs_layout: &Layout<'a>,
+    lhs_layout: &Layout<'a>,
     rhs: IntValue<'ctx>,
     _rhs_layout: &Layout<'a>,
     op: LowLevel,
@@ -4519,8 +4586,23 @@ fn build_int_binop<'a, 'ctx, 'env>(
     match op {
         NumAdd => {
             let context = env.context;
+
+            let intrinsic = match lhs_layout {
+                Layout::Builtin(Builtin::Int8) => LLVM_SADD_WITH_OVERFLOW_I8,
+                Layout::Builtin(Builtin::Int16) => LLVM_SADD_WITH_OVERFLOW_I16,
+                Layout::Builtin(Builtin::Int32) => LLVM_SADD_WITH_OVERFLOW_I32,
+                Layout::Builtin(Builtin::Int64) => LLVM_SADD_WITH_OVERFLOW_I64,
+                Layout::Builtin(Builtin::Int128) => LLVM_SADD_WITH_OVERFLOW_I128,
+                Layout::Builtin(Builtin::Usize) => match env.ptr_bytes {
+                    4 => LLVM_SADD_WITH_OVERFLOW_I32,
+                    8 => LLVM_SADD_WITH_OVERFLOW_I64,
+                    other => panic!("invalid ptr_bytes {}", other),
+                },
+                _ => unreachable!(),
+            };
+
             let result = env
-                .call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
+                .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
             let add_result = bd.build_extract_value(result, 0, "add_result").unwrap();
@@ -4550,8 +4632,23 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumSub => {
             let context = env.context;
+
+            let intrinsic = match lhs_layout {
+                Layout::Builtin(Builtin::Int8) => LLVM_SSUB_WITH_OVERFLOW_I8,
+                Layout::Builtin(Builtin::Int16) => LLVM_SSUB_WITH_OVERFLOW_I16,
+                Layout::Builtin(Builtin::Int32) => LLVM_SSUB_WITH_OVERFLOW_I32,
+                Layout::Builtin(Builtin::Int64) => LLVM_SSUB_WITH_OVERFLOW_I64,
+                Layout::Builtin(Builtin::Int128) => LLVM_SSUB_WITH_OVERFLOW_I128,
+                Layout::Builtin(Builtin::Usize) => match env.ptr_bytes {
+                    4 => LLVM_SSUB_WITH_OVERFLOW_I32,
+                    8 => LLVM_SSUB_WITH_OVERFLOW_I64,
+                    other => panic!("invalid ptr_bytes {}", other),
+                },
+                _ => unreachable!("invalid layout {:?}", lhs_layout),
+            };
+
             let result = env
-                .call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
+                .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
             let sub_result = bd.build_extract_value(result, 0, "sub_result").unwrap();
