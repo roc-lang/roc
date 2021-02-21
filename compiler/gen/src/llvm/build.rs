@@ -3943,7 +3943,23 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
         }
-        NumBitwiseAnd | NumBitwiseXor => {
+        NumBitwiseAnd | NumBitwiseOr | NumBitwiseXor => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            build_int_binop(
+                env,
+                parent,
+                lhs_arg.into_int_value(),
+                lhs_layout,
+                rhs_arg.into_int_value(),
+                rhs_layout,
+                op,
+            )
+        }
+        NumShiftLeftBy => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -4585,6 +4601,14 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::NUM_POW_INT),
         NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
+        NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
+        NumShiftLeftBy => {
+            // NOTE arguments are flipped;
+            // we write `assert_eq!(0b0000_0001 << 0, 0b0000_0001);`
+            // as `Num.shiftLeftBy 0 0b0000_0001
+            bd.build_left_shift(rhs, lhs, "int_bitwise_or").into()
+        }
+
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }

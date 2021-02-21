@@ -151,6 +151,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
         NUM_BITWISE_XOR => num_bitwise_xor,
+        NUM_BITWISE_OR => num_bitwise_or,
+        NUM_SHIFT_LEFT=> num_shift_left_by,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
         RESULT_WITH_DEFAULT => result_with_default,
@@ -273,6 +275,10 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ASIN => num_asin,
         Symbol::NUM_MAX_INT => num_max_int,
         Symbol::NUM_MIN_INT => num_min_int,
+        Symbol::NUM_BITWISE_AND => num_bitwise_and,
+        Symbol::NUM_BITWISE_XOR => num_bitwise_xor,
+        Symbol::NUM_BITWISE_OR => num_bitwise_or,
+        Symbol::NUM_SHIFT_LEFT=> num_shift_left_by,
         Symbol::RESULT_MAP => result_map,
         Symbol::RESULT_MAP_ERR => result_map_err,
         Symbol::RESULT_WITH_DEFAULT => result_with_default,
@@ -1297,6 +1303,16 @@ fn num_bitwise_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.bitwiseXor : Int, Int -> Int
 fn num_bitwise_xor(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseXor)
+}
+
+/// Num.bitwiseOr: Int, Int -> Int
+fn num_bitwise_or(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumBitwiseOr)
+}
+
+/// Num.shiftLeftBy: Nat, Int a -> Int a
+fn num_shift_left_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumShiftLeftBy, var_store)
 }
 
 /// List.isEmpty : List * -> Bool
