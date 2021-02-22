@@ -40,7 +40,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add rustfmt
     # sccache
     RUN apt -y install libssl-dev
-    RUN cargo install sccache
+    RUN cargo install sccache --version 0.2.15
     RUN sccache -V
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ENV SCCACHE_DIR=/earthbuild/sccache_dir
@@ -50,8 +50,99 @@ deps-image:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     SAVE IMAGE roc-deps:latest
 
+copy-skeleton:
+    # This is ridiculous and is needed because of how caching works in earthly currently.
+    # All of these commands take a really long time to run as well due to caching.
+    # There is an earthly bug that will hopefully fix this eventually: https://github.com/earthly/earthly/issues/786
+    COPY Cargo.lock Cargo.toml ./
+    COPY cli/Cargo.lock cli/Cargo.toml ./cli/
+    COPY compiler/arena_pool/Cargo.toml ./compiler/arena_pool/
+    COPY compiler/build/Cargo.toml ./compiler/build/
+    COPY compiler/builtins/Cargo.toml ./compiler/builtins/
+    COPY compiler/can/Cargo.toml ./compiler/can/
+    COPY compiler/collections/Cargo.toml ./compiler/collections/
+    COPY compiler/constrain/Cargo.toml ./compiler/constrain/
+    COPY compiler/fmt/Cargo.toml ./compiler/fmt/
+    COPY compiler/gen/Cargo.toml ./compiler/gen/
+    COPY compiler/gen_dev/Cargo.toml ./compiler/gen_dev/
+    COPY compiler/load/Cargo.toml ./compiler/load/
+    COPY compiler/module/Cargo.toml ./compiler/module/
+    COPY compiler/mono/Cargo.toml ./compiler/mono/
+    COPY compiler/parse/Cargo.toml ./compiler/parse/
+    COPY compiler/parse/fuzz/Cargo.lock compiler/parse/fuzz/Cargo.toml ./compiler/parse/fuzz/
+    COPY compiler/problem/Cargo.toml ./compiler/problem/
+    COPY compiler/region/Cargo.toml ./compiler/region/
+    COPY compiler/reporting/Cargo.toml ./compiler/reporting/
+    COPY compiler/solve/Cargo.toml ./compiler/solve/
+    COPY compiler/str/Cargo.toml ./compiler/str/
+    COPY compiler/types/Cargo.toml ./compiler/types/
+    COPY compiler/unify/Cargo.toml ./compiler/unify/
+    COPY docs/Cargo.toml ./docs/
+    COPY editor/Cargo.toml ./editor/
+    COPY examples/balance/platform/Cargo.lock examples/balance/platform/Cargo.toml ./examples/balance/platform/
+    COPY examples/effect/thing/platform-dir/Cargo.lock examples/effect/thing/platform-dir/Cargo.toml ./examples/effect/thing/platform-dir/
+    COPY examples/shared-quicksort/platform/Cargo.lock examples/shared-quicksort/platform/Cargo.toml ./examples/shared-quicksort/platform/
+    COPY examples/tea/platform/Cargo.lock examples/tea/platform/Cargo.toml ./examples/tea/platform/
+    COPY roc_std/Cargo.toml ./roc_std/
+    COPY vendor/ena/Cargo.toml ./vendor/ena/
+    COPY vendor/pathfinding/Cargo.toml ./vendor/pathfinding/
+    COPY vendor/pretty/Cargo.toml ./vendor/pretty/
+    RUN mkdir -p cli/src/ && touch cli/src/main.rs
+    RUN mkdir -p compiler/arena_pool/src/ && touch compiler/arena_pool/src/lib.rs
+    RUN mkdir -p compiler/build/src/ && touch compiler/build/src/lib.rs
+    RUN mkdir -p compiler/builtins/src/ && touch compiler/builtins/src/lib.rs
+    RUN mkdir -p compiler/can/src/ && touch compiler/can/src/lib.rs
+    RUN mkdir -p compiler/collections/src/ && touch compiler/collections/src/lib.rs
+    RUN mkdir -p compiler/constrain/src/ && touch compiler/constrain/src/lib.rs
+    RUN mkdir -p compiler/fmt/src/ && touch compiler/fmt/src/lib.rs
+    RUN mkdir -p compiler/gen/src/ && touch compiler/gen/src/lib.rs
+    RUN mkdir -p compiler/gen_dev/src/ && touch compiler/gen_dev/src/lib.rs
+    RUN mkdir -p compiler/load/src/ && touch compiler/load/src/lib.rs
+    RUN mkdir -p compiler/module/src/ && touch compiler/module/src/lib.rs
+    RUN mkdir -p compiler/mono/src/ && touch compiler/mono/src/lib.rs
+    RUN mkdir -p compiler/parse/src/ && touch compiler/parse/src/lib.rs
+    RUN mkdir -p compiler/parse/fuzz/src/ && touch compiler/parse/fuzz/src/lib.rs
+    RUN mkdir -p compiler/problem/src/ && touch compiler/problem/src/lib.rs
+    RUN mkdir -p compiler/region/src/ && touch compiler/region/src/lib.rs
+    RUN mkdir -p compiler/reporting/src/ && touch compiler/reporting/src/lib.rs
+    RUN mkdir -p compiler/solve/src/ && touch compiler/solve/src/lib.rs
+    RUN mkdir -p compiler/str/src/ && touch compiler/str/src/lib.rs
+    RUN mkdir -p compiler/types/src/ && touch compiler/types/src/lib.rs
+    RUN mkdir -p compiler/unify/src/ && touch compiler/unify/src/lib.rs
+    RUN mkdir -p docs/src/ && touch docs/src/main.rs
+    RUN mkdir -p editor/src/ && touch editor/src/lib.rs
+    RUN mkdir -p examples/balance/platform/src/ && touch examples/balance/platform/src/lib.rs
+    RUN mkdir -p examples/effect/thing/platform-dir/src/ && touch examples/effect/thing/platform-dir/src/lib.rs
+    RUN mkdir -p examples/shared-quicksort/platform/src/ && touch examples/shared-quicksort/platform/src/lib.rs
+    RUN mkdir -p examples/tea/platform/src/ && touch examples/tea/platform/src/lib.rs
+    RUN mkdir -p roc_std/src/ && touch roc_std/src/lib.rs
+    RUN mkdir -p vendor/ena/src/ && touch vendor/ena/src/lib.rs
+    RUN mkdir -p vendor/pathfinding/src/ && touch vendor/pathfinding/src/lib.rs
+    RUN mkdir -p vendor/pretty/src/ && touch vendor/pretty/src/lib.rs
+
+prepare-cache:
+    FROM +copy-skeleton 
+    RUN cargo install cargo-chef --version 0.1.15
+    RUN cargo chef prepare
+    SAVE ARTIFACT recipe.json
+
+save-cache:
+    FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo install cargo-chef --version 0.1.15
+    COPY +prepare-cache/recipe.json ./
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo chef cook; sccache --show-stats # for clippy
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo chef cook --release --tests; sccache --show-stats
+    SAVE ARTIFACT target
+    SAVE ARTIFACT $CARGO_HOME cargo_home
+
 copy-dirs-and-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    # cache
+    COPY +save-cache/target ./target
+    COPY +save-cache/cargo_home $CARGO_HOME
     # roc dirs
     COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
 
