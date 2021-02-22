@@ -2,6 +2,8 @@ use bumpalo::Bump;
 use cgmath::Vector2;
 use wgpu_glyph::GlyphBrush;
 use winit::dpi::PhysicalSize;
+use bumpalo::collections::String as BumpString;
+use crate::lang::pool::{PoolStr};
 
 use crate::{
     graphics::{
@@ -12,44 +14,117 @@ use crate::{
     lang::{ast::Expr2, expr::Env},
 };
 
-// TODO use arena allocation
-pub fn expr2_to_str<'a>(arena: &'a Bump, env: &Env<'a>, expr2: &Expr2) -> String {
+// fn to_bump_str<'a>(arena: &'a Bump, str_ref: &str) -> BumpString {
+
+// }
+
+fn pool_str_len<'a>(env: &Env<'a>, pool_str: &PoolStr) -> usize {
+    env.pool.get_str(pool_str).len()
+}
+
+// calculate the str len necessary for BumpString
+fn expr2_to_len<'a>(env: &Env<'a>, expr2: &Expr2) -> usize {
     match expr2 {
-        Expr2::SmallInt { text, .. } => env.pool.get_str(text).to_owned(),
-        Expr2::I128 { text, .. } => env.pool.get_str(text).to_owned(),
-        Expr2::U128 { text, .. } => env.pool.get_str(text).to_owned(),
-        Expr2::Float { text, .. } => env.pool.get_str(text).to_owned(),
-        Expr2::Str(text) => env.pool.get_str(text).to_owned(),
-        Expr2::GlobalTag { name, .. } => env.pool.get_str(name).to_owned(),
+        Expr2::SmallInt { text, .. } => pool_str_len(env, text),
+        Expr2::I128 { text, .. } => pool_str_len(env, text),
+        Expr2::U128 { text, .. } => pool_str_len(env, text),
+        Expr2::Float { text, .. } => pool_str_len(env, text),
+        Expr2::Str(text) => pool_str_len(env, text),
+        Expr2::GlobalTag { name, .. } => pool_str_len(env, name),
+        Expr2::Call { expr: expr_id, .. } => {
+            let expr = env.pool.get(*expr_id);
+
+            expr2_to_len(env, expr)
+        }
+        Expr2::Var(symbol) => {
+            //TODO make bump_format to use arena
+            let text = format!("{:?}", symbol);
+
+            text.len()
+        }
+        Expr2::List { elems, .. } => {
+            let mut len_ctr = 2; // for '[' and ']'
+
+            for (idx, node_id) in elems.iter_node_ids().enumerate() {
+                let sub_expr2 = env.pool.get(node_id);
+
+                len_ctr += expr2_to_len(env, sub_expr2);
+
+                if idx + 1 < elems.len() {
+                    len_ctr += 2; // for ", "
+                }
+            }
+
+            len_ctr
+        }
+        Expr2::Record { fields, .. } => {
+            let mut len_ctr = 2; // for '{' and '}'
+
+            for (idx, node_id) in fields.iter_node_ids().enumerate() {
+                let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(node_id);
+
+                len_ctr += pool_str_len(env, &pool_field_name);
+
+                let sub_expr2 = env.pool.get(*sub_expr2_node_id);
+                let sub_expr2_len = expr2_to_len(env, sub_expr2);
+                len_ctr += sub_expr2_len;
+
+                if idx + 1 < fields.len() {
+                    len_ctr += 2; // for ", "
+                }
+            }
+
+            len_ctr
+        }
+        rest => todo!("implement expr2_to_str for {:?}", rest),
+    }
+}
+
+pub fn expr2_to_str<'a>(arena: &'a Bump, env: &'a Env<'a>, expr2: &Expr2) -> &'a str {
+
+    match expr2 {
+        Expr2::SmallInt { text, .. } => env.pool.get_str(text),
+        Expr2::I128 { text, .. } => env.pool.get_str(text),
+        Expr2::U128 { text, .. } => env.pool.get_str(text),
+        Expr2::Float { text, .. } => env.pool.get_str(text),
+        Expr2::Str(text) => env.pool.get_str(text),
+        Expr2::GlobalTag { name, .. } => env.pool.get_str(name),
         Expr2::Call { expr: expr_id, .. } => {
             let expr = env.pool.get(*expr_id);
 
             expr2_to_str(arena, env, expr)
         }
         Expr2::Var(symbol) => {
+            //TODO make bump_format to use arena
             let text = format!("{:?}", symbol);
 
-            text
+            &text
         }
         Expr2::List { elems, .. } => {
-            let mut list_str = "[".to_owned();
+            let mut bump_str =
+                BumpString::with_capacity_in(expr2_to_len(env, expr2), arena);
+
+            bump_str.push('[');
 
             for (idx, node_id) in elems.iter_node_ids().enumerate() {
                 let sub_expr2 = env.pool.get(node_id);
 
-                list_str.push_str(&expr2_to_str(arena, env, sub_expr2));
+                bump_str.push_str(&expr2_to_str(arena, env, sub_expr2));
 
                 if idx + 1 < elems.len() {
-                    list_str.push_str(", ")
+                    bump_str.push_str(", ")
                 }
             }
 
-            list_str.push(']');
+            bump_str.push(']');
 
-            list_str
+            &bump_str
         }
         Expr2::Record { fields, .. } => {
-            let mut record_str = "{".to_owned();
+            let mut bump_str =
+                BumpString::with_capacity_in(expr2_to_len(env, expr2), arena);
+
+            bump_str.push('{');
 
             for (idx, node_id) in fields.iter_node_ids().enumerate() {
                 let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(node_id);
@@ -57,20 +132,18 @@ pub fn expr2_to_str<'a>(arena: &'a Bump, env: &Env<'a>, expr2: &Expr2) -> String
                 let field_name = env.pool.get_str(pool_field_name);
                 let sub_expr2 = env.pool.get(*sub_expr2_node_id);
 
-                record_str.push_str(&format!(
-                    "{}:{}",
-                    field_name,
-                    &expr2_to_str(arena, env, sub_expr2)
-                ));
+                bump_str.push_str(field_name);
+                bump_str.push(':');
+                bump_str.push_str(expr2_to_str(arena, env, sub_expr2));
 
                 if idx + 1 < fields.len() {
-                    record_str.push_str(", ")
+                    bump_str.push_str(", ")
                 }
             }
 
-            record_str.push('}');
+            bump_str.push('}');
 
-            record_str
+            &bump_str
         }
         rest => todo!("implement expr2_to_str for {:?}", rest),
     }
