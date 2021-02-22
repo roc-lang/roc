@@ -170,6 +170,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let arena = Bump::new();
 
     let mut rects_arena = Bump::new();
+    let mut ast_arena = Bump::new();
 
     // Render loop
     window.request_redraw();
@@ -278,7 +279,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     );
                 } else {
                     // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
-
+                    ast_arena.reset();
                     let mut pool = Pool::with_capacity(1024);
                     let mut var_store = VarStore::default();
                     let dep_idents = IdentIds::exposed_builtins(8);
@@ -289,7 +290,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     let mut env = crate::lang::expr::Env::new(
                         home,
-                        &arena,
+                        &ast_arena,
                         &mut pool,
                         &mut var_store,
                         dep_idents,
@@ -302,8 +303,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     let region = Region::new(0, 0, 0, 0);
 
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
-                        &arena,
-                        "{ x: 2, y: 5 }",
+                        &ast_arena,
+                        "{ a: 1, b: 2, c: {x: 3, y: 4} }",
                         &mut env,
                         &mut scope,
                         region,
@@ -311,6 +312,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .unwrap();
 
                     render::render_expr2(
+                        &ast_arena,
                         &mut env,
                         &expr2,
                         &size,
