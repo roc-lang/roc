@@ -1,6 +1,6 @@
-interface AStar exposes [ findPath, Model, initialModel ] imports [Quicksort]
+interface AStar exposes [ findPath, Model, initialModel, cheapestOpen, takeStep, reconstructPath ] imports [Quicksort]
 
-findPath = \costFn, moveFn, start, end -> 
+findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
 
 Model position :
@@ -14,9 +14,9 @@ Model position :
 initialModel : position -> Model position
 initialModel = \start ->
     {
-        evaluated : Set.empty, 
+        evaluated : Set.empty,
         openSet : Set.singleton start,
-        costs : Dict.singleton start 0, 
+        costs : Dict.singleton start 0,
         cameFrom : Dict.empty
     }
 
@@ -50,44 +50,28 @@ reconstructPath = \cameFrom, goal ->
 
 updateCost : position, position, Model position -> Model position
 updateCost = \current, neighbor, model ->
+    newCameFrom =
+        Dict.insert model.cameFrom neighbor current
+
+    newCosts =
+        Dict.insert model.costs neighbor distanceTo
+
+    distanceTo =
+        reconstructPath newCameFrom neighbor
+            |> List.len
+            |> Num.toFloat
+
+    newModel =
+        { model &
+            costs: newCosts,
+            cameFrom: newCameFrom
+        }
+
     when Dict.get model.costs neighbor is
         Err _ ->
-            newCameFrom =
-                Dict.insert model.cameFrom neighbor current
-
-            newCosts =
-                Dict.insert model.costs neighbor distanceTo
-
-            distanceTo =
-                reconstructPath newCameFrom neighbor
-                    |> List.len
-                    |> Num.toFloat
-
-            { model & 
-                costs: newCosts,
-                cameFrom: newCameFrom
-            }
+            newModel
 
         Ok previousDistance ->
-
-            newCameFrom =
-                Dict.insert model.cameFrom neighbor current
-
-            newCosts =
-                Dict.insert model.costs neighbor distanceTo
-
-            distanceTo =
-                reconstructPath newCameFrom neighbor
-                    |> List.len
-                    |> Num.toFloat
-
-            newModel =
-                { model & 
-                    costs: newCosts,
-                    cameFrom: newCameFrom
-                }
-
-
             if distanceTo < previousDistance then
                 newModel
 
@@ -126,3 +110,27 @@ astar = \costFn, moveFn, goal, model ->
                     Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
 
                 astar costFn moveFn goal modelWithCosts
+
+takeStep = \moveFn, _goal, model, current ->
+    modelPopped =
+        { model &
+            openSet: Set.remove model.openSet current,
+            evaluated: Set.insert model.evaluated current,
+        }
+
+    neighbors = moveFn current
+
+    newNeighbors = Set.difference neighbors modelPopped.evaluated
+
+    modelWithNeighbors = { modelPopped & openSet: Set.union modelPopped.openSet newNeighbors }
+
+    # a lot goes wrong here
+    modelWithCosts =
+        Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
+
+    modelWithCosts
+
+
+
+
+

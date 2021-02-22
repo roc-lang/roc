@@ -84,9 +84,8 @@ let
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
     # dev tools
-    rust-analyzer
+    # rust-analyzer
     # (import ./nix/zls.nix { inherit pkgs zig; })
-    ccls
   ];
 
 in mkShell (nixos-env // {

@@ -207,6 +207,33 @@ where
     )
 }
 
+pub fn space0_after_e<'a, P, S, E>(
+    parser: P,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, Located<S>, E>
+where
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>, E>,
+    P: 'a,
+    E: 'a,
+{
+    parser::map_with_arena(
+        and!(parser, space0_e(min_indent, space_problem, indent_problem)),
+        |arena: &'a Bump, (loc_expr, space_list): (Located<S>, &'a [CommentOrNewline<'a>])| {
+            if space_list.is_empty() {
+                loc_expr
+            } else {
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_after(space_list, loc_expr.region)
+            }
+        },
+    )
+}
+
 /// Parses the given expression with 1 or more (spaces/comments/newlines) before it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.

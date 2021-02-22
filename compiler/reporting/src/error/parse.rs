@@ -24,6 +24,10 @@ fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuil
     alloc.note("I may be confused by indentation")
 }
 
+fn note_for_record_pattern_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.note("I may be confused by indentation")
+}
+
 fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.note("I may be confused by indentation")
 }
@@ -47,6 +51,14 @@ fn hint_for_private_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilde
         alloc.text(" or "),
         alloc.parser_suggestion("@SecretKey"),
         alloc.text("."),
+    ])
+}
+
+fn record_patterns_look_like<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.concat(vec![
+        alloc.reflow(r"Record pattern look like "),
+        alloc.parser_suggestion("{ name, age: currentAge },"),
+        alloc.reflow(" so I was expecting to see a field name next."),
     ])
 }
 
@@ -132,7 +144,578 @@ fn to_syntax_report<'a>(
             }
         }
         Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
+        Pattern(pat) => to_pattern_report(alloc, filename, &pat, 0, 0),
+        Expr(expr) => to_expr_report(alloc, filename, Context::InDef, &expr, 0, 0),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+enum Context {
+    InNode(Node, Row, Col, Box<Context>),
+    InDef,
+}
+
+enum Node {
+    WhenCondition,
+    WhenBranch,
+    // WhenIfGuard,
+}
+
+fn to_expr_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    context: Context,
+    parse_problem: &roc_parse::parser::EExpr<'a>,
+    _start_row: Row,
+    _start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EExpr;
+
+    match parse_problem {
+        EExpr::When(when, row, col) => to_when_report(alloc, filename, context, &when, *row, *col),
+        _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_when_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    context: Context,
+    parse_problem: &roc_parse::parser::When<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::When;
+
+    match *parse_problem {
+        When::IfGuard(nested, row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Token("->") => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(
+                        r"I just started parsing an if guard, but there is no guard condition:",
+                    ),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("Try adding an expression before the arrow!")
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "IF GUARD NO CONDITION".to_string(),
+                }
+            }
+            _ => {
+                //            to_expr_report(
+                //                alloc,
+                //                filename,
+                //                Context::InNode(Node::WhenIfGuard, start_row, start_col, Box::new(context)),
+                //                expr,
+                //                row,
+                //                col,
+                //            )
+
+                to_syntax_report(alloc, filename, nested, row, col)
+            }
+        },
+        When::Arrow(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow(r"I am partway through parsing a "),
+                    alloc.keyword("when"),
+                    alloc.reflow(r" expression, but got stuck here:"),
+                ]),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow("I was expecting to see an arrow next.")]),
+                note_for_when_indent_error(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING ARROW".to_string(),
+            }
+        }
+
+        When::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        When::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        When::Branch(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::WhenBranch, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        When::Condition(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::WhenCondition, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        When::Bar(row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I just saw a "),
+                alloc.parser_suggestion(r"|"),
+                alloc.reflow(r" so I was expecting to see a pattern next."),
+            ]),
+        ),
+
+        When::IfToken(_row, _col) => unreachable!("the if-token is optional"),
+        When::When(_row, _col) => unreachable!("another branch would be taken"),
+
+        When::Is(row, col) | When::IndentIs(row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting to see the "),
+                alloc.keyword("is"),
+                alloc.reflow(r" keyword next."),
+            ]),
+        ),
+
+        When::IndentCondition(row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting to see a expression next")
+            ]),
+        ),
+
+        When::IndentPattern(row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![alloc.reflow(r"I was expecting to see a pattern next")]),
+        ),
+
+        When::IndentArrow(row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
+                alloc.parser_suggestion("->"),
+                alloc.reflow(" next."),
+            ]),
+        ),
+
+        When::IndentIfGuard(row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I just saw the "),
+                alloc.keyword("if"),
+                alloc.reflow(" keyword, so I was expecting to see an expression next."),
+            ]),
+        ),
+
+        When::IndentBranch(row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting to see an expression next. "),
+                alloc.reflow("What should I do when I run into this particular pattern?"),
+            ]),
+        ),
+
+        When::PatternAlignment(indent, row, col) => to_unfinished_when_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I suspect this is a pattern that is not indented enough? (by "),
+                alloc.text(indent.to_string()),
+                alloc.reflow(" spaces)"),
+            ]),
+        ),
+        When::Pattern(ref pat, row, col) => to_pattern_report(alloc, filename, pat, row, col),
+    }
+}
+
+fn to_unfinished_when_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    row: Row,
+    col: Col,
+    start_row: Row,
+    start_col: Col,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+    let region = Region::from_row_col(row, col);
+
+    let doc = alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.reflow(r"I was partway through parsing a "),
+            alloc.keyword("when"),
+            alloc.reflow(r" expression, but I got stuck here:"),
+        ]),
+        alloc.region_with_subregion(surroundings, region),
+        message,
+        note_for_when_error(alloc),
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED WHEN".to_string(),
+    }
+}
+
+fn note_for_when_error<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.note("Here is an example of a valid "),
+            alloc.keyword("when"),
+            alloc.reflow(r" expression for reference."),
+        ]),
+        alloc.vcat(vec![
+            alloc.text("when List.first plants is").indent(4),
+            alloc.text("Ok n ->").indent(6),
+            alloc.text("n").indent(8),
+            alloc.text(""),
+            alloc.text("Err _ ->").indent(6),
+            alloc.text("200").indent(8),
+        ]),
+        alloc.concat(vec![
+            alloc.reflow(
+                "Notice the indentation. All patterns are aligned, and each branch is indented",
+            ),
+            alloc.reflow(" a bit more than the corresponding pattern. That is important!"),
+        ]),
+    ])
+}
+
+fn note_for_when_indent_error<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.note("Sometimes I get confused by indentation, so try to make your "),
+            alloc.keyword("when"),
+            alloc.reflow(r" look something like this:"),
+        ]),
+        alloc.vcat(vec![
+            alloc.text("when List.first plants is").indent(4),
+            alloc.text("Ok n ->").indent(6),
+            alloc.text("n").indent(8),
+            alloc.text(""),
+            alloc.text("Err _ ->").indent(6),
+            alloc.text("200").indent(8),
+        ]),
+        alloc.concat(vec![
+            alloc.reflow(
+                "Notice the indentation. All patterns are aligned, and each branch is indented",
+            ),
+            alloc.reflow(" a bit more than the corresponding pattern. That is important!"),
+        ]),
+    ])
+}
+
+fn to_pattern_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EPattern<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EPattern;
+
+    match parse_problem {
+        EPattern::Start(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a pattern, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PATTERN".to_string(),
+            }
+        }
+        EPattern::Record(record, row, col) => {
+            to_precord_report(alloc, filename, &record, *row, *col)
+        }
+        _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_precord_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::PRecord<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::PRecord;
+
+    match *parse_problem {
+        PRecord::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Keyword(keyword) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = to_keyword_region(row, col, keyword);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Looks like you are trying to use "),
+                        alloc.keyword(keyword),
+                        alloc.reflow(" as a field name, but that is a reserved word. Try using a different name!"),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                }
+            }
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    record_patterns_look_like(alloc),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                }
+            }
+        },
+
+        PRecord::End(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            match what_is_next(alloc.src_lines, row, col) {
+                Next::Other(Some(c)) if c.is_alphabetic() => {
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(
+                                r"I was expecting to see a colon, question mark, comma or closing curly brace.",
+                            ),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                    }
+                }
+                _ => {
+                    let doc = alloc.stack(vec![
+                alloc.reflow("I am partway through parsing a record pattern, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(
+                        r"I was expecting to see a closing curly brace before this, so try adding a ",
+                    ),
+                    alloc.parser_suggestion("}"),
+                    alloc.reflow(" and see if that helps?"),
+                ]),
+            ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                    }
+                }
+            }
+        }
+
+        PRecord::Field(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Keyword(keyword) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = to_keyword_region(row, col, keyword);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"Looks like you are trying to use "),
+                        alloc.keyword(keyword),
+                        alloc.reflow(" as a field name, but that is a reserved word. Try using a different name!"),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                }
+            }
+            Next::Other(Some(',')) => todo!(),
+            Next::Other(Some('}')) => unreachable!("or is it?"),
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"I was expecting to see another record field defined next, so I am looking for a name like "),
+                        alloc.parser_suggestion("userName"),
+                        alloc.reflow(" or "),
+                        alloc.parser_suggestion("plantHight"),
+                        alloc.reflow("."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "PROBLEM IN RECORD PATTERN".to_string(),
+                }
+            }
+        },
+
+        PRecord::Colon(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+        }
+        PRecord::Optional(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+        }
+
+        PRecord::Pattern(pattern, row, col) => {
+            to_pattern_report(alloc, filename, pattern, row, col)
+        }
+        PRecord::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+
+        PRecord::IndentOpen(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                record_patterns_look_like(alloc),
+                note_for_record_pattern_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED RECORD PATTERN".to_string(),
+            }
+        }
+
+        PRecord::IndentEnd(row, col) => {
+            match next_line_starts_with_close_curly(alloc.src_lines, row.saturating_sub(1)) {
+                Some((curly_row, curly_col)) => {
+                    let surroundings =
+                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
+                    let region = Region::from_row_col(curly_row, curly_col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            "I am partway through parsing a record pattern, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "NEED MORE INDENTATION".to_string(),
+                    }
+                }
+                None => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a record pattern, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I was expecting to see a closing curly "),
+                            alloc.reflow("brace before this, so try adding a "),
+                            alloc.parser_suggestion("}"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                        note_for_record_pattern_indent(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                    }
+                }
+            }
+        }
+
+        PRecord::IndentColon(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+        }
+
+        PRecord::IndentOptional(_, _) => {
+            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+        }
+
+        PRecord::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
     }
 }
 
@@ -1027,6 +1610,7 @@ enum Next<'a> {
     Keyword(&'a str),
     // Operator(&'a str),
     Close(&'a str, char),
+    Token(&'a str),
     Other(Option<char>),
 }
 
@@ -1037,18 +1621,20 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a>
         None => Next::Other(None),
         Some(line) => {
             let chars = &line[col_index..];
+            let mut it = chars.chars();
 
             match roc_parse::keyword::KEYWORDS
                 .iter()
                 .find(|keyword| starts_with_keyword(chars, keyword))
             {
                 Some(keyword) => Next::Keyword(keyword),
-                None => match chars.chars().next() {
+                None => match it.next() {
                     None => Next::Other(None),
                     Some(c) => match c {
                         ')' => Next::Close("parenthesis", ')'),
                         ']' => Next::Close("square bracket", ']'),
                         '}' => Next::Close("curly brace", '}'),
+                        '-' if it.next() == Some('>') => Next::Token("->"),
                         // _ if is_symbol(c) => todo!("it's an operator"),
                         _ => Next::Other(Some(c)),
                     },

@@ -29,6 +29,7 @@ pub const NUM_ATAN: &str = "roc_builtins.num.atan";
 pub const NUM_IS_FINITE: &str = "roc_builtins.num.is_finite";
 pub const NUM_POW_INT: &str = "roc_builtins.num.pow_int";
 
+pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
@@ -40,6 +41,7 @@ pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
 pub const STR_FROM_FLOAT: &str = "roc_builtins.str.from_float";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
+pub const STR_VALIDATE_UTF_BYTES: &str = "roc_builtins.str.validate_utf8_bytes";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
@@ -67,3 +69,4 @@ pub const LIST_KEEP_ERRS: &str = "roc_builtins.list.keep_errs";
 pub const LIST_WALK: &str = "roc_builtins.list.walk";
 pub const LIST_WALK_BACKWARDS: &str = "roc_builtins.list.walk_backwards";
 pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
+pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";

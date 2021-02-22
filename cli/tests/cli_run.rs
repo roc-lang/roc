@@ -199,7 +199,7 @@ mod cli_run {
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
-            false,
+            true,
         );
     }
 
@@ -228,7 +228,6 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore]
     #[serial(astar)]
     fn run_astar_optimized_1() {
         check_output_with_stdin(
@@ -241,52 +240,12 @@ mod cli_run {
         );
     }
 
-    #[ignore]
     #[test]
-    #[serial(closure1)]
-    fn closure1() {
+    #[serial(closure)]
+    fn closure() {
         check_output(
-            &example_file("benchmarks", "Closure1.roc"),
-            "closure1",
-            &[],
-            "",
-            true,
-        );
-    }
-
-    #[ignore]
-    #[test]
-    #[serial(closure2)]
-    fn closure2() {
-        check_output(
-            &example_file("benchmarks", "Closure2.roc"),
-            "closure2",
-            &[],
-            "",
-            true,
-        );
-    }
-
-    #[ignore]
-    #[test]
-    #[serial(closure3)]
-    fn closure3() {
-        check_output(
-            &example_file("benchmarks", "Closure3.roc"),
-            "closure3",
-            &[],
-            "",
-            true,
-        );
-    }
-
-    #[ignore]
-    #[test]
-    #[serial(closure4)]
-    fn closure4() {
-        check_output(
-            &example_file("benchmarks", "Closure4.roc"),
-            "closure4",
+            &example_file("benchmarks", "Closure.roc"),
+            "closure",
             &[],
             "",
             true,
