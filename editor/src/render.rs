@@ -112,6 +112,46 @@ pub fn render_expr2<'a>(
 
             queue_code_text_draw(&code_text, glyph_brush);
         }
+        Expr2::List { elems, .. } => {
+            let code_text = Text {
+                position,
+                area_bounds,
+                color: CODE_COLOR.into(),
+                text: "[",
+                size: CODE_FONT_SIZE,
+                ..Default::default()
+            };
+
+            queue_code_text_draw(&code_text, glyph_brush);
+
+            for node_id in elems.iter_node_ids() {
+                let sub_expr2 = env.pool.get(node_id);
+
+                render_expr2(env, sub_expr2, size, position, glyph_brush);
+
+                let code_text = Text {
+                    position,
+                    area_bounds,
+                    color: CODE_COLOR.into(),
+                    text: ",",
+                    size: CODE_FONT_SIZE,
+                    ..Default::default()
+                };
+
+                queue_code_text_draw(&code_text, glyph_brush);
+            }
+
+            let code_text = Text {
+                position,
+                area_bounds,
+                color: CODE_COLOR.into(),
+                text: "]",
+                size: CODE_FONT_SIZE,
+                ..Default::default()
+            };
+
+            queue_code_text_draw(&code_text, glyph_brush);
+        }
         rest => todo!("implement {:?} render", rest),
     };
 }
