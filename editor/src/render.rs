@@ -124,25 +124,41 @@ pub fn render_expr2<'a>(
 
             queue_code_text_draw(&code_text, glyph_brush);
 
-            for node_id in elems.iter_node_ids() {
+            let mut x_pos = position.x;
+
+            for (idx, node_id) in elems.iter_node_ids().enumerate() {
                 let sub_expr2 = env.pool.get(node_id);
 
-                render_expr2(env, sub_expr2, size, position, glyph_brush);
+                x_pos += 20.0;
 
-                let code_text = Text {
-                    position,
-                    area_bounds,
-                    color: CODE_COLOR.into(),
-                    text: ",",
-                    size: CODE_FONT_SIZE,
-                    ..Default::default()
-                };
+                render_expr2(
+                    env,
+                    sub_expr2,
+                    size,
+                    Vector2::new(x_pos, position.y),
+                    glyph_brush,
+                );
 
-                queue_code_text_draw(&code_text, glyph_brush);
+                if idx + 1 < elems.len() {
+                    x_pos += 10.0;
+
+                    let code_text = Text {
+                        position: Vector2::new(x_pos, position.y),
+                        area_bounds,
+                        color: CODE_COLOR.into(),
+                        text: ",",
+                        size: CODE_FONT_SIZE,
+                        ..Default::default()
+                    };
+
+                    queue_code_text_draw(&code_text, glyph_brush);
+                }
             }
 
+            x_pos += 20.0;
+
             let code_text = Text {
-                position,
+                position: Vector2::new(x_pos, position.y),
                 area_bounds,
                 color: CODE_COLOR.into(),
                 text: "]",
