@@ -60,11 +60,11 @@ impl BigSelectableText {
         TextPos { line, column }
     }
 
-    fn sel_to_tup(&self, val_sel: Selection) -> UIResult<(usize, usize)> {
+    fn sel_to_tup(&self, val_sel: Selection) -> (usize, usize) {
         let start_char_indx = self.pos_to_char_indx(val_sel.start_pos);
         let end_char_indx = self.pos_to_char_indx(val_sel.end_pos);
 
-        Ok((start_char_indx, end_char_indx))
+        (start_char_indx, end_char_indx)
     }
 }
 
@@ -415,7 +415,7 @@ impl SelectableLines for BigSelectableText {
 
     fn get_selected_str(&self) -> UIResult<Option<&str>> {
         if let Some(val_sel) = self.caret_w_select.selection_opt {
-            let (start_char_indx, end_char_indx) = self.sel_to_tup(val_sel)?;
+            let (start_char_indx, end_char_indx) = self.sel_to_tup(val_sel);
 
             self.check_bounds(end_char_indx)?;
 
@@ -544,7 +544,7 @@ impl MutSelectableLines for BigSelectableText {
 
     fn del_selection(&mut self) -> UIResult<()> {
         if let Some(selection) = self.caret_w_select.selection_opt {
-            let (start_char_indx, end_char_indx) = self.sel_to_tup(selection)?;
+            let (start_char_indx, end_char_indx) = self.sel_to_tup(selection);
 
             self.check_bounds(end_char_indx)?;
 
