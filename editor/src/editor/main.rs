@@ -1,17 +1,24 @@
 use super::keyboard_input;
-use crate::editor::colors::BG_COL;
-use crate::editor::colors::CODE_COL;
-use crate::editor::ed_error::{print_err, print_ui_err};
-use crate::editor::mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view};
-use crate::graphics::colors::to_wgpu_color;
-use crate::graphics::primitives::text::{
-    build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw, Text,
+use crate::editor::{
+    ed_error::{print_err, print_ui_err},
+    colors::EdTheme,
+    mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view},
+    settings::Settings,
 };
 use crate::graphics::{
+    colors::to_wgpu_color,
+    primitives::text::{
+        build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw, Text,
+    },
     lowlevel::buffer::create_rect_buffers, lowlevel::ortho::update_ortho_buffer,
-    lowlevel::pipelines, style::CODE_FONT_SIZE, style::CODE_TXT_XY,
+    lowlevel::pipelines, style::CODE_TXT_XY,
 };
-use crate::ui::{colors::TXT_COL, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};
+use crate::ui::{
+    text::lines::Lines,
+    text::text_pos::TextPos,
+    ui_error::UIResult,
+    colors::UITheme
+};
 //use crate::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool, scope::Scope};
@@ -149,6 +156,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut rects_arena = Bump::new();
     let mut ast_arena = Bump::new();
 
+    let settings = Settings::default();
+    let ed_theme = EdTheme::default();
+
     // Render loop
     window.request_redraw();
 
@@ -251,7 +261,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &size,
                         &ed_model.text.all_lines(&arena),
                         ed_model.text.caret_w_select.caret_pos,
-                        CODE_TXT_XY.into(),
+                        &ed_theme,
+                        &settings,
                         &mut glyph_brush,
                     );
                 } else {
@@ -294,6 +305,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &expr2,
                         &size,
                         CODE_TXT_XY.into(),
+                        &settings,
                         &mut glyph_brush,
                     );
                 }
@@ -307,11 +319,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     &frame.view,
                     &gpu_device,
                     &rect_resources,
+                    &ed_theme,
                 ) {
                     Ok(()) => (),
                     Err(e) => {
                         print_ui_err(&e);
-                        begin_render_pass(&mut encoder, &frame.view);
+                        begin_render_pass(&mut encoder, &frame.view, &ed_theme);
                     }
                 }
 
@@ -353,13 +366,14 @@ fn draw_all_rects(
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
+    ed_theme: &EdTheme,
 ) -> UIResult<()> {
     if let Some(ed_model) = ed_model_opt {
-        let all_rects = ed_view::create_ed_rects(ed_model, arena)?;
+        let all_rects = ed_view::create_ed_rects(ed_model, &ed_theme.ui_theme, arena)?;
 
         let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
 
-        let mut render_pass = begin_render_pass(encoder, texture_view);
+        let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
 
         render_pass.set_pipeline(&rect_resources.pipeline);
         render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
@@ -368,7 +382,7 @@ fn draw_all_rects(
         render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
     } else {
         // need to begin render pass to clear screen
-        begin_render_pass(encoder, texture_view);
+        begin_render_pass(encoder, texture_view, ed_theme);
     }
 
     Ok(())
@@ -377,8 +391,9 @@ fn draw_all_rects(
 fn begin_render_pass<'a>(
     encoder: &'a mut CommandEncoder,
     texture_view: &'a TextureView,
+    ed_theme: &EdTheme
 ) -> RenderPass<'a> {
-    let bg_color = to_wgpu_color(BG_COL);
+    let bg_color = to_wgpu_color(ed_theme.background);
 
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
@@ -398,17 +413,18 @@ fn queue_editor_text(
     size: &PhysicalSize<u32>,
     editor_lines: &str,
     caret_pos: TextPos,
-    code_coords: Vector2<f32>,
+    ed_theme: &EdTheme,
+    settings: &Settings,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
     let code_text = Text {
-        position: code_coords,
+        position: CODE_TXT_XY.into(),
         area_bounds,
-        color: CODE_COL.into(),
+        color: ed_theme.syntax_high_theme.code,
         text: editor_lines,
-        size: CODE_FONT_SIZE,
+        size: settings.code_font_size,
         ..Default::default()
     };
 
@@ -418,7 +434,7 @@ fn queue_editor_text(
     let caret_pos_label = Text {
         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
         area_bounds,
-        color: TXT_COL.into(),
+        color: ed_theme.ui_theme.text,
         text,
         size: 25.0,
         ..Default::default()
@@ -433,6 +449,8 @@ fn _queue_no_file_text(
     size: &PhysicalSize<u32>,
     text: &str,
     text_coords: Vector2<f32>,
+    ui_theme: &UITheme,
+    settings: &Settings,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
     let area_bounds = (size.width as f32, size.height as f32).into();
@@ -440,9 +458,9 @@ fn _queue_no_file_text(
     let code_text = Text {
         position: text_coords,
         area_bounds,
-        color: CODE_COL.into(),
+        color: ui_theme.text,
         text,
-        size: CODE_FONT_SIZE,
+        size: settings.code_font_size,
         ..Default::default()
     };
 

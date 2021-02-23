@@ -1,4 +1,5 @@
-mod colors;
+pub mod colors; // TODO remove pub once we have ast based syntax highlighting
+mod settings;
 mod ed_error;
 mod keyboard_input;
 pub mod main;

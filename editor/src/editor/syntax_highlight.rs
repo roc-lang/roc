@@ -1,13 +1,15 @@
 use crate::editor::colors as ed_colors;
+use ed_colors::SyntaxHighlightTheme;
 use crate::graphics::colors as gr_colors;
 use crate::graphics::primitives;
-use gr_colors::ColorTup;
+use gr_colors::RgbaTup;
 
 //TODO optimize memory allocation
 //TODO this is a demo function, the AST should be used for highlighting, see #904.
 pub fn highlight_code(
     code_text: &primitives::text::Text,
-    all_text_tups: &mut Vec<(String, ColorTup)>,
+    all_text_tups: &mut Vec<(String, RgbaTup)>,
+    syntax_theme: &SyntaxHighlightTheme,
 ) {
     let split_code = split_inclusive(&code_text.text);
 
@@ -16,11 +18,11 @@ pub fn highlight_code(
 
     for token_seq in split_code {
         let new_word_color = if token_seq.contains(&'\"'.to_string()) {
-            ed_colors::STRING_SYNTAX_COL
+            syntax_theme.string
         } else if token_seq.contains(&'='.to_string()) {
-            ed_colors::EQUALS_SYNTAX_COL
+            syntax_theme.operator
         } else {
-            gr_colors::WHITE
+            syntax_theme.code
         };
 
         if new_word_color != active_color {
