@@ -1,15 +1,14 @@
-use cgmath::Vector2;
-use wgpu_glyph::GlyphBrush;
-use winit::dpi::PhysicalSize;
-
+use crate::editor::colors::CODE_COL;
 use crate::{
     graphics::{
-        colors::CODE_COLOR,
         primitives::text::{queue_code_text_draw, Text},
         style::CODE_FONT_SIZE,
     },
     lang::{ast::Expr2, expr::Env},
 };
+use cgmath::Vector2;
+use wgpu_glyph::GlyphBrush;
+use winit::dpi::PhysicalSize;
 
 pub fn render_expr2<'a>(
     env: &mut Env<'a>,
@@ -25,7 +24,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -37,7 +36,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -49,7 +48,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -61,7 +60,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -73,7 +72,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(text),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -85,7 +84,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: env.pool.get_str(name),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -104,7 +103,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: text.as_str(),
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -116,7 +115,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: "[",
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -145,7 +144,7 @@ pub fn render_expr2<'a>(
                     let code_text = Text {
                         position: Vector2::new(x_pos, position.y),
                         area_bounds,
-                        color: CODE_COLOR.into(),
+                        color: CODE_COL.into(),
                         text: ",",
                         size: CODE_FONT_SIZE,
                         ..Default::default()
@@ -160,7 +159,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position: Vector2::new(x_pos, position.y),
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: "]",
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -172,7 +171,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position,
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: "{",
                 size: CODE_FONT_SIZE,
                 ..Default::default()
@@ -192,7 +191,7 @@ pub fn render_expr2<'a>(
                 let code_text = Text {
                     position: Vector2::new(x_pos, position.y),
                     area_bounds,
-                    color: CODE_COLOR.into(),
+                    color: CODE_COL.into(),
                     text: field_name,
                     size: CODE_FONT_SIZE,
                     ..Default::default()
@@ -205,7 +204,7 @@ pub fn render_expr2<'a>(
                 let code_text = Text {
                     position: Vector2::new(x_pos, position.y),
                     area_bounds,
-                    color: CODE_COLOR.into(),
+                    color: CODE_COL.into(),
                     text: ":",
                     size: CODE_FONT_SIZE,
                     ..Default::default()
@@ -231,7 +230,7 @@ pub fn render_expr2<'a>(
                     let code_text = Text {
                         position: Vector2::new(x_pos, position.y),
                         area_bounds,
-                        color: CODE_COLOR.into(),
+                        color: CODE_COL.into(),
                         text: ",",
                         size: CODE_FONT_SIZE,
                         ..Default::default()
@@ -246,7 +245,7 @@ pub fn render_expr2<'a>(
             let code_text = Text {
                 position: Vector2::new(x_pos, position.y),
                 area_bounds,
-                color: CODE_COLOR.into(),
+                color: CODE_COL.into(),
                 text: "}",
                 size: CODE_FONT_SIZE,
                 ..Default::default()
