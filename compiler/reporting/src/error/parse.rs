@@ -161,6 +161,7 @@ enum Node {
     IfCondition,
     IfThenBranch,
     IfElseBranch,
+    ListElement,
 }
 
 fn to_expr_report<'a>(
@@ -174,11 +175,12 @@ fn to_expr_report<'a>(
     use roc_parse::parser::EExpr;
 
     match parse_problem {
+        EExpr::If(if_, row, col) => to_if_report(alloc, filename, context, &if_, *row, *col),
         EExpr::When(when, row, col) => to_when_report(alloc, filename, context, &when, *row, *col),
         EExpr::Lambda(lambda, row, col) => {
             to_lambda_report(alloc, filename, context, &lambda, *row, *col)
         }
-        EExpr::If(when, row, col) => to_if_report(alloc, filename, context, &when, *row, *col),
+        EExpr::List(list, row, col) => to_list_report(alloc, filename, context, &list, *row, *col),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -405,6 +407,115 @@ fn to_unfinished_lambda_report<'a>(
         filename,
         doc,
         title: "UNFINISHED FUNCTION".to_string(),
+    }
+}
+
+fn to_list_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    context: Context,
+    parse_problem: &roc_parse::parser::List<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::List;
+
+    match *parse_problem {
+        List::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        List::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        List::Expr(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::ListElement, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        List::Open(row, col) | List::End(row, col) => {
+            match dbg!(what_is_next(alloc.src_lines, row, col)) {
+                Next::Other(Some(',')) => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through started parsing a list, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc
+                                .reflow(r"I was expecting to see a list entry before this comma, "),
+                            alloc.reflow(r"so try adding a list entry"),
+                            alloc.reflow(r" and see if that helps?"),
+                        ]),
+                    ]);
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED LIST".to_string(),
+                    }
+                }
+                _ => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through started parsing a list, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(
+                                r"I was expecting to see a closing square bracket before this, ",
+                            ),
+                            alloc.reflow(r"so try adding a "),
+                            alloc.parser_suggestion("]"),
+                            alloc.reflow(r" and see if that helps?"),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.note("When "),
+                            alloc.reflow(r"I get stuck like this, "),
+                            alloc.reflow(r"it usually means that there is a missing parenthesis "),
+                            alloc.reflow(r"or bracket somewhere earlier. "),
+                            alloc.reflow(r"It could also be a stray keyword or operator."),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED LIST".to_string(),
+                    }
+                }
+            }
+        }
+
+        List::IndentOpen(row, col) | List::IndentEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this list:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("[ 1, 2, 3 ]"),
+                    alloc.reflow(" or even just "),
+                    alloc.parser_suggestion("[]"),
+                    alloc.reflow(". Anything where there is an open and a close square bracket, "),
+                    alloc.reflow("and where the elements of the list are separated by commas."),
+                ]),
+                note_for_tag_union_type_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED LIST".to_string(),
+            }
+        }
     }
 }
 
@@ -1976,6 +2087,7 @@ fn to_space_report<'a>(
     }
 }
 
+#[derive(Debug)]
 enum Next<'a> {
     Keyword(&'a str),
     // Operator(&'a str),
