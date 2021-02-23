@@ -380,7 +380,21 @@ pub enum EExpr<'a> {
     When(When<'a>, Row, Col),
     If(If<'a>, Row, Col),
 
+    List(List<'a>, Row, Col),
+
     // EInParens(PInParens<'a>, Row, Col),
+    IndentStart(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum List<'a> {
+    Open(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
 }

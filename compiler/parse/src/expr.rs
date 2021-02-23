@@ -11,8 +11,8 @@ use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     fail, map, newline_char, not, not_followed_by, optional, sep_by1, specialize, specialize_ref,
-    then, unexpected, unexpected_eof, word1, word2, EExpr, Either, If, ParseResult, Parser, State,
-    SyntaxError, When,
+    then, unexpected, unexpected_eof, word1, word2, BadInputError, EExpr, Either, If, List,
+    ParseResult, Parser, State, SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -1693,35 +1693,40 @@ fn binop<'a>() -> impl Parser<'a, BinOp, SyntaxError<'a>> {
         map!(ascii_char(b'%'), |_| BinOp::Percent)
     )
 }
-
-pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    let elems = collection_trailing_sep!(
-        ascii_char(b'['),
-        loc!(expr(min_indent)),
-        ascii_char(b','),
-        ascii_char(b']'),
-        min_indent
-    );
-
-    parser::attempt(
-        Attempting::List,
-        map_with_arena!(elems, |arena,
-                                (parsed_elems, final_comments): (
-            Vec<'a, Located<Expr<'a>>>,
-            &'a [CommentOrNewline<'a>]
-        )| {
-            let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
-
-            for parsed_elem in parsed_elems {
-                allocated.push(&*arena.alloc(parsed_elem));
-            }
-
-            Expr::List {
-                items: allocated.into_bump_slice(),
-                final_comments,
-            }
-        }),
+fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Expr(EExpr::List(e, r, c)),
+        list_literal_help(min_indent),
     )
+}
+
+fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>> {
+    move |arena, state| {
+        let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
+            word1(b'[', List::Open),
+            specialize_ref(List::Syntax, loc!(expr(min_indent))),
+            word1(b',', List::End),
+            word1(b']', List::End),
+            min_indent,
+            List::Open,
+            List::Space,
+            List::IndentEnd
+        )
+        .parse(arena, state)?;
+
+        let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
+
+        for parsed_elem in parsed_elems {
+            allocated.push(&*arena.alloc(parsed_elem));
+        }
+
+        let expr = Expr::List {
+            items: allocated.into_bump_slice(),
+            final_comments,
+        };
+
+        Ok((MadeProgress, expr, state))
+    }
 }
 
 // Parser<'a, Vec<'a, Located<AssignedField<'a, S>>>>
