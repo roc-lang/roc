@@ -378,6 +378,7 @@ pub enum EExpr<'a> {
     Space(BadInputError, Row, Col),
 
     When(When<'a>, Row, Col),
+    If(If<'a>, Row, Col),
 
     Lambda(ELambda<'a>, Row, Col),
 
@@ -423,6 +424,25 @@ pub enum When<'a> {
     IndentArrow(Row, Col),
     IndentBranch(Row, Col),
     IndentIfGuard(Row, Col),
+    PatternAlignment(u16, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum If<'a> {
+    Space(BadInputError, Row, Col),
+    If(Row, Col),
+    Then(Row, Col),
+    Else(Row, Col),
+    // TODO make EEXpr
+    Condition(&'a EExpr<'a>, Row, Col),
+    ThenBranch(&'a EExpr<'a>, Row, Col),
+    ElseBranch(&'a EExpr<'a>, Row, Col),
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    IndentCondition(Row, Col),
+    IndentThen(Row, Col),
+    IndentElse(Row, Col),
+
     PatternAlignment(u16, Row, Col),
 }
 
