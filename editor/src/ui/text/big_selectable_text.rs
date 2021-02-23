@@ -1,142 +1,717 @@
-use crate::error::{EdResult, InvalidSelection};
-use crate::graphics::colors;
-use crate::graphics::primitives::rect::Rect;
-use crate::mvc::ed_model::RawSelection;
-use crate::text_buffer::TextBuffer;
-use bumpalo::collections::Vec as BumpVec;
-use bumpalo::Bump;
-use snafu::ensure;
+// Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
 
-//using the "parse don't validate" pattern
-pub struct ValidSelection {
-    pub selection: RawSelection,
+use crate::ui::text::{
+    caret_w_select::CaretWSelect,
+    lines::{Lines, MutSelectableLines, SelectableLines},
+    selection::{validate_raw_sel, validate_selection, RawSelection, Selection},
+    text_pos::TextPos,
+};
+use crate::ui::ui_error::{
+    OutOfBounds,
+    UIError::{FileOpenFailed, TextBufReadFailed},
+    UIResult,
+};
+use crate::ui::util::is_newline;
+use bumpalo::collections::String as BumpString;
+use bumpalo::Bump;
+use ropey::Rope;
+use snafu::ensure;
+use std::{
+    cmp::{max, min},
+    fmt,
+    fs::File,
+    io,
+    path::Path,
+};
+use winit::event::{ModifiersState, VirtualKeyCode, VirtualKeyCode::*};
+
+pub struct BigSelectableText {
+    pub caret_w_select: CaretWSelect,
+    text_rope: Rope,
+    pub path_str: String,
+    arena: Bump,
 }
 
-pub fn validate_selection(selection: RawSelection) -> EdResult<ValidSelection> {
-    let RawSelection { start_pos, end_pos } = selection;
+impl BigSelectableText {
+    fn check_bounds(&self, char_indx: usize) -> UIResult<()> {
+        ensure!(
+            char_indx <= self.text_rope.len_chars(),
+            OutOfBounds {
+                index: char_indx,
+                collection_name: "Rope",
+                len: self.text_rope.len_chars()
+            }
+        );
 
-    ensure!(
-        start_pos.line <= end_pos.line,
-        InvalidSelection {
-            err_msg: format!(
-                "start_pos.line ({}) should be smaller than or equal to end_pos.line ({})",
-                start_pos.line, end_pos.line
-            )
+        Ok(())
+    }
+
+    fn pos_to_char_indx(&self, pos: TextPos) -> usize {
+        self.text_rope.line_to_char(pos.line) + pos.column
+    }
+
+    fn char_indx_to_pos(&self, char_indx: usize) -> TextPos {
+        let line = self.text_rope.char_to_line(char_indx);
+
+        let char_idx_line_start = self.pos_to_char_indx(TextPos { line, column: 0 });
+
+        let column = char_indx - char_idx_line_start;
+
+        TextPos { line, column }
+    }
+
+    fn sel_to_tup(&self, val_sel: Selection) -> (usize, usize) {
+        let start_char_indx = self.pos_to_char_indx(val_sel.start_pos);
+        let end_char_indx = self.pos_to_char_indx(val_sel.end_pos);
+
+        (start_char_indx, end_char_indx)
+    }
+}
+
+fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
+    Ok(Some(validate_selection(start_pos, end_pos)?))
+}
+
+impl Lines for BigSelectableText {
+    fn get_line(&self, line_nr: usize) -> UIResult<&str> {
+        ensure!(
+            line_nr < self.nr_of_lines(),
+            OutOfBounds {
+                index: line_nr,
+                collection_name: "BigSelectableText",
+                len: self.nr_of_lines(),
+            }
+        );
+
+        let rope_slice = self.text_rope.line(line_nr);
+
+        if let Some(line_str_ref) = rope_slice.as_str() {
+            Ok(line_str_ref)
+        } else {
+            // happens very rarely
+            let line_str = rope_slice.chunks().collect::<String>();
+            let arena_str_ref = self.arena.alloc(line_str);
+            Ok(arena_str_ref)
         }
-    );
+    }
 
-    ensure!(
-        !(start_pos.line == end_pos.line && start_pos.column > end_pos.column),
-        InvalidSelection {
-            err_msg: format!(
-                "start_pos.column ({}) should be smaller than or equal to end_pos.column ({}) when start_pos.line equals end_pos.line",
-                start_pos.column,
-                end_pos.column
-            )
+    fn line_len(&self, line_nr: usize) -> UIResult<usize> {
+        self.get_line(line_nr).map(|line| line.len())
+    }
+
+    fn nr_of_lines(&self) -> usize {
+        self.text_rope.len_lines()
+    }
+
+    fn nr_of_chars(&self) -> usize {
+        self.text_rope.len_chars()
+    }
+
+    // TODO use pool allocation here
+    // expensive function, don't use it if it can be done with a specialized, more efficient function
+    fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a> {
+        let mut lines = BumpString::with_capacity_in(self.text_rope.len_chars(), arena);
+
+        for line in self.text_rope.lines() {
+            lines.extend(line.as_str());
         }
-    );
 
-    Ok(ValidSelection {
-        selection: RawSelection { start_pos, end_pos },
+        lines
+    }
+}
+
+impl SelectableLines for BigSelectableText {
+    fn get_caret(self) -> TextPos {
+        self.caret_w_select.caret_pos
+    }
+
+    fn set_caret(&mut self, caret_pos: TextPos) {
+        self.caret_w_select.caret_pos = caret_pos;
+    }
+
+    fn move_caret_left(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => {
+                    (old_selection.start_pos.line, old_selection.start_pos.column)
+                }
+                None => unreachable!(),
+            }
+        } else if old_col_nr == 0 {
+            if old_line_nr == 0 {
+                (0, 0)
+            } else {
+                let curr_line_len = self.line_len(old_line_nr - 1)?;
+
+                (old_line_nr - 1, curr_line_len - 1)
+            }
+        } else {
+            (old_line_nr, old_col_nr - 1)
+        };
+
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_caret_pos >= old_selection.end_pos {
+                    if new_caret_pos == old_selection.start_pos {
+                        None
+                    } else {
+                        validate_sel_opt(old_selection.start_pos, new_caret_pos)?
+                    }
+                } else {
+                    validate_sel_opt(
+                        TextPos {
+                            line: line_nr,
+                            column: col_nr,
+                        },
+                        old_selection.end_pos,
+                    )?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    TextPos {
+                        line: line_nr,
+                        column: col_nr,
+                    },
+                    TextPos {
+                        line: old_line_nr,
+                        column: old_col_nr,
+                    },
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
+    }
+
+    fn move_caret_right(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
+                None => unreachable!(),
+            }
+        } else {
+            let curr_line = self.get_line(old_line_nr)?;
+
+            if let Some(last_char) = curr_line.chars().last() {
+                if is_newline(&last_char) {
+                    if old_col_nr + 1 > curr_line.len() - 1 {
+                        (old_line_nr + 1, 0)
+                    } else {
+                        (old_line_nr, old_col_nr + 1)
+                    }
+                } else if old_col_nr < curr_line.len() {
+                    (old_line_nr, old_col_nr + 1)
+                } else {
+                    (old_line_nr, old_col_nr)
+                }
+            } else {
+                (old_line_nr, old_col_nr)
+            }
+        };
+
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_caret_pos <= old_selection.start_pos {
+                    if new_caret_pos == old_selection.end_pos {
+                        None
+                    } else {
+                        validate_sel_opt(new_caret_pos, old_selection.end_pos)?
+                    }
+                } else {
+                    validate_sel_opt(
+                        old_selection.start_pos,
+                        TextPos {
+                            line: line_nr,
+                            column: col_nr,
+                        },
+                    )?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    TextPos {
+                        line: old_line_nr,
+                        column: old_col_nr,
+                    },
+                    TextPos {
+                        line: line_nr,
+                        column: col_nr,
+                    },
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
+    }
+
+    fn move_caret_up(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => {
+                    (old_selection.start_pos.line, old_selection.start_pos.column)
+                }
+                None => unreachable!(),
+            }
+        } else if old_line_nr == 0 {
+            (old_line_nr, 0)
+        } else {
+            let prev_line_len = self.line_len(old_line_nr - 1)?;
+
+            if prev_line_len <= old_col_nr {
+                (old_line_nr - 1, prev_line_len - 1)
+            } else {
+                (old_line_nr - 1, old_col_nr)
+            }
+        };
+
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_selection.end_pos <= old_caret_pos {
+                    if new_caret_pos == old_selection.start_pos {
+                        None
+                    } else {
+                        validate_sel_opt(
+                            min(old_selection.start_pos, new_caret_pos),
+                            max(old_selection.start_pos, new_caret_pos),
+                        )?
+                    }
+                } else {
+                    validate_sel_opt(new_caret_pos, old_selection.end_pos)?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    min(old_caret_pos, new_caret_pos),
+                    max(old_caret_pos, new_caret_pos),
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
+    }
+
+    fn move_caret_down(&mut self, shift_pressed: bool) -> UIResult<()> {
+        let old_selection_opt = self.get_selection();
+        let old_caret_pos = self.caret_w_select.caret_pos;
+        let old_line_nr = old_caret_pos.line;
+        let old_col_nr = old_caret_pos.column;
+
+        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
+            match old_selection_opt {
+                Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
+                None => unreachable!(),
+            }
+        } else if old_line_nr + 1 >= self.nr_of_lines() {
+            let curr_line_len = self.line_len(old_line_nr)?;
+
+            (old_line_nr, curr_line_len)
+        } else {
+            let next_line = self.get_line(old_line_nr + 1)?;
+
+            if next_line.len() <= old_col_nr {
+                if let Some(last_char) = next_line.chars().last() {
+                    if is_newline(&last_char) {
+                        (old_line_nr + 1, next_line.len() - 1)
+                    } else {
+                        (old_line_nr + 1, next_line.len())
+                    }
+                } else {
+                    (old_line_nr + 1, 0)
+                }
+            } else {
+                (old_line_nr + 1, old_col_nr)
+            }
+        };
+
+        let new_caret_pos = TextPos {
+            line: line_nr,
+            column: col_nr,
+        };
+
+        let new_selection_opt = if shift_pressed {
+            if let Some(old_selection) = old_selection_opt {
+                if old_caret_pos <= old_selection.start_pos {
+                    if new_caret_pos == old_selection.end_pos {
+                        None
+                    } else {
+                        validate_sel_opt(
+                            min(old_selection.end_pos, new_caret_pos),
+                            max(old_selection.end_pos, new_caret_pos),
+                        )?
+                    }
+                } else {
+                    validate_sel_opt(old_selection.start_pos, new_caret_pos)?
+                }
+            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
+                validate_sel_opt(
+                    min(old_caret_pos, new_caret_pos),
+                    max(old_caret_pos, new_caret_pos),
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+
+        Ok(())
+    }
+
+    fn get_selection(&self) -> Option<Selection> {
+        self.caret_w_select.selection_opt
+    }
+
+    fn is_selection_active(&self) -> bool {
+        self.get_selection().is_some()
+    }
+
+    fn get_selected_str(&self) -> UIResult<Option<&str>> {
+        if let Some(val_sel) = self.caret_w_select.selection_opt {
+            let (start_char_indx, end_char_indx) = self.sel_to_tup(val_sel);
+
+            self.check_bounds(end_char_indx)?;
+
+            let rope_slice = self.text_rope.slice(start_char_indx..end_char_indx);
+
+            if let Some(line_str_ref) = rope_slice.as_str() {
+                Ok(Some(line_str_ref))
+            } else {
+                // happens very rarely
+                let line_str = rope_slice.chunks().collect::<String>();
+                let arena_str_ref = self.arena.alloc(line_str);
+                Ok(Some(arena_str_ref))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn set_raw_sel(&mut self, raw_sel: RawSelection) -> UIResult<()> {
+        self.caret_w_select.selection_opt = Some(validate_raw_sel(raw_sel)?);
+
+        Ok(())
+    }
+
+    fn set_sel_none(&mut self) {
+        self.caret_w_select.selection_opt = None;
+    }
+
+    fn select_all(&mut self) -> UIResult<()> {
+        if self.nr_of_chars() > 0 {
+            let last_pos = self.last_text_pos();
+
+            self.set_raw_sel(RawSelection {
+                start_pos: TextPos { line: 0, column: 0 },
+                end_pos: last_pos,
+            })?;
+
+            self.set_caret(last_pos);
+        }
+
+        Ok(())
+    }
+
+    fn last_text_pos(&self) -> TextPos {
+        self.char_indx_to_pos(self.nr_of_chars())
+    }
+}
+
+impl MutSelectableLines for BigSelectableText {
+    fn insert_char(&mut self, new_char: &char) -> UIResult<()> {
+        if self.is_selection_active() {
+            self.del_selection()?;
+        }
+
+        self.insert_str(&new_char.to_string())?;
+
+        if is_newline(new_char) {
+            self.set_caret(TextPos {
+                line: self.caret_w_select.caret_pos.line + 1,
+                column: 0,
+            });
+        } else {
+            self.move_caret_right(false)?;
+        }
+
+        self.set_sel_none();
+
+        Ok(())
+    }
+
+    fn handle_new_char(&mut self, received_char: &char) -> UIResult<()> {
+        match received_char {
+            '\u{8}' | '\u{7f}' => {
+                // On Linux, '\u{8}' is backspace,
+                // on macOS '\u{7f}'.
+
+                self.pop_char()?
+            }
+
+            '\u{1}' // Ctrl + A
+            | '\u{3}' // Ctrl + C
+            | '\u{16}' // Ctrl + V
+            | '\u{18}' // Ctrl + X
+            | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
+            | '\u{f0000}'..='\u{ffffd}' // ^
+            | '\u{100000}'..='\u{10fffd}' // ^
+            => {
+                // chars that can be ignored
+            }
+
+            _ => {
+                self.insert_char(received_char)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn insert_str(&mut self, new_str: &str) -> UIResult<()> {
+        let caret_pos = self.caret_w_select.caret_pos;
+        let char_indx = self.pos_to_char_indx(caret_pos);
+
+        self.check_bounds(char_indx)?;
+
+        self.text_rope.insert(char_indx, new_str);
+
+        Ok(())
+    }
+
+    fn pop_char(&mut self) -> UIResult<()> {
+        if self.is_selection_active() {
+            self.del_selection()?;
+        } else {
+            let old_caret_pos = self.caret_w_select.caret_pos;
+            let char_indx = self.pos_to_char_indx(old_caret_pos);
+
+            self.move_caret_left(false)?;
+
+            if (char_indx > 0) && char_indx <= self.text_rope.len_chars() {
+                self.text_rope.remove((char_indx - 1)..char_indx);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn del_selection(&mut self) -> UIResult<()> {
+        if let Some(selection) = self.caret_w_select.selection_opt {
+            let (start_char_indx, end_char_indx) = self.sel_to_tup(selection);
+
+            self.check_bounds(end_char_indx)?;
+
+            self.text_rope.remove(start_char_indx..end_char_indx);
+
+            self.set_caret(selection.start_pos);
+
+            self.set_sel_none();
+        }
+
+        Ok(())
+    }
+
+    fn handle_key_down(
+        &mut self,
+        modifiers: &ModifiersState,
+        virtual_keycode: VirtualKeyCode,
+    ) -> UIResult<()> {
+        let shift_pressed = modifiers.shift();
+
+        match virtual_keycode {
+            Left => self.move_caret_left(shift_pressed),
+            Up => self.move_caret_up(shift_pressed),
+            Right => self.move_caret_right(shift_pressed),
+            Down => self.move_caret_down(shift_pressed),
+
+            A => {
+                if modifiers.ctrl() {
+                    self.select_all()
+                } else {
+                    Ok(())
+                }
+            }
+            Home => {
+                let curr_line_nr = self.caret_w_select.caret_pos.line;
+                // TODO no unwrap
+                let curr_line_str = self.get_line(curr_line_nr).unwrap();
+                let line_char_iter = curr_line_str.chars();
+
+                let mut first_no_space_char_col = 0;
+                let mut non_space_found = false;
+
+                for c in line_char_iter {
+                    if !c.is_whitespace() {
+                        non_space_found = true;
+                        break;
+                    } else {
+                        first_no_space_char_col += 1;
+                    }
+                }
+
+                if !non_space_found {
+                    first_no_space_char_col = 0;
+                }
+
+                self.caret_w_select.move_caret_w_mods(
+                    TextPos {
+                        line: curr_line_nr,
+                        column: first_no_space_char_col,
+                    },
+                    modifiers,
+                )
+            }
+            End => {
+                let curr_line_nr = self.caret_w_select.caret_pos.line;
+                let curr_line_len = self.line_len(curr_line_nr)?;
+                // TODO no unwrap
+                let new_col = if curr_line_len > 0 {
+                    curr_line_len - 1
+                } else {
+                    0
+                };
+
+                let new_pos = TextPos {
+                    line: curr_line_nr,
+                    column: new_col,
+                };
+
+                self.caret_w_select.move_caret_w_mods(new_pos, modifiers)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+pub fn from_path(path: &Path) -> UIResult<BigSelectableText> {
+    let caret_w_select = CaretWSelect::default();
+    let text_rope = rope_from_path(path)?;
+    let path_str = path_to_string(path);
+    let arena = Bump::new();
+
+    Ok(BigSelectableText {
+        caret_w_select,
+        text_rope,
+        path_str,
+        arena,
     })
 }
 
-pub fn create_selection_rects<'a>(
-    raw_sel: RawSelection,
-    text_buf: &TextBuffer,
-    glyph_dim_rect: &Rect,
-    arena: &'a Bump,
-) -> EdResult<BumpVec<'a, Rect>> {
-    let valid_sel = validate_selection(raw_sel)?;
-    let RawSelection { start_pos, end_pos } = valid_sel.selection;
+fn path_to_string(path: &Path) -> String {
+    let mut path_str = String::new();
+    path_str.push_str(&path.to_string_lossy());
 
-    let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
+    path_str
+}
 
-    let height = glyph_dim_rect.height;
-    let start_y = glyph_dim_rect.top_left_coords.y + height * (start_pos.line as f32);
-    let line_start_x = glyph_dim_rect.top_left_coords.x;
-
-    if start_pos.line == end_pos.line {
-        let width = ((end_pos.column as f32) * glyph_dim_rect.width)
-            - ((start_pos.column as f32) * glyph_dim_rect.width);
-        let sel_rect_x = line_start_x + ((start_pos.column as f32) * glyph_dim_rect.width);
-
-        all_rects.push(Rect {
-            top_left_coords: (sel_rect_x, start_y).into(),
-            width,
-            height,
-            color: colors::SELECT_COLOR,
-        });
-
-        Ok(all_rects)
-    } else {
-        // first line
-        let end_col = text_buf.line_len_res(start_pos.line)?;
-        let width = ((end_col as f32) * glyph_dim_rect.width)
-            - ((start_pos.column as f32) * glyph_dim_rect.width);
-
-        let sel_rect_x = line_start_x + ((start_pos.column as f32) * glyph_dim_rect.width);
-
-        all_rects.push(Rect {
-            top_left_coords: (sel_rect_x, start_y).into(),
-            width,
-            height,
-            color: colors::SELECT_COLOR,
-        });
-
-        //middle lines
-        let nr_mid_lines = (end_pos.line - start_pos.line) - 1;
-        let first_mid_line = start_pos.line + 1;
-
-        for i in first_mid_line..(first_mid_line + nr_mid_lines) {
-            let mid_line_len = text_buf.line_len_res(i)?;
-
-            let width = (mid_line_len as f32) * glyph_dim_rect.width;
-
-            let sel_rect_y = start_y + ((i - start_pos.line) as f32) * glyph_dim_rect.height;
-
-            all_rects.push(Rect {
-                top_left_coords: (line_start_x, sel_rect_y).into(),
-                width,
-                height,
-                color: colors::SELECT_COLOR,
-            });
+fn rope_from_path(path: &Path) -> UIResult<Rope> {
+    match File::open(path) {
+        Ok(file) => {
+            let buf_reader = &mut io::BufReader::new(file);
+            match Rope::from_reader(buf_reader) {
+                Ok(rope) => Ok(rope),
+                Err(e) => Err(TextBufReadFailed {
+                    path_str: path_to_string(path),
+                    err_msg: e.to_string(),
+                }),
+            }
         }
+        Err(e) => Err(FileOpenFailed {
+            path_str: path_to_string(path),
+            err_msg: e.to_string(),
+        }),
+    }
+}
 
-        //last line
-        if end_pos.column > 0 {
-            let sel_rect_y =
-                start_y + ((end_pos.line - start_pos.line) as f32) * glyph_dim_rect.height;
-
-            let width = (end_pos.column as f32) * glyph_dim_rect.width;
-
-            all_rects.push(Rect {
-                top_left_coords: (line_start_x, sel_rect_y).into(),
-                width,
-                height,
-                color: colors::SELECT_COLOR,
-            });
-        }
-
-        Ok(all_rects)
+// need to explicitly omit arena
+impl fmt::Debug for BigSelectableText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BigSelectableText")
+            .field("caret_w_select", &self.caret_w_select)
+            .field("text_rope", &self.text_rope)
+            .field("path_str", &self.path_str)
+            .finish()
     }
 }
 
 #[cfg(test)]
-pub mod test_selection {
-    use crate::error::{EdResult, OutOfBounds};
-    use crate::mvc::ed_model::{Position, RawSelection};
-    use crate::mvc::ed_update::{
-        move_caret_down, move_caret_left, move_caret_right, move_caret_up, MoveCaretFun,
+pub mod test_big_sel_text {
+    use crate::ui::text::{
+        big_selectable_text,
+        big_selectable_text::BigSelectableText,
+        caret_w_select::CaretWSelect,
+        lines::{Lines, MutSelectableLines, SelectableLines},
+        selection::validate_selection,
+        text_pos::TextPos,
     };
-    use crate::text_buffer::TextBuffer;
-    use crate::vec_result::get_res;
+    use crate::ui::ui_error::{OutOfBounds, UIResult};
     use core::cmp::Ordering;
     use pest::Parser;
-    use ropey::Rope;
     use snafu::OptionExt;
-    use std::collections::HashMap;
-    use std::slice::SliceIndex;
+    use std::{
+        collections::HashMap, fs, io::Write, path::Path, slice::SliceIndex, time::SystemTime,
+    };
+
+    // replace vec methods that return Option with ones that return Result and proper Error
+    pub fn slice_get<T>(
+        index: usize,
+        slice: &[T],
+    ) -> UIResult<&<usize as SliceIndex<[T]>>::Output> {
+        let elt_ref = slice.get(index).context(OutOfBounds {
+            index,
+            collection_name: "Slice",
+            len: slice.len(),
+        })?;
+
+        Ok(elt_ref)
+    }
 
     #[derive(Parser)]
     #[grammar = "../tests/selection.pest"]
@@ -144,16 +719,14 @@ pub mod test_selection {
 
     // show selection and caret position as symbols in lines for easy testing
     pub fn convert_selection_to_dsl(
-        raw_sel_opt: Option<RawSelection>,
-        caret_pos: Position,
+        caret_w_select: CaretWSelect,
         lines: &mut [String],
-    ) -> EdResult<&[String]> {
-        if let Some(raw_sel) = raw_sel_opt {
-            let mut to_insert = vec![
-                (raw_sel.start_pos, '['),
-                (raw_sel.end_pos, ']'),
-                (caret_pos, '|'),
-            ];
+    ) -> UIResult<&[String]> {
+        let selection_opt = caret_w_select.selection_opt;
+        let caret_pos = caret_w_select.caret_pos;
+
+        if let Some(sel) = selection_opt {
+            let mut to_insert = vec![(sel.start_pos, '['), (sel.end_pos, ']'), (caret_pos, '|')];
             let symbol_map: HashMap<char, usize> =
                 [('[', 2), (']', 0), ('|', 1)].iter().cloned().collect();
 
@@ -169,7 +742,7 @@ pub mod test_selection {
 
             // insert symbols into text lines
             for i in 0..to_insert.len() {
-                let (pos, insert_char) = *get_res(i, &to_insert)?;
+                let (pos, insert_char) = *slice_get(i, &to_insert)?;
 
                 insert_at_pos(lines, pos, insert_char)?;
 
@@ -189,7 +762,7 @@ pub mod test_selection {
         Ok(lines)
     }
 
-    fn insert_at_pos(lines: &mut [String], pos: Position, insert_char: char) -> EdResult<()> {
+    fn insert_at_pos(lines: &mut [String], pos: TextPos, insert_char: char) -> UIResult<()> {
         let line = get_mut_res(pos.line, lines)?;
         line.insert(pos.column, insert_char);
 
@@ -200,7 +773,7 @@ pub mod test_selection {
     fn get_mut_res<T>(
         index: usize,
         vec: &mut [T],
-    ) -> EdResult<&mut <usize as SliceIndex<[T]>>::Output> {
+    ) -> UIResult<&mut <usize as SliceIndex<[T]>>::Output> {
         let vec_len = vec.len();
 
         let elt_ref = vec.get_mut(index).context(OutOfBounds {
@@ -212,16 +785,25 @@ pub mod test_selection {
         Ok(elt_ref)
     }
 
-    fn text_buffer_from_str(lines_str: &str) -> TextBuffer {
-        TextBuffer {
-            text_rope: Rope::from_str(lines_str),
-            path_str: "".to_owned(),
-            arena: bumpalo::Bump::new(),
-        }
+    fn big_text_from_str(lines_str: &str) -> BigSelectableText {
+        let epoch_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let file_name = format!("temp_{:?}.txt", epoch_time);
+        let path = Path::new(&file_name);
+
+        let mut temp_file = fs::File::create(path).unwrap();
+        temp_file.write_all(lines_str.as_bytes()).unwrap();
+
+        let big_text = big_selectable_text::from_path(path).unwrap();
+        fs::remove_file(path).unwrap();
+
+        big_text
     }
 
-    pub fn text_buffer_from_dsl_str(lines: &[String]) -> TextBuffer {
-        text_buffer_from_str(
+    pub fn big_text_from_dsl_str(lines: &[String]) -> BigSelectableText {
+        big_text_from_str(
             &lines
                 .iter()
                 .map(|line| line.replace(&['[', ']', '|'][..], ""))
@@ -230,27 +812,18 @@ pub mod test_selection {
         )
     }
 
-    pub fn all_lines_vec(text_buf: &TextBuffer) -> Vec<String> {
+    pub fn all_lines_vec(big_sel_text: &BigSelectableText) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
 
-        for line in text_buf.text_rope.lines() {
-            lines.push(
-                line
-                .as_str()
-                .expect(
-                    "Failed to get str from RopeSlice. See https://docs.rs/ropey/1.2.0/ropey/struct.RopeSlice.html#method.as_str"
-                )
-                .to_owned()
-            );
+        for i in 0..big_sel_text.nr_of_lines() {
+            lines.push(big_sel_text.get_line(i).unwrap().to_string());
         }
 
         lines
     }
 
     // Retrieve selection and position from formatted string
-    pub fn convert_dsl_to_selection(
-        lines: &[String],
-    ) -> Result<(Option<RawSelection>, Position), String> {
+    pub fn convert_dsl_to_selection(lines: &[String]) -> Result<CaretWSelect, String> {
         let lines_str: String = lines.join("");
 
         let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str)
@@ -317,23 +890,26 @@ pub mod test_selection {
 
         // Make sure return makes sense
         if let Some((line, column)) = caret_opt {
-            let caret_pos = Position { line, column };
+            let caret_pos = TextPos { line, column };
             if sel_start_opt.is_none() && sel_end_opt.is_none() {
-                Ok((None, caret_pos))
+                Ok(CaretWSelect::new(caret_pos, None))
             } else if let Some((start_line, start_column)) = sel_start_opt {
                 if let Some((end_line, end_column)) = sel_end_opt {
-                    Ok((
-                        Some(RawSelection {
-                            start_pos: Position {
-                                line: start_line,
-                                column: start_column,
-                            },
-                            end_pos: Position {
-                                line: end_line,
-                                column: end_column,
-                            },
-                        }),
+                    Ok(CaretWSelect::new(
                         caret_pos,
+                        Some(
+                            validate_selection(
+                                TextPos {
+                                    line: start_line,
+                                    column: start_column,
+                                },
+                                TextPos {
+                                    line: end_line,
+                                    column: end_column,
+                                },
+                            )
+                            .unwrap(),
+                        ),
                     ))
                 } else {
                     Err("Selection end ']' was not found, but selection start '[' was. Bad input string.".to_owned())
@@ -346,6 +922,190 @@ pub mod test_selection {
         }
     }
 
+    pub fn gen_big_text(lines: &[&str]) -> Result<BigSelectableText, String> {
+        let lines_string_slice: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let mut big_text = big_text_from_dsl_str(&lines_string_slice);
+        let caret_w_select = convert_dsl_to_selection(&lines_string_slice).unwrap();
+
+        big_text.caret_w_select = caret_w_select;
+
+        Ok(big_text)
+    }
+
+    fn assert_insert(
+        pre_lines_str: &[&str],
+        expected_post_lines_str: &[&str],
+        new_char: char,
+    ) -> Result<(), String> {
+        let mut big_text = gen_big_text(pre_lines_str)?;
+
+        if let Err(e) = big_text.handle_new_char(&new_char) {
+            return Err(e.to_string());
+        }
+
+        let mut actual_lines = all_lines_vec(&big_text);
+        let dsl_slice =
+            convert_selection_to_dsl(big_text.caret_w_select, &mut actual_lines).unwrap();
+        assert_eq!(dsl_slice, expected_post_lines_str);
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_new_char_simple() -> Result<(), String> {
+        assert_insert(&["|"], &["a|"], 'a')?;
+        assert_insert(&["|"], &[" |"], ' ')?;
+        assert_insert(&["a|"], &["aa|"], 'a')?;
+        assert_insert(&["a|"], &["a |"], ' ')?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
+        assert_insert(&["a|\n", ""], &["ab|\n", ""], 'b')?;
+        assert_insert(&["a\n", "|"], &["a\n", "b|"], 'b')?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "cd|"], 'd')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_new_char_mid() -> Result<(), String> {
+        assert_insert(&["ab|d"], &["abc|d"], 'c')?;
+        assert_insert(&["a|cd"], &["ab|cd"], 'b')?;
+        assert_insert(&["abc\n", "|e"], &["abc\n", "d|e"], 'd')?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", "g| "], 'g')?;
+        assert_insert(&["abc\n", "def\n", "| "], &["abc\n", "def\n", " | "], ' ')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn simple_backspace() -> Result<(), String> {
+        assert_insert(&["|"], &["|"], '\u{8}')?;
+        assert_insert(&[" |"], &["|"], '\u{8}')?;
+        assert_insert(&["a|"], &["|"], '\u{8}')?;
+        assert_insert(&["ab|"], &["a|"], '\u{8}')?;
+        assert_insert(&["a|\n", ""], &["|\n", ""], '\u{8}')?;
+        assert_insert(&["ab|\n", ""], &["a|\n", ""], '\u{8}')?;
+        assert_insert(&["a\n", "|"], &["a|"], '\u{8}')?;
+        assert_insert(&["a\n", "b\n", "c|"], &["a\n", "b\n", "|"], '\u{8}')?;
+        assert_insert(&["a\n", "b\n", "|"], &["a\n", "b|"], '\u{8}')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn selection_backspace() -> Result<(), String> {
+        assert_insert(&["[a]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[a]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[aa]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[b c]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[abc]|\n", ""], &["|\n", ""], '\u{8}')?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "|"], '\u{8}')?;
+        assert_insert(&["[a\n", "abc]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["a|"], '\u{8}')?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["|"], '\u{8}')?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "|"], '\u{8}')?;
+        assert_insert(
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            &["abc\n", "d|\n", "jkl"],
+            '\u{8}',
+        )?;
+        assert_insert(
+            &["abc\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "|\n", "jkl"],
+            '\u{8}',
+        )?;
+        assert_insert(
+            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "\n", "|\n", "jkl"],
+            '\u{8}',
+        )?;
+        assert_insert(
+            &["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"],
+            &["|"],
+            '\u{8}',
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_with_selection() -> Result<(), String> {
+        assert_insert(&["[a]|"], &["z|"], 'z')?;
+        assert_insert(&["a[a]|"], &["az|"], 'z')?;
+        assert_insert(&["[aa]|"], &["z|"], 'z')?;
+        assert_insert(&["a[b c]|"], &["az|"], 'z')?;
+        assert_insert(&["[abc]|\n", ""], &["z|\n", ""], 'z')?;
+        assert_insert(&["a\n", "[abc]|"], &["a\n", "z|"], 'z')?;
+        assert_insert(&["[a\n", "abc]|"], &["z|"], 'z')?;
+        assert_insert(&["a[b\n", "cdef ghij]|"], &["az|"], 'z')?;
+        assert_insert(&["[a\n", "b\n", "c]|"], &["z|"], 'z')?;
+        assert_insert(&["a\n", "[b\n", "]|"], &["a\n", "z|"], 'z')?;
+        assert_insert(
+            &["abc\n", "d[ef\n", "ghi]|\n", "jkl"],
+            &["abc\n", "dz|\n", "jkl"],
+            'z',
+        )?;
+        assert_insert(
+            &["abc\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "z|\n", "jkl"],
+            'z',
+        )?;
+        assert_insert(
+            &["abc\n", "\n", "[def\n", "ghi]|\n", "jkl"],
+            &["abc\n", "\n", "z|\n", "jkl"],
+            'z',
+        )?;
+        assert_insert(&["[abc\n", "\n", "def\n", "ghi\n", "jkl]|"], &["z|"], 'z')?;
+
+        Ok(())
+    }
+
+    fn assert_select_all(
+        pre_lines_str: &[&str],
+        expected_post_lines_str: &[&str],
+    ) -> Result<(), String> {
+        let mut big_text = gen_big_text(pre_lines_str)?;
+
+        big_text.select_all().unwrap();
+
+        let mut big_text_lines = all_lines_vec(&big_text);
+        let post_lines_str =
+            convert_selection_to_dsl(big_text.caret_w_select, &mut big_text_lines)?;
+
+        assert_eq!(post_lines_str, expected_post_lines_str);
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_all() -> Result<(), String> {
+        assert_select_all(&["|"], &["|"])?;
+        assert_select_all(&["|a"], &["[a]|"])?;
+        assert_select_all(&["a|"], &["[a]|"])?;
+        assert_select_all(&["abc d|ef ghi"], &["[abc def ghi]|"])?;
+        assert_select_all(&["[a]|"], &["[a]|"])?;
+        assert_select_all(&["|[a]"], &["[a]|"])?;
+        assert_select_all(&["|[abc def ghi]"], &["[abc def ghi]|"])?;
+        assert_select_all(&["a\n", "[b\n", "]|"], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(&["a\n", "[b]|\n", ""], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(&["a\n", "|[b\n", "]"], &["[a\n", "b\n", "]|"])?;
+        assert_select_all(
+            &["abc\n", "def\n", "gh|i\n", "jkl"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+        )?;
+        assert_select_all(
+            &["|[abc\n", "def\n", "ghi\n", "jkl]"],
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+        )?;
+
+        Ok(())
+    }
+
+    // TODO hometest
+
+    // TODO endtest
+
+    type MoveCaretFun = fn(&mut BigSelectableText, bool) -> UIResult<()>;
+
     // Convert nice string representations and compare results
     fn assert_move(
         pre_lines_str: &[&str],
@@ -353,21 +1113,17 @@ pub mod test_selection {
         shift_pressed: bool,
         move_fun: MoveCaretFun,
     ) -> Result<(), String> {
-        let pre_lines: Vec<String> = pre_lines_str.iter().map(|l| l.to_string()).collect();
         let expected_post_lines: Vec<String> = expected_post_lines_str
             .iter()
             .map(|l| l.to_string())
             .collect();
 
-        let (sel_opt, caret_pos) = convert_dsl_to_selection(&pre_lines)?;
+        let mut big_text = gen_big_text(pre_lines_str)?;
 
-        let clean_text_buf = text_buffer_from_dsl_str(&pre_lines);
+        move_fun(&mut big_text, shift_pressed)?;
 
-        let (new_caret_pos, new_sel_opt) =
-            move_fun(caret_pos, sel_opt, shift_pressed, &clean_text_buf);
-
-        let mut lines_vec = all_lines_vec(&clean_text_buf);
-        let post_lines_res = convert_selection_to_dsl(new_sel_opt, new_caret_pos, &mut lines_vec);
+        let mut lines_vec = all_lines_vec(&big_text);
+        let post_lines_res = convert_selection_to_dsl(big_text.caret_w_select, &mut lines_vec);
 
         match post_lines_res {
             Ok(post_lines) => {
@@ -380,6 +1136,8 @@ pub mod test_selection {
 
     #[test]
     fn move_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
         assert_move(&["|"], &["|"], false, move_caret_right)?;
         assert_move(&["a|"], &["a|"], false, move_caret_right)?;
         assert_move(&["|A"], &["A|"], false, move_caret_right)?;
@@ -438,6 +1196,8 @@ pub mod test_selection {
 
     #[test]
     fn move_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
         assert_move(&["|"], &["|"], false, move_caret_left)?;
         assert_move(&["|a"], &["|a"], false, move_caret_left)?;
         assert_move(&["|A"], &["|A"], false, move_caret_left)?;
@@ -496,6 +1256,8 @@ pub mod test_selection {
 
     #[test]
     fn move_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
         assert_move(&["|"], &["|"], false, move_caret_up)?;
         assert_move(&["|a"], &["|a"], false, move_caret_up)?;
         assert_move(&["A|"], &["|A"], false, move_caret_up)?;
@@ -628,6 +1390,8 @@ pub mod test_selection {
 
     #[test]
     fn move_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
         assert_move(&["|"], &["|"], false, move_caret_down)?;
         assert_move(&["|a"], &["a|"], false, move_caret_down)?;
         assert_move(&["A|"], &["A|"], false, move_caret_down)?;
@@ -794,6 +1558,8 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
         assert_move(&["|"], &["|"], true, move_caret_right)?;
         assert_move(&["a|"], &["a|"], true, move_caret_right)?;
         assert_move(&["|A"], &["[A]|"], true, move_caret_right)?;
@@ -852,6 +1618,8 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
         assert_move(&["|"], &["|"], true, move_caret_left)?;
         assert_move(&["a|"], &["|[a]"], true, move_caret_left)?;
         assert_move(&["|A"], &["|A"], true, move_caret_left)?;
@@ -917,6 +1685,8 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
         assert_move(&["|"], &["|"], true, move_caret_down)?;
         assert_move(&["|a"], &["[a]|"], true, move_caret_down)?;
         assert_move(&["A|"], &["A|"], true, move_caret_down)?;
@@ -1123,6 +1893,8 @@ pub mod test_selection {
 
     #[test]
     fn start_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
         assert_move(&["|"], &["|"], true, move_caret_up)?;
         assert_move(&["|a"], &["|a"], true, move_caret_up)?;
         assert_move(&["A|"], &["|[A]"], true, move_caret_up)?;
@@ -1275,6 +2047,8 @@ pub mod test_selection {
 
     #[test]
     fn end_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
         assert_move(&["[A]|"], &["A|"], false, move_caret_right)?;
         assert_move(&["[a]|bc"], &["a|bc"], false, move_caret_right)?;
         assert_move(&["a[b]|c"], &["ab|c"], false, move_caret_right)?;
@@ -1375,6 +2149,8 @@ pub mod test_selection {
 
     #[test]
     fn end_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
         assert_move(&["[A]|"], &["|A"], false, move_caret_left)?;
         assert_move(&["[a]|bc"], &["|abc"], false, move_caret_left)?;
         assert_move(&["a[b]|c"], &["a|bc"], false, move_caret_left)?;
@@ -1465,6 +2241,8 @@ pub mod test_selection {
 
     #[test]
     fn end_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
         assert_move(&["[a]|"], &["a|"], false, move_caret_down)?;
         assert_move(&["|[a]"], &["a|"], false, move_caret_down)?;
         assert_move(&["a|[bc]"], &["abc|"], false, move_caret_down)?;
@@ -1662,6 +2440,8 @@ pub mod test_selection {
 
     #[test]
     fn end_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
         assert_move(&["[a]|"], &["|a"], false, move_caret_up)?;
         assert_move(&["|[a]"], &["|a"], false, move_caret_up)?;
         assert_move(&["a|[bc]"], &["a|bc"], false, move_caret_up)?;
@@ -1819,6 +2599,8 @@ pub mod test_selection {
 
     #[test]
     fn extend_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
         assert_move(&["[a]|bc"], &["[ab]|c"], true, move_caret_right)?;
         assert_move(&["a[b]|c"], &["a[bc]|"], true, move_caret_right)?;
         assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_right)?;
@@ -1875,6 +2657,8 @@ pub mod test_selection {
 
     #[test]
     fn extend_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
         assert_move(&["ab|[c]"], &["a|[bc]"], true, move_caret_left)?;
         assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_left)?;
         assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_left)?;
@@ -1918,6 +2702,8 @@ pub mod test_selection {
 
     #[test]
     fn extend_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
         assert_move(&["ab|[c]"], &["|[abc]"], true, move_caret_up)?;
         assert_move(&["a|[bc]"], &["|[abc]"], true, move_caret_up)?;
         assert_move(&["|[abc]"], &["|[abc]"], true, move_caret_up)?;
@@ -1970,6 +2756,8 @@ pub mod test_selection {
 
     #[test]
     fn extend_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
         assert_move(&["[ab]|c"], &["[abc]|"], true, move_caret_down)?;
         assert_move(&["[a]|bc"], &["[abc]|"], true, move_caret_down)?;
         assert_move(&["[abc]|"], &["[abc]|"], true, move_caret_down)?;
@@ -2030,6 +2818,8 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_right() -> Result<(), String> {
+        let move_caret_right = SelectableLines::move_caret_right;
+
         assert_move(&["ab|[c]"], &["abc|"], true, move_caret_right)?;
         assert_move(&["a|[bc]"], &["ab|[c]"], true, move_caret_right)?;
         assert_move(&["|[abc]"], &["a|[bc]"], true, move_caret_right)?;
@@ -2057,6 +2847,8 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_left() -> Result<(), String> {
+        let move_caret_left = SelectableLines::move_caret_left;
+
         assert_move(&["ab[c]|"], &["ab|c"], true, move_caret_left)?;
         assert_move(&["a[bc]|"], &["a[b]|c"], true, move_caret_left)?;
         assert_move(&["[abc]|"], &["[ab]|c"], true, move_caret_left)?;
@@ -2090,6 +2882,8 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_up() -> Result<(), String> {
+        let move_caret_up = SelectableLines::move_caret_up;
+
         assert_move(&["[abc]|"], &["|abc"], true, move_caret_up)?;
         assert_move(&["[ab]|c"], &["|abc"], true, move_caret_up)?;
         assert_move(&["[a]|bc"], &["|abc"], true, move_caret_up)?;
@@ -2136,6 +2930,8 @@ pub mod test_selection {
 
     #[test]
     fn shrink_selection_down() -> Result<(), String> {
+        let move_caret_down = SelectableLines::move_caret_down;
+
         assert_move(&["|[abc]"], &["abc|"], true, move_caret_down)?;
         assert_move(
             &["|[abc\n", "def]"],

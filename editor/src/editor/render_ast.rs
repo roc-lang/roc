@@ -6,23 +6,19 @@ use wgpu_glyph::GlyphBrush;
 use winit::dpi::PhysicalSize;
 
 use crate::{
+    editor::colors::CODE_COL,
     graphics::{
-        colors::CODE_COLOR,
         primitives::text::{queue_code_text_draw, Text},
         style::CODE_FONT_SIZE,
     },
     lang::{ast::Expr2, expr::Env},
 };
 
-// fn to_bump_str<'a>(arena: &'a Bump, str_ref: &str) -> BumpString {
-
-// }
-
 fn pool_str_len<'a>(env: &Env<'a>, pool_str: &PoolStr) -> usize {
     env.pool.get_str(pool_str).len()
 }
 
-// calculate the str len necessary for BumpString
+// calculate the str len, necessary for BumpString
 fn expr2_to_len<'a>(env: &Env<'a>, expr2: &Expr2) -> usize {
     match expr2 {
         Expr2::SmallInt { text, .. } => pool_str_len(env, text),
@@ -133,6 +129,7 @@ pub fn expr2_to_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, expr2: &Expr2) -> Bu
                 let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(node_id);
 
                 let field_name = env.pool.get_str(pool_field_name);
+
                 let sub_expr2 = env.pool.get(*sub_expr2_node_id);
 
                 bump_str.push_str(field_name);
@@ -169,7 +166,7 @@ pub fn render_expr2<'a>(
     let code_text = Text {
         position,
         area_bounds,
-        color: CODE_COLOR.into(),
+        color: CODE_COL.into(),
         text: &expr_str,
         size: CODE_FONT_SIZE,
         ..Default::default()

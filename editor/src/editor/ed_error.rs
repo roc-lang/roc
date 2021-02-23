@@ -1,5 +1,5 @@
 use colored::*;
-use snafu::{Backtrace, ErrorCompat, Snafu};
+use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -22,22 +22,6 @@ pub enum EdError {
     ClipboardInitFailed { err_msg: String },
 
     #[snafu(display(
-        "FileOpenFailed: failed to open file with path {} with the following error: {}.",
-        path_str,
-        err_msg
-    ))]
-    FileOpenFailed { path_str: String, err_msg: String },
-
-    #[snafu(display("InvalidSelection: {}.", err_msg))]
-    InvalidSelection {
-        err_msg: String,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display("MissingGlyphDims: glyph_dim_rect_opt was None for model. It needs to be set using the example_code_glyph_rect function."))]
-    MissingGlyphDims { backtrace: Backtrace },
-
-    #[snafu(display(
         "OutOfBounds: index {} was out of bounds for {} with length {}.",
         index,
         collection_name,
@@ -50,13 +34,21 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
-    #[snafu(display("TextBufReadFailed: the file {} could be opened but we encountered the following error while trying to read it: {}.", path_str, err_msg))]
-    TextBufReadFailed { path_str: String, err_msg: String },
+    #[snafu(display("UIError: {}", msg))]
+    UIErrorBacktrace { msg: String, backtrace: Backtrace },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
 
 pub fn print_err(err: &EdError) {
+    eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
+
+    if let Some(backtrace) = ErrorCompat::backtrace(err) {
+        eprintln!("{}", color_backtrace(backtrace));
+    }
+}
+
+pub fn print_ui_err(err: &UIError) {
     eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
 
     if let Some(backtrace) = ErrorCompat::backtrace(err) {
@@ -108,5 +100,17 @@ fn contains_one_of(main_str: &str, contain_slice: &[&str]) -> bool {
 impl From<EdError> for String {
     fn from(ed_error: EdError) -> Self {
         format!("{}", ed_error)
+    }
+}
+
+use crate::ui::ui_error::UIError;
+
+impl From<UIError> for EdError {
+    fn from(ui_err: UIError) -> Self {
+        let msg = format!("{}", ui_err);
+
+        // hack to handle EdError derive
+        let dummy_res: Result<(), NoneError> = Err(NoneError {});
+        dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
     }
 }
