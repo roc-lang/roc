@@ -6,6 +6,7 @@ use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 use roc_types::subs::VarStore;
+use std::time::{Duration, SystemTime};
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -19,6 +20,14 @@ fn promote_expr_to_module(src: &str) -> String {
 
     buffer
 }
+fn report_timing(label: &str, duration: Duration) {
+    print!(
+        "        {:9.3} ms   {}\n",
+        duration.as_secs_f64() * 1000.0,
+        label,
+    );
+}
+
 pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
     match builtin_defs_map(symbol, var_store) {
         Some(def) => Some(def),
@@ -80,6 +89,8 @@ pub fn helper<'a>(
     } = loaded;
 
     debug_assert_eq!(exposed_to_host.len(), 1);
+    let code_gen_start = SystemTime::now();
+
     let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
     let mut lines = Vec::new();
@@ -313,9 +324,16 @@ pub fn helper<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let gen_dylib_file_start = SystemTime::now();
+
     let lib = module_to_dylib(&env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
+    let gen_dylib_file = gen_dylib_file_start.elapsed().unwrap();
+
+    report_timing("Generate LLVM IR", code_gen);
+    report_timing("Generate and load dynlib", gen_dylib_file);
     (main_fn_name, delayed_errors.join("\n"), lib)
 }
 

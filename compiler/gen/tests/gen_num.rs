@@ -452,6 +452,27 @@ mod gen_num {
     }
 
     #[test]
+    fn gen_fib_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    fib = \n ->
+                        if n == 0 then
+                            0
+                        else if n == 1 then
+                            1
+                        else
+                            (fib (n - 1)) + (fib (n - 2))
+
+                    fib 10
+                "#
+            ),
+            55,
+            i64
+        );
+    }
+
+    #[test]
     fn gen_float_eq() {
         assert_evals_to!(
             indoc!(

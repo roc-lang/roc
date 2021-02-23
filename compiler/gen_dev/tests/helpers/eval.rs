@@ -3,6 +3,7 @@ use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
+use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -16,6 +17,13 @@ fn promote_expr_to_module(src: &str) -> String {
     }
 
     buffer
+}
+fn report_timing(label: &str, duration: Duration) {
+    print!(
+        "        {:9.3} ms   {}\n",
+        duration.as_secs_f64() * 1000.0,
+        label,
+    );
 }
 
 pub fn helper<'a>(
@@ -80,6 +88,9 @@ pub fn helper<'a>(
     println!("=================================\n");
     */
     debug_assert_eq!(exposed_to_host.len(), 1);
+
+    let code_gen_start = SystemTime::now();
+
     let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
     let (_, main_fn_layout) = procedures
@@ -171,6 +182,9 @@ pub fn helper<'a>(
     let module_object =
         roc_gen_dev::build_module(&env, &target, procedures).expect("failed to compile module");
 
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let gen_dylib_file_start = SystemTime::now();
+
     let module_out = module_object
         .write()
         .expect("failed to build output object");
@@ -196,6 +210,10 @@ pub fn helper<'a>(
     // std::fs::copy(&path, "/tmp/libapp.so").unwrap();
 
     let lib = Library::new(path).expect("failed to load shared library");
+
+    let gen_dylib_file = gen_dylib_file_start.elapsed().unwrap();
+    report_timing("Generate object", code_gen);
+    report_timing("Generate and load dynlib", gen_dylib_file);
 
     (main_fn_name, delayed_errors, lib)
 }
