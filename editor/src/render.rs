@@ -1,9 +1,9 @@
+use crate::lang::pool::PoolStr;
+use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use wgpu_glyph::GlyphBrush;
 use winit::dpi::PhysicalSize;
-use bumpalo::collections::String as BumpString;
-use crate::lang::pool::{PoolStr};
 
 use crate::{
     graphics::{
@@ -87,7 +87,6 @@ fn get_bump_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, pool_str: &PoolStr) -> B
 }
 
 pub fn expr2_to_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, expr2: &Expr2) -> BumpString<'a> {
-
     match expr2 {
         Expr2::SmallInt { text, .. } => get_bump_str(arena, env, text),
         Expr2::I128 { text, .. } => get_bump_str(arena, env, text),
@@ -107,8 +106,7 @@ pub fn expr2_to_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, expr2: &Expr2) -> Bu
             BumpString::from_str_in(&text, arena)
         }
         Expr2::List { elems, .. } => {
-            let mut bump_str =
-                BumpString::with_capacity_in(expr2_to_len(env, expr2), arena);
+            let mut bump_str = BumpString::with_capacity_in(expr2_to_len(env, expr2), arena);
 
             bump_str.push('[');
 
@@ -127,8 +125,7 @@ pub fn expr2_to_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, expr2: &Expr2) -> Bu
             bump_str
         }
         Expr2::Record { fields, .. } => {
-            let mut bump_str =
-                BumpString::with_capacity_in(expr2_to_len(env, expr2), arena);
+            let mut bump_str = BumpString::with_capacity_in(expr2_to_len(env, expr2), arena);
 
             bump_str.push('{');
 
