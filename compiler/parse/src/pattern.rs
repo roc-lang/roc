@@ -1,5 +1,5 @@
 use crate::ast::Pattern;
-use crate::blankspace::{space0_around_e, space0_before_e, space0_e};
+use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::number_literal::number_literal;
 use crate::parser::Progress::{self, *};
@@ -130,11 +130,12 @@ fn loc_pattern_in_parens_help<'a>(
 ) -> impl Parser<'a, Located<Pattern<'a>>, PInParens<'a>> {
     between!(
         word1(b'(', PInParens::Open),
-        space0_around_e(
+        space0_around_ee(
             move |arena, state| specialize_ref(PInParens::Syntax, loc_pattern(min_indent))
                 .parse(arena, state),
             min_indent,
             PInParens::Space,
+            PInParens::IndentOpen,
             PInParens::IndentEnd,
         ),
         word1(b')', PInParens::End)

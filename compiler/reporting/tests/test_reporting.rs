@@ -4636,12 +4636,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
-
-                I just started parsing a type, but I got stuck here:
-
+                
+                I am partway through parsing a type, but I got stuck here:
+                
                 1│  f : I64, I64
                                 ^
-
+                
                 Note: I may be confused by indentation
             "#
             ),
@@ -4996,6 +4996,58 @@ mod test_reporting {
                 
                 Notice the indentation. All patterns are aligned, and each branch is
                 indented a bit more than the corresponding pattern. That is important!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_outdented_then() {
+        // TODO I think we can do better here
+        report_problem_as(
+            indoc!(
+                r#"
+                x =
+                    if 5 == 5 
+                then 2 else 3
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED IF ───────────────────────────────────────────────────────────────
+                
+                I was partway through parsing an `if` expression, but I got stuck here:
+                
+                2│      if 5 == 5 
+                                 ^
+                
+                I was expecting to see the `then` keyword next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_missing_else() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                if 5 == 5 then 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED IF ───────────────────────────────────────────────────────────────
+                
+                I was partway through parsing an `if` expression, but I got stuck here:
+                
+                1│  if 5 == 5 then 2
+                                    ^
+                
+                I was expecting to see the `else` keyword next.
             "#
             ),
         )

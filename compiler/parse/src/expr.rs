@@ -2,9 +2,8 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_e,
-    space0_around_ee, space0_before, space0_before_e, space0_e, space1, space1_around,
-    space1_before, spaces_exactly,
+    line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_ee,
+    space0_before, space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -1046,14 +1045,15 @@ mod when {
             and!(
                 when_with_indent(),
                 skip_second!(
-                    space0_around_e(
+                    space0_around_ee(
                         loc!(specialize_ref(
                             When::Syntax,
                             move |arena, state| parse_expr(min_indent, arena, state)
                         )),
                         min_indent,
                         When::Space,
-                        When::IndentCondition
+                        When::IndentCondition,
+                        When::IndentIs,
                     ),
                     parser::keyword_e(keyword::IS, When::Is)
                 )
@@ -1199,13 +1199,14 @@ mod when {
                     skip_first!(
                         parser::keyword_e(keyword::IF, When::IfToken),
                         // TODO we should require space before the expression but not after
-                        space0_around_e(
+                        space0_around_ee(
                             loc!(specialize_ref(When::IfGuard, move |arena, state| {
                                 parse_expr(min_indent, arena, state)
                             })),
                             min_indent,
                             When::Space,
                             When::IndentIfGuard,
+                            When::IndentArrow,
                         )
                     ),
                     Some
@@ -1251,6 +1252,49 @@ mod when {
     }
 }
 
+fn if_branch<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, (Located<Expr<'a>>, Located<Expr<'a>>), If<'a>> {
+    move |arena, state| {
+        // NOTE: only parse spaces before the expression
+        let (_, cond, state) = space0_around_ee(
+            specialize_ref(
+                If::Syntax,
+                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            min_indent,
+            If::Space,
+            If::IndentCondition,
+            If::IndentThenToken,
+        )
+        .parse(arena, state)
+        .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let (_, _, state) = parser::keyword_e(keyword::THEN, If::Then)
+            .parse(arena, state)
+            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let (_, then_branch, state) = space0_around_ee(
+            specialize_ref(
+                If::Syntax,
+                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            min_indent,
+            If::Space,
+            If::IndentThenBranch,
+            If::IndentElseToken,
+        )
+        .parse(arena, state)
+        .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let (_, _, state) = parser::keyword_e(keyword::ELSE, If::Else)
+            .parse(arena, state)
+            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        Ok((MadeProgress, (cond, then_branch), state))
+    }
+}
+
 pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
     move |arena: &'a Bump, state| {
         let (_, _, state) = parser::keyword_e(keyword::IF, If::If).parse(arena, state)?;
@@ -1260,38 +1304,7 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
         let mut loop_state = state;
 
         let state_final_else = loop {
-            let state = loop_state;
-            let (_, cond, state) = space0_around_e(
-                specialize_ref(
-                    If::Syntax,
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                ),
-                min_indent,
-                If::Space,
-                If::IndentCondition,
-            )
-            .parse(arena, state)
-            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
-
-            let (_, _, state) = parser::keyword_e(keyword::THEN, If::Then)
-                .parse(arena, state)
-                .map_err(|(_, f, s)| (MadeProgress, f, s))?;
-
-            let (_, then_branch, state) = space0_around_e(
-                specialize_ref(
-                    If::Syntax,
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                ),
-                min_indent,
-                If::Space,
-                If::IndentThen,
-            )
-            .parse(arena, state)
-            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
-
-            let (_, _, state) = parser::keyword_e(keyword::ELSE, If::Else)
-                .parse(arena, state)
-                .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+            let (_, (cond, then_branch), state) = if_branch(min_indent).parse(arena, loop_state)?;
 
             branches.push((cond, then_branch));
 
@@ -1318,7 +1331,7 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
             ),
             min_indent,
             If::Space,
-            If::IndentElse,
+            If::IndentElseBranch,
         )
         .parse(arena, state_final_else)
         .map_err(|(_, f, s)| (MadeProgress, f, s))?;
