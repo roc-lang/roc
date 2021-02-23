@@ -440,6 +440,7 @@ pub enum If<'a> {
     Syntax(&'a SyntaxError<'a>, Row, Col),
 
     IndentCondition(Row, Col),
+    IndentIf(Row, Col),
     IndentThen(Row, Col),
     IndentElse(Row, Col),
 

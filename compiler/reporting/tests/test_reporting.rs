@@ -801,35 +801,36 @@ mod test_reporting {
         )
     }
 
-    // #[test]
-    // fn if_3_branch_mismatch() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //             if True then 2 else if False then 2 else "foo"
-    //             "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //  ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-
-    //             The 2nd branch of this `if` does not match all the previous branches:
-
-    //             1│ if True then 2 else "foo"
-    //                                     ^^^^^
-
-    //             The 2nd branch is a string of type
-
-    //                 Str
-
-    //             But all the previous branches have the type
-
-    //                 Num a
-
-    //             "#
-    //         ),
-    //     )
-    // }
+    #[test]
+    fn if_3_branch_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 if True then 2 else if False then 2 else "foo"
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                The 3rd branch of this `if` does not match all the previous branches:
+                
+                1│  if True then 2 else if False then 2 else "foo"
+                                                             ^^^^^
+                
+                The 3rd branch is a string of type:
+                
+                    Str
+                
+                But all the previous branches have type:
+                
+                    Num a
+                
+                I need all branches in an `if` to have the same type!
+                "#
+            ),
+        )
+    }
 
     #[test]
     fn when_branch_mismatch() {
