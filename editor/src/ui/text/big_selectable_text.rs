@@ -630,18 +630,42 @@ impl MutSelectableLines for BigSelectableText {
     }
 }
 
+impl Default for BigSelectableText {
+    fn default() -> Self {
+        let caret_w_select = CaretWSelect::default();
+        let text_rope = Rope::from_str("");
+        let path_str = "".to_owned();
+        let arena = Bump::new();
+
+        Self {
+            caret_w_select,
+            text_rope,
+            path_str,
+            arena,
+        }
+    }
+}
+
 pub fn from_path(path: &Path) -> UIResult<BigSelectableText> {
-    let caret_w_select = CaretWSelect::default();
     let text_rope = rope_from_path(path)?;
     let path_str = path_to_string(path);
-    let arena = Bump::new();
 
     Ok(BigSelectableText {
-        caret_w_select,
         text_rope,
         path_str,
-        arena,
+        ..Default::default()
     })
+}
+
+#[allow(dead_code)]
+// used by tests but will also be used in the future
+pub fn from_str(text: &str) -> BigSelectableText {
+    let text_rope = Rope::from_str(text);
+
+    BigSelectableText {
+        text_rope,
+        ..Default::default()
+    }
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -684,7 +708,7 @@ impl fmt::Debug for BigSelectableText {
 #[cfg(test)]
 pub mod test_big_sel_text {
     use crate::ui::text::{
-        big_selectable_text,
+        big_selectable_text::from_str,
         big_selectable_text::BigSelectableText,
         caret_w_select::CaretWSelect,
         lines::{Lines, MutSelectableLines, SelectableLines},
@@ -695,9 +719,7 @@ pub mod test_big_sel_text {
     use core::cmp::Ordering;
     use pest::Parser;
     use snafu::OptionExt;
-    use std::{
-        collections::HashMap, fs, io::Write, path::Path, slice::SliceIndex, time::SystemTime,
-    };
+    use std::{collections::HashMap, slice::SliceIndex};
 
     // replace vec methods that return Option with ones that return Result and proper Error
     pub fn slice_get<T>(
@@ -785,25 +807,8 @@ pub mod test_big_sel_text {
         Ok(elt_ref)
     }
 
-    fn big_text_from_str(lines_str: &str) -> BigSelectableText {
-        let epoch_time = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let file_name = format!("temp_{:?}.txt", epoch_time);
-        let path = Path::new(&file_name);
-
-        let mut temp_file = fs::File::create(path).unwrap();
-        temp_file.write_all(lines_str.as_bytes()).unwrap();
-
-        let big_text = big_selectable_text::from_path(path).unwrap();
-        fs::remove_file(path).unwrap();
-
-        big_text
-    }
-
     pub fn big_text_from_dsl_str(lines: &[String]) -> BigSelectableText {
-        big_text_from_str(
+        from_str(
             &lines
                 .iter()
                 .map(|line| line.replace(&['[', ']', '|'][..], ""))

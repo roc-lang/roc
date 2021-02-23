@@ -1327,10 +1327,10 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
 }
 
 pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    debug!(specialize(
+    specialize(
         |e, r, c| SyntaxError::Expr(EExpr::If(e, r, c)),
         if_expr_help(min_indent),
-    ))
+    )
 }
 
 /// This is a helper function for parsing function args.
