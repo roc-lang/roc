@@ -325,7 +325,7 @@ pub fn expr_to_pattern<'a>(
         | Expr::Closure(_, _)
         | Expr::BinOp(_)
         | Expr::Defs(_, _)
-        | Expr::If(_, _, _)
+        | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _, _)
@@ -1281,8 +1281,7 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>
         ),
         |arena: &'a Bump, (condition, (then_branch, else_branch))| {
             Expr::If(
-                &*arena.alloc(condition),
-                &*arena.alloc(then_branch),
+                arena.alloc([(condition, then_branch)]),
                 &*arena.alloc(else_branch),
             )
         }
