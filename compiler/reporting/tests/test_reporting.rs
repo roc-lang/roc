@@ -5002,4 +5002,86 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn list_double_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 2, , 3 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                
+                I am partway through started parsing a list, but I got stuck here:
+                
+                1│  [ 1, 2, , 3 ]
+                            ^
+                
+                I was expecting to see a list entry before this comma, so try adding a
+                list entry and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_without_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 2, 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                
+                I am partway through started parsing a list, but I got stuck here:
+                
+                1│  [ 1, 2, 
+                           ^
+                
+                I was expecting to see a closing square bracket before this, so try
+                adding a ] and see if that helps?
+                
+                Note: When I get stuck like this, it usually means that there is a
+                missing parenthesis or bracket somewhere earlier. It could also be a
+                stray keyword or operator.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_bad_indent() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = [ 1, 2, 
+                ]
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                
+                I cannot find the end of this list:
+                
+                1│  x = [ 1, 2, 
+                               ^
+                
+                You could change it to something like [ 1, 2, 3 ] or even just [].
+                Anything where there is an open and a close square bracket, and where
+                the elements of the list are separated by commas.
+                
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
 }

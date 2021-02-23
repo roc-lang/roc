@@ -394,8 +394,9 @@ pub enum List<'a> {
     Space(BadInputError, Row, Col),
 
     Syntax(&'a SyntaxError<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Row, Col),
 
-    IndentStart(Row, Col),
+    IndentOpen(Row, Col),
     IndentEnd(Row, Col),
 }
 
