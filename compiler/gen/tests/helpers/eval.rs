@@ -48,7 +48,6 @@ pub fn helper<'a>(
     use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
-    let stdlib_mode = stdlib.mode;
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -78,7 +77,7 @@ pub fn helper<'a>(
         test_builtin_defs,
     );
 
-    let mut loaded = loaded.expect("failed to load module");
+    let loaded = loaded.expect("failed to load module");
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
@@ -93,88 +92,88 @@ pub fn helper<'a>(
 
     let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
-    let mut lines = Vec::new();
+    // let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
-    let mut delayed_errors = Vec::new();
+    // let mut delayed_errors = Vec::new();
 
-    for (home, (module_path, src)) in loaded.sources {
-        use roc_reporting::report::{
-            can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
-        };
+    // for (home, (module_path, src)) in loaded.sources {
+    //     use roc_reporting::report::{
+    //         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+    //     };
 
-        let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
-        let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
-        let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
+    //     let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
+    //     let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
+    //     let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
-        let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
+    //     let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
 
-        if error_count == 0 {
-            continue;
-        }
+    //     if error_count == 0 {
+    //         continue;
+    //     }
 
-        let src_lines: Vec<&str> = src.split('\n').collect();
-        let palette = DEFAULT_PALETTE;
+    //     let src_lines: Vec<&str> = src.split('\n').collect();
+    //     let palette = DEFAULT_PALETTE;
 
-        // Report parsing and canonicalization problems
-        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+    //     // Report parsing and canonicalization problems
+    //     let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-        use roc_problem::can::Problem::*;
-        for problem in can_problems.into_iter() {
-            // Ignore "unused" problems
-            match problem {
-                UnusedDef(_, _)
-                | UnusedArgument(_, _, _)
-                | UnusedImport(_, _)
-                | RuntimeError(_)
-                | UnsupportedPattern(_, _)
-                | ExposedButNotDefined(_) => {
-                    let report = can_problem(&alloc, module_path.clone(), problem);
-                    let mut buf = String::new();
+    //     use roc_problem::can::Problem::*;
+    //     for problem in can_problems.into_iter() {
+    //         // Ignore "unused" problems
+    //         match problem {
+    //             UnusedDef(_, _)
+    //             | UnusedArgument(_, _, _)
+    //             | UnusedImport(_, _)
+    //             | RuntimeError(_)
+    //             | UnsupportedPattern(_, _)
+    //             | ExposedButNotDefined(_) => {
+    //                 let report = can_problem(&alloc, module_path.clone(), problem);
+    //                 let mut buf = String::new();
 
-                    report.render_color_terminal(&mut buf, &alloc, &palette);
+    //                 report.render_color_terminal(&mut buf, &alloc, &palette);
 
-                    delayed_errors.push(buf.clone());
-                    lines.push(buf);
-                }
-                _ => {
-                    let report = can_problem(&alloc, module_path.clone(), problem);
-                    let mut buf = String::new();
+    //                 delayed_errors.push(buf.clone());
+    //                 lines.push(buf);
+    //             }
+    //             _ => {
+    //                 let report = can_problem(&alloc, module_path.clone(), problem);
+    //                 let mut buf = String::new();
 
-                    report.render_color_terminal(&mut buf, &alloc, &palette);
+    //                 report.render_color_terminal(&mut buf, &alloc, &palette);
 
-                    lines.push(buf);
-                }
-            }
-        }
+    //                 lines.push(buf);
+    //             }
+    //         }
+    //     }
 
-        for problem in type_problems {
-            let report = type_problem(&alloc, module_path.clone(), problem);
-            let mut buf = String::new();
+    //     for problem in type_problems {
+    //         let report = type_problem(&alloc, module_path.clone(), problem);
+    //         let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+    //         report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            lines.push(buf);
-        }
+    //         lines.push(buf);
+    //     }
 
-        for problem in mono_problems {
-            let report = mono_problem(&alloc, module_path.clone(), problem);
-            let mut buf = String::new();
+    //     for problem in mono_problems {
+    //         let report = mono_problem(&alloc, module_path.clone(), problem);
+    //         let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+    //         report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            delayed_errors.push(buf.clone());
-            lines.push(buf);
-        }
-    }
+    //         delayed_errors.push(buf.clone());
+    //         lines.push(buf);
+    //     }
+    // }
 
-    if !lines.is_empty() {
-        println!("{}", lines.join("\n"));
+    // if !lines.is_empty() {
+    // println!("{}", lines.join("\n"));
 
-        // only crash at this point if there were no delayed_errors
-        if delayed_errors.is_empty() {
-            assert_eq!(0, 1, "Mistakes were made");
-        }
-    }
+    // only crash at this point if there were no delayed_errors
+    // if delayed_errors.is_empty() {
+    // assert_eq!(0, 1, "Mistakes were made");
+    // }
+    // }
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(found) => found.clone(),
@@ -191,15 +190,16 @@ pub fn helper<'a>(
     module.strip_debug_info();
 
     let builder = context.create_builder();
-    let opt_level = if cfg!(debug_assertions) {
-        roc_gen::llvm::build::OptLevel::Normal
-    } else {
-        roc_gen::llvm::build::OptLevel::Optimize
-    };
+    // let opt_level = if cfg!(debug_assertions) {
+    //     roc_gen::llvm::build::OptLevel::Normal
+    // } else {
+    //     roc_gen::llvm::build::OptLevel::Optimize
+    // };
+    let opt_level = roc_gen::llvm::build::OptLevel::Normal;
 
     let module = arena.alloc(module);
-    let (module_pass, function_pass) =
-        roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+    // let (module_pass, function_pass) =
+    // roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
 
@@ -270,33 +270,33 @@ pub fn helper<'a>(
         // call finalize() before any code generation/verification
         env.dibuilder.finalize();
 
-        if fn_val.verify(true) {
-            function_pass.run_on(&fn_val);
-        } else {
-            use roc_builtins::std::Mode;
+        // if fn_val.verify(true) {
+        // function_pass.run_on(&fn_val);
+        // } else {
+        //     use roc_builtins::std::Mode;
 
-            let mode = match stdlib_mode {
-                Mode::Uniqueness => "OPTIMIZED",
-                Mode::Standard => "NON-OPTIMIZED",
-            };
+        //     let mode = match stdlib_mode {
+        //         Mode::Uniqueness => "OPTIMIZED",
+        //         Mode::Standard => "NON-OPTIMIZED",
+        //     };
 
-            eprintln!(
-                "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
+        //     eprintln!(
+        //         "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
+        //         fn_val.get_name().to_str().unwrap(),
+        //         mode,
+        //     );
 
-            // fn_val.print_to_stderr();
-            // module.print_to_stderr();
+        //     // fn_val.print_to_stderr();
+        //     // module.print_to_stderr();
 
-            panic!(
-                "The preceding code was from {:?}, which failed LLVM verification in {} build.",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
-        }
+        //     panic!(
+        //         "The preceding code was from {:?}, which failed LLVM verification in {} build.",
+        //         fn_val.get_name().to_str().unwrap(),
+        //         mode,
+        //     );
+        // }
     }
-    let (main_fn_name, main_fn) = roc_gen::llvm::build::promote_to_main_function(
+    let (main_fn_name, _main_fn) = roc_gen::llvm::build::promote_to_main_function(
         &env,
         &mut layout_ids,
         main_fn_symbol,
@@ -308,18 +308,18 @@ pub fn helper<'a>(
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    if main_fn.verify(true) {
-        function_pass.run_on(&main_fn);
-    } else {
-        panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
-    }
+    // if main_fn.verify(true) {
+    // function_pass.run_on(&main_fn);
+    // } else {
+    // panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
+    // }
 
-    module_pass.run_on(env.module);
+    // module_pass.run_on(env.module);
 
     // Verify the module
-    if let Err(errors) = env.module.verify() {
-        panic!("Errors defining module: {:?}", errors);
-    }
+    // if let Err(errors) = env.module.verify() {
+    // panic!("Errors defining module: {:?}", errors);
+    // }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -334,7 +334,7 @@ pub fn helper<'a>(
 
     report_timing("Generate LLVM IR", code_gen);
     report_timing("Generate and load dynlib", gen_dylib_file);
-    (main_fn_name, delayed_errors.join("\n"), lib)
+    (main_fn_name, "".to_owned(), lib)
 }
 
 #[macro_export]
