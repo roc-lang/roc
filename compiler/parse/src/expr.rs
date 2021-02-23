@@ -3,7 +3,7 @@ use crate::ast::{
 };
 use crate::blankspace::{
     line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_e,
-    space0_before, space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
+    space0_before, space0_before_e, space0_e, space1, space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -1240,33 +1240,59 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
 
         let mut branches = Vec::with_capacity_in(1, arena);
 
-        let (_, cond, state) = space0_around_e(
-            specialize_ref(
-                If::Syntax,
-                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-            ),
-            min_indent,
-            If::Space,
-            If::IndentCondition,
-        )
-        .parse(arena, state)?;
+        let mut loop_state = state;
 
-        let (_, _, state) = parser::keyword_e(keyword::THEN, If::Then).parse(arena, state)?;
+        let state_final_else = loop {
+            let state = loop_state;
+            let (_, cond, state) = space0_around_e(
+                specialize_ref(
+                    If::Syntax,
+                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                ),
+                min_indent,
+                If::Space,
+                If::IndentCondition,
+            )
+            .parse(arena, state)
+            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
-        let (_, then_branch, state) = space0_around_e(
-            specialize_ref(
-                If::Syntax,
-                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-            ),
-            min_indent,
-            If::Space,
-            If::IndentThen,
-        )
-        .parse(arena, state)?;
+            let (_, _, state) = parser::keyword_e(keyword::THEN, If::Then)
+                .parse(arena, state)
+                .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
-        let (_, _, state) = parser::keyword_e(keyword::ELSE, If::Else).parse(arena, state)?;
+            let (_, then_branch, state) = space0_around_e(
+                specialize_ref(
+                    If::Syntax,
+                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                ),
+                min_indent,
+                If::Space,
+                If::IndentThen,
+            )
+            .parse(arena, state)
+            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
-        branches.push((cond, then_branch));
+            let (_, _, state) = parser::keyword_e(keyword::ELSE, If::Else)
+                .parse(arena, state)
+                .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+            branches.push((cond, then_branch));
+
+            // try to parse another `if`
+            // NOTE this drops spaces between the `else` and the `if`
+            let optional_if = and!(
+                backtrackable(space0_e(min_indent, If::Space, If::IndentIf)),
+                parser::keyword_e(keyword::IF, If::If)
+            );
+
+            match optional_if.parse(arena, state) {
+                Err((_, _, state)) => break state,
+                Ok((_, _, state)) => {
+                    loop_state = state;
+                    continue;
+                }
+            }
+        };
 
         let (_, else_branch, state) = space0_before_e(
             specialize_ref(
@@ -1277,9 +1303,9 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
             If::Space,
             If::IndentElse,
         )
-        .parse(arena, state)?;
+        .parse(arena, state_final_else)
+        .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
-        // parse the final else
         let expr = Expr::If(branches.into_bump_slice(), arena.alloc(else_branch));
 
         Ok((MadeProgress, expr, state))
@@ -1287,10 +1313,10 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
 }
 
 pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(
+    debug!(specialize(
         |e, r, c| SyntaxError::Expr(EExpr::If(e, r, c)),
         if_expr_help(min_indent),
-    )
+    ))
 }
 
 /// This is a helper function for parsing function args.
