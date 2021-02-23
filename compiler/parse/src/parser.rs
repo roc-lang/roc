@@ -381,6 +381,7 @@ pub enum EExpr<'a> {
     If(If<'a>, Row, Col),
 
     Lambda(ELambda<'a>, Row, Col),
+    List(List<'a>, Row, Col),
 
     // EInParens(PInParens<'a>, Row, Col),
     IndentStart(Row, Col),
@@ -401,6 +402,18 @@ pub enum ELambda<'a> {
     IndentArrow(Row, Col),
     IndentBody(Row, Col),
     IndentArg(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum List<'a> {
+    Open(Row, Col),
+    End(Row, Col),
+    Space(BadInputError, Row, Col),
+
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    IndentStart(Row, Col),
+    IndentEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
