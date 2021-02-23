@@ -1,5 +1,5 @@
 use crate::ast::{AssignedField, Tag, TypeAnnotation};
-use crate::blankspace::{space0_around_e, space0_before_e, space0_e};
+use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
@@ -146,11 +146,12 @@ fn loc_type_in_parens<'a>(
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, TInParens<'a>> {
     between!(
         word1(b'(', TInParens::Open),
-        space0_around_e(
+        space0_around_ee(
             move |arena, state| specialize_ref(TInParens::Type, expression(min_indent))
                 .parse(arena, state),
             min_indent,
             TInParens::Space,
+            TInParens::IndentOpen,
             TInParens::IndentEnd,
         ),
         word1(b')', TInParens::End)
@@ -436,11 +437,12 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
         let (p2, rest, state) = zero_or_more!(skip_first!(
             word1(b',', Type::TFunctionArgument),
             one_of![
-                space0_around_e(
+                space0_around_ee(
                     term(min_indent),
                     min_indent,
                     Type::TSpace,
-                    Type::TIndentStart
+                    Type::TIndentStart,
+                    Type::TIndentEnd
                 ),
                 |_, state: State<'a>| Err((
                     NoProgress,

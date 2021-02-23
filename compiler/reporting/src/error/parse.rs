@@ -158,7 +158,9 @@ enum Context {
 enum Node {
     WhenCondition,
     WhenBranch,
-    // WhenIfGuard,
+    IfCondition,
+    IfThenBranch,
+    IfElseBranch,
 }
 
 fn to_expr_report<'a>(
@@ -173,7 +175,127 @@ fn to_expr_report<'a>(
 
     match parse_problem {
         EExpr::When(when, row, col) => to_when_report(alloc, filename, context, &when, *row, *col),
+        EExpr::If(when, row, col) => to_if_report(alloc, filename, context, &when, *row, *col),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_if_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    context: Context,
+    parse_problem: &roc_parse::parser::If<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::If;
+
+    match *parse_problem {
+        If::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        If::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        If::Condition(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::IfCondition, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        If::ThenBranch(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::IfThenBranch, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        If::ElseBranch(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::IfElseBranch, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        If::If(_row, _col) => unreachable!("another branch would be taken"),
+        If::IndentIf(_row, _col) => unreachable!("another branch would be taken"),
+
+        If::Then(row, col) | If::IndentThenBranch(row, col) | If::IndentThenToken(row, col) => {
+            to_unfinished_if_report(
+                alloc,
+                filename,
+                row,
+                col,
+                start_row,
+                start_col,
+                alloc.concat(vec![
+                    alloc.reflow(r"I was expecting to see the "),
+                    alloc.keyword("then"),
+                    alloc.reflow(r" keyword next."),
+                ]),
+            )
+        }
+
+        If::Else(row, col) | If::IndentElseBranch(row, col) | If::IndentElseToken(row, col) => {
+            to_unfinished_if_report(
+                alloc,
+                filename,
+                row,
+                col,
+                start_row,
+                start_col,
+                alloc.concat(vec![
+                    alloc.reflow(r"I was expecting to see the "),
+                    alloc.keyword("else"),
+                    alloc.reflow(r" keyword next."),
+                ]),
+            )
+        }
+
+        If::IndentCondition(row, col) => to_unfinished_if_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting to see a expression next")
+            ]),
+        ),
+    }
+}
+
+fn to_unfinished_if_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    row: Row,
+    col: Col,
+    start_row: Row,
+    start_col: Col,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+    let region = Region::from_row_col(row, col);
+
+    let doc = alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.reflow(r"I was partway through parsing an "),
+            alloc.keyword("if"),
+            alloc.reflow(r" expression, but I got stuck here:"),
+        ]),
+        alloc.region_with_subregion(surroundings, region),
+        message,
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED IF".to_string(),
     }
 }
 
@@ -781,6 +903,23 @@ fn to_type_report<'a>(
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED TYPE".to_string(),
+            }
+        }
+
+        Type::TIndentEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a type, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.note("I may be confused by indentation"),
             ]);

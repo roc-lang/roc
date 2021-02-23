@@ -423,10 +423,10 @@ pub enum If<'a> {
 
     IndentCondition(Row, Col),
     IndentIf(Row, Col),
-    IndentThen(Row, Col),
-    IndentElse(Row, Col),
-
-    PatternAlignment(u16, Row, Col),
+    IndentThenToken(Row, Col),
+    IndentElseToken(Row, Col),
+    IndentThenBranch(Row, Col),
+    IndentElseBranch(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1452,10 +1452,11 @@ macro_rules! collection_trailing_sep_e {
                                     and!(
                                         $crate::parser::trailing_sep_by0(
                                             $delimiter,
-                                            $crate::blankspace::space0_around_e(
+                                            $crate::blankspace::space0_around_ee(
                                                 $elem,
                                                 $min_indent,
                                                 $space_problem,
+                                                $indent_problem,
                                                 $indent_problem
                                             )
                                         ),
