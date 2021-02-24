@@ -358,6 +358,7 @@ struct ModuleCache<'a> {
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
 
     /// Various information
+    imports: MutMap<ModuleId, MutSet<ModuleId>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
@@ -1640,6 +1641,18 @@ fn update<'a>(
             state
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
+
+            state
+                .module_cache
+                .imports
+                .entry(header.module_id)
+                .or_default()
+                .extend(
+                    header
+                        .package_qualified_imported_modules
+                        .iter()
+                        .map(|x| *x.as_inner()),
+                );
 
             work.extend(state.dependencies.add_module(
                 header.module_id,
