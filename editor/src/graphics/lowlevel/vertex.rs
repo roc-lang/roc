@@ -4,7 +4,6 @@ use cgmath::Vector2;
 
 #[derive(Copy, Clone)]
 pub struct Vertex {
-    #[allow(dead_code)]
     pub position: Vector2<f32>,
     pub color: [f32; 4],
 }
