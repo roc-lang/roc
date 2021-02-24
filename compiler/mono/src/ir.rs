@@ -5725,8 +5725,11 @@ fn call_by_pointer<'a>(
         // cause issues. The caller (which is here) doesn't know whether the called is a closure
         // so we're safe rather than sorry for now. Hopefully we can figure out how to call by name
         // more in the future
+        let is_thunk =
+            procs.module_thunks.contains(&symbol) || procs.imported_module_thunks.contains(&symbol);
+
         match layout {
-            Layout::FunctionPointer(arg_layouts, ret_layout) if false => {
+            Layout::FunctionPointer(arg_layouts, ret_layout) if !is_thunk => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
                     let name = env.unique_symbol();
                     let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
