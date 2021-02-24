@@ -5,7 +5,7 @@ use super::rect::Rect;
 use crate::editor::syntax_highlight;
 use crate::graphics::colors;
 use crate::graphics::colors::RgbaTup;
-use crate::graphics::style::{DEFAULT_FONT_SIZE, CODE_TXT_XY};
+use crate::graphics::style::{CODE_TXT_XY, DEFAULT_FONT_SIZE};
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};

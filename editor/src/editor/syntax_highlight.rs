@@ -1,7 +1,7 @@
 use crate::editor::colors as ed_colors;
-use ed_colors::SyntaxHighlightTheme;
 use crate::graphics::colors as gr_colors;
 use crate::graphics::primitives;
+use ed_colors::SyntaxHighlightTheme;
 use gr_colors::RgbaTup;
 
 //TODO optimize memory allocation

@@ -6,12 +6,12 @@ use wgpu_glyph::GlyphBrush;
 use winit::dpi::PhysicalSize;
 
 use crate::{
+    editor::settings::Settings,
     graphics::{
-        primitives::text::{queue_code_text_draw, Text},
         colors,
+        primitives::text::{queue_code_text_draw, Text},
     },
     lang::{ast::Expr2, expr::Env},
-    editor::settings::Settings,
 };
 
 fn pool_str_len<'a>(env: &Env<'a>, pool_str: &PoolStr) -> usize {

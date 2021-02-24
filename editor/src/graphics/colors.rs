@@ -1,4 +1,3 @@
-
 use palette::{Hsv, LinSrgb};
 
 pub type RgbaTup = (f32, f32, f32, f32);
@@ -22,13 +21,11 @@ pub fn from_hsb(hue: usize, saturation: usize, brightness: usize) -> RgbaTup {
 }
 
 pub fn from_hsba(hue: usize, saturation: usize, brightness: usize, alpha: f32) -> RgbaTup {
-    let rgb = LinSrgb::from(
-                Hsv::new(
-                    hue as f32,
-                    (saturation as f32)/100.0,
-                    (brightness as f32)/100.0
-                )
-            );
+    let rgb = LinSrgb::from(Hsv::new(
+        hue as f32,
+        (saturation as f32) / 100.0,
+        (brightness as f32) / 100.0,
+    ));
 
     (rgb.red, rgb.green, rgb.blue, alpha)
 }

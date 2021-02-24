@@ -1,5 +1,5 @@
 use crate::graphics::colors as gr_colors;
-use gr_colors::{RgbaTup, from_hsb};
+use gr_colors::{from_hsb, RgbaTup};
 
 pub struct UITheme {
     pub light_brand: RgbaTup,

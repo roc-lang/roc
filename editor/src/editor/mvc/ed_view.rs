@@ -12,7 +12,11 @@ use snafu::ensure;
 
 //TODO add editor text here as well
 
-pub fn create_ed_rects<'a>(ed_model: &EdModel, ui_theme:&UITheme, arena: &'a Bump) -> UIResult<BumpVec<'a, Rect>> {
+pub fn create_ed_rects<'a>(
+    ed_model: &EdModel,
+    ui_theme: &UITheme,
+    arena: &'a Bump,
+) -> UIResult<BumpVec<'a, Rect>> {
     ensure!(ed_model.glyph_dim_rect_opt.is_some(), MissingGlyphDims {});
 
     let glyph_rect = ed_model.glyph_dim_rect_opt.unwrap();

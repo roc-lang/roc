@@ -1,24 +1,21 @@
 use super::keyboard_input;
 use crate::editor::{
-    ed_error::{print_err, print_ui_err},
     colors::EdTheme,
+    ed_error::{print_err, print_ui_err},
     mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view},
     settings::Settings,
 };
 use crate::graphics::{
     colors::to_wgpu_color,
+    lowlevel::buffer::create_rect_buffers,
+    lowlevel::ortho::update_ortho_buffer,
+    lowlevel::pipelines,
     primitives::text::{
         build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw, Text,
     },
-    lowlevel::buffer::create_rect_buffers, lowlevel::ortho::update_ortho_buffer,
-    lowlevel::pipelines, style::CODE_TXT_XY,
+    style::CODE_TXT_XY,
 };
-use crate::ui::{
-    text::lines::Lines,
-    text::text_pos::TextPos,
-    ui_error::UIResult,
-    colors::UITheme
-};
+use crate::ui::{colors::UITheme, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};
 //use crate::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool, scope::Scope};
@@ -391,7 +388,7 @@ fn draw_all_rects(
 fn begin_render_pass<'a>(
     encoder: &'a mut CommandEncoder,
     texture_view: &'a TextureView,
-    ed_theme: &EdTheme
+    ed_theme: &EdTheme,
 ) -> RenderPass<'a> {
     let bg_color = to_wgpu_color(ed_theme.background);
 
