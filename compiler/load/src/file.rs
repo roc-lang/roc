@@ -1620,8 +1620,6 @@ fn update<'a>(
             match header_extra {
                 App { to_platform } => {
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                    debug_assert!(header.is_root_module);
-
                     state.platform_path = PlatformPath::Valid(to_platform.clone());
                 }
                 PkgConfig { .. } => {
