@@ -359,6 +359,7 @@ struct ModuleCache<'a> {
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
@@ -1916,6 +1917,13 @@ fn update<'a>(
                     }
                 }
             }
+
+            state
+                .module_cache
+                .top_level_thunks
+                .entry(module_id)
+                .or_default()
+                .extend(procs.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
                 layout_cache,
