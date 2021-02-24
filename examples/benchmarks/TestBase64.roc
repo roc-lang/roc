@@ -7,7 +7,6 @@ IO a : Task.Task a []
 
 main : IO {}
 main =
-    # when fromBytes [ 0 ] is
     when Base64.fromBytes (Str.toBytes "Hello World") is
         Ok str ->
             Task.putLine str

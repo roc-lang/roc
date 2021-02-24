@@ -1018,9 +1018,9 @@ fn fromUtf8(allocator: *Allocator, arg: RocList) FromUtf8Result {
     } else {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
 
-        // TODO what should we do RC-wise here
-        // const data_bytes = arg.len();
-        // utils.decref(allocator, @alignOf(usize), arg.list_bytes, data_bytes);
+        // consume the input list
+        const data_bytes = arg.len();
+        utils.decref(allocator, @alignOf(usize), arg.bytes, data_bytes);
 
         return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
     }
