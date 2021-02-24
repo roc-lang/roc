@@ -1,68 +1,41 @@
-use crate::editor::colors as ed_colors;
 use crate::graphics::colors as gr_colors;
-use crate::graphics::primitives;
-use ed_colors::SyntaxHighlightTheme;
-use gr_colors::RgbaTup;
+use gr_colors::{from_hsb, RgbaTup};
+use std::collections::HashMap;
 
-//TODO optimize memory allocation
-//TODO this is a demo function, the AST should be used for highlighting, see #904.
-pub fn highlight_code(
-    code_text: &primitives::text::Text,
-    all_text_tups: &mut Vec<(String, RgbaTup)>,
-    syntax_theme: &SyntaxHighlightTheme,
-) {
-    let split_code = split_inclusive(&code_text.text);
-
-    let mut active_color = gr_colors::WHITE;
-    let mut same_type_str = String::new();
-
-    for token_seq in split_code {
-        let new_word_color = if token_seq.contains(&'\"'.to_string()) {
-            syntax_theme.string
-        } else if token_seq.contains(&'='.to_string()) {
-            syntax_theme.operator
-        } else {
-            syntax_theme.code
-        };
-
-        if new_word_color != active_color {
-            all_text_tups.push((same_type_str, active_color));
-
-            active_color = new_word_color;
-            same_type_str = String::new();
-        }
-
-        same_type_str.push_str(&token_seq);
-    }
-
-    if !same_type_str.is_empty() {
-        all_text_tups.push((same_type_str, active_color));
-    }
+#[derive(Hash, Eq, PartialEq, Copy, Clone)]
+pub enum HighlightStyle {
+    Operator, // =+-<>...
+    String,
+    FunctionName,
+    Type,
+    Bracket,
+    Number,
+    PackageRelated, // app, packages, imports, exposes, provides...
+    Variable,
+    RecordField,
 }
 
-//TODO use rust's split_inclusive once rust 1.50 is released
-fn split_inclusive(code_str: &str) -> Vec<String> {
-    let mut split_vec: Vec<String> = Vec::new();
-    let mut temp_str = String::new();
-    let mut non_space_encountered = false;
+pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
+    use HighlightStyle::*;
 
-    for token in code_str.chars() {
-        if token != ' ' && token != '\n' {
-            non_space_encountered = true;
-            temp_str.push(token);
-        } else if non_space_encountered {
-            split_vec.push(temp_str);
-            temp_str = String::new();
-            temp_str.push(token);
-            non_space_encountered = false;
-        } else {
-            temp_str.push(token);
-        }
-    }
+    let mut highlight_map = HashMap::new();
+    [
+        (Operator, gr_colors::WHITE),
+        (String, from_hsb(346, 65, 97)),
+        (FunctionName, gr_colors::WHITE),
+        (Type, gr_colors::WHITE),
+        (Bracket, from_hsb(347, 80, 100)),
+        (Number, from_hsb(185, 50, 75)),
+        (PackageRelated, gr_colors::WHITE),
+        (Variable, gr_colors::WHITE),
+        (RecordField, from_hsb(258, 50, 90)),
+        // comment from_hsb(285, 6, 47) or 186, 35, 40
+    ].iter()
+    .for_each(
+        |tup| {highlight_map.insert(tup.0, tup.1);}
+    );
 
-    if !temp_str.is_empty() {
-        split_vec.push(temp_str);
-    }
+   
 
-    split_vec
+    highlight_map
 }

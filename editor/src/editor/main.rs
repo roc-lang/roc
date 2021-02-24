@@ -1,9 +1,9 @@
 use super::keyboard_input;
 use crate::editor::{
-    colors::EdTheme,
+    theme::EdTheme,
     ed_error::{print_err, print_ui_err},
     mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view},
-    settings::Settings,
+    config::Config,
 };
 use crate::graphics::{
     colors::to_wgpu_color,
@@ -11,11 +11,11 @@ use crate::graphics::{
     lowlevel::ortho::update_ortho_buffer,
     lowlevel::pipelines,
     primitives::text::{
-        build_glyph_brush, example_code_glyph_rect, queue_code_text_draw, queue_text_draw, Text,
+        build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text,
     },
     style::CODE_TXT_XY,
 };
-use crate::ui::{colors::UITheme, text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};
+use crate::ui::{text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};
 //use crate::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool, scope::Scope};
@@ -153,7 +153,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut rects_arena = Bump::new();
     let mut ast_arena = Bump::new();
 
-    let settings = Settings::default();
+    let config = Config::default();
     let ed_theme = EdTheme::default();
 
     // Render loop
@@ -258,8 +258,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &size,
                         &ed_model.text.all_lines(&arena),
                         ed_model.text.caret_w_select.caret_pos,
-                        &ed_theme,
-                        &settings,
+                        &config,
                         &mut glyph_brush,
                     );
                 } else {
@@ -289,7 +288,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
                         &arena,
-                        "{ a: 1, b: 2, c: {x: 3, y: 4} }",
+                        "{ population: 5437, coords: {x: 3.637, y: 4}, style: \"Functional\" }",
                         &mut env,
                         &mut scope,
                         region,
@@ -302,7 +301,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &expr2,
                         &size,
                         CODE_TXT_XY.into(),
-                        &settings,
+                        &config,
                         &mut glyph_brush,
                     );
                 }
@@ -405,25 +404,22 @@ fn begin_render_pass<'a>(
     })
 }
 
-// returns bounding boxes for every glyph
 fn queue_editor_text(
     size: &PhysicalSize<u32>,
-    editor_lines: &str,
+    _editor_lines: &str,
     caret_pos: TextPos,
-    ed_theme: &EdTheme,
-    settings: &Settings,
+    config: &Config,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
-    let code_text = Text {
-        position: CODE_TXT_XY.into(),
-        area_bounds,
-        color: ed_theme.syntax_high_theme.code,
-        text: editor_lines,
-        size: settings.code_font_size,
-        ..Default::default()
-    };
+    // let code_text = Text {
+    //     position: CODE_TXT_XY.into(),
+    //     area_bounds,
+    //     text: editor_lines,
+    //     size: settings.code_font_size,
+    //     ..Default::default()
+    // };
 
     let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
     let text = s.as_str();
@@ -431,7 +427,7 @@ fn queue_editor_text(
     let caret_pos_label = Text {
         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
         area_bounds,
-        color: ed_theme.ui_theme.text,
+        color: config.ed_theme.ui_theme.text,
         text,
         size: 25.0,
         ..Default::default()
@@ -439,15 +435,15 @@ fn queue_editor_text(
 
     queue_text_draw(&caret_pos_label, glyph_brush);
 
-    queue_code_text_draw(&code_text, glyph_brush);
+    // TODO convert to ast and render with render_ast::render_expr2
+    //queue_code_text_draw(&code_text, &ed_theme.syntax_high_map, settings, glyph_brush);
 }
 
 fn _queue_no_file_text(
     size: &PhysicalSize<u32>,
     text: &str,
     text_coords: Vector2<f32>,
-    ui_theme: &UITheme,
-    settings: &Settings,
+    config: &Config,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
     let area_bounds = (size.width as f32, size.height as f32).into();
@@ -455,9 +451,9 @@ fn _queue_no_file_text(
     let code_text = Text {
         position: text_coords,
         area_bounds,
-        color: ui_theme.text,
+        color: config.ed_theme.ui_theme.text,
         text,
-        size: settings.code_font_size,
+        size: config.code_font_size,
         ..Default::default()
     };
 

@@ -1,7 +1,7 @@
 use super::ed_model::EdModel;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::{
-    colors::UITheme,
+    theme::UITheme,
     text::{selection::create_selection_rects, text_pos::TextPos},
     ui_error::{MissingGlyphDims, UIResult},
 };

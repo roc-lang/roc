@@ -1,6 +1,6 @@
 use super::lines::Lines;
 use super::text_pos::TextPos;
-use crate::ui::colors::UITheme;
+use crate::ui::theme::UITheme;
 use crate::ui::ui_error::{InvalidSelection, UIResult};
 use bumpalo::collections::Vec as BumpVec;
 use snafu::ensure;
