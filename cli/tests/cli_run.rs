@@ -247,7 +247,7 @@ mod cli_run {
             &example_file("benchmarks", "TestBase64.roc"),
             "test-base64",
             &[],
-            "SGVsbG8gV29ybGQ=",
+            "SGVsbG8gV29ybGQ=\n",
             true,
         );
     }
