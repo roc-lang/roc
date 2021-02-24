@@ -2950,6 +2950,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
+ "ven_pretty",
 ]
 
 [[package]]
