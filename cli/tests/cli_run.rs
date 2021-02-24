@@ -241,6 +241,18 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(base64)]
+    fn base64() {
+        check_output(
+            &example_file("benchmarks", "TestBase64.roc"),
+            "test-base64",
+            &[],
+            "SGVsbG8gV29ybGQ=",
+            true,
+        );
+    }
+
+    #[test]
     #[serial(closure)]
     fn closure() {
         check_output(

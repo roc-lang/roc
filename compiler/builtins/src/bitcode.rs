@@ -41,8 +41,8 @@ pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
 pub const STR_FROM_FLOAT: &str = "roc_builtins.str.from_float";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
-pub const STR_VALIDATE_UTF_BYTES: &str = "roc_builtins.str.validate_utf8_bytes";
 pub const STR_TO_BYTES: &str = "roc_builtins.str.to_bytes";
+pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";

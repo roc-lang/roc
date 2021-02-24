@@ -1598,7 +1598,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 Access {
                     record_var,
                     ext_var: var_store.fresh(),
-                    field: "isOk".into(),
+                    field: "c_isOk".into(),
                     field_var: var_store.fresh(),
                     loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                 },
@@ -1610,7 +1610,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 vec![Access {
                     record_var,
                     ext_var: var_store.fresh(),
-                    field: "str".into(),
+                    field: "b_str".into(),
                     field_var: var_store.fresh(),
                     loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                 }],
@@ -1627,14 +1627,14 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         Access {
                             record_var,
                             ext_var: var_store.fresh(),
-                            field: "problem".into(),
+                            field: "d_problem".into(),
                             field_var: var_store.fresh(),
                             loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                         },
                         Access {
                             record_var,
                             ext_var: var_store.fresh(),
-                            field: "byteIndex".into(),
+                            field: "a_byteIndex".into(),
                             field_var: var_store.fresh(),
                             loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                         },

@@ -15,6 +15,7 @@ const InPlace = packed enum(u8) {
     Clone,
 };
 
+const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = 2 * @sizeOf(usize);
 const blank_small_string: [16]u8 = init_blank_small_string(small_string_size);
 
@@ -982,6 +983,71 @@ fn strToBytes(allocator: *Allocator, arg: RocStr) RocList {
     }
 }
 
+const FromUtf8Result = extern struct {
+    byte_index: usize,
+    string: RocStr,
+    is_ok: bool,
+    problem_code: Utf8ByteProblem,
+};
+
+pub fn fromUtf8C(arg: RocList, output: *FromUtf8Result) callconv(.C) void {
+    output.* = @call(.{ .modifier = always_inline }, fromUtf8, .{ std.heap.c_allocator, arg });
+}
+
+fn fromUtf8(allocator: *Allocator, arg: RocList) FromUtf8Result {
+    const bytes = @ptrCast([*]const u8, arg.bytes)[0..arg.length];
+
+    if (unicode.utf8ValidateSlice(bytes)) {
+        // the output will be correct. Now we need to take ownership of the input
+        if (arg.len() <= SMALL_STR_MAX_LENGTH) {
+            // turn the bytes into a small string
+            const string = RocStr.init(allocator, @ptrCast([*]u8, arg.bytes), arg.len());
+
+            // then decrement the input list
+            const data_bytes = arg.len();
+            utils.decref(allocator, @alignOf(usize), arg.bytes, data_bytes);
+
+            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+        } else {
+            const byte_list = arg.makeUnique(allocator, @alignOf(usize), @sizeOf(u8));
+
+            const string = RocStr{ .str_bytes = byte_list.bytes, .str_len = byte_list.length };
+
+            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+        }
+    } else {
+        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
+
+        // TODO what should we do RC-wise here
+        // const data_bytes = arg.len();
+        // utils.decref(allocator, @alignOf(usize), arg.list_bytes, data_bytes);
+
+        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+    }
+}
+
+fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: Utf8ByteProblem } {
+    var index: usize = 0;
+
+    while (index < length) {
+        const nextNumBytes = numberOfNextCodepointBytes(bytes, length, index) catch |err| {
+            switch (err) {
+                error.UnexpectedEof => {
+                    return .{ .index = index, .problem = Utf8ByteProblem.UnexpectedEndOfSequence };
+                },
+                error.Utf8InvalidStartByte => return .{ .index = index, .problem = Utf8ByteProblem.InvalidStartByte },
+                error.Utf8ExpectedContinuation => return .{ .index = index, .problem = Utf8ByteProblem.ExpectedContinuation },
+                error.Utf8OverlongEncoding => return .{ .index = index, .problem = Utf8ByteProblem.OverlongEncoding },
+                error.Utf8EncodesSurrogateHalf => return .{ .index = index, .problem = Utf8ByteProblem.EncodesSurrogateHalf },
+                error.Utf8CodepointTooLarge => return .{ .index = index, .problem = Utf8ByteProblem.CodepointTooLarge },
+            }
+        };
+        index += nextNumBytes;
+    }
+
+    unreachable;
+}
+
 pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
     const bytes: []u8 = ptr[0..len];
     return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{bytes});
@@ -1019,76 +1085,74 @@ pub const Utf8ByteProblem = packed enum(u8) {
     OverlongEncoding = 4,
     UnexpectedEndOfSequence = 5,
 };
-pub const ValidateUtf8BytesResult = extern struct {
-    is_ok: bool, byte_index: usize, problem_code: Utf8ByteProblem
-};
 
-const is_ok_utf8_byte_response =
-    ValidateUtf8BytesResult{ .is_ok = true, .byte_index = 0, .problem_code = Utf8ByteProblem.UnexpectedEndOfSequence };
-inline fn toErrUtf8ByteResponse(byte_index: usize, problem_code: Utf8ByteProblem) ValidateUtf8BytesResult {
-    return ValidateUtf8BytesResult{ .is_ok = false, .byte_index = byte_index, .problem_code = problem_code };
+fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
+    return fromUtf8(std.testing.allocator, RocList{ .bytes = bytes, .length = length });
 }
 
-// Validate that an array of bytes is valid UTF-8, but if it fails catch & return the error & byte index
-pub fn validateUtf8Bytes(ptr: [*]u8, len: usize) callconv(.C) ValidateUtf8BytesResult {
-    var index: usize = 0;
-    while (index < len) {
-        const nextNumBytes = numberOfNextCodepointBytes(ptr, len, index) catch |err| {
-            return toErrUtf8ByteResponse(
-                index,
-                switch (err) {
-                    error.UnexpectedEof => Utf8ByteProblem.UnexpectedEndOfSequence,
-                    error.Utf8InvalidStartByte => Utf8ByteProblem.InvalidStartByte,
-                    error.Utf8ExpectedContinuation => Utf8ByteProblem.ExpectedContinuation,
-                    error.Utf8OverlongEncoding => Utf8ByteProblem.OverlongEncoding,
-                    error.Utf8EncodesSurrogateHalf => Utf8ByteProblem.EncodesSurrogateHalf,
-                    error.Utf8CodepointTooLarge => Utf8ByteProblem.CodepointTooLarge,
-                },
-            );
-        };
-        index += nextNumBytes;
-    }
-    return is_ok_utf8_byte_response;
+fn validateUtf8BytesX(str: RocList) FromUtf8Result {
+    return fromUtf8(std.testing.allocator, str);
 }
+
+fn expectOk(result: FromUtf8Result) void {
+    expectEqual(result.is_ok, true);
+}
+
+fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
+    var list = RocList.allocate(testing.allocator, @alignOf(usize), length, @sizeOf(u8));
+    @memcpy(list.bytes orelse unreachable, bytes, length);
+    list.length = length;
+
+    return list;
+}
+
+fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
+    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = index, .problem_code = problem };
+}
+
+// NOTE on memory: the validate function consumes a RC token of the input. Since
+// we freshly created it (in `sliceHelp`), it has only one RC token, and input list will be deallocated.
+//
+// If we tested with big strings, we'd have to deallocate the output string, but never the input list
 
 test "validateUtf8Bytes: ascii" {
-    const str_len = 3;
-    var str: [str_len]u8 = "abc".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectEqual(is_ok_utf8_byte_response, validateUtf8Bytes(str_ptr, str_len));
+    expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode œ" {
-    const str_len = 2;
-    var str: [str_len]u8 = "œ".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "œ";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectEqual(is_ok_utf8_byte_response, validateUtf8Bytes(str_ptr, str_len));
+    expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode ∆" {
-    const str_len = 3;
-    var str: [str_len]u8 = "∆".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "∆";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectEqual(is_ok_utf8_byte_response, validateUtf8Bytes(str_ptr, str_len));
+    expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: emoji" {
-    const str_len = 4;
-    var str: [str_len]u8 = "💖".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "💖";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectEqual(is_ok_utf8_byte_response, validateUtf8Bytes(str_ptr, str_len));
+    expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode ∆ in middle of array" {
-    const str_len = 9;
-    var str: [str_len]u8 = "œb∆c¬".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "œb∆c¬";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectEqual(is_ok_utf8_byte_response, validateUtf8Bytes(str_ptr, str_len));
+    expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: invalid start byte" {

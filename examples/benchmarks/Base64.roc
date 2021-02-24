@@ -1,23 +1,6 @@
-app "base64"
-    packages { base: "platform" }
-    imports [base.Task, Bytes.Decode.{Decoder} ]
-    provides [ main ] to base
-
-IO a : Task.Task a []
+interface Base64 exposes [ fromBytes ] imports [ Bytes.Decode ]
 
 Decoder a : Bytes.Decode.Decoder a
-
-main : IO {}
-main =
-    # when fromBytes [ 0 ] is
-    when fromBytes (Str.toBytes "Hello World") is
-        Ok str ->
-            Task.putLine str
-
-        Err _ ->
-            Task.putLine "sadness"
-
-# ------
 
 
 fromBytes : List U8 -> Result Str Bytes.Decode.DecodeError
