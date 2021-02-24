@@ -147,6 +147,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let arena = Bump::new();
 
     let mut rects_arena = Bump::new();
+    let mut ast_arena = Bump::new();
 
     // Render loop
     window.request_redraw();
@@ -255,8 +256,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     );
                 } else {
                     // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
-
-                    let mut pool = Pool::with_capacity(12);
+                    ast_arena.reset();
+                    let mut pool = Pool::with_capacity(1024);
                     let mut var_store = VarStore::default();
                     let dep_idents = IdentIds::exposed_builtins(8);
                     let mut module_ids = ModuleIds::default();
@@ -280,7 +281,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
                         &arena,
-                        "{ x: 2, y: 5 }",
+                        "{ a: 1, b: 2, c: {x: 3, y: 4} }",
                         &mut env,
                         &mut scope,
                         region,
@@ -288,6 +289,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .unwrap();
 
                     super::render_ast::render_expr2(
+                        &ast_arena,
                         &mut env,
                         &expr2,
                         &size,
