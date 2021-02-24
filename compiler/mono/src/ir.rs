@@ -273,6 +273,7 @@ impl ExternalSpecializations {
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
+    pub imported_module_thunks: MutSet<Symbol>,
     pub module_thunks: MutSet<Symbol>,
     pub pending_specializations: Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
@@ -285,6 +286,7 @@ impl<'a> Default for Procs<'a> {
     fn default() -> Self {
         Self {
             partial_procs: MutMap::default(),
+            imported_module_thunks: MutSet::default(),
             module_thunks: MutSet::default(),
             pending_specializations: Some(MutMap::default()),
             specialized: MutMap::default(),
