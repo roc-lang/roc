@@ -646,13 +646,13 @@ mod test_mono {
                     let Test.4 = lowlevel DictEmpty ;
                     ret Test.4;
 
-                procedure Dict.6 (#Attr.2):
+                procedure Dict.8 (#Attr.2):
                     let Test.3 = lowlevel DictSize #Attr.2;
                     ret Test.3;
 
                 procedure Test.0 ():
                     let Test.2 = FunctionPointer Dict.2;
-                    let Test.1 = CallByName Dict.6 Test.2;
+                    let Test.1 = CallByName Dict.8 Test.2;
                     ret Test.1;
                 "#
             ),
@@ -1969,15 +1969,14 @@ mod test_mono {
                         let Test.7 = Index 1 Test.2;
                         let Test.8 = 0i64;
                         let Test.9 = Index 0 Test.7;
+                        dec Test.7;
+                        decref Test.2;
                         let Test.10 = lowlevel Eq Test.8 Test.9;
                         if Test.10 then
-                            let Test.4 = Index 1 Test.2;
                             let Test.3 = 1i64;
-                            decref Test.2;
                             ret Test.3;
                         else
                             let Test.5 = 0i64;
-                            dec Test.2;
                             ret Test.5;
                     else
                         let Test.6 = 0i64;

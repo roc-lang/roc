@@ -24,8 +24,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN ln -s /usr/bin/clang-10 /usr/bin/clang
     # use lld as linker
     RUN ln -s /usr/bin/lld-10 /usr/bin/ld.lld
-    RUN echo "[build]" > $CARGO_HOME/config.toml
-    RUN echo "rustflags = [\"-C\", \"link-arg=-fuse-ld=lld\", \"-C\", \"target-cpu=native\"]" >> $CARGO_HOME/config.tom
+    ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
     RUN apt -y install autotools-dev cmake automake libc6-dbg
     RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
@@ -43,6 +42,9 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN apt -y install libssl-dev
     RUN cargo install sccache
     RUN sccache -V
+    ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
+    ENV SCCACHE_DIR=/earthbuild/sccache_dir
+    ENV CARGO_INCREMENTAL=0 # no need to recompile package when using new function
 
 deps-image:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -50,8 +52,6 @@ deps-image:
 
 copy-dirs-and-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    # cache
-    COPY --dir sccache_dir ./
     # roc dirs
     COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
 
@@ -62,36 +62,31 @@ test-zig:
 
 build-rust:
     FROM +copy-dirs-and-cache
-    ARG RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
-    ARG SCCACHE_DIR=/earthbuild/sccache_dir
-    ARG CARGO_INCREMENTAL=0 # no need to recompile package when using new function
-    RUN cargo build; sccache --show-stats # for clippy
-    RUN cargo test --release --no-run; sccache --show-stats
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo build; sccache --show-stats # for clippy
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --release --no-run; sccache --show-stats
 
 check-clippy:
     FROM +build-rust
     RUN cargo clippy -V
-    RUN cargo clippy -- -D warnings
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo clippy -- -D warnings
 
 check-rustfmt:
     FROM +copy-dirs-and-cache
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
-save-cache:
-    FROM +build-rust
-    SAVE ARTIFACT sccache_dir AS LOCAL sccache_dir
-
 test-rust:
     FROM +build-rust
-    ARG RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
-    ARG SCCACHE_DIR=/earthbuild/sccache_dir
-    RUN cargo test --release 
+    ENV RUST_BACKTRACE=1
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --release 
 
 test-all:
-    BUILD +check-clippy
-    BUILD +check-rustfmt
-    BUILD +save-cache
     BUILD +test-zig
+    BUILD +check-rustfmt
+    BUILD +check-clippy
     BUILD +test-rust
     
