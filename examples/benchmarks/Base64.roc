@@ -31,7 +31,7 @@ decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string: 
 loopHelp : { remaining : Nat, string : Str } -> Decoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
 loopHelp = \{ remaining, string } ->
     if remaining >= 3 then
-        Bytes.Decode.map3 
+        Bytes.Decode.map3
             Bytes.Decode.u8
             Bytes.Decode.u8
             Bytes.Decode.u8
@@ -53,7 +53,7 @@ loopHelp = \{ remaining, string } ->
         Bytes.Decode.succeed (Done string)
 
     else if remaining == 2 then
-        Bytes.Decode.map2 
+        Bytes.Decode.map2
             Bytes.Decode.u8
             Bytes.Decode.u8
             \x, y ->
@@ -66,9 +66,9 @@ loopHelp = \{ remaining, string } ->
 
     else
         # remaining = 1
-        Bytes.Decode.map 
+        Bytes.Decode.map
             Bytes.Decode.u8
-            \x -> 
+            \x ->
                 a : U32
                 a = Num.intCast x
                 Done (Str.concat string (bitsToChars (Num.shiftLeftBy 16 a) 2))
@@ -90,33 +90,33 @@ bitsToCharsHelp = \bits, missing ->
     # The input is 24 bits, which we have to partition into 4 6-bit segments. We achieve this by
     # shifting to the right by (a multiple of) 6 to remove unwanted bits on the right, then `Num.bitwiseAnd`
     # with `0b111111` (which is 2^6 - 1 or 63) (so, 6 1s) to remove unwanted bits on the left.
-        
+
     # any 6-bit number is a valid base64 digit, so this is actually safe
     p =
         Num.shiftRightZfBy 18 bits
             |> Num.intCast
-            |> unsafeToChar 
+            |> unsafeToChar
 
     q =
         Num.bitwiseAnd (Num.shiftRightZfBy 12 bits) lowest6BitsMask
             |> Num.intCast
-            |> unsafeToChar 
+            |> unsafeToChar
 
     r =
         Num.bitwiseAnd (Num.shiftRightZfBy 6 bits) lowest6BitsMask
             |> Num.intCast
-            |> unsafeToChar 
+            |> unsafeToChar
 
     s =
         Num.bitwiseAnd bits lowest6BitsMask
             |> Num.intCast
-            |> unsafeToChar 
+            |> unsafeToChar
 
     equals : U8
     equals = 61
 
     when missing is
-        0 -> 
+        0 ->
             [ p, q, r, s ]
         1 ->
             [ p, q, r, equals ]
