@@ -1155,102 +1155,100 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     expectOk(validateUtf8BytesX(list));
 }
 
+fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) void {
+    const str_ptr = @ptrCast([*]u8, list.bytes);
+    const str_len = list.length;
+
+    expectError(err, numberOfNextCodepointBytes(str_ptr, str_len, index));
+    expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, str_len));
+}
+
 test "validateUtf8Bytes: invalid start byte" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
-    const str_len = 4;
-    var str: [str_len]u8 = "ab\x80c".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "ab\x80c";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.Utf8InvalidStartByte, numberOfNextCodepointBytes(str_ptr, str_len, 2));
-    expectEqual(toErrUtf8ByteResponse(2, Utf8ByteProblem.InvalidStartByte), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 2, error.Utf8InvalidStartByte, Utf8ByteProblem.InvalidStartByte);
 }
 
 test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
-    const str_len = 4;
-    var str: [str_len]u8 = "abc\xc2".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xc2";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.UnexpectedEof, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.UnexpectedEndOfSequence), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
-    const str_len = 5;
-    var str: [str_len]u8 = "abc\xc2\x00".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xc2\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.Utf8ExpectedContinuation, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.ExpectedContinuation), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L430
-    const str_len = 5;
-    var str: [str_len]u8 = "abc\xe0\x00".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xe0\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.UnexpectedEof, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.UnexpectedEndOfSequence), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L430
-    const str_len = 6;
-    var str: [str_len]u8 = "abc\xe0\xa0\xc0".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xe0\xa0\xc0";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.Utf8ExpectedContinuation, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.ExpectedContinuation), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L437
-    const str_len = 6;
-    var str: [str_len]u8 = "abc\xf0\x90\x00".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xf0\x90\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.UnexpectedEof, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.UnexpectedEndOfSequence), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L437
-    const str_len = 7;
-    var str: [str_len]u8 = "abc\xf0\x90\x80\x00".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xf0\x90\x80\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.Utf8ExpectedContinuation, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.ExpectedContinuation), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: overlong" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L451
-    const str_len = 7;
-    var str: [str_len]u8 = "abc\xf0\x80\x80\x80".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xf0\x80\x80\x80";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.Utf8OverlongEncoding, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.OverlongEncoding), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.Utf8OverlongEncoding, Utf8ByteProblem.OverlongEncoding);
 }
 
 test "validateUtf8Bytes: codepoint out too large" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L465
-    const str_len = 7;
-    var str: [str_len]u8 = "abc\xf4\x90\x80\x80".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xf4\x90\x80\x80";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.Utf8CodepointTooLarge, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.CodepointTooLarge), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.Utf8CodepointTooLarge, Utf8ByteProblem.CodepointTooLarge);
 }
 
 test "validateUtf8Bytes: surrogate halves" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L468
-    const str_len = 6;
-    var str: [str_len]u8 = "abc\xed\xa0\x80".*;
-    const str_ptr: [*]u8 = &str;
+    const raw = "abc\xed\xa0\x80";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
 
-    expectError(error.Utf8EncodesSurrogateHalf, numberOfNextCodepointBytes(str_ptr, str_len, 3));
-    expectEqual(toErrUtf8ByteResponse(3, Utf8ByteProblem.EncodesSurrogateHalf), validateUtf8Bytes(str_ptr, str_len));
+    expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
 }
