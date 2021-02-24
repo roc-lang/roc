@@ -30,8 +30,8 @@ map = \@Decoder decoder, transform ->
                 Bad e
 
 
-map2 : (a,b -> c), Decoder a, Decoder b -> Decoder c
-map2 = \transform, @Decoder decoder1, @Decoder decoder2 -> 
+map2 : Decoder a, Decoder b, (a, b -> c) -> Decoder c
+map2 = \@Decoder decoder1, @Decoder decoder2, transform -> 
     @Decoder \state1 -> 
         when decoder1 state1 is
             Good state2 a ->
@@ -45,8 +45,8 @@ map2 = \transform, @Decoder decoder1, @Decoder decoder2 ->
             Bad e ->
                 Bad e
 
-map3 : (a, b, c -> d), Decoder a, Decoder b, Decoder c -> Decoder d
-map3 = \transform, @Decoder decoder1, @Decoder decoder2, @Decoder decoder3 -> 
+map3 : Decoder a, Decoder b, Decoder c, (a, b, c -> d) -> Decoder d
+map3 = \@Decoder decoder1, @Decoder decoder2, @Decoder decoder3, transform -> 
     @Decoder \state1 -> 
         when decoder1 state1 is
             Good state2 a ->
