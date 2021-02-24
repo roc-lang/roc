@@ -5720,11 +5720,13 @@ fn call_by_pointer<'a>(
     let is_specialized = procs.specialized.keys().any(|(s, _)| *s == symbol);
     if env.is_imported_symbol(symbol) || procs.partial_procs.contains_key(&symbol) || is_specialized
     {
-        // TODO we should be able to call by name in this wrapper for "normal" functions
-        // but closures, specifically top-level values that are closures (by unification)
-        // cause issues. The caller (which is here) doesn't know whether the called is a closure
-        // so we're safe rather than sorry for now. Hopefully we can figure out how to call by name
-        // more in the future
+        // anything that is not a thunk can be called by-value in the wrapper
+        // (the above condition guarantees we're dealing with a top-level symbol)
+        //
+        // But thunks cannot be called by-value, since they are not really functions to all parts
+        // of the system (notably RC insertion). So we still call those by-pointer.
+        // Luckily such values were top-level originally (in the user code), and can therefore
+        // not be closures
         let is_thunk =
             procs.module_thunks.contains(&symbol) || procs.imported_module_thunks.contains(&symbol);
 
