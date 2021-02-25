@@ -1331,16 +1331,12 @@ where
                 }
             }
 
-            Err((MadeProgress, fail, state)) => {
-                return Err((MadeProgress, fail, state));
-            }
-            Err((NoProgress, _fail, state)) => {
-                return Err((
-                    NoProgress,
-                    to_element_error(state.line, state.column),
-                    state,
-                ));
-            }
+            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
+            Err((NoProgress, _fail, state)) => Err((
+                NoProgress,
+                to_element_error(state.line, state.column),
+                state,
+            )),
         }
     }
 }
