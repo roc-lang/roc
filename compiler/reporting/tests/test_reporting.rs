@@ -4928,8 +4928,8 @@ mod test_reporting {
                 I am in the middle of parsing a function argument list, but I got
                 stuck at this comma:
                 
-                1│  \,b -> 1
-                     ^
+                1│  \a,,b -> 1
+                       ^
                 
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
