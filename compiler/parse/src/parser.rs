@@ -372,7 +372,6 @@ pub type Col = u16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpr<'a> {
-    // Record(PRecord<'a>, Row, Col),
     Start(Row, Col),
     End(Row, Col),
     Space(BadInputError, Row, Col),
@@ -381,10 +380,49 @@ pub enum EExpr<'a> {
     If(If<'a>, Row, Col),
 
     Lambda(ELambda<'a>, Row, Col),
+
+    InParens(EInParens<'a>, Row, Col),
+    Record(ERecord<'a>, Row, Col),
     List(List<'a>, Row, Col),
 
-    // EInParens(PInParens<'a>, Row, Col),
     IndentStart(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ERecord<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+
+    Field(Row, Col),
+    Colon(Row, Col),
+    Bar(Row, Col),
+    Ampersand(Row, Col),
+
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    Space(BadInputError, Row, Col),
+
+    IndentOpen(Row, Col),
+    IndentColon(Row, Col),
+    IndentBar(Row, Col),
+    IndentAmpersand(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EInParens<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+    ///
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    ///
+    Space(BadInputError, Row, Col),
+    ///
+    IndentOpen(Row, Col),
     IndentEnd(Row, Col),
 }
 
