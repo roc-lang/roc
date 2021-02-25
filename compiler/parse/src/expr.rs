@@ -10,7 +10,7 @@ use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
-    fail, map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
+    map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
     specialize_ref, then, unexpected, unexpected_eof, word1, word2, EExpr, EInParens, ELambda,
     Either, If, List, ParseResult, Parser, State, SyntaxError, When,
 };
@@ -27,13 +27,6 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     // as this causes rustc to stack overflow. Thus, parse_expr must be a
     // separate function which recurses by calling itself directly.
     move |arena, state: State<'a>| parse_expr(min_indent, arena, state)
-}
-
-fn loc_expr_in_parens<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Expr(EExpr::InParens(e, r, c)),
-        loc_expr_in_parens_help(min_indent),
-    )
 }
 
 fn loc_expr_in_parens_help<'a>(
@@ -191,74 +184,6 @@ type Extras<'a> = Located<(
     >,
 )>;
 
-macro_rules! loc_parenthetical_expr {
-    ($min_indent:expr, $args_parser:expr) => {
-    then(
-        loc!(and!( loc_expr_in_parens($min_indent),
-
-            optional(either!(
-                // There may optionally be function args after the ')'
-                // e.g. ((foo bar) baz)
-                $args_parser,
-                // If there aren't any args, there may be a '=' or ':' after it.
-                //
-                // (It's a syntax error to write e.g. `foo bar =` - so if there
-                // were any args, there is definitely no need to parse '=' or ':'!)
-                //
-                // Also, there may be a '.' for field access (e.g. `(foo).bar`),
-                // but we only want to look for that if there weren't any args,
-                // as if there were any args they'd have consumed it anyway
-                // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
-                either!(
-                    one_or_more!(skip_first!(ascii_char(b'.' ), lowercase_ident())),
-                    and!(space0($min_indent), equals_with_indent())
-                )
-            ))
-        )),
-        move |arena, state, _progress, parsed| helper(arena, state, parsed, $min_indent)
-    )
-    }
-}
-
-fn helper<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    loc_expr_with_extras: Extras<'a>,
-    min_indent: u16,
-) -> ParseResult<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    // We parse the parenthetical expression *and* the arguments after it
-    // in one region, so that (for example) the region for Apply includes its args.
-    let (loc_expr, opt_extras) = loc_expr_with_extras.value;
-
-    match opt_extras {
-        Some(Either::First(loc_args)) => Ok((
-            MadeProgress,
-            expr_in_parens_then_arguments(arena, loc_expr, loc_args, loc_expr_with_extras.region),
-            state,
-        )),
-        Some(Either::Second(Either::Second((spaces_before_equals, equals_indent)))) => {
-            // '=' after optional spaces
-            expr_in_parens_then_equals(
-                min_indent,
-                loc_expr,
-                spaces_before_equals,
-                equals_indent,
-                loc_expr_with_extras.region.start_col,
-            )
-            .parse(arena, state)
-        }
-        Some(Either::Second(Either::First(fields))) => {
-            // '.' and a record field immediately after ')', no optional spaces
-            Ok((
-                MadeProgress,
-                expr_in_parens_then_access(arena, loc_expr, fields),
-                state,
-            ))
-        }
-        None => Ok((MadeProgress, loc_expr, state)),
-    }
-}
-
 fn helper_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
@@ -295,55 +220,6 @@ fn helper_help<'a>(
             ))
         }
         None => Ok((MadeProgress, loc_expr, state)),
-    }
-}
-
-fn expr_in_parens_then_equals<'a>(
-    min_indent: u16,
-    loc_expr: Located<Expr<'a>>,
-    spaces_before_equals: &'a [CommentOrNewline],
-    equals_indent: u16,
-    def_start_col: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    move |arena, state| {
-        let region = loc_expr.region;
-
-        // Re-parse the Expr as a Pattern.
-        let pattern = match expr_to_pattern(arena, &loc_expr.value) {
-            Ok(valid) => valid,
-            Err(fail) => return Err((MadeProgress, fail, state)),
-        };
-
-        // Make sure we don't discard the spaces - might be comments in there!
-        let value = if spaces_before_equals.is_empty() {
-            pattern
-        } else {
-            Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
-        };
-
-        let loc_first_pattern = Located { region, value };
-
-        // Continue parsing the expression as a Def.
-        let (_, spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
-        // Use loc_expr_with_extras because we want to include the opening '(' char.
-        let (_, parsed_expr, state) = parse_def_expr(
-            min_indent,
-            def_start_col,
-            equals_indent,
-            arena,
-            state,
-            loc_first_pattern,
-            spaces_after_equals,
-        )?;
-
-        Ok((
-            MadeProgress,
-            Located {
-                value: parsed_expr,
-                region,
-            },
-            state,
-        ))
     }
 }
 
