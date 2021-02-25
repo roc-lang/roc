@@ -72,6 +72,41 @@ fn loc_expr_in_parens_help_help<'a>(
     )
 }
 
+fn loc_function_arg_in_parens_etc<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
+    specialize(
+        |e, _, _| SyntaxError::Expr(e),
+        loc_function_arg_in_parens_etc_help(min_indent),
+    )
+}
+
+fn loc_function_arg_in_parens_etc_help<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+    then(
+        loc!(and!(
+            specialize(EExpr::InParens, loc_expr_in_parens_help(min_indent)),
+            optional(record_field_access_chain())
+        )),
+        move |arena, state, _progress, loc_parsed| {
+            let Located {
+                region: _,
+                value: (loc_expr, opt_accesses),
+            } = loc_parsed;
+
+            match opt_accesses {
+                None => Ok((MadeProgress, loc_expr, state)),
+                Some(fields) => Ok((
+                    MadeProgress,
+                    expr_in_parens_then_access(arena, loc_expr, fields),
+                    state,
+                )),
+            }
+        },
+    )
+}
+
 fn loc_expr_in_parens_etc<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
@@ -417,7 +452,6 @@ fn loc_parse_expr_body_without_operators<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, SyntaxError<'a>> {
     one_of!(
-        // loc_parenthetical_expr!(min_indent, loc_function_args(min_indent)),
         loc_expr_in_parens_etc(min_indent),
         loc!(string_literal()),
         loc!(number_literal()),
@@ -1242,7 +1276,7 @@ fn loc_parse_function_arg<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, SyntaxError<'a>> {
     one_of!(
-        loc_parenthetical_expr!(min_indent, fail() /* don't parse args within args! */),
+        loc_function_arg_in_parens_etc(min_indent),
         loc!(string_literal()),
         loc!(number_literal()),
         loc!(closure(min_indent)),
