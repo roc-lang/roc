@@ -11,9 +11,9 @@ use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
-    fail, map, newline_char, not, not_followed_by, optional, sep_by1, specialize, specialize_ref,
-    then, unexpected, unexpected_eof, word1, word2, EExpr, ELambda, Either, ParseResult, Parser,
-    State, SyntaxError, When,
+    fail, map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
+    specialize_ref, then, unexpected, unexpected_eof, word1, word2, EExpr, ELambda, Either,
+    ParseResult, Parser, State, SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -991,10 +991,10 @@ fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
             word1(b'\\', ELambda::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
-            optional(and!(
+            and!(
                 // Parse the params
                 // Params are comma-separated
-                sep_by1(
+                sep_by1_e(
                     word1(b',', ELambda::Comma),
                     space0_around_ee(
                         specialize(ELambda::Pattern, loc_closure_param(min_indent)),
@@ -1002,7 +1002,8 @@ fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
                         ELambda::Space,
                         ELambda::IndentArg,
                         ELambda::IndentArrow
-                    )
+                    ),
+                    ELambda::Arg,
                 ),
                 skip_first!(
                     // Parse the -> which separates params from body
@@ -1018,16 +1019,13 @@ fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
                         ELambda::IndentBody
                     )
                 )
-            ))
+            )
         ),
-        |arena: &'a Bump, opt_contents| match opt_contents {
-            None => Expr::MalformedClosure,
-            Some((params, loc_body)) => {
-                let params: Vec<'a, Located<Pattern<'a>>> = params;
-                let params: &'a [Located<Pattern<'a>>] = params.into_bump_slice();
+        |arena: &'a Bump, (params, loc_body)| {
+            let params: Vec<'a, Located<Pattern<'a>>> = params;
+            let params: &'a [Located<Pattern<'a>>] = params.into_bump_slice();
 
-                Expr::Closure(params, arena.alloc(loc_body))
-            }
+            Expr::Closure(params, arena.alloc(loc_body))
         }
     )
 }
@@ -1790,25 +1788,6 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<
             }
         },
     )
-}
-
-/// This is mainly for matching tags in closure params, e.g. \@Foo -> ...
-pub fn private_tag<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    map_with_arena!(
-        skip_first!(ascii_char(b'@'), global_tag()),
-        |arena: &'a Bump, name: &'a str| {
-            let mut buf = String::with_capacity_in(1 + name.len(), arena);
-
-            buf.push('@');
-            buf.push_str(name);
-            buf.into_bump_str()
-        }
-    )
-}
-
-/// This is mainly for matching tags in closure params, e.g. \Foo -> ...
-pub fn global_tag<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    global_tag_or_ident(|first_char| first_char.is_uppercase())
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {

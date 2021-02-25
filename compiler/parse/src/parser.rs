@@ -392,6 +392,7 @@ pub enum ELambda<'a> {
     Start(Row, Col),
     Arrow(Row, Col),
     Comma(Row, Col),
+    Arg(Row, Col),
     // TODO make EEXpr
     Pattern(EPattern<'a>, Row, Col),
     Syntax(&'a SyntaxError<'a>, Row, Col),
@@ -1204,8 +1205,6 @@ where
                                     buf.push(next_output);
                                 }
                                 Err((element_progress, fail, state)) => {
-                                    // If the delimiter parsed, but the following
-                                    // element did not, that's a fatal error.
                                     return Err((element_progress, fail, state));
                                 }
                             }
@@ -1229,6 +1228,84 @@ where
                 }
             }
             Err((fail_progress, fail, new_state)) => Err((fail_progress, fail, new_state)),
+        }
+    }
+}
+
+/// Parse one or more values separated by a delimiter (e.g. a comma) whose
+/// values are discarded
+pub fn sep_by1_e<'a, P, V, D, Val, Error>(
+    delimiter: D,
+    parser: P,
+    to_element_error: V,
+) -> impl Parser<'a, Vec<'a, Val>, Error>
+where
+    D: Parser<'a, (), Error>,
+    P: Parser<'a, Val, Error>,
+    V: Fn(Row, Col) -> Error,
+    Error: 'a,
+{
+    move |arena, state: State<'a>| {
+        let start_bytes_len = state.bytes.len();
+
+        match parser.parse(arena, state) {
+            Ok((progress, first_output, next_state)) => {
+                debug_assert_eq!(progress, MadeProgress);
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
+
+                buf.push(first_output);
+
+                loop {
+                    match delimiter.parse(arena, state) {
+                        Ok((_, (), next_state)) => {
+                            // If the delimiter passed, check the element parser.
+                            match parser.parse(arena, next_state) {
+                                Ok((_, next_output, next_state)) => {
+                                    state = next_state;
+                                    buf.push(next_output);
+                                }
+                                Err((MadeProgress, fail, state)) => {
+                                    return Err((MadeProgress, fail, state));
+                                }
+                                Err((NoProgress, _fail, state)) => {
+                                    return Err((
+                                        NoProgress,
+                                        to_element_error(state.line, state.column),
+                                        state,
+                                    ));
+                                }
+                            }
+                        }
+                        Err((delim_progress, fail, old_state)) => {
+                            match delim_progress {
+                                MadeProgress => {
+                                    // fail if the delimiter made progress
+                                    return Err((MadeProgress, fail, old_state));
+                                }
+                                NoProgress => {
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        old_state.bytes.len(),
+                                    );
+                                    return Ok((progress, buf, old_state));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Err((MadeProgress, fail, state)) => {
+                return Err((MadeProgress, fail, state));
+            }
+            Err((NoProgress, _fail, state)) => {
+                return Err((
+                    NoProgress,
+                    to_element_error(state.line, state.column),
+                    state,
+                ));
+            }
         }
     }
 }
