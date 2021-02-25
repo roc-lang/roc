@@ -376,6 +376,9 @@ pub enum EExpr<'a> {
     End(Row, Col),
     Space(BadInputError, Row, Col),
 
+    Dot(Row, Col),
+    Access(Row, Col),
+
     When(When<'a>, Row, Col),
     If(If<'a>, Row, Col),
 
