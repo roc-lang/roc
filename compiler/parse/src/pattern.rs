@@ -26,11 +26,8 @@ pub enum PatternType {
 
 pub fn loc_closure_param<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Pattern(e),
-        move |arena, state| parse_closure_param(arena, state, min_indent),
-    )
+) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+    move |arena, state| parse_closure_param(arena, state, min_indent)
 }
 
 fn parse_closure_param<'a>(

@@ -379,9 +379,26 @@ pub enum EExpr<'a> {
 
     When(When<'a>, Row, Col),
 
+    Lambda(ELambda<'a>, Row, Col),
+
     // EInParens(PInParens<'a>, Row, Col),
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ELambda<'a> {
+    Space(BadInputError, Row, Col),
+    Start(Row, Col),
+    Arrow(Row, Col),
+    Comma(Row, Col),
+    // TODO make EEXpr
+    Pattern(EPattern<'a>, Row, Col),
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    IndentArrow(Row, Col),
+    IndentBody(Row, Col),
+    IndentArg(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

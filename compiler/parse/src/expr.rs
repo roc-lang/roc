@@ -3,7 +3,8 @@ use crate::ast::{
 };
 use crate::blankspace::{
     line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_e,
-    space0_before, space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
+    space0_around_ee, space0_before, space0_before_e, space0_e, space1, space1_around,
+    space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -11,8 +12,8 @@ use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     fail, map, newline_char, not, not_followed_by, optional, sep_by1, specialize, specialize_ref,
-    then, unexpected, unexpected_eof, word1, word2, EExpr, Either, ParseResult, Parser, State,
-    SyntaxError, When,
+    then, unexpected, unexpected_eof, word1, word2, EExpr, ELambda, Either, ParseResult, Parser,
+    State, SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -596,7 +597,13 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, SyntaxError<'a>> {
 // PARSER HELPERS
 
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    space0_after(loc_closure_param(min_indent), min_indent)
+    space0_after(
+        specialize(
+            |e, _, _| SyntaxError::Pattern(e),
+            loc_closure_param(min_indent),
+        ),
+        min_indent,
+    )
 }
 
 fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>, SyntaxError<'a>> {
@@ -971,32 +978,44 @@ fn reserved_keyword<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 }
 
 fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Expr(EExpr::Lambda(e, r, c)),
+        closure_help(min_indent),
+    )
+}
+
+fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
     map_with_arena!(
         skip_first!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
-            ascii_char(b'\\'),
+            word1(b'\\', ELambda::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
             optional(and!(
                 // Parse the params
-                attempt!(
-                    Attempting::ClosureParams,
-                    // Params are comma-separated
-                    sep_by1(
-                        ascii_char(b','),
-                        space0_around(loc_closure_param(min_indent), min_indent)
+                // Params are comma-separated
+                sep_by1(
+                    word1(b',', ELambda::Comma),
+                    space0_around_ee(
+                        specialize(ELambda::Pattern, loc_closure_param(min_indent)),
+                        min_indent,
+                        ELambda::Space,
+                        ELambda::IndentArg,
+                        ELambda::IndentArrow
                     )
                 ),
                 skip_first!(
                     // Parse the -> which separates params from body
-                    ascii_string("->"),
+                    word2(b'-', b'>', ELambda::Arrow),
                     // Parse the body
-                    attempt!(
-                        Attempting::ClosureBody,
-                        space0_before(
-                            loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                            min_indent,
-                        )
+                    space0_before_e(
+                        specialize_ref(
+                            ELambda::Syntax,
+                            loc!(move |arena, state| parse_expr(min_indent, arena, state))
+                        ),
+                        min_indent,
+                        ELambda::Space,
+                        ELambda::IndentBody
                     )
                 )
             ))
