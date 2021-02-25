@@ -101,7 +101,7 @@ test-rust:
     FROM +copy-dirs-and-cache
     ENV RUST_BACKTRACE=1
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release 
+        cargo test --release; sccache --show-stats
 
 test-all:
     BUILD +test-zig
