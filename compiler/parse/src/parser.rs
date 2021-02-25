@@ -1551,7 +1551,7 @@ macro_rules! collection_trailing_sep_e {
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
                 zero_or_more!($crate::parser::word1(b' ', |row, col| $space_problem(
-                    BadInputError::LineTooLong,
+                    crate::parser::BadInputError::LineTooLong,
                     row,
                     col
                 ))),

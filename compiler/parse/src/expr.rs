@@ -3,20 +3,19 @@ use crate::ast::{
 };
 use crate::blankspace::{
     line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_ee,
-    space0_before, space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
+    space0_before, space0_before_e, space0_e, space1, space1_before, spaces_exactly,
 };
-use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
+use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     fail, map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
-    specialize_ref, then, unexpected, unexpected_eof, word1, word2, EExpr, ELambda, Either, If, List,
-    ParseResult, Parser, State, SyntaxError, When,
+    specialize_ref, then, unexpected, unexpected_eof, word1, word2, EExpr, ELambda, Either, If,
+    List, ParseResult, Parser, State, SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
-use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};

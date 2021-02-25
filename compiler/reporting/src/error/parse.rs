@@ -188,7 +188,7 @@ fn to_expr_report<'a>(
 fn to_lambda_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    context: Context,
+    _context: Context,
     parse_problem: &roc_parse::parser::ELambda<'a>,
     start_row: Row,
     start_col: Col,
