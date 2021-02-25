@@ -12,7 +12,7 @@ use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
     specialize_ref, then, unexpected, unexpected_eof, word1, word2, EExpr, EInParens, ELambda,
-    Either, If, List, ParseResult, Parser, State, SyntaxError, When,
+    ERecord, Either, If, List, ParseResult, Parser, State, SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -1958,6 +1958,160 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>>
 
         Ok((MadeProgress, expr, state))
     }
+}
+
+fn record_field<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, AssignedField<'a, Expr<'a>>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Expr(EExpr::Record(e, r, c)),
+        record_field_help(min_indent),
+    )
+}
+
+fn record_field_help<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
+    use AssignedField::*;
+
+    move |arena, state: State<'a>| {
+        // You must have a field name, e.g. "email"
+        let (progress, loc_label, state) =
+            specialize(|_, r, c| ERecord::Field(r, c), loc!(lowercase_ident()))
+                .parse(arena, state)?;
+        debug_assert_eq!(progress, MadeProgress);
+
+        let (_, spaces, state) =
+            space0_e(min_indent, ERecord::Space, ERecord::IndentColon).parse(arena, state)?;
+
+        // Having a value is optional; both `{ email }` and `{ email: blah }` work.
+        // (This is true in both literals and types.)
+        let (_, opt_loc_val, state) = optional(and!(
+            either!(
+                word1(b':', ERecord::Colon),
+                word1(b'?', ERecord::QuestionMark)
+            ),
+            space0_before_e(
+                specialize_ref(ERecord::Syntax, loc!(expr(min_indent))),
+                min_indent,
+                ERecord::Space,
+                ERecord::IndentEnd,
+            )
+        ))
+        .parse(arena, state)?;
+
+        let answer = match opt_loc_val {
+            Some((Either::First(_), loc_val)) => {
+                RequiredValue(loc_label, spaces, arena.alloc(loc_val))
+            }
+
+            Some((Either::Second(_), loc_val)) => {
+                OptionalValue(loc_label, spaces, arena.alloc(loc_val))
+            }
+
+            // If no value was provided, record it as a Var.
+            // Canonicalize will know what to do with a Var later.
+            None => {
+                if !spaces.is_empty() {
+                    SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                } else {
+                    LabelOnly(loc_label)
+                }
+            }
+        };
+
+        Ok((MadeProgress, answer, state))
+    }
+}
+
+// #[macro_export]
+// macro_rules! record_field {
+//     ($val_parser:expr, $min_indent:expr) => {
+//         move |arena: &'a bumpalo::Bump,
+//               state: $crate::parser::State<'a>|
+//               -> $crate::parser::ParseResult<'a, $crate::ast::AssignedField<'a, _>, _> {
+//             use $crate::ast::AssignedField::*;
+//             use $crate::blankspace::{space0, space0_before};
+//             use $crate::ident::lowercase_ident;
+//             use $crate::parser::ascii_char;
+//
+//             // You must have a field name, e.g. "email"
+//             let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
+//             debug_assert_eq!(progress, MadeProgress);
+//
+//             let (_, spaces, state) = space0($min_indent).parse(arena, state)?;
+//
+//             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
+//             // (This is true in both literals and types.)
+//             let (_, opt_loc_val, state) = $crate::parser::optional(skip_first!(
+//                 ascii_char(b':'),
+//                 space0_before($val_parser, $min_indent)
+//             ))
+//             .parse(arena, state)?;
+//
+//             let answer = match opt_loc_val {
+//                 Some(loc_val) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
+//
+//                 // If no value was provided, record it as a Var.
+//                 // Canonicalize will know what to do with a Var later.
+//                 None => {
+//                     if !spaces.is_empty() {
+//                         SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+//                     } else {
+//                         LabelOnly(loc_label)
+//                     }
+//                 }
+//             };
+//
+//             Ok((MadeProgress, answer, state))
+//         }
+//     };
+// }
+
+#[macro_export]
+macro_rules! record {
+    ($val_parser:expr, $min_indent:expr) => {
+        skip_first!(
+            $crate::parser::ascii_char(b'{'),
+            and!(
+                // You can optionally have an identifier followed by an '&' to
+                // make this a record update, e.g. { Foo.user & username: "blah" }.
+                $crate::parser::optional(skip_second!(
+                    $crate::blankspace::space0_around(
+                        // We wrap the ident in an Expr here,
+                        // so that we have a Spaceable value to work with,
+                        // and then in canonicalization verify that it's an Expr::Var
+                        // (and not e.g. an `Expr::Access`) and extract its string.
+                        loc!(map_with_arena!(
+                            $crate::expr::ident(),
+                            $crate::expr::ident_to_expr
+                        )),
+                        $min_indent
+                    ),
+                    $crate::parser::ascii_char(b'&')
+                )),
+                loc!(skip_first!(
+                    // We specifically allow space characters inside here, so that
+                    // `{  }` can be successfully parsed as an empty record, and then
+                    // changed by the formatter back into `{}`.
+                    zero_or_more!($crate::parser::ascii_char(b' ')),
+                    skip_second!(
+                        and!(
+                            $crate::parser::trailing_sep_by0(
+                                $crate::parser::ascii_char(b','),
+                                $crate::blankspace::space0_around(
+                                    loc!(record_field($min_indent)),
+                                    $min_indent
+                                ),
+                            ),
+                            $crate::blankspace::space0($min_indent)
+                        ),
+                        $crate::parser::ascii_char(b'}')
+                    )
+                ))
+            )
+        )
+    };
 }
 
 // Parser<'a, Vec<'a, Located<AssignedField<'a, S>>>>

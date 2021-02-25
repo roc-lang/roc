@@ -406,6 +406,7 @@ pub enum ERecord<'a> {
 
     Field(Row, Col),
     Colon(Row, Col),
+    QuestionMark(Row, Col),
     Bar(Row, Col),
     Ampersand(Row, Col),
 
@@ -1989,112 +1990,6 @@ macro_rules! either {
 macro_rules! between {
     ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
         skip_first!($opening_brace, skip_second!($parser, $closing_brace))
-    };
-}
-
-#[macro_export]
-macro_rules! record_field {
-    ($val_parser:expr, $min_indent:expr) => {
-        move |arena: &'a bumpalo::Bump,
-              state: $crate::parser::State<'a>|
-              -> $crate::parser::ParseResult<'a, $crate::ast::AssignedField<'a, _>, _> {
-            use $crate::ast::AssignedField::*;
-            use $crate::blankspace::{space0, space0_before};
-            use $crate::ident::lowercase_ident;
-            use $crate::parser::ascii_char;
-            use $crate::parser::Either::*;
-
-            // You must have a field name, e.g. "email"
-            let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
-            debug_assert_eq!(progress, MadeProgress);
-
-            let (_, spaces, state) = space0($min_indent).parse(arena, state)?;
-
-            // Having a value is optional; both `{ email }` and `{ email: blah }` work.
-            // (This is true in both literals and types.)
-            let (_, opt_loc_val, state) = $crate::parser::optional(either!(
-                skip_first!(ascii_char(b':'), space0_before($val_parser, $min_indent)),
-                skip_first!(ascii_char(b'?'), space0_before($val_parser, $min_indent))
-            ))
-            .parse(arena, state)?;
-
-            let answer = match opt_loc_val {
-                Some(either) => match either {
-                    First(loc_val) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
-                    Second(loc_val) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
-                },
-                // If no value was provided, record it as a Var.
-                // Canonicalize will know what to do with a Var later.
-                None => {
-                    if !spaces.is_empty() {
-                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                    } else {
-                        LabelOnly(loc_label)
-                    }
-                }
-            };
-
-            Ok((MadeProgress, answer, state))
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! record_without_update {
-    ($val_parser:expr, $min_indent:expr) => {
-        collection_trailing_sep!(
-            ascii_char(b'{'),
-            loc!(record_field!($val_parser, $min_indent)),
-            ascii_char(b','),
-            ascii_char(b'}'),
-            $min_indent
-        )
-    };
-}
-
-#[macro_export]
-macro_rules! record {
-    ($val_parser:expr, $min_indent:expr) => {
-        skip_first!(
-            $crate::parser::ascii_char(b'{'),
-            and!(
-                // You can optionally have an identifier followed by an '&' to
-                // make this a record update, e.g. { Foo.user & username: "blah" }.
-                $crate::parser::optional(skip_second!(
-                    $crate::blankspace::space0_around(
-                        // We wrap the ident in an Expr here,
-                        // so that we have a Spaceable value to work with,
-                        // and then in canonicalization verify that it's an Expr::Var
-                        // (and not e.g. an `Expr::Access`) and extract its string.
-                        loc!(map_with_arena!(
-                            $crate::expr::ident(),
-                            $crate::expr::ident_to_expr
-                        )),
-                        $min_indent
-                    ),
-                    $crate::parser::ascii_char(b'&')
-                )),
-                loc!(skip_first!(
-                    // We specifically allow space characters inside here, so that
-                    // `{  }` can be successfully parsed as an empty record, and then
-                    // changed by the formatter back into `{}`.
-                    zero_or_more!($crate::parser::ascii_char(b' ')),
-                    skip_second!(
-                        and!(
-                            $crate::parser::trailing_sep_by0(
-                                $crate::parser::ascii_char(b','),
-                                $crate::blankspace::space0_around(
-                                    loc!(record_field!($val_parser, $min_indent)),
-                                    $min_indent
-                                ),
-                            ),
-                            $crate::blankspace::space0($min_indent)
-                        ),
-                        $crate::parser::ascii_char(b'}')
-                    )
-                ))
-            )
-        )
     };
 }
 
