@@ -18,9 +18,9 @@ For example, parsing would translate this string...
 
 This `Expr` representation of the expression is useful for things like:
 
-* Checking that all variables are declared before they're used
-* Type checking
-* Running Roc code in Interpreted Mode (that is, without having to compile it to Rust first - useful for development, since it's a faster feedback loop, but there's a runtime performance penalty compared to doing a full compile to Rust).
+- Checking that all variables are declared before they're used
+- Type checking
+- Running Roc code in Interpreted Mode (that is, without having to compile it to Rust first - useful for development, since it's a faster feedback loop, but there's a runtime performance penalty compared to doing a full compile to Rust).
 
 > As of this writing, the compiler doesn't do any of those things yet. They'll be added later!
 
@@ -28,7 +28,7 @@ Since the parser is only concerned with translating String values into Expr valu
 
 For example, parsing will translate this string:
 
-  not "foo", "bar"
+not "foo", "bar"
 
 ...into this `Expr`:
 
@@ -68,7 +68,7 @@ The `eval` function will take this `Expr` and translate it into this much simple
 
     Int(6)
 
-At this point it's become so simple that we can display it to the end user as the number `6`.  So running `parse` and then `eval` on the original Roc string of `1 + 8 - 3` will result in displaying `6` as the final output.
+At this point it's become so simple that we can display it to the end user as the number `6`. So running `parse` and then `eval` on the original Roc string of `1 + 8 - 3` will result in displaying `6` as the final output.
 
 > The `expr` module includes an `impl fmt::Display for Expr` that takes care of translating `Int(6)` into `6`, `Char('x')` as `'x'`, and so on.
 
@@ -104,7 +104,6 @@ That concludes our original recursive call to `eval`, after which point we'll be
     )
 
 This will work the same way as `Minus` did, and will reduce down to `Int(6)`.
-
 
 ## Optimization philosophy
 
