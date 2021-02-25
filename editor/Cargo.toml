@@ -69,6 +69,7 @@ pest = "2.1"
 pest_derive = "2.1"
 ropey = "1.2.0"
 copypasta = "0.7.1"
+indoc = "0.3.3"
 
 [dependencies.bytemuck]
 version = "1.4"
@@ -77,7 +78,6 @@ features = ["derive"]
 [dev-dependencies]
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
-indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 criterion = "0.3"

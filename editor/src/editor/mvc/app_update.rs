@@ -1,14 +1,17 @@
 use super::app_model;
 use super::app_model::AppModel;
-use super::ed_model::Position;
-use super::ed_update;
-use crate::error::EdResult;
+use crate::editor::ed_error::EdResult;
+use crate::ui::text::{
+    lines::{MutSelectableLines, SelectableLines},
+    text_pos::TextPos,
+};
+use crate::ui::ui_error::UIResult;
 use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            let selected_str_opt = ed_model.get_selected_str()?;
+            let selected_str_opt = ed_model.text.get_selected_str()?;
 
             if let Some(selected_str) = selected_str_opt {
                 app_model::set_clipboard_txt(&mut app_model.clipboard_opt, selected_str)?;
@@ -30,43 +33,39 @@ pub fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
                 let last_line_nr_chars = rsplit_iter.next().unwrap().len();
                 let clipboard_nr_lines = rsplit_iter.count();
 
-                let old_caret_pos = ed_model.caret_pos;
+                let old_caret_pos = ed_model.text.caret_w_select.caret_pos;
+                let selection_opt = ed_model.text.get_selection();
 
-                if let Some(selection) = ed_model.selection_opt {
+                if let Some(selection) = selection_opt {
                     let start_caret_pos = selection.start_pos;
-                    ed_model.text_buf.del_selection(selection)?;
-                    ed_model.selection_opt = None;
+                    ed_model.text.del_selection()?;
 
-                    ed_model
-                        .text_buf
-                        .insert_str(start_caret_pos, &clipboard_content)?;
+                    ed_model.text.insert_str(&clipboard_content)?;
 
                     if clipboard_nr_lines > 0 {
-                        ed_model.caret_pos = Position {
+                        ed_model.text.set_caret(TextPos {
                             line: start_caret_pos.line + clipboard_nr_lines,
                             column: last_line_nr_chars,
-                        }
+                        })
                     } else {
-                        ed_model.caret_pos = Position {
+                        ed_model.text.set_caret(TextPos {
                             line: start_caret_pos.line,
                             column: start_caret_pos.column + last_line_nr_chars,
-                        }
+                        })
                     }
                 } else {
-                    ed_model
-                        .text_buf
-                        .insert_str(old_caret_pos, &clipboard_content)?;
+                    ed_model.text.insert_str(&clipboard_content)?;
 
                     if clipboard_nr_lines > 0 {
-                        ed_model.caret_pos = Position {
+                        ed_model.text.set_caret(TextPos {
                             line: old_caret_pos.line + clipboard_nr_lines,
                             column: last_line_nr_chars,
-                        }
+                        })
                     } else {
-                        ed_model.caret_pos = Position {
+                        ed_model.text.set_caret(TextPos {
                             line: old_caret_pos.line,
                             column: old_caret_pos.column + last_line_nr_chars,
-                        }
+                        })
                     }
                 }
             }
@@ -79,12 +78,12 @@ pub fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
 pub fn handle_cut(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            let selected_str_opt = ed_model.get_selected_str()?;
+            let selected_str_opt = ed_model.text.get_selected_str()?;
 
             if let Some(selected_str) = selected_str_opt {
                 app_model::set_clipboard_txt(&mut app_model.clipboard_opt, selected_str)?;
 
-                ed_model.del_selection()?;
+                ed_model.text.del_selection()?;
             }
         }
     }
@@ -96,18 +95,20 @@ pub fn pass_keydown_to_focused(
     modifiers: &ModifiersState,
     virtual_keycode: VirtualKeyCode,
     app_model: &mut AppModel,
-) {
+) -> UIResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_update::handle_key_down(modifiers, virtual_keycode, ed_model);
+            ed_model.text.handle_key_down(modifiers, virtual_keycode)?;
         }
     }
+
+    Ok(())
 }
 
 pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_update::handle_new_char(received_char, ed_model)?;
+            ed_model.text.handle_new_char(received_char)?;
         }
     }
 
@@ -116,25 +117,24 @@ pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResu
 
 #[cfg(test)]
 pub mod test_app_update {
-    use crate::mvc::app_model;
-    use crate::mvc::app_model::{AppModel, Clipboard};
-    use crate::mvc::app_update::{handle_copy, handle_cut, handle_paste};
-    use crate::mvc::ed_model::{EdModel, Position, RawSelection};
-    use crate::mvc::ed_update::test_ed_update::gen_caret_text_buf;
-    use crate::selection::test_selection::{all_lines_vec, convert_selection_to_dsl};
-    use crate::text_buffer::TextBuffer;
+    use crate::editor::mvc::app_model;
+    use crate::editor::mvc::app_model::{AppModel, Clipboard};
+    use crate::editor::mvc::app_update::{handle_copy, handle_cut, handle_paste};
+    use crate::editor::mvc::ed_model::EdModel;
+    use crate::ui::text::{
+        big_selectable_text::test_big_sel_text::{
+            all_lines_vec, convert_selection_to_dsl, gen_big_text,
+        },
+        big_selectable_text::BigSelectableText,
+    };
 
     pub fn mock_app_model(
-        text_buf: TextBuffer,
-        caret_pos: Position,
-        selection_opt: Option<RawSelection>,
+        big_sel_text: BigSelectableText,
         clipboard_opt: Option<Clipboard>,
     ) -> AppModel {
         AppModel {
             ed_model_opt: Some(EdModel {
-                text_buf,
-                caret_pos,
-                selection_opt,
+                text: big_sel_text,
                 glyph_dim_rect_opt: None,
                 has_focus: true,
             }),
@@ -147,9 +147,9 @@ pub mod test_app_update {
         expected_clipboard_content: &str,
         clipboard_opt: Option<Clipboard>,
     ) -> Result<Option<Clipboard>, String> {
-        let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
+        let pre_text_buf = gen_big_text(pre_lines_str)?;
 
-        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, clipboard_opt);
+        let mut app_model = mock_app_model(pre_text_buf, clipboard_opt);
 
         handle_copy(&mut app_model)?;
 
@@ -166,21 +166,18 @@ pub mod test_app_update {
         expected_post_lines_str: &[&str],
         clipboard_opt: Option<Clipboard>,
     ) -> Result<Option<Clipboard>, String> {
-        let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
+        let pre_big_text = gen_big_text(pre_lines_str)?;
 
-        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, clipboard_opt);
+        let mut app_model = mock_app_model(pre_big_text, clipboard_opt);
 
         app_model::set_clipboard_txt(&mut app_model.clipboard_opt, clipboard_content)?;
 
         handle_paste(&mut app_model)?;
 
         let ed_model = app_model.ed_model_opt.unwrap();
-        let mut text_buf_lines = all_lines_vec(&ed_model.text_buf);
-        let post_lines_str = convert_selection_to_dsl(
-            ed_model.selection_opt,
-            ed_model.caret_pos,
-            &mut text_buf_lines,
-        )?;
+        let mut text_lines = all_lines_vec(&ed_model.text);
+        let post_lines_str =
+            convert_selection_to_dsl(ed_model.text.caret_w_select, &mut text_lines)?;
 
         assert_eq!(post_lines_str, expected_post_lines_str);
 
@@ -193,9 +190,9 @@ pub mod test_app_update {
         expected_post_lines_str: &[&str],
         clipboard_opt: Option<Clipboard>,
     ) -> Result<Option<Clipboard>, String> {
-        let (caret_pos, selection_opt, pre_text_buf) = gen_caret_text_buf(pre_lines_str)?;
+        let pre_big_text = gen_big_text(pre_lines_str)?;
 
-        let mut app_model = mock_app_model(pre_text_buf, caret_pos, selection_opt, clipboard_opt);
+        let mut app_model = mock_app_model(pre_big_text, clipboard_opt);
 
         handle_cut(&mut app_model)?;
 
@@ -204,12 +201,9 @@ pub mod test_app_update {
         assert_eq!(clipboard_content, expected_clipboard_content);
 
         let ed_model = app_model.ed_model_opt.unwrap();
-        let mut text_buf_lines = all_lines_vec(&ed_model.text_buf);
-        let post_lines_str = convert_selection_to_dsl(
-            ed_model.selection_opt,
-            ed_model.caret_pos,
-            &mut text_buf_lines,
-        )?;
+        let mut text_lines = all_lines_vec(&ed_model.text);
+        let post_lines_str =
+            convert_selection_to_dsl(ed_model.text.caret_w_select, &mut text_lines)?;
 
         assert_eq!(post_lines_str, expected_post_lines_str);
 
@@ -236,6 +230,7 @@ pub mod test_app_update {
         )?;
 
         // paste
+
         clipboard_opt = assert_paste(&["|"], "", &["|"], clipboard_opt)?;
         clipboard_opt = assert_paste(&["|"], "a", &["a|"], clipboard_opt)?;
         clipboard_opt = assert_paste(&["a|"], "b", &["ab|"], clipboard_opt)?;

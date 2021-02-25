@@ -517,6 +517,225 @@ mod gen_str {
     }
 
     #[test]
+    fn str_from_utf8_pass_single_ascii() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97 ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_pass_many_ascii() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97, 98, 99, 0x7E ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("abc~".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_pass_single_unicode() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 0xE2, 0x88, 0x86 ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("∆".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_pass_many_unicode() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("∆œ¬".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_pass_single_grapheme() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96 ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("💖".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_pass_many_grapheme() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80 ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("💖🤠🚀".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_pass_all() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86 ] is
+                        Ok val -> val
+                        Err _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("💖b∆".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_fail_invalid_start_byte() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97, 98, 0x80, 99 ] is
+                        Err (BadUtf8 InvalidStartByte byteIndex) ->
+                            if byteIndex == 2 then
+                                "a"
+                            else
+                                "b"
+                        _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_fail_unexpected_end_of_sequence() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97, 98, 99, 0xC2 ] is
+                        Err (BadUtf8 UnexpectedEndOfSequence byteIndex) ->
+                            if byteIndex == 3 then
+                                "a"
+                            else
+                                "b"
+                        _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_fail_expected_continuation() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97, 98, 99, 0xC2, 0x00 ] is
+                        Err (BadUtf8 ExpectedContinuation byteIndex) ->
+                            if byteIndex == 3 then
+                                "a"
+                            else
+                                "b"
+                        _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_fail_overlong_encoding() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97, 0xF0, 0x80, 0x80, 0x80 ] is
+                        Err (BadUtf8 OverlongEncoding byteIndex) ->
+                            if byteIndex == 1 then
+                                "a"
+                            else
+                                "b"
+                        _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_fail_codepoint_too_large() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97, 0xF4, 0x90, 0x80, 0x80 ] is
+                        Err (BadUtf8 CodepointTooLarge byteIndex) ->
+                            if byteIndex == 1 then
+                                "a"
+                            else
+                                "b"
+                        _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
+    fn str_from_utf8_fail_surrogate_half() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Str.fromUtf8 [ 97, 98, 0xED, 0xA0, 0x80 ] is
+                        Err (BadUtf8 EncodesSurrogateHalf byteIndex) ->
+                            if byteIndex == 2 then
+                                "a"
+                            else
+                                "b"
+                        _ -> ""
+                "#
+            ),
+            roc_std::RocStr::from_slice("a".as_bytes()),
+            roc_std::RocStr
+        );
+    }
+
+    #[test]
     fn str_equality() {
         assert_evals_to!(r#""a" == "a""#, true, bool);
         assert_evals_to!(

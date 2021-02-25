@@ -1,6 +1,7 @@
-use crate::graphics::colors;
+use crate::editor::colors as ed_colors;
+use crate::graphics::colors as gr_colors;
 use crate::graphics::primitives;
-use colors::ColorTup;
+use gr_colors::ColorTup;
 
 //TODO optimize memory allocation
 //TODO this is a demo function, the AST should be used for highlighting, see #904.
@@ -10,16 +11,16 @@ pub fn highlight_code(
 ) {
     let split_code = split_inclusive(&code_text.text);
 
-    let mut active_color = colors::WHITE;
+    let mut active_color = gr_colors::WHITE;
     let mut same_type_str = String::new();
 
     for token_seq in split_code {
         let new_word_color = if token_seq.contains(&'\"'.to_string()) {
-            colors::CODE_COLOR
+            ed_colors::STRING_SYNTAX_COL
         } else if token_seq.contains(&'='.to_string()) {
-            colors::BLACK
+            ed_colors::EQUALS_SYNTAX_COL
         } else {
-            colors::WHITE
+            gr_colors::WHITE
         };
 
         if new_word_color != active_color {
