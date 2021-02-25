@@ -379,6 +379,13 @@ pub enum EExpr<'a> {
     Dot(Row, Col),
     Access(Row, Col),
 
+    Def(&'a SyntaxError<'a>, Row, Col),
+    IndentDefBody(Row, Col),
+    IndentEquals(Row, Col),
+    Equals(Row, Col),
+
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
     When(When<'a>, Row, Col),
     If(If<'a>, Row, Col),
 
