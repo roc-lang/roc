@@ -11,8 +11,8 @@ use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
-    specialize_ref, then, unexpected, unexpected_eof, word1, word2, EExpr, EInParens, ELambda,
-    ERecord, Either, If, List, ParseResult, Parser, State, SyntaxError, When,
+    specialize_ref, then, trailing_sep_by0, unexpected, unexpected_eof, word1, word2, EExpr,
+    EInParens, ELambda, ERecord, Either, If, List, ParseResult, Parser, State, SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -32,7 +32,7 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
 fn loc_expr_in_parens_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EInParens<'a>> {
-    debug!(move |arena, state| {
+    move |arena, state| {
         let (_, loc_expr, state) = loc_expr_in_parens_help_help(min_indent).parse(arena, state)?;
 
         Ok((
@@ -43,7 +43,7 @@ fn loc_expr_in_parens_help<'a>(
             },
             state,
         ))
-    })
+    }
 }
 
 fn loc_expr_in_parens_help_help<'a>(
@@ -503,7 +503,10 @@ pub fn expr_to_pattern<'a>(
         | Expr::Record {
             update: Some(_), ..
         }
-        | Expr::UnaryOp(_, _) => Err(SyntaxError::InvalidPattern),
+        | Expr::UnaryOp(_, _) => {
+            dbg!(&expr);
+            Err(SyntaxError::InvalidPattern)
+        }
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
         Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
@@ -1820,9 +1823,26 @@ pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
 
 /// Like equals_for_def(), except it produces the indent_col of the state rather than ()
 pub fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
-    move |arena, state: State<'a>| match word1(b'=', EExpr::Equals).parse(arena, state) {
-        Ok((_, _, state)) => Ok((MadeProgress, state.indent_col, state)),
-        Err(bad) => Err(bad),
+    move |arena, state: State<'a>| {
+        let equals = EExpr::Equals(state.line, state.column);
+        let indent_col = state.indent_col;
+
+        match state.bytes.first() {
+            Some(b'=') => {
+                match state.bytes.get(1) {
+                    // The '=' must not be followed by another `=` or `>`
+                    // (See equals_for_def() for explanation)
+                    Some(b'=') | Some(b'>') => Err((NoProgress, equals, state)),
+                    Some(_) => match state.advance_without_indenting_e(arena, 1, EExpr::Space) {
+                        Err(bad) => Err(bad),
+                        Ok(good) => Ok((MadeProgress, indent_col, good)),
+                    },
+                    None => Err((NoProgress, equals, state)),
+                }
+            }
+            Some(_) => Err((NoProgress, equals, state)),
+            None => Err((NoProgress, equals, state)),
+        }
     }
 }
 
@@ -1960,15 +1980,6 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>>
     }
 }
 
-fn record_field<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, AssignedField<'a, Expr<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Expr(EExpr::Record(e, r, c)),
-        record_field_help(min_indent),
-    )
-}
-
 fn record_field_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
@@ -2024,104 +2035,94 @@ fn record_field_help<'a>(
     }
 }
 
-// #[macro_export]
-// macro_rules! record_field {
-//     ($val_parser:expr, $min_indent:expr) => {
-//         move |arena: &'a bumpalo::Bump,
-//               state: $crate::parser::State<'a>|
-//               -> $crate::parser::ParseResult<'a, $crate::ast::AssignedField<'a, _>, _> {
-//             use $crate::ast::AssignedField::*;
-//             use $crate::blankspace::{space0, space0_before};
-//             use $crate::ident::lowercase_ident;
-//             use $crate::parser::ascii_char;
-//
-//             // You must have a field name, e.g. "email"
-//             let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
-//             debug_assert_eq!(progress, MadeProgress);
-//
-//             let (_, spaces, state) = space0($min_indent).parse(arena, state)?;
-//
-//             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
-//             // (This is true in both literals and types.)
-//             let (_, opt_loc_val, state) = $crate::parser::optional(skip_first!(
-//                 ascii_char(b':'),
-//                 space0_before($val_parser, $min_indent)
-//             ))
-//             .parse(arena, state)?;
-//
-//             let answer = match opt_loc_val {
-//                 Some(loc_val) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
-//
-//                 // If no value was provided, record it as a Var.
-//                 // Canonicalize will know what to do with a Var later.
-//                 None => {
-//                     if !spaces.is_empty() {
-//                         SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-//                     } else {
-//                         LabelOnly(loc_label)
-//                     }
-//                 }
-//             };
-//
-//             Ok((MadeProgress, answer, state))
-//         }
-//     };
-// }
-
-#[macro_export]
-macro_rules! record {
-    ($val_parser:expr, $min_indent:expr) => {
-        skip_first!(
-            $crate::parser::ascii_char(b'{'),
-            and!(
-                // You can optionally have an identifier followed by an '&' to
-                // make this a record update, e.g. { Foo.user & username: "blah" }.
-                $crate::parser::optional(skip_second!(
-                    $crate::blankspace::space0_around(
-                        // We wrap the ident in an Expr here,
-                        // so that we have a Spaceable value to work with,
-                        // and then in canonicalization verify that it's an Expr::Var
-                        // (and not e.g. an `Expr::Access`) and extract its string.
-                        loc!(map_with_arena!(
-                            $crate::expr::ident(),
-                            $crate::expr::ident_to_expr
-                        )),
-                        $min_indent
-                    ),
-                    $crate::parser::ascii_char(b'&')
-                )),
-                loc!(skip_first!(
-                    // We specifically allow space characters inside here, so that
-                    // `{  }` can be successfully parsed as an empty record, and then
-                    // changed by the formatter back into `{}`.
-                    zero_or_more!($crate::parser::ascii_char(b' ')),
-                    skip_second!(
-                        and!(
-                            $crate::parser::trailing_sep_by0(
-                                $crate::parser::ascii_char(b','),
-                                $crate::blankspace::space0_around(
-                                    loc!(record_field($min_indent)),
-                                    $min_indent
-                                ),
-                            ),
-                            $crate::blankspace::space0($min_indent)
-                        ),
-                        $crate::parser::ascii_char(b'}')
-                    )
-                ))
-            )
-        )
-    };
+fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
+    specialize(
+        |_, r, c| ERecord::Updateable(r, c),
+        map_with_arena!(ident(), ident_to_expr),
+    )
 }
 
-// Parser<'a, Vec<'a, Located<AssignedField<'a, S>>>>
+fn record_literal_wrapper<'a>(
+    min_indent: u16,
+) -> impl Parser<
+    'a,
+    (
+        Option<Located<Expr<'a>>>,
+        Located<(
+            Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
+            &'a [CommentOrNewline<'a>],
+        )>,
+    ),
+    SyntaxError<'a>,
+> {
+    specialize(
+        |e, r, c| SyntaxError::Expr(EExpr::Record(e, r, c)),
+        record_help(min_indent),
+    )
+}
+
+fn record_help<'a>(
+    min_indent: u16,
+) -> impl Parser<
+    'a,
+    (
+        Option<Located<Expr<'a>>>,
+        Located<(
+            Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
+            &'a [CommentOrNewline<'a>],
+        )>,
+    ),
+    ERecord<'a>,
+> {
+    skip_first!(
+        word1(b'{', ERecord::Open),
+        and!(
+            // You can optionally have an identifier followed by an '&' to
+            // make this a record update, e.g. { Foo.user & username: "blah" }.
+            optional(skip_second!(
+                space0_around_ee(
+                    // We wrap the ident in an Expr here,
+                    // so that we have a Spaceable value to work with,
+                    // and then in canonicalization verify that it's an Expr::Var
+                    // (and not e.g. an `Expr::Access`) and extract its string.
+                    loc!(record_updateable_identifier()),
+                    min_indent,
+                    ERecord::Space,
+                    ERecord::IndentEnd,
+                    ERecord::IndentAmpersand,
+                ),
+                word1(b'&', ERecord::Ampersand)
+            )),
+            loc!(skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `{  }` can be successfully parsed as an empty record, and then
+                // changed by the formatter back into `{}`.
+                zero_or_more!(word1(b' ', ERecord::End)),
+                skip_second!(
+                    and!(
+                        trailing_sep_by0(
+                            word1(b',', ERecord::End),
+                            space0_around_ee(
+                                loc!(record_field_help(min_indent)),
+                                min_indent,
+                                ERecord::Space,
+                                ERecord::IndentEnd,
+                                ERecord::IndentEnd
+                            ),
+                        ),
+                        space0_e(min_indent, ERecord::Space, ERecord::IndentEnd)
+                    ),
+                    word1(b'}', ERecord::End)
+                )
+            ))
+        )
+    )
+}
+
 fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     then(
         and!(
-            attempt!(
-                Attempting::Record,
-                loc!(record!(loc!(expr(min_indent)), min_indent))
-            ),
+            attempt!(Attempting::Record, loc!(record_literal_wrapper(min_indent))),
             optional(and!(
                 space0(min_indent),
                 either!(equals_with_indent(), colon_with_indent())

@@ -404,6 +404,7 @@ pub enum ERecord<'a> {
     End(Row, Col),
     Open(Row, Col),
 
+    Updateable(Row, Col),
     Field(Row, Col),
     Colon(Row, Col),
     QuestionMark(Row, Col),
