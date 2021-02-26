@@ -62,6 +62,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
         STR_FROM_UTF8 => str_from_utf8,
+        STR_TO_BYTES => str_to_bytes,
         STR_FROM_FLOAT=> str_from_float,
         LIST_LEN => list_len,
         LIST_GET => list_get,
@@ -152,6 +153,11 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
         NUM_BITWISE_XOR => num_bitwise_xor,
+        NUM_BITWISE_OR => num_bitwise_or,
+        NUM_SHIFT_LEFT=> num_shift_left_by,
+        NUM_SHIFT_RIGHT => num_shift_right_by,
+        NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
+        NUM_INT_CAST=> num_int_cast,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
         RESULT_WITH_DEFAULT => result_with_default,
@@ -191,6 +197,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::STR_FROM_INT => str_from_int,
         Symbol::STR_FROM_UTF8 => str_from_utf8,
+        Symbol::STR_TO_BYTES => str_to_bytes,
         Symbol::STR_FROM_FLOAT=> str_from_float,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
@@ -275,6 +282,13 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ASIN => num_asin,
         Symbol::NUM_MAX_INT => num_max_int,
         Symbol::NUM_MIN_INT => num_min_int,
+        Symbol::NUM_BITWISE_AND => num_bitwise_and,
+        Symbol::NUM_BITWISE_XOR => num_bitwise_xor,
+        Symbol::NUM_BITWISE_OR => num_bitwise_or,
+        Symbol::NUM_SHIFT_LEFT => num_shift_left_by,
+        Symbol::NUM_SHIFT_RIGHT => num_shift_right_by,
+        Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
+        Symbol::NUM_INT_CAST=> num_int_cast,
         Symbol::RESULT_MAP => result_map,
         Symbol::RESULT_MAP_ERR => result_map_err,
         Symbol::RESULT_WITH_DEFAULT => result_with_default,
@@ -1301,6 +1315,31 @@ fn num_bitwise_xor(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseXor)
 }
 
+/// Num.bitwiseOr: Int, Int -> Int
+fn num_bitwise_or(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumBitwiseOr)
+}
+
+/// Num.shiftLeftBy: Nat, Int a -> Int a
+fn num_shift_left_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumShiftLeftBy, var_store)
+}
+
+/// Num.shiftRightBy: Nat, Int a -> Int a
+fn num_shift_right_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumShiftRightBy, var_store)
+}
+
+/// Num.shiftRightZfBy: Nat, Int a -> Int a
+fn num_shift_right_zf_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumShiftRightZfBy, var_store)
+}
+
+/// Num.intCast: Int a -> Int b
+fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
 /// List.isEmpty : List * -> Bool
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -1559,7 +1598,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 Access {
                     record_var,
                     ext_var: var_store.fresh(),
-                    field: "isOk".into(),
+                    field: "c_isOk".into(),
                     field_var: var_store.fresh(),
                     loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                 },
@@ -1571,7 +1610,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 vec![Access {
                     record_var,
                     ext_var: var_store.fresh(),
-                    field: "str".into(),
+                    field: "b_str".into(),
                     field_var: var_store.fresh(),
                     loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                 }],
@@ -1588,14 +1627,14 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         Access {
                             record_var,
                             ext_var: var_store.fresh(),
-                            field: "problem".into(),
+                            field: "d_problem".into(),
                             field_var: var_store.fresh(),
                             loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                         },
                         Access {
                             record_var,
                             ext_var: var_store.fresh(),
-                            field: "byteIndex".into(),
+                            field: "a_byteIndex".into(),
                             field_var: var_store.fresh(),
                             loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                         },
@@ -1616,6 +1655,11 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+/// Str.toBytes : Str -> List U8
+fn str_to_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrToBytes, var_store)
 }
 
 /// Str.fromFloat : Float * -> Str

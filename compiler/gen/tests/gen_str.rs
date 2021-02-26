@@ -816,4 +816,17 @@ mod gen_str {
     fn str_from_float() {
         assert_evals_to!(r#"Str.fromFloat 3.14"#, RocStr::from("3.140000"), RocStr);
     }
+
+    #[test]
+    fn str_to_bytes() {
+        assert_evals_to!(r#"Str.toBytes "hello""#, &[104, 101, 108, 108, 111], &[u8]);
+        assert_evals_to!(
+            r#"Str.toBytes "this is a long string""#,
+            &[
+                116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116,
+                114, 105, 110, 103
+            ],
+            &[u8]
+        );
+    }
 }

@@ -841,15 +841,21 @@ define_builtins! {
         80 NUM_BINARY32: "Binary32" imported
         81 NUM_BITWISE_AND: "bitwiseAnd"
         82 NUM_BITWISE_XOR: "bitwiseXor"
-        83 NUM_SUB_WRAP: "subWrap"
-        84 NUM_SUB_CHECKED: "subChecked"
-        85 NUM_MUL_WRAP: "mulWrap"
-        86 NUM_MUL_CHECKED: "mulChecked"
-        87 NUM_INT: "Int" imported
-        88 NUM_FLOAT: "Float" imported
-        89 NUM_AT_NATURAL: "@Natural"
-        90 NUM_NATURAL: "Natural" imported
-        91 NUM_NAT: "Nat" imported
+        83 NUM_BITWISE_OR: "bitwiseOr"
+        84 NUM_SHIFT_LEFT: "shiftLeftBy"
+        85 NUM_SHIFT_RIGHT: "shiftRightBy"
+        86 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
+        87 NUM_SUB_WRAP: "subWrap"
+        88 NUM_SUB_CHECKED: "subChecked"
+        89 NUM_MUL_WRAP: "mulWrap"
+        90 NUM_MUL_CHECKED: "mulChecked"
+        91 NUM_INT: "Int" imported
+        92 NUM_FLOAT: "Float" imported
+        93 NUM_AT_NATURAL: "@Natural"
+        94 NUM_NATURAL: "Natural" imported
+        95 NUM_NAT: "Nat" imported
+        96 NUM_INT_CAST: "intCast"
+
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -876,6 +882,7 @@ define_builtins! {
         12 STR_FROM_UTF8: "fromUtf8"
         13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
+        15 STR_TO_BYTES: "toBytes"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
