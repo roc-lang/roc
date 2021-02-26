@@ -14,19 +14,15 @@ use crate::{
     lang::{ast::Expr2, expr::Env},
 };
 
-fn pool_str_len<'a>(env: &Env<'a>, pool_str: &PoolStr) -> usize {
-    env.pool.get_str(pool_str).len()
-}
-
 // calculate the str len, necessary for BumpString
 fn expr2_to_len<'a>(env: &Env<'a>, expr2: &Expr2) -> usize {
     match expr2 {
-        Expr2::SmallInt { text, .. } => pool_str_len(env, text),
-        Expr2::I128 { text, .. } => pool_str_len(env, text),
-        Expr2::U128 { text, .. } => pool_str_len(env, text),
-        Expr2::Float { text, .. } => pool_str_len(env, text),
-        Expr2::Str(text) => pool_str_len(env, text),
-        Expr2::GlobalTag { name, .. } => pool_str_len(env, name),
+        Expr2::SmallInt { text, .. } => text.len(env.pool),
+        Expr2::I128 { text, .. } => text.len(env.pool),
+        Expr2::U128 { text, .. } => text.len(env.pool),
+        Expr2::Float { text, .. } => text.len(env.pool),
+        Expr2::Str(text) => text.len(env.pool),
+        Expr2::GlobalTag { name, .. } => name.len(env.pool),
         Expr2::Call { expr: expr_id, .. } => {
             let expr = env.pool.get(*expr_id);
 
@@ -59,7 +55,7 @@ fn expr2_to_len<'a>(env: &Env<'a>, expr2: &Expr2) -> usize {
             for (idx, node_id) in fields.iter_node_ids().enumerate() {
                 let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(node_id);
 
-                len_ctr += pool_str_len(env, &pool_field_name);
+                len_ctr += pool_field_name.len(env.pool);
 
                 let sub_expr2 = env.pool.get(*sub_expr2_node_id);
                 let sub_expr2_len = expr2_to_len(env, sub_expr2);
@@ -77,7 +73,7 @@ fn expr2_to_len<'a>(env: &Env<'a>, expr2: &Expr2) -> usize {
 }
 
 fn get_bump_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, pool_str: &PoolStr) -> BumpString<'a> {
-    let env_str = env.pool.get_str(pool_str);
+    let env_str = pool_str.as_str(env.pool);
 
     BumpString::from_str_in(env_str, arena)
 }
@@ -128,7 +124,7 @@ pub fn expr2_to_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, expr2: &Expr2) -> Bu
             for (idx, node_id) in fields.iter_node_ids().enumerate() {
                 let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(node_id);
 
-                let field_name = env.pool.get_str(pool_field_name);
+                let field_name = pool_field_name.as_str(env.pool);
 
                 let sub_expr2 = env.pool.get(*sub_expr2_node_id);
 

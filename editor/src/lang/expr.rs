@@ -508,22 +508,31 @@ pub fn to_expr2<'a>(
             Output::default(),
         ),
 
-        If(cond, then_branch, else_branch) => {
-            let (cond, mut output) = to_expr2(env, scope, &cond.value, cond.region);
+        If(branches, final_else) => {
+            let mut new_branches = Vec::with_capacity(branches.len());
+            let mut output = Output::default();
 
-            let (then_expr, then_output) =
-                to_expr2(env, scope, &then_branch.value, then_branch.region);
+            for (condition, then_branch) in branches.iter() {
+                let (cond, cond_output) = to_expr2(env, scope, &condition.value, condition.region);
+
+                let (then_expr, then_output) =
+                    to_expr2(env, scope, &then_branch.value, then_branch.region);
+
+                output.references.union_mut(cond_output.references);
+                output.references.union_mut(then_output.references);
+
+                new_branches.push((cond, then_expr));
+            }
 
             let (else_expr, else_output) =
-                to_expr2(env, scope, &else_branch.value, else_branch.region);
+                to_expr2(env, scope, &final_else.value, final_else.region);
 
-            output.references.union_mut(then_output.references);
             output.references.union_mut(else_output.references);
 
             let expr = Expr2::If {
                 cond_var: env.var_store.fresh(),
                 expr_var: env.var_store.fresh(),
-                branches: PoolVec::new(vec![(cond, then_expr)].into_iter(), env.pool),
+                branches: PoolVec::new(new_branches.into_iter(), env.pool),
                 final_else: env.pool.add(else_expr),
             };
 

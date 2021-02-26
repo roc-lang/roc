@@ -135,6 +135,9 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
         Err(LoadingProblem::ParsingFailedReport(report)) => {
             print!("{}", report);
         }
+        Err(LoadingProblem::NoPlatform(report)) => {
+            print!("{}", report);
+        }
         Err(other) => {
             panic!("build_file failed with error:\n{:?}", other);
         }

@@ -674,32 +674,43 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::If(cond, then_branch, else_branch) => {
-            let (loc_cond, mut output) =
-                canonicalize_expr(env, var_store, scope, cond.region, &cond.value);
-            let (loc_then, then_output) = canonicalize_expr(
-                env,
-                var_store,
-                scope,
-                then_branch.region,
-                &then_branch.value,
-            );
+        ast::Expr::If(if_thens, final_else_branch) => {
+            let mut branches = Vec::with_capacity(1);
+            let mut output = Output::default();
+
+            for (condition, then_branch) in if_thens.iter() {
+                let (loc_cond, cond_output) =
+                    canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+
+                let (loc_then, then_output) = canonicalize_expr(
+                    env,
+                    var_store,
+                    scope,
+                    then_branch.region,
+                    &then_branch.value,
+                );
+
+                branches.push((loc_cond, loc_then));
+
+                output.references = output.references.union(cond_output.references);
+                output.references = output.references.union(then_output.references);
+            }
+
             let (loc_else, else_output) = canonicalize_expr(
                 env,
                 var_store,
                 scope,
-                else_branch.region,
-                &else_branch.value,
+                final_else_branch.region,
+                &final_else_branch.value,
             );
 
-            output.references = output.references.union(then_output.references);
             output.references = output.references.union(else_output.references);
 
             (
                 If {
                     cond_var: var_store.fresh(),
                     branch_var: var_store.fresh(),
-                    branches: vec![(loc_cond, loc_then)],
+                    branches,
                     final_else: Box::new(loc_else),
                 },
                 output,
