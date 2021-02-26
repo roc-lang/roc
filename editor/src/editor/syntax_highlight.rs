@@ -30,12 +30,11 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (Variable, gr_colors::WHITE),
         (RecordField, from_hsb(258, 50, 90)),
         // comment from_hsb(285, 6, 47) or 186, 35, 40
-    ].iter()
-    .for_each(
-        |tup| {highlight_map.insert(tup.0, tup.1);}
-    );
-
-   
+    ]
+    .iter()
+    .for_each(|tup| {
+        highlight_map.insert(tup.0, tup.1);
+    });
 
     highlight_map
 }

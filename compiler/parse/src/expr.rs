@@ -2,8 +2,8 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_e,
-    space0_before, space0_before_e, space0_e, space1, space1_around, space1_before, spaces_exactly,
+    line_comment, space0, space0_after, space0_after_e, space0_around, space0_around_ee,
+    space0_before, space0_before_e, space0_e, space1, space1_before, spaces_exactly,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -11,8 +11,8 @@ use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     fail, map, newline_char, not, not_followed_by, optional, sep_by1, specialize, specialize_ref,
-    then, unexpected, unexpected_eof, word1, word2, EExpr, Either, ParseResult, Parser, State,
-    SyntaxError, When,
+    then, unexpected, unexpected_eof, word1, word2, BadInputError, EExpr, Either, If, List,
+    ParseResult, Parser, State, SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -324,7 +324,7 @@ pub fn expr_to_pattern<'a>(
         | Expr::Closure(_, _)
         | Expr::BinOp(_)
         | Expr::Defs(_, _)
-        | Expr::If(_, _, _)
+        | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _, _)
@@ -1029,14 +1029,15 @@ mod when {
             and!(
                 when_with_indent(),
                 skip_second!(
-                    space0_around_e(
+                    space0_around_ee(
                         loc!(specialize_ref(
                             When::Syntax,
                             move |arena, state| parse_expr(min_indent, arena, state)
                         )),
                         min_indent,
                         When::Space,
-                        When::IndentCondition
+                        When::IndentCondition,
+                        When::IndentIs,
                     ),
                     parser::keyword_e(keyword::IS, When::Is)
                 )
@@ -1182,13 +1183,14 @@ mod when {
                     skip_first!(
                         parser::keyword_e(keyword::IF, When::IfToken),
                         // TODO we should require space before the expression but not after
-                        space0_around_e(
+                        space0_around_ee(
                             loc!(specialize_ref(When::IfGuard, move |arena, state| {
                                 parse_expr(min_indent, arena, state)
                             })),
                             min_indent,
                             When::Space,
                             When::IndentIfGuard,
+                            When::IndentArrow,
                         )
                     ),
                     Some
@@ -1234,41 +1236,100 @@ mod when {
     }
 }
 
-pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    map_with_arena!(
-        and!(
-            skip_first!(
-                parser::keyword(keyword::IF, min_indent),
-                space1_around(
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent,
-                )
+fn if_branch<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, (Located<Expr<'a>>, Located<Expr<'a>>), If<'a>> {
+    move |arena, state| {
+        // NOTE: only parse spaces before the expression
+        let (_, cond, state) = space0_around_ee(
+            specialize_ref(
+                If::Syntax,
+                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
             ),
-            and!(
-                skip_first!(
-                    parser::keyword(keyword::THEN, min_indent),
-                    space1_around(
-                        loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                        min_indent,
-                    )
-                ),
-                skip_first!(
-                    parser::keyword(keyword::ELSE, min_indent),
-                    // NOTE changed this from space1_around to space1_before
-                    space1_before(
-                        loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                        min_indent,
-                    )
-                )
-            )
-        ),
-        |arena: &'a Bump, (condition, (then_branch, else_branch))| {
-            Expr::If(
-                &*arena.alloc(condition),
-                &*arena.alloc(then_branch),
-                &*arena.alloc(else_branch),
-            )
-        }
+            min_indent,
+            If::Space,
+            If::IndentCondition,
+            If::IndentThenToken,
+        )
+        .parse(arena, state)
+        .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let (_, _, state) = parser::keyword_e(keyword::THEN, If::Then)
+            .parse(arena, state)
+            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let (_, then_branch, state) = space0_around_ee(
+            specialize_ref(
+                If::Syntax,
+                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            min_indent,
+            If::Space,
+            If::IndentThenBranch,
+            If::IndentElseToken,
+        )
+        .parse(arena, state)
+        .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let (_, _, state) = parser::keyword_e(keyword::ELSE, If::Else)
+            .parse(arena, state)
+            .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        Ok((MadeProgress, (cond, then_branch), state))
+    }
+}
+
+pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
+    move |arena: &'a Bump, state| {
+        let (_, _, state) = parser::keyword_e(keyword::IF, If::If).parse(arena, state)?;
+
+        let mut branches = Vec::with_capacity_in(1, arena);
+
+        let mut loop_state = state;
+
+        let state_final_else = loop {
+            let (_, (cond, then_branch), state) = if_branch(min_indent).parse(arena, loop_state)?;
+
+            branches.push((cond, then_branch));
+
+            // try to parse another `if`
+            // NOTE this drops spaces between the `else` and the `if`
+            let optional_if = and!(
+                backtrackable(space0_e(min_indent, If::Space, If::IndentIf)),
+                parser::keyword_e(keyword::IF, If::If)
+            );
+
+            match optional_if.parse(arena, state) {
+                Err((_, _, state)) => break state,
+                Ok((_, _, state)) => {
+                    loop_state = state;
+                    continue;
+                }
+            }
+        };
+
+        let (_, else_branch, state) = space0_before_e(
+            specialize_ref(
+                If::Syntax,
+                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            min_indent,
+            If::Space,
+            If::IndentElseBranch,
+        )
+        .parse(arena, state_final_else)
+        .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let expr = Expr::If(branches.into_bump_slice(), arena.alloc(else_branch));
+
+        Ok((MadeProgress, expr, state))
+    }
+}
+
+pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Expr(EExpr::If(e, r, c)),
+        if_expr_help(min_indent),
     )
 }
 
@@ -1632,35 +1693,40 @@ fn binop<'a>() -> impl Parser<'a, BinOp, SyntaxError<'a>> {
         map!(ascii_char(b'%'), |_| BinOp::Percent)
     )
 }
-
-pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    let elems = collection_trailing_sep!(
-        ascii_char(b'['),
-        loc!(expr(min_indent)),
-        ascii_char(b','),
-        ascii_char(b']'),
-        min_indent
-    );
-
-    parser::attempt(
-        Attempting::List,
-        map_with_arena!(elems, |arena,
-                                (parsed_elems, final_comments): (
-            Vec<'a, Located<Expr<'a>>>,
-            &'a [CommentOrNewline<'a>]
-        )| {
-            let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
-
-            for parsed_elem in parsed_elems {
-                allocated.push(&*arena.alloc(parsed_elem));
-            }
-
-            Expr::List {
-                items: allocated.into_bump_slice(),
-                final_comments,
-            }
-        }),
+fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Expr(EExpr::List(e, r, c)),
+        list_literal_help(min_indent),
     )
+}
+
+fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>> {
+    move |arena, state| {
+        let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
+            word1(b'[', List::Open),
+            specialize_ref(List::Syntax, loc!(expr(min_indent))),
+            word1(b',', List::End),
+            word1(b']', List::End),
+            min_indent,
+            List::Open,
+            List::Space,
+            List::IndentEnd
+        )
+        .parse(arena, state)?;
+
+        let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
+
+        for parsed_elem in parsed_elems {
+            allocated.push(&*arena.alloc(parsed_elem));
+        }
+
+        let expr = Expr::List {
+            items: allocated.into_bump_slice(),
+            final_comments,
+        };
+
+        Ok((MadeProgress, expr, state))
+    }
 }
 
 // Parser<'a, Vec<'a, Located<AssignedField<'a, S>>>>

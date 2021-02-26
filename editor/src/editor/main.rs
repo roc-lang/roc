@@ -1,18 +1,16 @@
 use super::keyboard_input;
 use crate::editor::{
-    theme::EdTheme,
+    config::Config,
     ed_error::{print_err, print_ui_err},
     mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view},
-    config::Config,
+    theme::EdTheme,
 };
 use crate::graphics::{
     colors::to_wgpu_color,
     lowlevel::buffer::create_rect_buffers,
     lowlevel::ortho::update_ortho_buffer,
     lowlevel::pipelines,
-    primitives::text::{
-        build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text,
-    },
+    primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
     style::CODE_TXT_XY,
 };
 use crate::ui::{text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};

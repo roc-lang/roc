@@ -1,8 +1,8 @@
 use super::ed_model::EdModel;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::{
-    theme::UITheme,
     text::{selection::create_selection_rects, text_pos::TextPos},
+    theme::UITheme,
     ui_error::{MissingGlyphDims, UIResult},
 };
 

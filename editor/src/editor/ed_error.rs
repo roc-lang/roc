@@ -34,10 +34,7 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
-    #[snafu(display(
-        "KeyNotFound: key {} was not found in HashMap.",
-        key_str,
-    ))]
+    #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
     KeyNotFound {
         key_str: String,
         backtrace: Backtrace,

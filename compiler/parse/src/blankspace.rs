@@ -60,11 +60,12 @@ where
     )
 }
 
-pub fn space0_around_e<'a, P, S, E>(
+pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
     min_indent: u16,
     space_problem: fn(BadInputError, Row, Col) -> E,
-    indent_problem: fn(Row, Col) -> E,
+    indent_before_problem: fn(Row, Col) -> E,
+    indent_after_problem: fn(Row, Col) -> E,
 ) -> impl Parser<'a, Located<S>, E>
 where
     S: Spaceable<'a>,
@@ -75,8 +76,11 @@ where
 {
     parser::map_with_arena(
         and(
-            space0_e(min_indent, space_problem, indent_problem),
-            and(parser, space0_e(min_indent, space_problem, indent_problem)),
+            space0_e(min_indent, space_problem, indent_before_problem),
+            and(
+                parser,
+                space0_e(min_indent, space_problem, indent_after_problem),
+            ),
         ),
         move |arena: &'a Bump,
               tuples: (
