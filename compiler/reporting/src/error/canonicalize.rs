@@ -305,24 +305,35 @@ pub fn can_problem<'b>(
                 alloc.reflow(" can occur in this position."),
             ]),
         ]),
-        Problem::InvalidHexadecimal(region) => {
-            todo!(
-                "TODO report an invalid hexadecimal number in a \\u(...) code point at region {:?}",
-                region
-            );
-        }
-        Problem::InvalidUnicodeCodePoint(region) => {
-            todo!(
-                "TODO report an invalid \\u(...) code point at region {:?}",
-                region
-            );
-        }
-        Problem::InvalidInterpolation(region) => {
-            todo!(
-                "TODO report an invalid string interpolation at region {:?}",
-                region
-            );
-        }
+        Problem::InvalidHexadecimal(region) => alloc.stack(vec![
+            alloc.reflow("This unicode code point is invalid:"),
+            alloc.region(region),
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting a hexadecimal number, like "),
+                alloc.parser_suggestion("\\u(1100)"),
+                alloc.reflow(" or "),
+                alloc.parser_suggestion("\\u(00FF)"),
+                alloc.text("."),
+            ]),
+            alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
+        ]),
+        Problem::InvalidUnicodeCodePoint(region) => alloc.stack(vec![
+            alloc.reflow("This unicode code point is invalid:"),
+            alloc.region(region),
+            alloc.reflow("Learn more about working with unicode in roc at TODO"),
+        ]),
+        Problem::InvalidInterpolation(region) => alloc.stack(vec![
+            alloc.reflow("This string interpolation is invalid:"),
+            alloc.region(region),
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting an identifier, like "),
+                alloc.parser_suggestion("\\u(message)"),
+                alloc.reflow(" or "),
+                alloc.parser_suggestion("\\u(LoremIpsum.text)"),
+                alloc.text("."),
+            ]),
+            alloc.reflow(r"Learn more about string interpolation at TODO"),
+        ]),
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 

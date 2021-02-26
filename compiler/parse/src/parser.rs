@@ -429,17 +429,17 @@ pub enum EString<'a> {
     Space(BadInputError, Row, Col),
     EndlessSingle(Row, Col),
     EndlessMulti,
-    StringEscape(Escape),
-    Format(&'a SyntaxError<'a>),
+    UnknownEscape(Row, Col),
+    Format(&'a SyntaxError<'a>, Row, Col),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Escape {
-    EscapeUnknown,
-    BadUnicodeFormat(u16),
-    BadUnicodeCode(u16),
-    BadUnicodeLength(u16, i32, i32),
-}
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// pub enum Escape {
+//     EscapeUnknown,
+//     BadUnicodeFormat(u16),
+//     BadUnicodeCode(u16),
+//     BadUnicodeLength(u16, i32, i32),
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERecord<'a> {

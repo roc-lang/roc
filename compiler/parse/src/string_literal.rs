@@ -2,8 +2,8 @@ use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
 use crate::parser::{
-    allocated, ascii_char, loc, parse_utf8, specialize_ref, unexpected_eof, word1, BadInputError,
-    EString, Escape, ParseResult, Parser, State, SyntaxError,
+    allocated, ascii_char, loc, parse_utf8, specialize_ref, word1, BadInputError, EString, Parser,
+    State,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -232,7 +232,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
                             let (_progress, loc_expr, new_state) = specialize_ref(
-                                |e, _, _| EString::Format(e),
+                                EString::Format,
                                 skip_second!(loc(allocated(expr::expr(0))), ascii_char(b')')),
                             )
                             .parse(arena, state)?;
@@ -296,7 +296,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // escapable characters (\n, \t, \", \\, etc)
                             return Err((
                                 MadeProgress,
-                                EString::StringEscape(Escape::EscapeUnknown),
+                                EString::UnknownEscape(state.line, state.column),
                                 state,
                             ));
                         }
