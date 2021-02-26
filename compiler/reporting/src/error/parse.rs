@@ -603,10 +603,7 @@ fn to_if_report<'a>(
             start_row,
             start_col,
             alloc.concat(vec![
-                alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
-                alloc.parser_suggestion("->"),
-                alloc.reflow(" next."),
-                alloc.reflow(r"I was expecting to see a expression next"),
+                alloc.reflow(r"I was expecting to see a expression next")
             ]),
         ),
     }

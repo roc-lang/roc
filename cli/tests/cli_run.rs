@@ -231,11 +231,23 @@ mod cli_run {
     #[serial(astar)]
     fn run_astar_optimized_1() {
         check_output(
-            &example_file("benchmarks", "AStarTests.roc"),
-            "astar-tests",
+            &example_file("benchmarks", "TestAStar.roc"),
+            "test-astar",
             &[],
             "True\n",
             false,
+        );
+    }
+
+    #[test]
+    #[serial(base64)]
+    fn base64() {
+        check_output(
+            &example_file("benchmarks", "TestBase64.roc"),
+            "test-base64",
+            &[],
+            "SGVsbG8gV29ybGQ=\n",
+            true,
         );
     }
 
