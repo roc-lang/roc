@@ -5134,4 +5134,30 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn number_double_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1.1.1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                This float literal contains an invalid digit:
+                
+                1│  1.1.1
+                    ^^^^^
+                
+                Floating point literals can only contain the digits 0-9, or use
+                scientific notation 10e4
+                
+                Tip: Learn more about number literals at TODO
+            "#
+            ),
+        )
+    }
 }

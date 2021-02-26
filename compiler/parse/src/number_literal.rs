@@ -40,11 +40,10 @@ fn chomp_number_base<'a>(
     bytes: &'a [u8],
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, Number> {
-    let (_is_float, mut chomped) = chomp_number(bytes);
-    chomped += 2 + (is_negative as usize);
+    let (_is_float, chomped) = chomp_number(bytes);
 
     match parse_utf8(&bytes[0..chomped]) {
-        Ok(string) => match state.advance_without_indenting(chomped) {
+        Ok(string) => match state.advance_without_indenting(chomped + 2 + is_negative as usize) {
             Ok(new) => {
                 // all is well
                 Ok((
@@ -73,7 +72,7 @@ fn chomp_number_dec<'a>(
     bytes: &'a [u8],
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, Number> {
-    let (is_float, mut chomped) = chomp_number(bytes);
+    let (is_float, chomped) = chomp_number(bytes);
 
     if is_negative && chomped == 0 {
         // we're probably actually looking at unary negation here
@@ -85,11 +84,9 @@ fn chomp_number_dec<'a>(
         return Err((Progress::NoProgress, Number::End, state));
     }
 
-    chomped += is_negative as usize;
+    let string = unsafe { from_utf8_unchecked(&state.bytes[0..chomped + is_negative as usize]) };
 
-    let string = unsafe { from_utf8_unchecked(&state.bytes[0..chomped]) };
-
-    match state.advance_without_indenting(chomped) {
+    match state.advance_without_indenting(chomped + is_negative as usize) {
         Ok(new) => {
             // all is well
             Ok((

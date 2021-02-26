@@ -140,6 +140,21 @@ mod test_can {
     }
 
     #[test]
+    fn float_double_dot() {
+        let string = "1.1.1";
+        let region = Region::zero();
+
+        assert_can(
+            &string.clone(),
+            RuntimeError(RuntimeError::InvalidFloat(
+                FloatErrorKind::Error,
+                region,
+                string.into(),
+            )),
+        );
+    }
+
+    #[test]
     fn zero() {
         assert_can_num("0", 0);
     }
