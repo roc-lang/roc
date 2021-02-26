@@ -48,7 +48,6 @@ pub fn highlight_expr2<'a, 'b>(
             ))
         }
         Expr2::GlobalTag { name, .. } =>
-        // TODO split this string up for the brackets
         {
             highlight_tups.push((get_bump_str(arena, env, name), HighlightStyle::Type))
         }
