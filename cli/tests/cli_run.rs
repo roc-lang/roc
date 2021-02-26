@@ -230,9 +230,8 @@ mod cli_run {
     #[test]
     #[serial(astar)]
     fn run_astar_optimized_1() {
-        check_output_with_stdin(
+        check_output(
             &example_file("benchmarks", "AStarTests.roc"),
-            "1",
             "astar-tests",
             &[],
             "True\n",
