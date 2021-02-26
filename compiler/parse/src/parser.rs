@@ -896,14 +896,14 @@ pub fn unexpected_eof<'a>(
     state: State<'a>,
     chars_consumed: usize,
 ) -> (Progress, SyntaxError<'a>, State<'a>) {
-    checked_unexpected(state, chars_consumed, |region| SyntaxError::Eof(region))
+    checked_unexpected(state, chars_consumed, SyntaxError::Eof)
 }
 
-pub fn unexpected<'a>(
+pub fn unexpected(
     chars_consumed: usize,
     _attempting: Attempting,
-    state: State<'a>,
-) -> (Progress, SyntaxError<'a>, State<'a>) {
+    state: State,
+) -> (Progress, SyntaxError, State) {
     // NOTE state is the last argument because chars_consumed often depends on the state's fields
     // having state be the final argument prevents borrowing issues
     checked_unexpected(state, chars_consumed, |region| {
@@ -946,7 +946,7 @@ where
     }
 }
 
-fn line_too_long_e<'a, TE, E>(state: State<'a>, to_error: TE) -> (Progress, E, State<'a>)
+fn line_too_long_e<TE, E>(state: State, to_error: TE) -> (Progress, E, State)
 where
     TE: Fn(Row, Col) -> E,
 {
@@ -971,7 +971,7 @@ where
     (Progress::NoProgress, problem, state)
 }
 
-fn line_too_long<'a>(state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
+fn line_too_long(state: State) -> (Progress, SyntaxError, State) {
     line_too_long_e(state, |line, _| SyntaxError::LineTooLong(line))
 }
 

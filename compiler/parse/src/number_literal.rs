@@ -107,7 +107,7 @@ fn chomp_number_dec<'a>(
     }
 }
 
-fn chomp_number<'a>(mut bytes: &'a [u8]) -> (bool, usize) {
+fn chomp_number(mut bytes: &[u8]) -> (bool, usize) {
     let start_bytes_len = bytes.len();
     let mut is_float = false;
 

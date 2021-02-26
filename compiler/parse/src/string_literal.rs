@@ -151,6 +151,8 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             return Ok((MadeProgress, PlainLine(""), advance_state!(state, 1)?));
                         }
                     } else {
+                        // the string is non-empty, which means we need to convert any previous segments
+                        // and the current segment into a string literal
                         if is_multiline {
                             if bytes.as_slice().starts_with(b"\"\"") {
                                 end_segment!(StrSegment::Plaintext);
