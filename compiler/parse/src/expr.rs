@@ -2230,7 +2230,7 @@ fn string_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
 }
 
 #[allow(dead_code)]
-fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString> {
+fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
     specialize(
         |_, _, _| EString::EndlessSingle,
         map!(crate::string_literal::parse(), Expr::Str),

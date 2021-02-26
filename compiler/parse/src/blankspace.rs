@@ -484,11 +484,15 @@ where
                                 ' ' => {
                                     // Don't check indentation here; it might not be enough
                                     // indentation yet, but maybe it will be after more spaces happen!
-                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
+                                    state = state.advance_spaces_e(arena, 1, |r, c| {
+                                        space_problem(BadInputError::LineTooLong, r, c)
+                                    })?;
                                 }
                                 '\r' => {
                                     // Ignore carriage returns.
-                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
+                                    state = state.advance_spaces_e(arena, 1, |r, c| {
+                                        space_problem(BadInputError::LineTooLong, r, c)
+                                    })?;
                                 }
                                 '\n' => {
                                     // don't need to check the indent here since we'll reset it

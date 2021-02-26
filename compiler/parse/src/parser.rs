@@ -137,7 +137,7 @@ impl<'a> State<'a> {
         self,
         quantity: usize,
     ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.advance_without_indenting_e(quantity, bad_input_to_syntax_error)
+        self.advance_without_indenting_ee(quantity, |line, _| SyntaxError::LineTooLong(line))
     }
 
     pub fn advance_without_indenting_e<TE, E>(
@@ -147,6 +147,19 @@ impl<'a> State<'a> {
     ) -> Result<Self, (Progress, E, Self)>
     where
         TE: Fn(BadInputError, Row, Col) -> E,
+    {
+        self.advance_without_indenting_ee(quantity, |r, c| {
+            to_error(BadInputError::LineTooLong, r, c)
+        })
+    }
+
+    pub fn advance_without_indenting_ee<TE, E>(
+        self,
+        quantity: usize,
+        to_error: TE,
+    ) -> Result<Self, (Progress, E, Self)>
+    where
+        TE: Fn(Row, Col) -> E,
     {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
@@ -167,7 +180,7 @@ impl<'a> State<'a> {
         arena: &'a Bump,
         spaces: usize,
     ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.advance_spaces_e(arena, spaces, bad_input_to_syntax_error)
+        self.advance_spaces_e(arena, spaces, |line, _| SyntaxError::LineTooLong(line))
     }
 
     /// Advance the parser while also indenting as appropriate.
@@ -179,7 +192,7 @@ impl<'a> State<'a> {
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
     where
-        TE: Fn(BadInputError, Row, Col) -> E,
+        TE: Fn(Row, Col) -> E,
     {
         match (self.column as usize).checked_add(spaces) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
@@ -391,7 +404,7 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),
-    Str(EString, Row, Col),
+    Str(EString<'a>, Row, Col),
     Number(Number, Row, Col),
     List(List<'a>, Row, Col),
 
@@ -406,10 +419,13 @@ pub enum Number {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EString {
+pub enum EString<'a> {
+    End,
+    LineTooLong,
     EndlessSingle,
     EndlessMulti,
     StringEscape(Escape),
+    Format(&'a SyntaxError<'a>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -928,9 +944,9 @@ where
 
 fn line_too_long_e<'a, TE, E>(state: State<'a>, to_error: TE) -> (Progress, E, State<'a>)
 where
-    TE: Fn(BadInputError, Row, Col) -> E,
+    TE: Fn(Row, Col) -> E,
 {
-    let problem = to_error(BadInputError::LineTooLong, state.line, state.column);
+    let problem = to_error(state.line, state.column);
     // Set column to MAX and advance the parser to end of input.
     // This way, all future parsers will fail on EOF, and then
     // unexpected_eof will take them back here - thus propagating
@@ -952,7 +968,7 @@ where
 }
 
 fn line_too_long<'a>(state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
-    line_too_long_e(state, |_, line, _| SyntaxError::LineTooLong(line))
+    line_too_long_e(state, |line, _| SyntaxError::LineTooLong(line))
 }
 
 /// A single ASCII char that isn't a newline.

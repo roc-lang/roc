@@ -176,7 +176,7 @@ mod test_can {
 
     #[test]
     fn scientific_positive() {
-        assert_can_float("5e4", 5000.0);
+        assert_can_float("5e4", 50000.0);
     }
 
     #[test]
