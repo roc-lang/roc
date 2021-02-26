@@ -421,14 +421,13 @@ pub enum Number {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EString<'a> {
     Open(Row, Col),
-    End,
 
     CodePointOpen(Row, Col),
     CodePointEnd(Row, Col),
 
     Space(BadInputError, Row, Col),
     EndlessSingle(Row, Col),
-    EndlessMulti,
+    EndlessMulti(Row, Col),
     UnknownEscape(Row, Col),
     Format(&'a SyntaxError<'a>, Row, Col),
 }

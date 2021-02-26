@@ -424,6 +424,7 @@ fn to_str_report<'a>(
     use roc_parse::parser::EString;
 
     match *parse_problem {
+        EString::Open(_row, _col) => unreachable!("another branch would be taken"),
         EString::Format(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
         EString::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
         EString::UnknownEscape(row, col) => {
@@ -491,7 +492,50 @@ fn to_str_report<'a>(
                 title: "WEIRD CODE POINT".to_string(),
             }
         }
-        ref other => todo!("{:?}", other),
+        EString::EndlessSingle(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this string:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("\"to be or not to be\""),
+                    alloc.reflow(" or even just "),
+                    alloc.parser_suggestion("\"\""),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ENDLESS STRING".to_string(),
+            }
+        }
+        EString::EndlessMulti(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this block string:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("\"\"\"to be or not to be\"\"\""),
+                    alloc.reflow(" or even just "),
+                    alloc.parser_suggestion("\"\"\"\"\"\""),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ENDLESS STRING".to_string(),
+            }
+        }
     }
 }
 

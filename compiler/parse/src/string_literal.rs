@@ -311,7 +311,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
         // We ran out of characters before finding a closed quote
         Err((
             MadeProgress,
-            EString::EndlessSingle(state.line, state.column),
+            if is_multiline {
+                EString::EndlessMulti(state.line, state.column)
+            } else {
+                EString::EndlessSingle(state.line, state.column)
+            },
             state,
         ))
     }

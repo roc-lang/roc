@@ -5251,4 +5251,44 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn single_no_end() {
+        report_problem_as(
+            r#""there is no end"#,
+            indoc!(
+                r#"
+                ── ENDLESS STRING ──────────────────────────────────────────────────────────────
+                
+                I cannot find the end of this string:
+                
+                1│  "there is no end
+                     ^
+                
+                You could change it to something like "to be or not to be" or even
+                just "".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn multi_no_end() {
+        report_problem_as(
+            r#""""there is no end"#,
+            indoc!(
+                r#"
+                ── ENDLESS STRING ──────────────────────────────────────────────────────────────
+                
+                I cannot find the end of this block string:
+                
+                1│  """there is no end
+                       ^
+                
+                You could change it to something like """to be or not to be""" or even
+                just """""".
+            "#
+            ),
+        )
+    }
 }
