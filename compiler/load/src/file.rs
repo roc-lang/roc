@@ -358,6 +358,8 @@ struct ModuleCache<'a> {
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
 
     /// Various information
+    imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
@@ -544,11 +546,24 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                     ident_ids,
                 } = typechecked;
 
+                let mut imported_module_thunks = MutSet::default();
+
+                if let Some(imports) = state.module_cache.imports.get(&module_id) {
+                    for imported in imports.iter() {
+                        imported_module_thunks.extend(
+                            state.module_cache.top_level_thunks[imported]
+                                .iter()
+                                .copied(),
+                        );
+                    }
+                }
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
                     module_id,
                     module_timing,
                     solved_subs,
+                    imported_module_thunks,
                     decls,
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
@@ -957,6 +972,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
+        imported_module_thunks: MutSet<Symbol>,
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
@@ -1662,6 +1678,18 @@ fn update<'a>(
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
 
+            state
+                .module_cache
+                .imports
+                .entry(header.module_id)
+                .or_default()
+                .extend(
+                    header
+                        .package_qualified_imported_modules
+                        .iter()
+                        .map(|x| *x.as_inner()),
+                );
+
             work.extend(state.dependencies.add_module(
                 header.module_id,
                 &header.package_qualified_imported_modules,
@@ -1924,6 +1952,13 @@ fn update<'a>(
                     }
                 }
             }
+
+            state
+                .module_cache
+                .top_level_thunks
+                .entry(module_id)
+                .or_default()
+                .extend(procs.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
                 layout_cache,
@@ -3747,6 +3782,7 @@ fn make_specializations<'a>(
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
+    imported_module_thunks: MutSet<Symbol>,
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
@@ -3758,6 +3794,9 @@ fn build_pending_specializations<'a>(
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
     let mut procs = Procs::default();
+
+    debug_assert!(procs.imported_module_thunks.is_empty());
+    procs.imported_module_thunks = imported_module_thunks;
 
     let mut mono_problems = std::vec::Vec::new();
     let mut subs = solved_subs.into_inner();
@@ -4040,10 +4079,12 @@ where
             module_timing,
             layout_cache,
             solved_subs,
+            imported_module_thunks,
             exposed_to_host,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
+            imported_module_thunks,
             module_id,
             ident_ids,
             decls,
