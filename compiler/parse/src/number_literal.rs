@@ -4,7 +4,7 @@ use std::char;
 use std::str::from_utf8_unchecked;
 
 pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, Number> {
-    move |arena, state: State<'a>| {
+    move |_arena, state: State<'a>| {
         match state.bytes.get(0) {
             Some(first_byte) if *first_byte == b'-' => {
                 // drop the minus
@@ -52,7 +52,7 @@ fn chomp_number_base<'a>(
                     Expr::NonBase10Int {
                         is_negative,
                         string,
-                        base: Base::Binary,
+                        base,
                     },
                     new,
                 ))
