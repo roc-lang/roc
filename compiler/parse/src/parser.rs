@@ -393,10 +393,33 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),
+    Str(EString, Row, Col),
+    Number(Number, Row, Col),
     List(List<'a>, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Number {
+    NumberEnd,
+    NumberDot(i64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EString {
+    EndlessSingle,
+    EndlessMulti,
+    StringEscape(Escape),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Escape {
+    EscapeUnknown,
+    BadUnicodeFormat(u16),
+    BadUnicodeCode(u16),
+    BadUnicodeLength(u16, i32, i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

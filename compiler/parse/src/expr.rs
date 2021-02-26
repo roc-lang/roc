@@ -12,7 +12,8 @@ use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
     specialize_ref, then, trailing_sep_by0, unexpected, unexpected_eof, word1, word2, EExpr,
-    EInParens, ELambda, ERecord, Either, If, List, ParseResult, Parser, State, SyntaxError, When,
+    EInParens, ELambda, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State,
+    SyntaxError, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -2225,6 +2226,20 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<
     )
 }
 
-pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    map!(crate::string_literal::parse(), Expr::Str)
+fn string_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+    specialize(
+        |_, r, c| SyntaxError::Expr(EExpr::Str(EString::EndlessSingle, r, c)),
+        map!(crate::string_literal::parse(), Expr::Str),
+    )
+}
+
+fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString> {
+    specialize(
+        |_, _, _| EString::EndlessSingle,
+        map!(crate::string_literal::parse(), Expr::Str),
+    )
+}
+
+fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
+    specialize(|_, _, _| Number::NumberEnd, number_literal())
 }
