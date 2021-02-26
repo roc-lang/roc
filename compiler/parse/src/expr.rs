@@ -504,10 +504,7 @@ pub fn expr_to_pattern<'a>(
         | Expr::Record {
             update: Some(_), ..
         }
-        | Expr::UnaryOp(_, _) => {
-            dbg!(&expr);
-            Err(SyntaxError::InvalidPattern)
-        }
+        | Expr::UnaryOp(_, _) => Err(SyntaxError::InvalidPattern),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
         Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
@@ -2233,6 +2230,7 @@ fn string_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     )
 }
 
+#[allow(dead_code)]
 fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString> {
     specialize(
         |_, _, _| EString::EndlessSingle,
@@ -2240,6 +2238,7 @@ fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString> {
     )
 }
 
+#[allow(dead_code)]
 fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
     specialize(|_, _, _| Number::NumberEnd, number_literal())
 }
