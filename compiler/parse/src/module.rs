@@ -189,7 +189,13 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
         and!(
             skip_first!(
                 ascii_string("app"),
-                and!(space1(1), loc!(string_literal::parse()))
+                and!(
+                    space1(1),
+                    loc!(crate::parser::specialize(
+                        |e, r, c| SyntaxError::Expr(crate::parser::EExpr::Str(e, r, c)),
+                        string_literal::parse()
+                    ))
+                )
             ),
             and!(
                 optional(packages()),

@@ -2224,17 +2224,14 @@ fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<
 
 fn string_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     specialize(
-        |_, r, c| SyntaxError::Expr(EExpr::Str(EString::EndlessSingle, r, c)),
+        |e, r, c| SyntaxError::Expr(EExpr::Str(e, r, c)),
         map!(crate::string_literal::parse(), Expr::Str),
     )
 }
 
 #[allow(dead_code)]
 fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
-    specialize(
-        |_, _, _| EString::EndlessSingle,
-        map!(crate::string_literal::parse(), Expr::Str),
-    )
+    map!(crate::string_literal::parse(), Expr::Str)
 }
 
 #[allow(dead_code)]

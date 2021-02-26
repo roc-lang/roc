@@ -1,33 +1,72 @@
-use crate::ast::{Attempting, EscapedChar, StrLiteral, StrSegment};
+use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
 use crate::parser::{
-    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof,
-    ParseResult, Parser, State, SyntaxError,
+    allocated, ascii_char, loc, parse_utf8, specialize_ref, unexpected_eof, word1, BadInputError,
+    EString, Escape, ParseResult, Parser, State, SyntaxError,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
-    use StrLiteral::*;
+/// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
+/// which must consist entirely of ASCII hex digits.)
+fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
+    move |arena, state: State<'a>| {
+        let mut buf = bumpalo::collections::String::new_in(arena);
 
-    move |arena: &'a Bump, mut state: State<'a>| {
-        let mut bytes = state.bytes.iter();
-        // String literals must start with a quote.
-        // If this doesn't, it must not be a string literal!
-        match bytes.next() {
-            Some(&byte) => {
-                if byte != b'"' {
-                    return Err(unexpected(0, Attempting::StrLiteral, state));
-                }
-            }
-            None => {
-                return Err(unexpected_eof(arena, state, 0));
+        for &byte in state.bytes.iter() {
+            if (byte as char).is_ascii_hexdigit() {
+                buf.push(byte as char);
+            } else if buf.is_empty() {
+                // We didn't find any hex digits!
+                return Err((
+                    NoProgress,
+                    EString::CodePointEnd(state.line, state.column),
+                    state,
+                ));
+            } else {
+                let state = state.advance_without_indenting_ee(buf.len(), |r, c| {
+                    EString::Space(BadInputError::LineTooLong, r, c)
+                })?;
+
+                return Ok((MadeProgress, buf.into_bump_str(), state));
             }
         }
 
+        Err((
+            NoProgress,
+            EString::CodePointEnd(state.line, state.column),
+            state,
+        ))
+    }
+}
+
+pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
+    use StrLiteral::*;
+
+    move |arena: &'a Bump, mut state: State<'a>| {
+        let is_multiline;
+        let mut bytes;
+
+        if state.bytes.starts_with(b"\"\"\"") {
+            // we will be parsing a multi-string
+            is_multiline = true;
+            bytes = state.bytes[3..].iter()
+        } else if state.bytes.starts_with(b"\"") {
+            // we will be parsing a single-string
+            is_multiline = true;
+            bytes = state.bytes[1..].iter()
+        } else {
+            return Err((NoProgress, EString::Open(state.line, state.column), state));
+        }
+
+        // String literals must start with a quote.
+        // If this doesn't, it must not be a string literal!
+
         // Advance past the opening quotation mark.
-        state = state.advance_without_indenting(1)?;
+        state = state.advance_without_indenting_ee(1, |r, c| {
+            EString::Space(BadInputError::LineTooLong, r, c)
+        })?;
 
         // At the parsing stage we keep the entire raw string, because the formatter
         // needs the raw string. (For example, so it can "remember" whether you
@@ -38,13 +77,21 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
         let mut segment_parsed_bytes = 0;
         let mut segments = Vec::new_in(arena);
 
+        macro_rules! advance_state {
+            ($state:expr, $n:expr) => {
+                $state.advance_without_indenting_ee($n, |r, c| {
+                    EString::Space(BadInputError::LineTooLong, r, c)
+                })
+            };
+        }
+
         macro_rules! escaped_char {
             ($ch:expr) => {
                 // Record the escaped char.
                 segments.push(StrSegment::EscapedChar($ch));
 
                 // Advance past the segment we just added
-                state = state.advance_without_indenting(segment_parsed_bytes)?;
+                state = advance_state!(state, segment_parsed_bytes)?;
 
                 // Reset the segment
                 segment_parsed_bytes = 0;
@@ -63,12 +110,16 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
 
                     match parse_utf8(string_bytes) {
                         Ok(string) => {
-                            state = state.advance_without_indenting(string.len())?;
+                            state = advance_state!(state, string.len())?;
 
                             segments.push($transform(string));
                         }
                         Err(reason) => {
-                            return state.fail(arena, MadeProgress, reason);
+                            return Err((
+                                MadeProgress,
+                                EString::Space(BadInputError::BadUtf8, state.line, state.column),
+                                state,
+                            ));
                         }
                     }
                 }
@@ -98,14 +149,15 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                                 // If the very first three chars were all `"`,
                                 // then this literal begins with `"""`
                                 // and is a block string.
-                                return parse_block_string(arena, state, &mut bytes);
+                                // return parse_block_string(arena, state, &mut bytes);
+                                todo!()
                             }
                             _ => {
                                 // Advance 1 for the close quote
                                 return Ok((
                                     MadeProgress,
                                     PlainLine(""),
-                                    state.advance_without_indenting(1)?,
+                                    advance_state!(state, 1)?,
                                 ));
                             }
                         }
@@ -128,7 +180,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                         };
 
                         // Advance the state 1 to account for the closing `"`
-                        return Ok((MadeProgress, expr, state.advance_without_indenting(1)?));
+                        return Ok((MadeProgress, expr, advance_state!(state, 1)?));
                     };
                 }
                 b'\n' => {
@@ -137,9 +189,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                     // all remaining chars. This will mask all other errors, but
                     // it should make it easiest to debug; the file will be a giant
                     // error starting from where the open quote appeared.
-                    return Err(unexpected(
-                        state.bytes.len() - 1,
-                        Attempting::StrLiteral,
+                    return Err((
+                        MadeProgress,
+                        EString::EndlessSingle(state.line, state.column),
                         state,
                     ));
                 }
@@ -158,7 +210,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                     match bytes.next() {
                         Some(b'(') => {
                             // Advance past the `\(` before using the expr parser
-                            state = state.advance_without_indenting(2)?;
+                            state = advance_state!(state, 2)?;
 
                             let original_byte_count = state.bytes.len();
 
@@ -166,9 +218,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                             // Parse an arbitrary expression, then give a
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
-                            let (_progress, loc_expr, new_state) =
-                                skip_second!(loc(allocated(expr::expr(0))), ascii_char(b')'))
-                                    .parse(arena, state)?;
+                            let (_progress, loc_expr, new_state) = specialize_ref(
+                                |e, _, _| EString::Format(e),
+                                skip_second!(loc(allocated(expr::expr(0))), ascii_char(b')')),
+                            )
+                            .parse(arena, state)?;
 
                             // Advance the iterator past the expr we just parsed.
                             for _ in 0..(original_byte_count - new_state.bytes.len()) {
@@ -183,7 +237,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                         }
                         Some(b'u') => {
                             // Advance past the `\u` before using the expr parser
-                            state = state.advance_without_indenting(2)?;
+                            state = advance_state!(state, 2)?;
 
                             let original_byte_count = state.bytes.len();
 
@@ -191,9 +245,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
                             let (_progress, loc_digits, new_state) = between!(
-                                ascii_char(b'('),
+                                word1(b'(', EString::CodePointOpen),
                                 loc(ascii_hex_digits()),
-                                ascii_char(b')')
+                                word1(b')', EString::CodePointEnd)
                             )
                             .parse(arena, state)?;
 
@@ -227,9 +281,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                             // Invalid escape! A backslash must be followed
                             // by either an open paren or else one of the
                             // escapable characters (\n, \t, \", \\, etc)
-                            return Err(unexpected(
-                                state.bytes.len() - 1,
-                                Attempting::StrLiteral,
+                            return Err((
+                                MadeProgress,
+                                EString::StringEscape(Escape::EscapeUnknown),
                                 state,
                             ));
                         }
@@ -242,7 +296,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
         }
 
         // We ran out of characters before finding a closed quote
-        Err(unexpected_eof(arena, state.clone(), state.bytes.len()))
+        Err((
+            MadeProgress,
+            EString::EndlessSingle(state.line, state.column),
+            state,
+        ))
     }
 }
 
