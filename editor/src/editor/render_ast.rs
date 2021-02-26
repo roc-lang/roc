@@ -47,8 +47,7 @@ pub fn highlight_expr2<'a, 'b>(
                 HighlightStyle::String,
             ))
         }
-        Expr2::GlobalTag { name, .. } =>
-        {
+        Expr2::GlobalTag { name, .. } => {
             highlight_tups.push((get_bump_str(arena, env, name), HighlightStyle::Type))
         }
         Expr2::Call { expr: expr_id, .. } => {
