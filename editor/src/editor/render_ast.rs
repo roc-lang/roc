@@ -1,5 +1,10 @@
 use crate::lang::pool::PoolStr;
-use crate::editor::syntax_highlight::HighlightStyle;
+use crate::editor::{
+    syntax_highlight::HighlightStyle,
+    util::map_get,
+    ed_error::EdResult,
+};
+
 use crate::graphics::colors::RgbaTup;
 use crate::graphics::primitives::text as gr_text;
 use bumpalo::collections::String as BumpString;
@@ -130,11 +135,11 @@ pub fn render_expr2<'a>(
     position: Vector2<f32>,
     config: &Config,
     glyph_brush: &mut GlyphBrush<()>,
-) {
+) -> EdResult<()> {
     // TODO formatting code
     let highlight_tups = highlight_expr2(arena, env, expr2);
 
-    queue_code_text_draw(&highlight_tups, size, position, config, glyph_brush);
+    queue_code_text_draw(&highlight_tups, size, position, config, glyph_brush)
 }
 
 pub fn queue_code_text_draw<'a>(
@@ -143,7 +148,7 @@ pub fn queue_code_text_draw<'a>(
     position: Vector2<f32>,
     config: &Config,
     glyph_brush: &mut GlyphBrush<()>,
-) {
+) -> EdResult<()> {
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
 
@@ -151,8 +156,9 @@ pub fn queue_code_text_draw<'a>(
         highlight_tups_to_glyph_text(
             &highlight_tups,
             &config.ed_theme.syntax_high_map,
-            config.code_font_size
-        );
+            config.code_font_size,
+
+        )?;
 
     let section = gr_text::section_from_glyph_text(
         glyph_text_vec,
@@ -162,21 +168,36 @@ pub fn queue_code_text_draw<'a>(
     );
 
     glyph_brush.queue(section.clone());
+
+    Ok(())
 }
 
 fn highlight_tups_to_glyph_text<'a>(
     highlight_tups: &'a BumpVec<'a, (BumpString<'a>, HighlightStyle)>,
     syntax_theme: &HashMap<HighlightStyle, RgbaTup>,
     font_size: f32,
-) -> Vec<wgpu_glyph::Text<'a>> {
-    // TODO remove unwrap
+) -> EdResult<Vec<wgpu_glyph::Text<'a>>> {
 
-    highlight_tups
+    let arena = Bump::new();
+    let mut colored_str_tups: BumpVec<(&BumpString, &RgbaTup)> = BumpVec::new_in(&arena);
+
+    for (token_str, highlight_style) in highlight_tups.iter() {
+        let highlight_color_res = map_get(&syntax_theme, highlight_style);
+
+        match highlight_color_res {
+            Ok(highlight_color) => colored_str_tups.push((token_str, highlight_color)),
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(
+        colored_str_tups
         .iter()
-        .map(|(token_str, highlight_style)| {
-            wgpu_glyph::Text::new(&token_str)
-                .with_color(colors::to_slice(*syntax_theme.get(highlight_style).unwrap()))
+        .map(|(token_str, highlight_color)| {
+            wgpu_glyph::Text::new(token_str)
+                .with_color(colors::to_slice(**highlight_color))
                 .with_scale(font_size)
         })
         .collect()
+    )
 }

@@ -14,8 +14,9 @@ pub fn slice_get<T>(index: usize, slice: &[T]) -> EdResult<&<usize as SliceIndex
     Ok(elt_ref)
 }
 
-pub fn map_get<K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>
-    (hash_map: &HashMap<K, V>, key: &K) -> EdResult<&V> {
+// replace HashMap method that returns Option with one that returns Result and proper Error
+pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>
+    (hash_map: &'a HashMap<K, V>, key: &K) -> EdResult<&'a V> {
     
     let value =
         hash_map.get(key).context(
@@ -26,3 +27,4 @@ pub fn map_get<K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>
     
     Ok(value)
 }
+

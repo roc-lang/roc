@@ -2,7 +2,7 @@ use crate::graphics::colors as gr_colors;
 use gr_colors::{from_hsb, RgbaTup};
 use std::collections::HashMap;
 
-#[derive(Hash, Eq, PartialEq, Copy, Clone)]
+#[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
 pub enum HighlightStyle {
     Operator, // =+-<>...
     String,

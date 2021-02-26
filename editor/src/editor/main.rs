@@ -295,7 +295,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     )
                     .unwrap();
 
-                    super::render_ast::render_expr2(
+                    let ast_render_res = super::render_ast::render_expr2(
                         &ast_arena,
                         &mut env,
                         &expr2,
@@ -304,6 +304,10 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &config,
                         &mut glyph_brush,
                     );
+
+                    if let Err(e) = ast_render_res {
+                        print_err(&e)
+                    }
                 }
 
                 rects_arena.reset();
