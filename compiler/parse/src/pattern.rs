@@ -4,8 +4,8 @@ use crate::ident::{ident, lowercase_ident, Ident};
 use crate::number_literal::number_literal;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, optional, specialize, specialize_ref, word1,  EPattern, PInParens,
-    PRecord, ParseResult, Parser, State, SyntaxError,
+    backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
+    ParseResult, Parser, State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
