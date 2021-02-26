@@ -1557,6 +1557,26 @@ mod test_can {
         assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
     }
 
+    #[test]
+    fn block_string() {
+        assert_can(
+            r#"
+            """foobar"""
+            "#,
+            expr_str("foobar"),
+        );
+
+        assert_can(
+            indoc!(
+                r#"
+            """foo
+            bar"""
+            "#
+            ),
+            expr_str("foo\nbar"),
+        );
+    }
+
     //     #[test]
     //     fn string_with_too_large_unicode_escape() {
     //         // Should be too big - max size should be 10FFFF.

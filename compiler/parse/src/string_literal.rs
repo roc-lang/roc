@@ -41,6 +41,14 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
     }
 }
 
+macro_rules! advance_state {
+    ($state:expr, $n:expr) => {
+        $state.advance_without_indenting_ee($n, |r, c| {
+            EString::Space(BadInputError::LineTooLong, r, c)
+        })
+    };
+}
+
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     use StrLiteral::*;
 
@@ -51,22 +59,16 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
         if state.bytes.starts_with(b"\"\"\"") {
             // we will be parsing a multi-string
             is_multiline = true;
-            bytes = state.bytes[3..].iter()
+            bytes = state.bytes[3..].iter();
+            state = advance_state!(state, 3)?;
         } else if state.bytes.starts_with(b"\"") {
             // we will be parsing a single-string
-            is_multiline = true;
-            bytes = state.bytes[1..].iter()
+            is_multiline = false;
+            bytes = state.bytes[1..].iter();
+            state = advance_state!(state, 1)?;
         } else {
             return Err((NoProgress, EString::Open(state.line, state.column), state));
         }
-
-        // String literals must start with a quote.
-        // If this doesn't, it must not be a string literal!
-
-        // Advance past the opening quotation mark.
-        state = state.advance_without_indenting_ee(1, |r, c| {
-            EString::Space(BadInputError::LineTooLong, r, c)
-        })?;
 
         // At the parsing stage we keep the entire raw string, because the formatter
         // needs the raw string. (For example, so it can "remember" whether you
@@ -76,14 +78,6 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
         // how many characters we've parsed. So far, that's 1 (the opening `"`).
         let mut segment_parsed_bytes = 0;
         let mut segments = Vec::new_in(arena);
-
-        macro_rules! advance_state {
-            ($state:expr, $n:expr) => {
-                $state.advance_without_indenting_ee($n, |r, c| {
-                    EString::Space(BadInputError::LineTooLong, r, c)
-                })
-            };
-        }
 
         macro_rules! escaped_char {
             ($ch:expr) => {
@@ -114,7 +108,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
                             segments.push($transform(string));
                         }
-                        Err(reason) => {
+                        Err(_) => {
                             return Err((
                                 MadeProgress,
                                 EString::Space(BadInputError::BadUtf8, state.line, state.column),
@@ -142,58 +136,77 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
             match byte {
                 b'"' => {
-                    // This is the end of the string!
                     if segment_parsed_bytes == 1 && segments.is_empty() {
-                        match bytes.next() {
-                            Some(b'"') => {
-                                // If the very first three chars were all `"`,
-                                // then this literal begins with `"""`
-                                // and is a block string.
-                                // return parse_block_string(arena, state, &mut bytes);
-                                todo!()
-                            }
-                            _ => {
-                                // Advance 1 for the close quote
-                                return Ok((
-                                    MadeProgress,
-                                    PlainLine(""),
-                                    advance_state!(state, 1)?,
-                                ));
-                            }
-                        }
-                    } else {
-                        end_segment!(StrSegment::Plaintext);
-
-                        let expr = if segments.len() == 1 {
-                            // We had exactly one segment, so this is a candidate
-                            // to be StrLiteral::Plaintext
-                            match segments.pop().unwrap() {
-                                StrSegment::Plaintext(string) => StrLiteral::PlainLine(string),
-                                other => {
-                                    let vec = bumpalo::vec![in arena; other];
-
-                                    StrLiteral::Line(vec.into_bump_slice())
-                                }
+                        // special case of the empty string
+                        if is_multiline {
+                            if bytes.as_slice().starts_with(b"\"\"") {
+                                return Ok((MadeProgress, Block(&[]), advance_state!(state, 3)?));
+                            } else {
+                                // this quote is in a block string
+                                continue;
                             }
                         } else {
-                            Line(segments.into_bump_slice())
-                        };
+                            // This is the end of the string!
+                            // Advance 1 for the close quote
+                            return Ok((MadeProgress, PlainLine(""), advance_state!(state, 1)?));
+                        }
+                    } else {
+                        if is_multiline {
+                            if bytes.as_slice().starts_with(b"\"\"") {
+                                end_segment!(StrSegment::Plaintext);
 
-                        // Advance the state 1 to account for the closing `"`
-                        return Ok((MadeProgress, expr, advance_state!(state, 1)?));
+                                let expr = if segments.len() == 1 {
+                                    // We had exactly one segment, so this is a candidate
+                                    // to be StrLiteral::Plaintext
+                                    match segments.pop().unwrap() {
+                                        StrSegment::Plaintext(string) => {
+                                            StrLiteral::PlainLine(string)
+                                        }
+                                        other => StrLiteral::Line(arena.alloc([other])),
+                                    }
+                                } else {
+                                    Block(arena.alloc([segments.into_bump_slice()]))
+                                };
+
+                                return Ok((MadeProgress, expr, advance_state!(state, 3)?));
+                            } else {
+                                // this quote is in a block string
+                                continue;
+                            }
+                        } else {
+                            end_segment!(StrSegment::Plaintext);
+
+                            let expr = if segments.len() == 1 {
+                                // We had exactly one segment, so this is a candidate
+                                // to be StrLiteral::Plaintext
+                                match segments.pop().unwrap() {
+                                    StrSegment::Plaintext(string) => StrLiteral::PlainLine(string),
+                                    other => StrLiteral::Line(arena.alloc([other])),
+                                }
+                            } else {
+                                Line(segments.into_bump_slice())
+                            };
+
+                            // Advance the state 1 to account for the closing `"`
+                            return Ok((MadeProgress, expr, advance_state!(state, 1)?));
+                        }
                     };
                 }
                 b'\n' => {
-                    // This is a single-line string, which cannot have newlines!
-                    // Treat this as an unclosed string literal, and consume
-                    // all remaining chars. This will mask all other errors, but
-                    // it should make it easiest to debug; the file will be a giant
-                    // error starting from where the open quote appeared.
-                    return Err((
-                        MadeProgress,
-                        EString::EndlessSingle(state.line, state.column),
-                        state,
-                    ));
+                    if is_multiline {
+                        continue;
+                    } else {
+                        // This is a single-line string, which cannot have newlines!
+                        // Treat this as an unclosed string literal, and consume
+                        // all remaining chars. This will mask all other errors, but
+                        // it should make it easiest to debug; the file will be a giant
+                        // error starting from where the open quote appeared.
+                        return Err((
+                            MadeProgress,
+                            EString::EndlessSingle(state.line, state.column),
+                            state,
+                        ));
+                    }
                 }
                 b'\\' => {
                     // We're about to begin an escaped segment of some sort!
@@ -302,83 +315,4 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             state,
         ))
     }
-}
-
-fn parse_block_string<'a, I>(
-    arena: &'a Bump,
-    state: State<'a>,
-    bytes: &mut I,
-) -> ParseResult<'a, StrLiteral<'a>, SyntaxError<'a>>
-where
-    I: Iterator<Item = &'a u8>,
-{
-    // So far we have consumed the `"""` and that's it.
-    let mut parsed_chars = 3;
-    let mut prev_byte = b'"';
-    let mut quotes_seen = 0;
-
-    // start at 3 to omit the opening `"`.
-    let mut line_start = 3;
-
-    let mut lines: Vec<'a, &'a str> = Vec::new_in(arena);
-
-    for byte in bytes {
-        parsed_chars += 1;
-
-        // Potentially end the string (unless this is an escaped `"`!)
-        match byte {
-            b'"' if prev_byte != b'\\' => {
-                if quotes_seen == 2 {
-                    // three consecutive qoutes, end string
-
-                    // Subtract 3 from parsed_chars so we omit the closing `"`.
-                    let line_bytes = &state.bytes[line_start..(parsed_chars - 3)];
-
-                    return match parse_utf8(line_bytes) {
-                        Ok(line) => {
-                            // state = state.advance_without_indenting(parsed_chars)?;
-
-                            // lines.push(line);
-
-                            // Ok((StrLiteral::Block(lines.into_bump_slice()), state))
-                            Err((
-                                MadeProgress,
-                                SyntaxError::NotYetImplemented(format!(
-                                    "TODO parse this line in a block string: {:?}",
-                                    line
-                                )),
-                                state,
-                            ))
-                        }
-                        Err(reason) => state.fail(arena, MadeProgress, reason),
-                    };
-                }
-                quotes_seen += 1;
-            }
-            b'\n' => {
-                // note this includes the newline
-                let line_bytes = &state.bytes[line_start..parsed_chars];
-
-                match parse_utf8(line_bytes) {
-                    Ok(line) => {
-                        lines.push(line);
-
-                        quotes_seen = 0;
-                        line_start = parsed_chars;
-                    }
-                    Err(reason) => {
-                        return state.fail(arena, MadeProgress, reason);
-                    }
-                }
-            }
-            _ => {
-                quotes_seen = 0;
-            }
-        }
-
-        prev_byte = *byte;
-    }
-
-    // We ran out of characters before finding 3 closing quotes
-    Err(unexpected_eof(arena, state, parsed_chars))
 }
