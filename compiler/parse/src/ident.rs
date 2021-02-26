@@ -114,7 +114,6 @@ pub fn parse_ident<'a>(
                             is_accessor_fn = false;
                         } else {
                             return Err(unexpected(
-                                arena,
                                 bytes_parsed + next_bytes_parsed,
                                 Attempting::Identifier,
                                 state,
@@ -127,7 +126,7 @@ pub fn parse_ident<'a>(
                     }
                 }
             } else {
-                return Err(unexpected(arena, 0, Attempting::Identifier, state));
+                return Err(unexpected(0, Attempting::Identifier, state));
             }
         }
         Err(reason) => {
@@ -254,7 +253,7 @@ pub fn parse_ident<'a>(
                 // We had neither capitalized nor noncapitalized parts,
                 // yet we made it this far. The only explanation is that this was
                 // a stray '.' drifting through the cosmos.
-                return Err(unexpected(arena, 1, Attempting::Identifier, state));
+                return Err(unexpected(1, Attempting::Identifier, state));
             }
         }
     } else if is_private_tag {
@@ -339,7 +338,7 @@ where
         let (first_letter, bytes_parsed) = match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !pred(first_letter) {
-                    return Err(unexpected(arena, 0, Attempting::RecordFieldLabel, state));
+                    return Err(unexpected(0, Attempting::RecordFieldLabel, state));
                 }
 
                 (first_letter, bytes_parsed)

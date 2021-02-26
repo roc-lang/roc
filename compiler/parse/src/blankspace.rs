@@ -358,7 +358,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
         and!(ascii_char(b'#'), optional(ascii_string("# "))),
         |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
             if opt_doc != None {
-                return Err(unexpected(arena, 3, Attempting::LineComment, state));
+                return Err(unexpected(3, Attempting::LineComment, state));
             }
             let mut length = 0;
 
@@ -401,7 +401,6 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
                 }
                 Ok(_) => {
                     return Err(unexpected(
-                        arena,
                         spaces_seen.into(),
                         Attempting::TODO,
                         state.clone(),
@@ -418,7 +417,6 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
                         return Err(unexpected_eof(arena, state, 0));
                     } else {
                         return Err(unexpected(
-                            arena,
                             spaces_seen.into(),
                             Attempting::TODO,
                             state.clone(),
@@ -431,12 +429,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
         if spaces_seen == 0 {
             Err(unexpected_eof(arena, state, 0))
         } else {
-            Err(unexpected(
-                arena,
-                spaces_seen.into(),
-                Attempting::TODO,
-                state,
-            ))
+            Err(unexpected(spaces_seen.into(), Attempting::TODO, state))
         }
     }
 }

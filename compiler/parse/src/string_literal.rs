@@ -18,7 +18,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
         match bytes.next() {
             Some(&byte) => {
                 if byte != b'"' {
-                    return Err(unexpected(arena, 0, Attempting::StrLiteral, state));
+                    return Err(unexpected(0, Attempting::StrLiteral, state));
                 }
             }
             None => {
@@ -138,7 +138,6 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                     // it should make it easiest to debug; the file will be a giant
                     // error starting from where the open quote appeared.
                     return Err(unexpected(
-                        arena,
                         state.bytes.len() - 1,
                         Attempting::StrLiteral,
                         state,
@@ -229,7 +228,6 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                             // by either an open paren or else one of the
                             // escapable characters (\n, \t, \", \\, etc)
                             return Err(unexpected(
-                                arena,
                                 state.bytes.len() - 1,
                                 Attempting::StrLiteral,
                                 state,

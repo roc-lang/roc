@@ -1851,7 +1851,7 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16, SyntaxError<'a>> {
                 match state.bytes.get(1) {
                     // The '=' must not be followed by another `=` or `>`
                     // (See equals_for_def() for explanation)
-                    Some(b'=') | Some(b'>') => Err(unexpected(arena, 0, Attempting::Def, state)),
+                    Some(b'=') | Some(b'>') => Err(unexpected(0, Attempting::Def, state)),
                     Some(_) => Ok((
                         MadeProgress,
                         state.indent_col,
@@ -1864,7 +1864,7 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16, SyntaxError<'a>> {
                     )),
                 }
             }
-            Some(_) => Err(unexpected(arena, 0, Attempting::Def, state)),
+            Some(_) => Err(unexpected(0, Attempting::Def, state)),
             None => Err(unexpected_eof(arena, state, 0)),
         }
     }
@@ -1877,7 +1877,7 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16, SyntaxError<'a>> {
             state.indent_col,
             state.advance_without_indenting(1)?,
         )),
-        Some(_) => Err(unexpected(arena, 0, Attempting::Def, state)),
+        Some(_) => Err(unexpected(0, Attempting::Def, state)),
         None => Err(unexpected_eof(arena, state, 0)),
     }
 }

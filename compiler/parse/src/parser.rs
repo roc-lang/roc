@@ -880,7 +880,6 @@ pub fn unexpected_eof<'a>(
 }
 
 pub fn unexpected<'a>(
-    arena: &'a Bump,
     chars_consumed: usize,
     _attempting: Attempting,
     state: State<'a>,
@@ -968,7 +967,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
             (),
             state.advance_without_indenting(1)?,
         )),
-        Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
+        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(arena, state, 0)),
     }
 }
@@ -979,7 +978,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
 pub fn newline_char<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena, state: State<'a>| match state.bytes.first() {
         Some(b'\n') => Ok((Progress::MadeProgress, (), state.newline(arena)?)),
-        Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
+        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(arena, state, 0)),
     }
 }
@@ -995,7 +994,7 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
                 buf.push(byte as char);
             } else if buf.is_empty() {
                 // We didn't find any hex digits!
-                return Err(unexpected(arena, 0, Attempting::Keyword, state));
+                return Err(unexpected(0, Attempting::Keyword, state));
             } else {
                 let state = state.advance_without_indenting(buf.len())?;
 
@@ -1144,7 +1143,7 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxErro
                 state.advance_without_indenting(len)?,
             ))
         } else {
-            let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);
+            let (_, fail, state) = unexpected(len, Attempting::Keyword, state);
             Err((NoProgress, fail, state))
         }
     }
