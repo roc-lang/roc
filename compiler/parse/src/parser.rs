@@ -872,7 +872,7 @@ where
 }
 
 pub fn unexpected_eof<'a>(
-    arena: &'a Bump,
+    _arena: &'a Bump,
     state: State<'a>,
     chars_consumed: usize,
 ) -> (Progress, SyntaxError<'a>, State<'a>) {
@@ -1132,7 +1132,7 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxErro
     // the row in the state, only the column.
     debug_assert!(keyword.chars().all(|ch| ch.len_utf8() == 1 && ch != '\n'));
 
-    move |arena, state: State<'a>| {
+    move |_arena, state: State<'a>| {
         let len = keyword.len();
 
         // TODO do this comparison in one SIMD instruction (on supported systems)

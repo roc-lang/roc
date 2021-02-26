@@ -668,7 +668,7 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
 fn equals_for_def<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    |arena, state: State<'a>| match state.bytes.get(0) {
+    |_arena, state: State<'a>| match state.bytes.get(0) {
         Some(b'=') => match state.bytes.get(1) {
             Some(b'=') | Some(b'>') => Err((NoProgress, SyntaxError::ConditionFailed, state)),
             _ => {
@@ -1820,7 +1820,7 @@ pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
 
 /// Like equals_for_def(), except it produces the indent_col of the state rather than ()
 pub fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
-    move |arena, state: State<'a>| {
+    move |_arena, state: State<'a>| {
         let equals = EExpr::Equals(state.line, state.column);
         let indent_col = state.indent_col;
 
