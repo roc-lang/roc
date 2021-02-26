@@ -118,6 +118,22 @@ fn chomp_number<'a>(mut bytes: &'a [u8]) -> (bool, usize) {
                 is_float = true;
                 bytes = &bytes[1..];
             }
+            b'e' => {
+                // maybe scientific notation?
+                match bytes.get(1) {
+                    Some(b'-') => {
+                        is_float = true;
+                        bytes = &bytes[2..];
+                    }
+                    Some(c) if (*c as char).is_ascii_digit() => {
+                        is_float = true;
+                        bytes = &bytes[2..];
+                    }
+                    _ => {
+                        bytes = &bytes[1..];
+                    }
+                }
+            }
             b'_' => {
                 // skip
                 bytes = &bytes[1..];

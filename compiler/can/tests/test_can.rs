@@ -175,6 +175,16 @@ mod test_can {
     }
 
     #[test]
+    fn scientific_positive() {
+        assert_can_float("5e4", 5000.0);
+    }
+
+    #[test]
+    fn scientific_negative() {
+        assert_can_float("5e-4", 0.0005);
+    }
+
+    #[test]
     fn num_max() {
         assert_can_num(&(i64::MAX.to_string()), i64::MAX);
     }
