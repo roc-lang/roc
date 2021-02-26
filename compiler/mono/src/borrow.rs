@@ -373,6 +373,14 @@ impl<'a> BorrowInfState<'a> {
                         self.own_var(z);
 
                         // if the function exects an owned argument (ps), the argument must be owned (args)
+                        debug_assert_eq!(
+                            arguments.len(),
+                            ps.len(),
+                            "{:?} has {} parameters, but was applied to {} arguments",
+                            name,
+                            ps.len(),
+                            arguments.len()
+                        );
                         self.own_args_using_params(arguments, ps);
                     }
                     None => {
@@ -658,14 +666,17 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap | NumSubChecked
         | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare
         | NumDivUnchecked | NumRemUnchecked | NumPow | NumPowInt | NumBitwiseAnd
-        | NumBitwiseXor => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy | NumShiftRightZfBy => {
+            arena.alloc_slice_copy(&[irrelevant, irrelevant])
+        }
 
         NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumCeiling | NumFloor
-        | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin => {
+        | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin | NumIntCast => {
             arena.alloc_slice_copy(&[irrelevant])
         }
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
         StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
+        StrToBytes => arena.alloc_slice_copy(&[owned]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
         Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         DictSize => arena.alloc_slice_copy(&[borrowed]),

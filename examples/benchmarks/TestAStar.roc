@@ -1,4 +1,4 @@
-app "astar-tests"
+app "test-astar"
     packages { base: "platform" }
     imports [base.Task, AStar]
     provides [ main ] to base

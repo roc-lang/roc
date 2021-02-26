@@ -324,6 +324,48 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // bitwiseOr : Int a, Int a -> Int a
+    add_type(
+        Symbol::NUM_BITWISE_OR,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
+    );
+
+    // shiftLeftBy : Int a, Int a -> Int a
+    add_type(
+        Symbol::NUM_SHIFT_LEFT,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
+    );
+
+    // shiftRightBy : Int a, Int a -> Int a
+    add_type(
+        Symbol::NUM_SHIFT_RIGHT,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
+    );
+
+    // shiftRightZfBy : Int a, Int a -> Int a
+    add_type(
+        Symbol::NUM_SHIFT_RIGHT_ZERO_FILL,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
+        ),
+    );
+
+    // intCast : Int a -> Int b
+    add_type(
+        Symbol::NUM_INT_CAST,
+        top_level_function(vec![int_type(flex(TVAR1))], Box::new(int_type(flex(TVAR2)))),
+    );
+
     // rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_type(
         Symbol::NUM_REM,
@@ -579,6 +621,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             vec![list_type(u8_type())],
             Box::new(result_type(str_type(), bad_utf8)),
         ),
+    );
+
+    // toBytes : Str -> List U8
+    add_type(
+        Symbol::STR_TO_BYTES,
+        top_level_function(vec![str_type()], Box::new(list_type(u8_type()))),
     );
 
     // fromFloat : Float a -> Str

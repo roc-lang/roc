@@ -290,16 +290,21 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 }),
             )
         }
-        If(condition, then_branch, else_branch)
-        | Nested(If(condition, then_branch, else_branch)) => {
-            // If does not get desugared yet so we can give more targetted error messages during
-            // type checking.
-            let desugared_cond = &*arena.alloc(desugar_expr(arena, &condition));
-            let desugared_then = &*arena.alloc(desugar_expr(arena, &then_branch));
-            let desugared_else = &*arena.alloc(desugar_expr(arena, &else_branch));
+        If(if_thens, final_else_branch) | Nested(If(if_thens, final_else_branch)) => {
+            // If does not get desugared into `when` so we can give more targetted error messages during type checking.
+            let desugared_final_else = &*arena.alloc(desugar_expr(arena, &final_else_branch));
+
+            let mut desugared_if_thens = Vec::with_capacity_in(if_thens.len(), arena);
+
+            for (condition, then_branch) in if_thens.iter() {
+                desugared_if_thens.push((
+                    desugar_expr(arena, condition).clone(),
+                    desugar_expr(arena, then_branch).clone(),
+                ));
+            }
 
             arena.alloc(Located {
-                value: If(desugared_cond, desugared_then, desugared_else),
+                value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
                 region: loc_expr.region,
             })
         }
