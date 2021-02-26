@@ -158,7 +158,10 @@ enum Context {
 enum Node {
     WhenCondition,
     WhenBranch,
-    // WhenIfGuard,
+    IfCondition,
+    IfThenBranch,
+    IfElseBranch,
+    ListElement,
 }
 
 fn to_expr_report<'a>(
@@ -173,7 +176,237 @@ fn to_expr_report<'a>(
 
     match parse_problem {
         EExpr::When(when, row, col) => to_when_report(alloc, filename, context, &when, *row, *col),
+        EExpr::If(if_, row, col) => to_if_report(alloc, filename, context, &if_, *row, *col),
+        EExpr::List(list, row, col) => to_list_report(alloc, filename, context, &list, *row, *col),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_list_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    context: Context,
+    parse_problem: &roc_parse::parser::List<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::List;
+
+    match *parse_problem {
+        List::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        List::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        List::Expr(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::ListElement, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        List::Open(row, col) | List::End(row, col) => {
+            match dbg!(what_is_next(alloc.src_lines, row, col)) {
+                Next::Other(Some(',')) => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through started parsing a list, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc
+                                .reflow(r"I was expecting to see a list entry before this comma, "),
+                            alloc.reflow(r"so try adding a list entry"),
+                            alloc.reflow(r" and see if that helps?"),
+                        ]),
+                    ]);
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED LIST".to_string(),
+                    }
+                }
+                _ => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through started parsing a list, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(
+                                r"I was expecting to see a closing square bracket before this, ",
+                            ),
+                            alloc.reflow(r"so try adding a "),
+                            alloc.parser_suggestion("]"),
+                            alloc.reflow(r" and see if that helps?"),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.note("When "),
+                            alloc.reflow(r"I get stuck like this, "),
+                            alloc.reflow(r"it usually means that there is a missing parenthesis "),
+                            alloc.reflow(r"or bracket somewhere earlier. "),
+                            alloc.reflow(r"It could also be a stray keyword or operator."),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED LIST".to_string(),
+                    }
+                }
+            }
+        }
+
+        List::IndentOpen(row, col) | List::IndentEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this list:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("[ 1, 2, 3 ]"),
+                    alloc.reflow(" or even just "),
+                    alloc.parser_suggestion("[]"),
+                    alloc.reflow(". Anything where there is an open and a close square bracket, "),
+                    alloc.reflow("and where the elements of the list are separated by commas."),
+                ]),
+                note_for_tag_union_type_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED LIST".to_string(),
+            }
+        }
+    }
+}
+
+fn to_if_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    context: Context,
+    parse_problem: &roc_parse::parser::If<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::If;
+
+    match *parse_problem {
+        If::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        If::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        If::Condition(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::IfCondition, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        If::ThenBranch(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::IfThenBranch, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        If::ElseBranch(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::IfElseBranch, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+
+        If::If(_row, _col) => unreachable!("another branch would be taken"),
+        If::IndentIf(_row, _col) => unreachable!("another branch would be taken"),
+
+        If::Then(row, col) | If::IndentThenBranch(row, col) | If::IndentThenToken(row, col) => {
+            to_unfinished_if_report(
+                alloc,
+                filename,
+                row,
+                col,
+                start_row,
+                start_col,
+                alloc.concat(vec![
+                    alloc.reflow(r"I was expecting to see the "),
+                    alloc.keyword("then"),
+                    alloc.reflow(r" keyword next."),
+                ]),
+            )
+        }
+
+        If::Else(row, col) | If::IndentElseBranch(row, col) | If::IndentElseToken(row, col) => {
+            to_unfinished_if_report(
+                alloc,
+                filename,
+                row,
+                col,
+                start_row,
+                start_col,
+                alloc.concat(vec![
+                    alloc.reflow(r"I was expecting to see the "),
+                    alloc.keyword("else"),
+                    alloc.reflow(r" keyword next."),
+                ]),
+            )
+        }
+
+        If::IndentCondition(row, col) => to_unfinished_if_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting to see a expression next")
+            ]),
+        ),
+    }
+}
+
+fn to_unfinished_if_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    row: Row,
+    col: Col,
+    start_row: Row,
+    start_col: Col,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+    let region = Region::from_row_col(row, col);
+
+    let doc = alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.reflow(r"I was partway through parsing an "),
+            alloc.keyword("if"),
+            alloc.reflow(r" expression, but I got stuck here:"),
+        ]),
+        alloc.region_with_subregion(surroundings, region),
+        message,
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED IF".to_string(),
     }
 }
 
@@ -781,6 +1014,23 @@ fn to_type_report<'a>(
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.note("I may be confused by indentation"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED TYPE".to_string(),
+            }
+        }
+
+        Type::TIndentEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a type, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.note("I may be confused by indentation"),
             ]);
@@ -1606,6 +1856,7 @@ fn to_space_report<'a>(
     }
 }
 
+#[derive(Debug)]
 enum Next<'a> {
     Keyword(&'a str),
     // Operator(&'a str),

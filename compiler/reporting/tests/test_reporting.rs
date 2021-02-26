@@ -801,35 +801,36 @@ mod test_reporting {
         )
     }
 
-    // #[test]
-    // fn if_3_branch_mismatch() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //             if True then 2 else if False then 2 else "foo"
-    //             "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //  ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-
-    //             The 2nd branch of this `if` does not match all the previous branches:
-
-    //             1│ if True then 2 else "foo"
-    //                                     ^^^^^
-
-    //             The 2nd branch is a string of type
-
-    //                 Str
-
-    //             But all the previous branches have the type
-
-    //                 Num a
-
-    //             "#
-    //         ),
-    //     )
-    // }
+    #[test]
+    fn if_3_branch_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 if True then 2 else if False then 2 else "foo"
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                The 3rd branch of this `if` does not match all the previous branches:
+                
+                1│  if True then 2 else if False then 2 else "foo"
+                                                             ^^^^^
+                
+                The 3rd branch is a string of type:
+                
+                    Str
+                
+                But all the previous branches have type:
+                
+                    Num a
+                
+                I need all branches in an `if` to have the same type!
+                "#
+            ),
+        )
+    }
 
     #[test]
     fn when_branch_mismatch() {
@@ -4635,12 +4636,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
-
-                I just started parsing a type, but I got stuck here:
-
+                
+                I am partway through parsing a type, but I got stuck here:
+                
                 1│  f : I64, I64
                                 ^
-
+                
                 Note: I may be confused by indentation
             "#
             ),
@@ -4945,6 +4946,140 @@ mod test_reporting {
                 
                 Notice the indentation. All patterns are aligned, and each branch is
                 indented a bit more than the corresponding pattern. That is important!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_outdented_then() {
+        // TODO I think we can do better here
+        report_problem_as(
+            indoc!(
+                r#"
+                x =
+                    if 5 == 5 
+                then 2 else 3
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED IF ───────────────────────────────────────────────────────────────
+                
+                I was partway through parsing an `if` expression, but I got stuck here:
+                
+                2│      if 5 == 5 
+                                 ^
+                
+                I was expecting to see the `then` keyword next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_missing_else() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                if 5 == 5 then 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED IF ───────────────────────────────────────────────────────────────
+                
+                I was partway through parsing an `if` expression, but I got stuck here:
+                
+                1│  if 5 == 5 then 2
+                                    ^
+                
+                I was expecting to see the `else` keyword next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_double_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 2, , 3 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                
+                I am partway through started parsing a list, but I got stuck here:
+                
+                1│  [ 1, 2, , 3 ]
+                            ^
+                
+                I was expecting to see a list entry before this comma, so try adding a
+                list entry and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_without_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 2, 
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                
+                I am partway through started parsing a list, but I got stuck here:
+                
+                1│  [ 1, 2, 
+                           ^
+                
+                I was expecting to see a closing square bracket before this, so try
+                adding a ] and see if that helps?
+                
+                Note: When I get stuck like this, it usually means that there is a
+                missing parenthesis or bracket somewhere earlier. It could also be a
+                stray keyword or operator.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_bad_indent() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = [ 1, 2, 
+                ]
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                
+                I cannot find the end of this list:
+                
+                1│  x = [ 1, 2, 
+                               ^
+                
+                You could change it to something like [ 1, 2, 3 ] or even just [].
+                Anything where there is an open and a close square bracket, and where
+                the elements of the list are separated by commas.
+                
+                Note: I may be confused by indentation
             "#
             ),
         )

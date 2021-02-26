@@ -631,6 +631,7 @@ struct ModuleHeader<'a> {
     module_id: ModuleId,
     module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
+    is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     packages: MutMap<&'a str, PackageOrPath<'a>>,
@@ -782,6 +783,14 @@ enum Msg<'a> {
 }
 
 #[derive(Debug)]
+enum PlatformPath<'a> {
+    NotSpecified,
+    Valid(To<'a>),
+    RootIsInterface,
+    RootIsPkgConfig,
+}
+
+#[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
     pub platform_id: Option<ModuleId>,
@@ -789,7 +798,7 @@ struct State<'a> {
     pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
-    pub platform_path: Option<To<'a>>,
+    pub platform_path: PlatformPath<'a>,
 
     pub headers_parsed: MutSet<ModuleId>,
 
@@ -994,6 +1003,8 @@ pub enum LoadingProblem<'a> {
     },
     ParsingFailed(ParseProblem<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
+    /// there is no platform (likely running an Interface module)
+    NoPlatform(String),
 
     MsgChannelDied,
     ErrJoiningWorkerThreads,
@@ -1147,6 +1158,7 @@ impl<'a> LoadStart<'a> {
             load_filename(
                 arena,
                 filename,
+                true,
                 None,
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
@@ -1415,7 +1427,7 @@ where
                 goal_phase,
                 stdlib,
                 output_path: None,
-                platform_path: None,
+                platform_path: PlatformPath::NotSpecified,
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
@@ -1492,7 +1504,7 @@ where
                             state,
                             subs,
                             exposed_to_host,
-                        )));
+                        )?));
                     }
                     Msg::FailedToParse(problem) => {
                         // Shut down all the worker threads.
@@ -1623,16 +1635,25 @@ fn update<'a>(
 
             match header_extra {
                 App { to_platform } => {
-                    debug_assert_eq!(state.platform_path, None);
-
-                    state.platform_path = Some(to_platform.clone());
+                    debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                    state.platform_path = PlatformPath::Valid(to_platform.clone());
                 }
                 PkgConfig { .. } => {
                     debug_assert_eq!(state.platform_id, None);
 
                     state.platform_id = Some(header.module_id);
+
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsPkgConfig;
+                    }
                 }
-                Interface => {}
+                Interface => {
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsInterface;
+                    }
+                }
             }
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
@@ -2070,7 +2091,7 @@ fn finish_specialization(
     state: State,
     subs: Subs,
     exposed_to_host: MutMap<Symbol, Variable>,
-) -> MonomorphizedModule {
+) -> Result<MonomorphizedModule, LoadingProblem> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
@@ -2097,21 +2118,89 @@ fn finish_specialization(
         ..
     } = module_cache;
 
-    let sources = sources
+    let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
         .into_iter()
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
     let path_to_platform = {
+        use PlatformPath::*;
         let package_or_path = match platform_path {
-            Some(To::ExistingPackage(shorthand)) => {
+            Valid(To::ExistingPackage(shorthand)) => {
                 match (*state.arc_shorthands).lock().get(shorthand) {
                     Some(p_or_p) => p_or_p.clone(),
                     None => unreachable!(),
                 }
             }
-            Some(To::NewPackage(p_or_p)) => p_or_p,
-            None => panic!("no platform!"),
+            Valid(To::NewPackage(p_or_p)) => p_or_p,
+            other => {
+                use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+                use ven_pretty::DocAllocator;
+
+                let module_id = state.root_id;
+
+                let palette = DEFAULT_PALETTE;
+
+                // Report parsing and canonicalization problems
+                let alloc = RocDocAllocator::new(&[], module_id, &interns);
+
+                let report = {
+                    match other {
+                        Valid(_) => unreachable!(),
+                        NotSpecified => {
+                            let doc = alloc.stack(vec![
+                                alloc.reflow("I could not find a platform based on your input file."),
+                                alloc.reflow(r"Does the module header contain an entry that looks like this:"),
+                                alloc
+                                    .parser_suggestion(" packages { base: \"platform\" }")
+                                    .indent(4),
+                                alloc.reflow("See also TODO."),
+                            ]);
+
+                            Report {
+                                filename: "UNKNOWN.roc".into(),
+                                doc,
+                                title: "NO PLATFORM".to_string(),
+                            }
+                        }
+                        RootIsInterface => {
+                            let doc = alloc.stack(vec![
+                                alloc.reflow(r"The input file is a interface file, but only app modules can be ran."),
+                                alloc.concat(vec![
+                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
+                                alloc.reflow(r"but won't output any executable."),
+                                ])
+                            ]);
+
+                            Report {
+                                filename: "UNKNOWN.roc".into(),
+                                doc,
+                                title: "NO PLATFORM".to_string(),
+                            }
+                        }
+                        RootIsPkgConfig => {
+                            let doc = alloc.stack(vec![
+                                alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
+                                alloc.concat(vec![
+                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
+                                alloc.reflow(r"but won't output any executable."),
+                                ])
+                            ]);
+
+                            Report {
+                                filename: "UNKNOWN.roc".into(),
+                                doc,
+                                title: "NO PLATFORM".to_string(),
+                            }
+                        }
+                    }
+                };
+                let mut buf = String::new();
+
+                report.render_color_terminal(&mut buf, &alloc, &palette);
+
+                return Err(LoadingProblem::NoPlatform(buf));
+            }
         };
 
         match package_or_path {
@@ -2123,7 +2212,7 @@ fn finish_specialization(
 
     let platform_path = path_to_platform.into();
 
-    MonomorphizedModule {
+    Ok(MonomorphizedModule {
         can_problems,
         mono_problems,
         type_problems,
@@ -2136,7 +2225,7 @@ fn finish_specialization(
         procedures,
         sources,
         timings: state.timings,
-    }
+    })
 }
 
 fn finish(
@@ -2319,6 +2408,7 @@ fn load_module<'a>(
     load_filename(
         arena,
         filename,
+        false,
         opt_shorthand,
         module_ids,
         ident_ids_by_module,
@@ -2358,6 +2448,7 @@ fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
     filename: PathBuf,
+    is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -2383,6 +2474,7 @@ fn parse_header<'a>(
                 value: ModuleNameEnum::Interface(header.name.value),
             },
             filename,
+            is_root_module,
             opt_shorthand,
             &[],
             header.exposes.into_bump_slice(),
@@ -2405,6 +2497,7 @@ fn parse_header<'a>(
                     value: ModuleNameEnum::App(header.name.value),
                 },
                 filename,
+                is_root_module,
                 opt_shorthand,
                 packages,
                 header.provides.into_bump_slice(),
@@ -2507,9 +2600,11 @@ fn parse_header<'a>(
 }
 
 /// Load a module by its filename
+#[allow(clippy::too_many_arguments)]
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -2525,6 +2620,7 @@ fn load_filename<'a>(
             arena,
             file_io_duration,
             filename,
+            is_root_module,
             opt_shorthand,
             module_ids,
             ident_ids_by_module,
@@ -2559,6 +2655,7 @@ fn load_from_str<'a>(
         arena,
         file_io_duration,
         filename,
+        false,
         None,
         module_ids,
         ident_ids_by_module,
@@ -2580,6 +2677,7 @@ enum ModuleNameEnum<'a> {
 fn send_header<'a>(
     loc_name: Located<ModuleNameEnum<'a>>,
     filename: PathBuf,
+    is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     packages: &'a [Located<PackageEntry<'a>>],
     exposes: &'a [Located<ExposesEntry<'a, &'a str>>],
@@ -2766,6 +2864,7 @@ fn send_header<'a>(
             ModuleHeader {
                 module_id: home,
                 module_path: filename,
+                is_root_module,
                 exposed_ident_ids: ident_ids,
                 module_name: loc_name.value,
                 packages: package_entries,
@@ -2787,6 +2886,7 @@ fn send_header<'a>(
 fn send_header_two<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    is_root_module: bool,
     shorthand: &'a str,
     app_module_id: ModuleId,
     packages: &'a [Located<PackageEntry<'a>>],
@@ -2983,6 +3083,7 @@ fn send_header_two<'a>(
             ModuleHeader {
                 module_id: home,
                 module_path: filename,
+                is_root_module,
                 exposed_ident_ids: ident_ids,
                 module_name,
                 packages: package_entries,
@@ -3126,6 +3227,7 @@ fn fabricate_pkg_config_module<'a>(
     send_header_two(
         arena,
         filename,
+        false,
         shorthand,
         app_module_id,
         &[],
