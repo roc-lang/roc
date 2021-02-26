@@ -7,7 +7,6 @@ use crate::blankspace::{
 };
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
-use crate::number_literal::number_literal;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
     map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
@@ -673,7 +672,7 @@ fn equals_for_def<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         Some(b'=') => match state.bytes.get(1) {
             Some(b'=') | Some(b'>') => Err((NoProgress, SyntaxError::ConditionFailed, state)),
             _ => {
-                let state = state.advance_without_indenting(arena, 1)?;
+                let state = state.advance_without_indenting(1)?;
 
                 Ok((MadeProgress, (), state))
             }
@@ -1831,7 +1830,7 @@ pub fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
                     // The '=' must not be followed by another `=` or `>`
                     // (See equals_for_def() for explanation)
                     Some(b'=') | Some(b'>') => Err((NoProgress, equals, state)),
-                    Some(_) => match state.advance_without_indenting_e(arena, 1, EExpr::Space) {
+                    Some(_) => match state.advance_without_indenting_e(1, EExpr::Space) {
                         Err(bad) => Err(bad),
                         Ok(good) => Ok((MadeProgress, indent_col, good)),
                     },
@@ -1856,11 +1855,11 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16, SyntaxError<'a>> {
                     Some(_) => Ok((
                         MadeProgress,
                         state.indent_col,
-                        state.advance_without_indenting(arena, 1)?,
+                        state.advance_without_indenting(1)?,
                     )),
                     None => Err(unexpected_eof(
                         arena,
-                        state.advance_without_indenting(arena, 1)?,
+                        state.advance_without_indenting(1)?,
                         1,
                     )),
                 }
@@ -1876,7 +1875,7 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16, SyntaxError<'a>> {
         Some(&byte) if byte == b':' => Ok((
             MadeProgress,
             state.indent_col,
-            state.advance_without_indenting(arena, 1)?,
+            state.advance_without_indenting(1)?,
         )),
         Some(_) => Err(unexpected(arena, 0, Attempting::Def, state)),
         None => Err(unexpected_eof(arena, state, 0)),
@@ -2239,6 +2238,15 @@ fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString> {
 }
 
 #[allow(dead_code)]
+fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+    // use crate::number_literal::number_literal;
+    specialize(
+        |e, r, c| SyntaxError::Expr(EExpr::Number(e, r, c)),
+        crate::number_literal::number_literal(),
+    )
+}
+
+#[allow(dead_code)]
 fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
-    specialize(|_, _, _| Number::NumberEnd, number_literal())
+    crate::number_literal::number_literal()
 }

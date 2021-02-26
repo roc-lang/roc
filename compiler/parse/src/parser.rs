@@ -135,15 +135,13 @@ impl<'a> State<'a> {
     /// they weren't eligible to indent anyway.
     pub fn advance_without_indenting(
         self,
-        arena: &'a Bump,
         quantity: usize,
     ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.advance_without_indenting_e(arena, quantity, bad_input_to_syntax_error)
+        self.advance_without_indenting_e(quantity, bad_input_to_syntax_error)
     }
 
     pub fn advance_without_indenting_e<TE, E>(
         self,
-        arena: &'a Bump,
         quantity: usize,
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
@@ -160,7 +158,7 @@ impl<'a> State<'a> {
                     ..self
                 })
             }
-            _ => Err(line_too_long_e(arena, self.clone(), to_error)),
+            _ => Err(line_too_long_e(self.clone(), to_error)),
         }
     }
 
@@ -214,7 +212,7 @@ impl<'a> State<'a> {
                     original_len: self.original_len,
                 })
             }
-            _ => Err(line_too_long_e(arena, self.clone(), to_error)),
+            _ => Err(line_too_long_e(self.clone(), to_error)),
         }
     }
 
@@ -403,8 +401,8 @@ pub enum EExpr<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Number {
-    NumberEnd,
-    NumberDot(i64),
+    End,
+    LineTooLong,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -878,9 +876,7 @@ pub fn unexpected_eof<'a>(
     state: State<'a>,
     chars_consumed: usize,
 ) -> (Progress, SyntaxError<'a>, State<'a>) {
-    checked_unexpected(arena, state, chars_consumed, |region| {
-        SyntaxError::Eof(region)
-    })
+    checked_unexpected(state, chars_consumed, |region| SyntaxError::Eof(region))
 }
 
 pub fn unexpected<'a>(
@@ -891,7 +887,7 @@ pub fn unexpected<'a>(
 ) -> (Progress, SyntaxError<'a>, State<'a>) {
     // NOTE state is the last argument because chars_consumed often depends on the state's fields
     // having state be the final argument prevents borrowing issues
-    checked_unexpected(arena, state, chars_consumed, |region| {
+    checked_unexpected(state, chars_consumed, |region| {
         SyntaxError::Unexpected(region)
     })
 }
@@ -901,7 +897,6 @@ pub fn unexpected<'a>(
 /// If maximum line length was exceeded, return a Problem indicating as much.
 #[inline(always)]
 fn checked_unexpected<'a, F>(
-    arena: &'a Bump,
     state: State<'a>,
     chars_consumed: usize,
     problem_from_region: F,
@@ -926,17 +921,13 @@ where
             (Progress::NoProgress, problem_from_region(region), state)
         }
         _ => {
-            let (_progress, fail, state) = line_too_long(arena, state);
+            let (_progress, fail, state) = line_too_long(state);
             (Progress::NoProgress, fail, state)
         }
     }
 }
 
-fn line_too_long_e<'a, TE, E>(
-    _arena: &'a Bump,
-    state: State<'a>,
-    to_error: TE,
-) -> (Progress, E, State<'a>)
+fn line_too_long_e<'a, TE, E>(state: State<'a>, to_error: TE) -> (Progress, E, State<'a>)
 where
     TE: Fn(BadInputError, Row, Col) -> E,
 {
@@ -961,8 +952,8 @@ where
     (Progress::NoProgress, problem, state)
 }
 
-fn line_too_long<'a>(arena: &'a Bump, state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
-    line_too_long_e(arena, state, |_, line, _| SyntaxError::LineTooLong(line))
+fn line_too_long<'a>(state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
+    line_too_long_e(state, |_, line, _| SyntaxError::LineTooLong(line))
 }
 
 /// A single ASCII char that isn't a newline.
@@ -975,7 +966,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
         Some(&actual) if expected == actual => Ok((
             Progress::MadeProgress,
             (),
-            state.advance_without_indenting(arena, 1)?,
+            state.advance_without_indenting(1)?,
         )),
         Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(arena, state, 0)),
@@ -1006,7 +997,7 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
                 // We didn't find any hex digits!
                 return Err(unexpected(arena, 0, Attempting::Keyword, state));
             } else {
-                let state = state.advance_without_indenting(arena, buf.len())?;
+                let state = state.advance_without_indenting(buf.len())?;
 
                 return Ok((Progress::MadeProgress, buf.into_bump_str(), state));
             }
@@ -1150,7 +1141,7 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxErro
             Ok((
                 Progress::MadeProgress,
                 (),
-                state.advance_without_indenting(arena, len)?,
+                state.advance_without_indenting(len)?,
             ))
         } else {
             let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);

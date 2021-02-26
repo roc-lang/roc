@@ -27,7 +27,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
         }
 
         // Advance past the opening quotation mark.
-        state = state.advance_without_indenting(arena, 1)?;
+        state = state.advance_without_indenting(1)?;
 
         // At the parsing stage we keep the entire raw string, because the formatter
         // needs the raw string. (For example, so it can "remember" whether you
@@ -44,7 +44,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                 segments.push(StrSegment::EscapedChar($ch));
 
                 // Advance past the segment we just added
-                state = state.advance_without_indenting(arena, segment_parsed_bytes)?;
+                state = state.advance_without_indenting(segment_parsed_bytes)?;
 
                 // Reset the segment
                 segment_parsed_bytes = 0;
@@ -63,7 +63,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
 
                     match parse_utf8(string_bytes) {
                         Ok(string) => {
-                            state = state.advance_without_indenting(arena, string.len())?;
+                            state = state.advance_without_indenting(string.len())?;
 
                             segments.push($transform(string));
                         }
@@ -105,7 +105,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                                 return Ok((
                                     MadeProgress,
                                     PlainLine(""),
-                                    state.advance_without_indenting(arena, 1)?,
+                                    state.advance_without_indenting(1)?,
                                 ));
                             }
                         }
@@ -128,11 +128,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                         };
 
                         // Advance the state 1 to account for the closing `"`
-                        return Ok((
-                            MadeProgress,
-                            expr,
-                            state.advance_without_indenting(arena, 1)?,
-                        ));
+                        return Ok((MadeProgress, expr, state.advance_without_indenting(1)?));
                     };
                 }
                 b'\n' => {
@@ -163,7 +159,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                     match bytes.next() {
                         Some(b'(') => {
                             // Advance past the `\(` before using the expr parser
-                            state = state.advance_without_indenting(arena, 2)?;
+                            state = state.advance_without_indenting(2)?;
 
                             let original_byte_count = state.bytes.len();
 
@@ -188,7 +184,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, SyntaxError<'a>> {
                         }
                         Some(b'u') => {
                             // Advance past the `\u` before using the expr parser
-                            state = state.advance_without_indenting(arena, 2)?;
+                            state = state.advance_without_indenting(2)?;
 
                             let original_byte_count = state.bytes.len();
 
