@@ -74,6 +74,17 @@ fn chomp_number_dec<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, Number> {
     let (is_float, mut chomped) = chomp_number(bytes);
+
+    if is_negative && chomped == 0 {
+        // we're probably actually looking at unary negation here
+        return Err((Progress::NoProgress, Number::End, state));
+    }
+
+    if !bytes.get(0).copied().unwrap_or_default().is_ascii_digit() {
+        // we're probably actually looking at unary negation here
+        return Err((Progress::NoProgress, Number::End, state));
+    }
+
     chomped += is_negative as usize;
 
     let string = unsafe { from_utf8_unchecked(&state.bytes[0..chomped]) };
