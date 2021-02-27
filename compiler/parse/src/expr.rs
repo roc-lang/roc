@@ -356,16 +356,68 @@ where
     }
 }
 
+fn unary_not<'a>() -> impl Parser<'a, (), EExpr<'a>> {
+    move |_arena: &'a Bump, state: State<'a>| {
+        if state.bytes.starts_with(b"!") && state.bytes.get(1) != Some(&b'=') {
+            // don't parse the `!` if it's followed by a `=`
+            Ok((
+                MadeProgress,
+                (),
+                State {
+                    bytes: &state.bytes[1..],
+                    column: state.column + 1,
+                    ..state
+                },
+            ))
+        } else {
+            // this is not a negated expression
+            Err((NoProgress, EExpr::UnaryNot(state.line, state.column), state))
+        }
+    }
+}
+
+fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
+    move |_arena: &'a Bump, state: State<'a>| {
+        let followed_by_whitespace = state
+            .bytes
+            .get(1)
+            .map(|c| c.is_ascii_whitespace())
+            .unwrap_or(false);
+
+        if state.bytes.starts_with(b"!") && !followed_by_whitespace {
+            // don't parse the `!` if it's followed by a `!=`
+            Ok((
+                MadeProgress,
+                (),
+                State {
+                    bytes: &state.bytes[1..],
+                    column: state.column + 1,
+                    ..state
+                },
+            ))
+        } else {
+            // this is not a negated expression
+            Err((NoProgress, EExpr::UnaryNot(state.line, state.column), state))
+        }
+    }
+}
+
 /// Unary (!) or (-)
 ///
 /// e.g. `!x` or `-x`
-pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
+    specialize(|e, _, _| SyntaxError::Expr(e), unary_op_help(min_indent))
+}
+
+fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     one_of!(
         map_with_arena!(
             // must backtrack to distinguish `!x` from `!= y`
             and!(
-                loc!(backtrackable(ascii_char(b'!'))),
-                loc!(move |arena, state| parse_expr(min_indent, arena, state))
+                loc!(unary_not()),
+                loc!(specialize_ref(EExpr::Syntax, move |arena, state| {
+                    parse_expr(min_indent, arena, state)
+                }))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Not))
@@ -374,8 +426,10 @@ pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a
         map_with_arena!(
             and!(
                 // must backtrack to distinguish `x - 1` from `-1`
-                loc!(backtrackable(ascii_char(b'-'))),
-                loc!(move |arena, state| parse_expr(min_indent, arena, state))
+                loc!(unary_negate()),
+                loc!(specialize_ref(EExpr::Syntax, move |arena, state| {
+                    parse_expr(min_indent, arena, state)
+                }))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Negate))

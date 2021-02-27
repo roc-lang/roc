@@ -389,6 +389,8 @@ pub enum EExpr<'a> {
 
     Dot(Row, Col),
     Access(Row, Col),
+    UnaryNot(Row, Col),
+    UnaryNegate(Row, Col),
 
     Def(&'a SyntaxError<'a>, Row, Col),
     Type(Type<'a>, Row, Col),
