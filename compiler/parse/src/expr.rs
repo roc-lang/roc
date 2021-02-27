@@ -2,15 +2,15 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    line_comment, space0, space0_after, space0_after_e, space0_around_ee, space0_before,
-    space0_before_e, space0_e, space1, space1_before, spaces_exactly,
+    line_comment, space0, space0_after_e, space0_around_ee, space0_before, space0_before_e,
+    space0_e, space1, space1_before, spaces_exactly_e,
 };
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, backtrackable, map,
-    newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize, specialize_ref,
-    then, trailing_sep_by0, unexpected, unexpected_eof, word1, word2, EExpr, EInParens, ELambda,
+    newline_char, not, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
+    trailing_sep_by0, unexpected, unexpected_eof, word1, word2, EExpr, EInParens, ELambda,
     EPattern, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State, SyntaxError,
     Type, When,
 };
@@ -387,9 +387,7 @@ fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
             // must backtrack to distinguish `!x` from `!= y`
             and!(
                 loc!(unary_not()),
-                loc!(specialize_ref(EExpr::Syntax, move |arena, state| {
-                    parse_expr(min_indent, arena, state)
-                }))
+                loc!(move |arena, state| parse_expr_help(min_indent, arena, state))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Not))
@@ -399,9 +397,7 @@ fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
             and!(
                 // must backtrack to distinguish `x - 1` from `-1`
                 loc!(unary_negate()),
-                loc!(specialize_ref(EExpr::Syntax, move |arena, state| {
-                    parse_expr(min_indent, arena, state)
-                }))
+                loc!(move |arena, state| parse_expr_help(min_indent, arena, state))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Negate))
@@ -764,20 +760,6 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
-fn equals_for_def<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    |_arena, state: State<'a>| match state.bytes.get(0) {
-        Some(b'=') => match state.bytes.get(1) {
-            Some(b'=') | Some(b'>') => Err((NoProgress, SyntaxError::ConditionFailed, state)),
-            _ => {
-                let state = state.advance_without_indenting(1)?;
-
-                Ok((MadeProgress, (), state))
-            }
-        },
-        _ => Err((NoProgress, SyntaxError::ConditionFailed, state)),
-    }
-}
-
 fn equals_for_def_help<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     |_arena, state: State<'a>| match state.bytes.get(0) {
         Some(b'=') => match state.bytes.get(1) {
@@ -889,16 +871,6 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
 
 // PARSER HELPERS
 
-fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    space0_after(
-        specialize(
-            |e, _, _| SyntaxError::Pattern(e),
-            loc_closure_param(min_indent),
-        ),
-        min_indent,
-    )
-}
-
 fn pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EExpr<'a>> {
     specialize_ref(
         EExpr::Pattern,
@@ -929,24 +901,22 @@ fn spaces_then_comment_or_newline_help<'a>() -> impl Parser<'a, Option<&'a str>,
 
 type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
 
-fn body_at_indent<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>, SyntaxError<'a>> {
+fn body_at_indent_help<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>, EExpr<'a>> {
     let indented_more = indent_level + 1;
     and!(
-        skip_first!(spaces_exactly(indent_level), pattern(indent_level)),
+        skip_first!(spaces_exactly_e(indent_level), pattern_help(indent_level)),
         skip_first!(
-            equals_for_def(),
+            equals_for_def_help(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
             // The expr itself must be indented more than the pattern and '='
-            space0_before(
-                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
+            space0_before_e(
+                loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
                 indent_level,
+                EExpr::Space,
+                EExpr::IndentStart,
             )
         )
     )
-}
-
-fn body_at_indent_help<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>, EExpr<'a>> {
-    specialize_ref(EExpr::Syntax, body_at_indent(indent_level))
 }
 
 fn annotation_or_alias<'a>(
@@ -1675,13 +1645,6 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
     }
 }
 
-pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Expr(EExpr::If(e, r, c)),
-        if_expr_help(min_indent),
-    )
-}
-
 /// This is a helper function for parsing function args.
 /// The rules for (-) are special-cased, and they come up in function args.
 ///
@@ -1699,66 +1662,53 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>
 fn unary_negate_function_arg<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    then(
-        // Spaces, then '-', then *not* more spaces.
-        not_followed_by(
-            either!(
-                // Try to parse a number literal *before* trying to parse unary negate,
-                // because otherwise (foo -1) will parse as (foo (Num.neg 1))
-                loc!(number_literal()),
-                loc!(ascii_char(b'-'))
-            ),
-            one_of!(
-                ascii_char(b' '),
-                ascii_char(b'#'),
-                newline_char(),
-                ascii_char(b'>')
-            ),
-        ),
-        move |arena, state, progress, num_or_minus_char| {
-            debug_assert_eq!(progress, MadeProgress);
-
-            match num_or_minus_char {
-                Either::First(loc_num_literal) => Ok((progress, loc_num_literal, state)),
-                Either::Second(Located { region, .. }) => {
-                    let loc_op = Located {
-                        region,
-                        value: UnaryOp::Negate,
-                    };
-
-                    // Continue parsing the function arg as normal.
-                    let (_, loc_expr, state) = loc_function_arg(min_indent).parse(arena, state)?;
-                    let region = Region {
-                        start_col: loc_op.region.start_col,
-                        start_line: loc_op.region.start_line,
-                        end_col: loc_expr.region.end_col,
-                        end_line: loc_expr.region.end_line,
-                    };
-                    let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
-                    let loc_expr = Located {
-                        // Start from where the unary op started,
-                        // and end where its argument expr ended.
-                        // This is relevant in case (for example)
-                        // we have an expression involving parens,
-                        // for example `-(foo bar)`
-                        region,
-                        value,
-                    };
-
-                    let value = loc_expr.value;
-
-                    Ok((
-                        MadeProgress,
-                        Located {
-                            region: loc_expr.region,
-                            value,
-                        },
-                        state,
-                    ))
-                }
-            }
-        },
+    specialize(
+        |e, _, _| SyntaxError::Expr(e),
+        unary_negate_function_arg_help(min_indent),
     )
+}
+
+fn unary_negate_function_arg_help<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+    move |arena, state: State<'a>| {
+        let (_, Located { region, .. }, state) = loc!(unary_negate()).parse(arena, state)?;
+
+        let loc_op = Located {
+            region,
+            value: UnaryOp::Negate,
+        };
+
+        // Continue parsing the function arg as normal.
+        let (_, loc_expr, state) = loc_parse_function_arg_help(min_indent, arena, state)?;
+        let region = Region {
+            start_col: loc_op.region.start_col,
+            start_line: loc_op.region.start_line,
+            end_col: loc_expr.region.end_col,
+            end_line: loc_expr.region.end_line,
+        };
+        let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
+        let loc_expr = Located {
+            // Start from where the unary op started,
+            // and end where its argument expr ended.
+            // This is relevant in case (for example)
+            // we have an expression involving parens,
+            // for example `-(foo bar)`
+            region,
+            value,
+        };
+
+        let value = loc_expr.value;
+
+        Ok((
+            MadeProgress,
+            Located {
+                region: loc_expr.region,
+                value,
+            },
+            state,
+        ))
+    }
 }
 
 fn loc_function_args_help<'a>(
@@ -2397,14 +2347,6 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
 
 fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
     map!(crate::string_literal::parse(), Expr::Str)
-}
-
-fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    // use crate::number_literal::number_literal;
-    specialize(
-        |e, r, c| SyntaxError::Expr(EExpr::Number(e, r, c)),
-        crate::number_literal::number_literal(),
-    )
 }
 
 fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {

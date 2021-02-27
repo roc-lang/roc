@@ -435,6 +435,62 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
 }
 
 #[inline(always)]
+pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser::EExpr<'a>> {
+    use parser::EExpr;
+
+    move |arena: &'a Bump, state: State<'a>| {
+        if spaces_expected == 0 {
+            return Ok((NoProgress, (), state));
+        }
+
+        let mut state = state;
+        let mut spaces_seen: u16 = 0;
+
+        while !state.bytes.is_empty() {
+            match peek_utf8_char(&state) {
+                Ok((' ', _)) => {
+                    spaces_seen += 1;
+                    state = state.advance_spaces_e(arena, 1, EExpr::IndentStart)?;
+                    if spaces_seen == spaces_expected {
+                        return Ok((MadeProgress, (), state));
+                    }
+                }
+                Ok(_) => {
+                    return Err((
+                        NoProgress,
+                        EExpr::IndentStart(state.line, state.column),
+                        state,
+                    ))
+                }
+
+                Err(SyntaxError::BadUtf8) => {
+                    // If we hit an invalid UTF-8 character, bail out immediately.
+                    let progress = Progress::progress_when(spaces_seen != 0);
+                    return Err((
+                        progress,
+                        EExpr::Space(BadInputError::BadUtf8, state.line, state.column),
+                        state,
+                    ));
+                }
+                Err(_) => {
+                    return Err((
+                        NoProgress,
+                        EExpr::IndentStart(state.line, state.column),
+                        state,
+                    ))
+                }
+            }
+        }
+
+        Err((
+            NoProgress,
+            EExpr::IndentStart(state.line, state.column),
+            state,
+        ))
+    }
+}
+
+#[inline(always)]
 fn spaces<'a>(
     require_at_least_one: bool,
     min_indent: u16,
