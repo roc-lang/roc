@@ -391,6 +391,7 @@ pub enum EExpr<'a> {
     Access(Row, Col),
     UnaryNot(Row, Col),
     UnaryNegate(Row, Col),
+    BinOp(roc_module::operator::BinOp, Row, Col),
 
     Def(&'a SyntaxError<'a>, Row, Col),
     Type(Type<'a>, Row, Col),
@@ -477,8 +478,7 @@ pub enum EInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
     ///
-    // TODO remove
-    Syntax(&'a SyntaxError<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Row, Col),
 
     ///
     Space(BadInputError, Row, Col),
@@ -496,8 +496,7 @@ pub enum ELambda<'a> {
     Arg(Row, Col),
     // TODO make EEXpr
     Pattern(EPattern<'a>, Row, Col),
-    Syntax(&'a SyntaxError<'a>, Row, Col),
-
+    Body(&'a EExpr<'a>, Row, Col),
     IndentArrow(Row, Col),
     IndentBody(Row, Col),
     IndentArg(Row, Col),
@@ -524,9 +523,10 @@ pub enum When<'a> {
     Pattern(EPattern<'a>, Row, Col),
     Arrow(Row, Col),
     Bar(Row, Col),
+
     IfToken(Row, Col),
-    // TODO make EEXpr
-    IfGuard(&'a SyntaxError<'a>, Row, Col),
+    IfGuard(&'a EExpr<'a>, Row, Col),
+
     Condition(&'a EExpr<'a>, Row, Col),
     Branch(&'a EExpr<'a>, Row, Col),
     Syntax(&'a SyntaxError<'a>, Row, Col),

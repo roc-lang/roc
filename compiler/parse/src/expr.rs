@@ -53,8 +53,8 @@ fn loc_expr_in_parens_help_help<'a>(
         word1(b'(', EInParens::Open),
         space0_around_ee(
             specialize_ref(
-                EInParens::Syntax,
-                loc!(move |arena, state| parse_expr(min_indent, arena, state))
+                EInParens::Expr,
+                loc!(move |arena, state| parse_expr_help(min_indent, arena, state))
             ),
             min_indent,
             EInParens::Space,
@@ -408,6 +408,58 @@ fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
             }
         )
     )
+}
+
+fn parse_expr_help<'a>(
+    min_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let expr_parser = crate::parser::map_with_arena(
+        and!(
+            // First parse the body without operators, then try to parse possible operators after.
+            move |arena, state| loc_parse_expr_body_without_operators_help(
+                min_indent, arena, state
+            ),
+            // Parse the operator, with optional spaces before it.
+            //
+            // Since spaces can only wrap an Expr, not an BinOp, we have to first
+            // parse the spaces and then attach them retroactively to the expression
+            // preceding the operator (the one we parsed before considering operators).
+            optional(and!(
+                and!(
+                    space0_e(min_indent, EExpr::Space, EExpr::IndentEnd),
+                    loc!(binop_help())
+                ),
+                // The spaces *after* the operator can be attached directly to
+                // the expression following the operator.
+                space0_before_e(
+                    loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
+                    min_indent,
+                    EExpr::Space,
+                    EExpr::IndentEnd,
+                )
+            ))
+        ),
+        |arena, (loc_expr1, opt_operator)| match opt_operator {
+            Some(((spaces_before_op, loc_op), loc_expr2)) => {
+                let loc_expr1 = if spaces_before_op.is_empty() {
+                    loc_expr1
+                } else {
+                    // Attach the spaces retroactively to the expression preceding the operator.
+                    arena
+                        .alloc(loc_expr1.value)
+                        .with_spaces_after(spaces_before_op, loc_expr1.region)
+                };
+                let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
+
+                Expr::BinOp(tuple)
+            }
+            None => loc_expr1.value,
+        },
+    );
+
+    expr_parser.parse(arena, state)
 }
 
 fn parse_expr<'a>(
@@ -1144,10 +1196,7 @@ fn parse_def_signature_help<'a>(
                 // Parse the final expression that will be returned.
                 // It should be indented the same amount as the original.
                 space0_before_e(
-                    specialize_ref(
-                        EExpr::Syntax,
-                        loc!(|arena, state: State<'a>| parse_expr(original_indent, arena, state))
-                    ),
+                    loc!(|arena, state| parse_expr_help(original_indent, arena, state)),
                     original_indent,
                     EExpr::Space,
                     EExpr::IndentEnd,
@@ -1277,8 +1326,8 @@ fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
                     // Parse the body
                     space0_before_e(
                         specialize_ref(
-                            ELambda::Syntax,
-                            loc!(move |arena, state| parse_expr(min_indent, arena, state))
+                            ELambda::Body,
+                            loc!(move |arena, state| parse_expr_help(min_indent, arena, state))
                         ),
                         min_indent,
                         ELambda::Space,
@@ -1307,10 +1356,9 @@ mod when {
                 when_with_indent(),
                 skip_second!(
                     space0_around_ee(
-                        loc!(specialize_ref(
-                            When::Syntax,
-                            move |arena, state| parse_expr(min_indent, arena, state)
-                        )),
+                        loc!(specialize_ref(When::Condition, move |arena, state| {
+                            parse_expr_help(min_indent, arena, state)
+                        })),
                         min_indent,
                         When::Space,
                         When::IndentCondition,
@@ -1462,7 +1510,7 @@ mod when {
                         // TODO we should require space before the expression but not after
                         space0_around_ee(
                             loc!(specialize_ref(When::IfGuard, move |arena, state| {
-                                parse_expr(min_indent, arena, state)
+                                parse_expr_help(min_indent, arena, state)
                             })),
                             min_indent,
                             When::Space,
@@ -1502,8 +1550,8 @@ mod when {
             word2(b'-', b'>', When::Arrow),
             space0_before_e(
                 specialize_ref(
-                    When::Syntax,
-                    loc!(move |arena, state| parse_expr(indent, arena, state))
+                    When::Branch,
+                    loc!(move |arena, state| parse_expr_help(indent, arena, state))
                 ),
                 indent,
                 When::Space,
@@ -1520,8 +1568,8 @@ fn if_branch<'a>(
         // NOTE: only parse spaces before the expression
         let (_, cond, state) = space0_around_ee(
             specialize_ref(
-                If::Syntax,
-                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                If::Condition,
+                loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
             ),
             min_indent,
             If::Space,
@@ -1537,8 +1585,8 @@ fn if_branch<'a>(
 
         let (_, then_branch, state) = space0_around_ee(
             specialize_ref(
-                If::Syntax,
-                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                If::ThenBranch,
+                loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
             ),
             min_indent,
             If::Space,
@@ -1587,8 +1635,8 @@ pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
 
         let (_, else_branch, state) = space0_before_e(
             specialize_ref(
-                If::Syntax,
-                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                If::ElseBranch,
+                loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
             ),
             min_indent,
             If::Space,
@@ -2011,6 +2059,49 @@ fn binop<'a>() -> impl Parser<'a, BinOp, SyntaxError<'a>> {
         map!(ascii_char(b'^'), |_| BinOp::Caret),
         map!(ascii_string("%%"), |_| BinOp::DoublePercent),
         map!(ascii_char(b'%'), |_| BinOp::Percent)
+    )
+}
+
+fn binop_help<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
+    macro_rules! binop {
+        ($word1:expr, $op:expr) => {
+            map!(
+                word1($word1, |row, col| EExpr::BinOp($op, row, col)),
+                |_| $op
+            )
+        };
+        ($word1:expr, $word2:expr, $op:expr) => {
+            map!(
+                word2($word1, $word2, |row, col| EExpr::BinOp($op, row, col)),
+                |_| $op
+            )
+        };
+    }
+
+    one_of!(
+        // Sorted from highest to lowest predicted usage in practice,
+        // so that successful matches short-circuit as early as possible.
+        // The only exception to this is that operators which begin
+        // with other valid operators (e.g. "<=" begins with "<") must
+        // come before the shorter ones; otherwise, they will never
+        // be reached because the shorter one will pass and consume!
+        binop!(b'|', b'>', BinOp::Pizza),
+        binop!(b'=', b'=', BinOp::Equals),
+        binop!(b'!', b'=', BinOp::NotEquals),
+        binop!(b'&', b'&', BinOp::And),
+        binop!(b'|', b'|', BinOp::Or),
+        binop!(b'+', BinOp::Plus),
+        binop!(b'*', BinOp::Star),
+        binop!(b'-', BinOp::Minus),
+        binop!(b'/', b'/', BinOp::DoubleSlash),
+        binop!(b'/', BinOp::Slash),
+        binop!(b'<', b'=', BinOp::LessThanOrEq),
+        binop!(b'<', BinOp::LessThan),
+        binop!(b'>', b'=', BinOp::GreaterThanOrEq),
+        binop!(b'>', BinOp::GreaterThan),
+        binop!(b'^', BinOp::Caret),
+        binop!(b'%', b'%', BinOp::DoublePercent),
+        binop!(b'%', BinOp::Percent)
     )
 }
 
