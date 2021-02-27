@@ -395,6 +395,7 @@ pub enum EExpr<'a> {
 
     Def(&'a SyntaxError<'a>, Row, Col),
     Type(Type<'a>, Row, Col),
+    Pattern(&'a EPattern<'a>, Row, Col),
     IndentDefBody(Row, Col),
     IndentEquals(Row, Col),
     IndentAnnotation(Row, Col),

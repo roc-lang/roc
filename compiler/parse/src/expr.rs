@@ -8,11 +8,11 @@ use crate::blankspace::{
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, allocated, and_then_with_indent_level, ascii_char, ascii_string, attempt, backtrackable,
-    map, newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize,
-    specialize_ref, then, trailing_sep_by0, unexpected, unexpected_eof, word1, word2, EExpr,
-    EInParens, ELambda, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State,
-    SyntaxError, When,
+    self, allocated, and_then_with_indent_level, ascii_char, ascii_string, backtrackable, map,
+    newline_char, not, not_followed_by, optional, sep_by1, sep_by1_e, specialize, specialize_ref,
+    then, trailing_sep_by0, unexpected, unexpected_eof, word1, word2, EExpr, EInParens, ELambda,
+    EPattern, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State, SyntaxError,
+    Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -778,6 +778,24 @@ fn equals_for_def<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     }
 }
 
+fn equals_for_def_help<'a>() -> impl Parser<'a, (), EExpr<'a>> {
+    |_arena, state: State<'a>| match state.bytes.get(0) {
+        Some(b'=') => match state.bytes.get(1) {
+            Some(b'=') | Some(b'>') => {
+                Err((NoProgress, EExpr::Equals(state.line, state.column), state))
+            }
+            _ => {
+                let state = state.advance_without_indenting_ee(1, |r, c| {
+                    EExpr::Space(parser::BadInputError::LineTooLong, r, c)
+                })?;
+
+                Ok((MadeProgress, (), state))
+            }
+        },
+        _ => Err((NoProgress, EExpr::Equals(state.line, state.column), state)),
+    }
+}
+
 /// A definition, consisting of one of these:
 ///
 /// * A type alias using `:`
@@ -785,6 +803,10 @@ fn equals_for_def<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 /// * A type annotation
 /// * A type annotation followed on the next line by a pattern, an `=`, and an expression
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, SyntaxError<'a>> {
+    specialize(|e, _, _| SyntaxError::Expr(e), def_help(min_indent))
+}
+
+fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     let indented_more = min_indent + 1;
 
     enum DefKind {
@@ -793,72 +815,75 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, SyntaxError<'a>> {
     }
 
     let def_colon_or_equals = one_of![
-        map!(equals_for_def(), |_| DefKind::DefEqual),
-        map!(ascii_char(b':'), |_| DefKind::DefColon)
+        map!(equals_for_def_help(), |_| DefKind::DefEqual),
+        map!(word1(b':', EExpr::Colon), |_| DefKind::DefColon)
     ];
 
-    attempt(
-        Attempting::Def,
-        then(
-            // backtrackable because
-            //
-            // i = 0
-            // i
-            //
-            // on the last line, we parse a pattern `i`, but it's not actually a def, so need to
-            // backtrack
-            and!(backtrackable(pattern(min_indent)), def_colon_or_equals),
-            move |arena, state, _progress, (loc_pattern, def_kind)| match def_kind {
-                DefKind::DefColon => {
-                    // Spaces after the ':' (at a normal indentation level) and then the type.
-                    // The type itself must be indented more than the pattern and ':'
-                    let (_, ann_type, state) =
-                        space0_before(type_annotation::located(indented_more), min_indent)
-                            .parse(arena, state)?;
-
-                    // see if there is a definition (assuming the preceding characters were a type
-                    // annotation
-                    let (_, opt_rest, state) = optional(and!(
-                        spaces_then_comment_or_newline(),
-                        body_at_indent(min_indent)
-                    ))
-                    .parse(arena, state)?;
-
-                    let def = match opt_rest {
-                        None => annotation_or_alias(
-                            arena,
-                            &loc_pattern.value,
-                            loc_pattern.region,
-                            ann_type,
-                        ),
-                        Some((opt_comment, (body_pattern, body_expr))) => Def::AnnotatedBody {
-                            ann_pattern: arena.alloc(loc_pattern),
-                            ann_type: arena.alloc(ann_type),
-                            comment: opt_comment,
-                            body_pattern: arena.alloc(body_pattern),
-                            body_expr: arena.alloc(body_expr),
-                        },
-                    };
-
-                    Ok((MadeProgress, def, state))
-                }
-                DefKind::DefEqual => {
-                    // Spaces after the '=' (at a normal indentation level) and then the expr.
-                    // The expr itself must be indented more than the pattern and '='
-                    let (_, body_expr, state) = space0_before(
-                        loc!(move |arena, state| { parse_expr(indented_more, arena, state) }),
+    then(
+        // backtrackable because
+        //
+        // i = 0
+        // i
+        //
+        // on the last line, we parse a pattern `i`, but it's not actually a def, so need to
+        // backtrack
+        and!(backtrackable(pattern_help(min_indent)), def_colon_or_equals),
+        move |arena, state, _progress, (loc_pattern, def_kind)| match def_kind {
+            DefKind::DefColon => {
+                // Spaces after the ':' (at a normal indentation level) and then the type.
+                // The type itself must be indented more than the pattern and ':'
+                let (_, ann_type, state) = specialize(
+                    EExpr::Type,
+                    space0_before_e(
+                        type_annotation::located_help(indented_more),
                         min_indent,
-                    )
-                    .parse(arena, state)?;
+                        Type::TSpace,
+                        Type::TIndentStart,
+                    ),
+                )
+                .parse(arena, state)?;
 
-                    Ok((
-                        MadeProgress,
-                        Def::Body(arena.alloc(loc_pattern), arena.alloc(body_expr)),
-                        state,
-                    ))
-                }
-            },
-        ),
+                // see if there is a definition (assuming the preceding characters were a type
+                // annotation
+                let (_, opt_rest, state) = optional(and!(
+                    spaces_then_comment_or_newline_help(),
+                    body_at_indent_help(min_indent)
+                ))
+                .parse(arena, state)?;
+
+                let def = match opt_rest {
+                    None => {
+                        annotation_or_alias(arena, &loc_pattern.value, loc_pattern.region, ann_type)
+                    }
+                    Some((opt_comment, (body_pattern, body_expr))) => Def::AnnotatedBody {
+                        ann_pattern: arena.alloc(loc_pattern),
+                        ann_type: arena.alloc(ann_type),
+                        comment: opt_comment,
+                        body_pattern: arena.alloc(body_pattern),
+                        body_expr: arena.alloc(body_expr),
+                    },
+                };
+
+                Ok((MadeProgress, def, state))
+            }
+            DefKind::DefEqual => {
+                // Spaces after the '=' (at a normal indentation level) and then the expr.
+                // The expr itself must be indented more than the pattern and '='
+                let (_, body_expr, state) = space0_before_e(
+                    loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
+                    min_indent,
+                    EExpr::Space,
+                    EExpr::IndentStart,
+                )
+                .parse(arena, state)?;
+
+                Ok((
+                    MadeProgress,
+                    Def::Body(arena.alloc(loc_pattern), arena.alloc(body_expr)),
+                    state,
+                ))
+            }
+        },
     )
 }
 
@@ -874,16 +899,15 @@ fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxE
     )
 }
 
-fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>, SyntaxError<'a>> {
-    skip_first!(
-        zero_or_more!(ascii_char(b' ')),
-        map!(
-            either!(newline_char(), line_comment()),
-            |either_comment_or_newline| match either_comment_or_newline {
-                Either::First(_) => None,
-                Either::Second(comment) => Some(comment),
-            }
-        )
+fn pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EExpr<'a>> {
+    specialize_ref(
+        EExpr::Pattern,
+        space0_after_e(
+            loc_closure_param(min_indent),
+            min_indent,
+            EPattern::Space,
+            EPattern::IndentStart,
+        ),
     )
 }
 
