@@ -391,9 +391,15 @@ pub enum EExpr<'a> {
     Access(Row, Col),
 
     Def(&'a SyntaxError<'a>, Row, Col),
+    Type(Type<'a>, Row, Col),
     IndentDefBody(Row, Col),
     IndentEquals(Row, Col),
+    IndentAnnotation(Row, Col),
     Equals(Row, Col),
+    Colon(Row, Col),
+    Ident(Row, Col),
+    ElmStyleFunction(Region, Row, Col),
+    MalformedPattern(Row, Col),
 
     Syntax(&'a SyntaxError<'a>, Row, Col),
 

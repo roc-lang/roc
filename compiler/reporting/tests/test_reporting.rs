@@ -3158,12 +3158,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-
-                Unexpected tokens in front of the `=` symbol:
-
+                ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
+                
+                I am in the middle of parsing a definition, but I got stuck here:
+                
                 1│  f x y = x
                       ^^^
+                
+                Looks like you are trying to define a function. In roc, functions are
+                always written as a lambda, like increment = \n -> n + 1.
                 "#
             ),
         )
@@ -4096,12 +4099,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-
-                Unexpected token :
-
+                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition, but I got stuck here:
+                
                 2│      5 ** 3
                           ^
+                
+                I was expecting to see an expression like 42 or "hello".
             "#
             ),
         )
@@ -4822,12 +4827,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
                 
-                Unexpected token :
+                I am partway through parsing a definition, but I got stuck here:
                 
+                1│  when Just 4 is
                 2│      Just 4 | ->
                                  ^
+                
+                I was expecting to see an expression like 42 or "hello".
                 "#
             ),
             //            indoc!(
