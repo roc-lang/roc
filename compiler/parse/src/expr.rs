@@ -65,15 +65,6 @@ fn loc_expr_in_parens_help_help<'a>(
     )
 }
 
-fn loc_function_arg_in_parens_etc<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Expr(e),
-        loc_function_arg_in_parens_etc_help(min_indent),
-    )
-}
-
 fn loc_function_arg_in_parens_etc_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
@@ -384,8 +375,8 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
             .map(|c| c.is_ascii_whitespace())
             .unwrap_or(false);
 
-        if state.bytes.starts_with(b"!") && !followed_by_whitespace {
-            // don't parse the `!` if it's followed by a `!=`
+        if state.bytes.starts_with(b"-") && !followed_by_whitespace {
+            // the negate is only unary if it is not followed by whitespace
             Ok((
                 MadeProgress,
                 (),
@@ -1235,26 +1226,29 @@ fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, S
         not(and!(reserved_keyword(), space1(min_indent))),
         // Don't parse operators, because they have a higher precedence than function application.
         // If we encounter one, we're done parsing function args!
-        move |arena, state| loc_parse_function_arg(min_indent, arena, state)
+        specialize(
+            |e, _, _| SyntaxError::Expr(e),
+            move |arena, state| loc_parse_function_arg_help(min_indent, arena, state)
+        )
     )
 }
 
-fn loc_parse_function_arg<'a>(
+fn loc_parse_function_arg_help<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, SyntaxError<'a>> {
+) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        loc_function_arg_in_parens_etc(min_indent),
-        loc!(string_literal()),
-        loc!(number_literal()),
-        loc!(closure(min_indent)),
-        loc!(record_literal(min_indent)),
-        loc!(list_literal(min_indent)),
-        loc!(unary_op(min_indent)),
-        loc!(when::expr(min_indent)),
-        loc!(if_expr(min_indent)),
-        loc!(ident_without_apply())
+        loc_function_arg_in_parens_etc_help(min_indent),
+        loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::Number, number_literal_help())),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
+        loc!(unary_op_help(min_indent)),
+        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
+        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
+        loc!(ident_without_apply_help())
     )
     .parse(arena, state)
 }
@@ -1913,10 +1907,13 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     )
 }
 
-pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    then(loc!(ident()), move |arena, state, progress, loc_ident| {
-        Ok((progress, ident_to_expr(arena, loc_ident.value), state))
-    })
+fn ident_without_apply_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    specialize_ref(
+        EExpr::Syntax,
+        then(loc!(ident()), move |arena, state, progress, loc_ident| {
+            Ok((progress, ident_to_expr(arena, loc_ident.value), state))
+        }),
+    )
 }
 
 /// Like equals_for_def(), except it produces the indent_col of the state rather than ()
