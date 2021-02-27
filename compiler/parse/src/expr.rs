@@ -91,15 +91,6 @@ fn loc_function_arg_in_parens_etc_help<'a>(
     )
 }
 
-fn loc_expr_in_parens_etc<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Expr(e),
-        loc_expr_in_parens_etc_help(min_indent),
-    )
-}
-
 fn loc_expr_in_parens_etc_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
@@ -313,38 +304,32 @@ fn expr_in_parens_then_access<'a>(
     }
 }
 
-fn loc_parse_expr_body_without_operators<'a>(
+fn loc_parse_expr_body_without_operators_help<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, SyntaxError<'a>> {
+) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        loc_expr_in_parens_etc(min_indent),
-        loc!(string_literal()),
-        loc!(number_literal()),
-        loc!(closure(min_indent)),
-        loc!(record_literal(min_indent)),
-        loc!(list_literal(min_indent)),
-        loc!(unary_op(min_indent)),
-        loc!(when::expr(min_indent)),
-        loc!(if_expr(min_indent)),
-        loc!(ident_etc(min_indent)),
-        fail_expr_start()
+        loc_expr_in_parens_etc_help(min_indent),
+        loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::Number, number_literal_help())),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
+        loc!(unary_op_help(min_indent)),
+        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
+        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
+        loc!(ident_etc_help(min_indent)),
+        fail_expr_start_e()
     )
     .parse(arena, state)
 }
 
-fn fail_expr_start<'a, T>() -> impl Parser<'a, T, SyntaxError<'a>>
+fn fail_expr_start_e<'a, T>() -> impl Parser<'a, T, EExpr<'a>>
 where
     T: 'a,
 {
-    |_arena, state: State<'a>| {
-        Err((
-            NoProgress,
-            SyntaxError::Expr(EExpr::Start(state.line, state.column)),
-            state,
-        ))
-    }
+    |_arena, state: State<'a>| Err((NoProgress, EExpr::Start(state.line, state.column), state))
 }
 
 fn unary_not<'a>() -> impl Parser<'a, (), EExpr<'a>> {
@@ -396,10 +381,6 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 /// Unary (!) or (-)
 ///
 /// e.g. `!x` or `-x`
-fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Expr(e), unary_op_help(min_indent))
-}
-
 fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     one_of!(
         map_with_arena!(
@@ -437,7 +418,12 @@ fn parse_expr<'a>(
     let expr_parser = crate::parser::map_with_arena(
         and!(
             // First parse the body without operators, then try to parse possible operators after.
-            move |arena, state| loc_parse_expr_body_without_operators(min_indent, arena, state),
+            specialize(
+                |e, _, _| SyntaxError::Expr(e),
+                move |arena, state| loc_parse_expr_body_without_operators_help(
+                    min_indent, arena, state
+                ),
+            ),
             // Parse the operator, with optional spaces before it.
             //
             // Since spaces can only wrap an Expr, not an BinOp, we have to first
@@ -1264,13 +1250,6 @@ fn reserved_keyword<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     )
 }
 
-fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Expr(EExpr::Lambda(e, r, c)),
-        closure_help(min_indent),
-    )
-}
-
 fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
     map_with_arena!(
         skip_first!(
@@ -1322,12 +1301,6 @@ mod when {
     use crate::ast::WhenBranch;
 
     /// Parser for when expressions.
-    pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-        specialize(
-            |e, r, c| SyntaxError::Expr(EExpr::When(e, r, c)),
-            expr_help(min_indent),
-        )
-    }
     pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, When<'a>> {
         then(
             and!(
@@ -1755,9 +1728,6 @@ fn loc_function_args<'a>(
 /// 3. The beginning of a definition (e.g. `foo =`)
 /// 4. The beginning of a type annotation (e.g. `foo :`)
 /// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
-fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Expr(e), ident_etc_help(min_indent))
-}
 
 fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a>> {
     specialize(|_, r, c| EExpr::Ident(r, c), ident())
@@ -2043,12 +2013,6 @@ fn binop<'a>() -> impl Parser<'a, BinOp, SyntaxError<'a>> {
         map!(ascii_char(b'%'), |_| BinOp::Percent)
     )
 }
-fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Expr(EExpr::List(e, r, c)),
-        list_literal_help(min_indent),
-    )
-}
 
 fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>> {
     move |arena, state| {
@@ -2199,13 +2163,6 @@ fn record_help<'a>(
     )
 }
 
-fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Expr(e),
-        record_literal_help(min_indent),
-    )
-}
-
 fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     then(
         and!(
@@ -2323,19 +2280,10 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
     )
 }
 
-fn string_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Expr(EExpr::Str(e, r, c)),
-        map!(crate::string_literal::parse(), Expr::Str),
-    )
-}
-
-#[allow(dead_code)]
 fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
     map!(crate::string_literal::parse(), Expr::Str)
 }
 
-#[allow(dead_code)]
 fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     // use crate::number_literal::number_literal;
     specialize(
@@ -2344,7 +2292,6 @@ fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     )
 }
 
-#[allow(dead_code)]
 fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
     crate::number_literal::number_literal()
 }
