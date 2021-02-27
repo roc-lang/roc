@@ -12,6 +12,7 @@ mod editor;
 mod graphics;
 pub mod lang; //TODO remove pub for unused warnings
 mod ui;
+mod window;
 
 use std::io;
 use std::path::Path;

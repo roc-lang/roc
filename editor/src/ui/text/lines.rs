@@ -5,9 +5,10 @@ use crate::ui::text::{
     text_pos::TextPos,
 };
 use crate::ui::ui_error::UIResult;
+use crate::window::keyboard_input::Modifiers;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
-use winit::event::{ModifiersState, VirtualKeyCode};
+use winit::event::{VirtualKeyCode};
 
 pub trait Lines {
     fn get_line(&self, line_nr: usize) -> UIResult<&str>;
@@ -27,13 +28,17 @@ pub trait SelectableLines {
 
     fn set_caret(&mut self, caret_pos: TextPos);
 
-    fn move_caret_left(&mut self, shift_pressed: bool) -> UIResult<()>;
+    fn move_caret_left(&mut self, modifiers: &Modifiers) -> UIResult<()>;
 
-    fn move_caret_right(&mut self, shift_pressed: bool) -> UIResult<()>;
+    fn move_caret_right(&mut self, modifiers: &Modifiers) -> UIResult<()>;
 
-    fn move_caret_up(&mut self, shift_pressed: bool) -> UIResult<()>;
+    fn move_caret_up(&mut self, modifiers: &Modifiers) -> UIResult<()>;
 
-    fn move_caret_down(&mut self, shift_pressed: bool) -> UIResult<()>;
+    fn move_caret_down(&mut self, modifiers: &Modifiers) -> UIResult<()>;
+
+    fn move_caret_home(&mut self, modifiers: &Modifiers) -> UIResult<()>;
+
+    fn move_caret_end(&mut self, modifiers: &Modifiers) -> UIResult<()>;
 
     fn get_selection(&self) -> Option<Selection>;
 
@@ -48,6 +53,12 @@ pub trait SelectableLines {
     fn select_all(&mut self) -> UIResult<()>;
 
     fn last_text_pos(&self) -> TextPos;
+
+    fn handle_key_down(
+        &mut self,
+        modifiers: &Modifiers,
+        virtual_keycode: VirtualKeyCode,
+    ) -> UIResult<()>;
 }
 
 pub trait MutSelectableLines {
@@ -61,10 +72,4 @@ pub trait MutSelectableLines {
     fn pop_char(&mut self) -> UIResult<()>;
 
     fn del_selection(&mut self) -> UIResult<()>;
-
-    fn handle_key_down(
-        &mut self,
-        modifiers: &ModifiersState,
-        virtual_keycode: VirtualKeyCode,
-    ) -> UIResult<()>;
 }

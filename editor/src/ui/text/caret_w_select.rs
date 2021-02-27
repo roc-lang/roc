@@ -2,7 +2,7 @@ use super::selection::validate_selection;
 use super::selection::Selection;
 use super::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
-use winit::event::ModifiersState;
+use crate::window::keyboard_input::Modifiers;
 
 #[derive(Debug, Copy, Clone)]
 pub struct CaretWSelect {
@@ -31,12 +31,12 @@ impl CaretWSelect {
         }
     }
 
-    pub fn move_caret_w_mods(&mut self, new_pos: TextPos, mods: &ModifiersState) -> UIResult<()> {
+    pub fn move_caret_w_mods(&mut self, new_pos: TextPos, mods: &Modifiers) -> UIResult<()> {
         let caret_pos = self.caret_pos;
 
         // one does not simply move the caret
         let valid_sel_opt = if new_pos != caret_pos {
-            if mods.shift() {
+            if mods.shift {
                 if let Some(old_sel) = self.selection_opt {
                     if new_pos < old_sel.start_pos {
                         if caret_pos > old_sel.start_pos {
@@ -55,7 +55,6 @@ impl CaretWSelect {
                     } else if new_pos < caret_pos {
                         mk_some_sel(old_sel.start_pos, new_pos)?
                     } else {
-                        // TODO should this return none?
                         None
                     }
                 } else if new_pos < self.caret_pos {
