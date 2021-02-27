@@ -1102,7 +1102,7 @@ fn parse_def_signature_help<'a>(
                     move |opt_body| (type_ann.clone(), opt_body)
                 )
             ),
-            debug!(and!(
+            and!(
                 // Optionally parse additional defs.
                 zero_or_more!(backtrackable(allocated(space0_before_e(
                     loc!(specialize_ref(EExpr::Syntax, def(original_indent))),
@@ -1121,7 +1121,7 @@ fn parse_def_signature_help<'a>(
                     EExpr::Space,
                     EExpr::IndentEnd,
                 )
-            ))
+            )
         )
         .parse(arena, state)
         .map(
@@ -1822,7 +1822,7 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> 
 }
 
 fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a>> {
-    debug!(specialize(|_, r, c| EExpr::Ident(r, c), ident()))
+    specialize(|_, r, c| EExpr::Ident(r, c), ident())
 }
 
 fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
@@ -1905,7 +1905,6 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                     ))
                 }
                 (opt_args, Some((spaces_before_colon, Either::Second(colon_indent)))) => {
-                    dbg!("parsed a colon");
                     // We may have gotten args, but we definitely got a ':'
                     // (meaning this is an annotation or alias;
                     // parse_def_signature will translate it into one or the other.)
