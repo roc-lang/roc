@@ -221,7 +221,30 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Ident(_row, _col) => unreachable!("another branch would have been chosen"),
+        EExpr::Ident(_row, _col) => unreachable!("another branch would be taken"),
+
+        EExpr::QualifiedTag(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am very confused by this identifier:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Are you trying to qualify a name? I am execting something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.reflow(". Maybe you are trying to qualify a tag? Tags like "),
+                    alloc.parser_suggestion("Err"),
+                    alloc.reflow(" are globally scoped in roc, and cannot be qualified."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD IDENTIFIER".to_string(),
+            }
+        }
 
         EExpr::Start(row, col) => {
             let (context_row, context_col, a_thing) = match context {

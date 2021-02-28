@@ -267,7 +267,7 @@ fn loc_ident_pattern_help<'a>(
                 },
                 state,
             )),
-            Ident::Malformed(malformed) => {
+            Ident::Malformed(malformed, _problem) => {
                 debug_assert!(!malformed.is_empty());
 
                 Err((

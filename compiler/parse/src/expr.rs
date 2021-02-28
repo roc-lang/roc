@@ -7,9 +7,9 @@ use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, backtrackable, map,
-    newline_char, not, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
-    trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either,
-    If, List, Number, ParseResult, Parser, State, SyntaxError, Type, When,
+    newline_char, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then, trailing_sep_by0,
+    word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either, If, List, Number,
+    ParseResult, Parser, State, SyntaxError, Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -597,7 +597,7 @@ pub fn expr_to_pattern<'a>(
         | Expr::UnaryOp(_, _) => Err(SyntaxError::InvalidPattern),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
-        Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
+        Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
     }
 }
 
@@ -1235,20 +1235,24 @@ fn parse_def_signature_help<'a>(
 }
 
 fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    skip_first!(
-        // If this is a reserved keyword ("if", "then", "case, "when"),
-        // followed by a blank space, then it is not a function argument!
-        //
-        // (The space is necessary because otherwise we'll get a false
-        // positive on function arguments beginning with keywords,
-        // e.g. `ifBlah` or `isSomething` will register as `if`/`is` keywords)
-        not(and!(reserved_keyword(), space1(min_indent))),
-        // Don't parse operators, because they have a higher precedence than function application.
-        // If we encounter one, we're done parsing function args!
-        specialize(
-            |e, _, _| SyntaxError::Expr(e),
-            move |arena, state| loc_parse_function_arg_help(min_indent, arena, state)
-        )
+    //    skip_first!(
+    //        // If this is a reserved keyword ("if", "then", "case, "when"),
+    //        // followed by a blank space, then it is not a function argument!
+    //        //
+    //        // (The space is necessary because otherwise we'll get a false
+    //        // positive on function arguments beginning with keywords,
+    //        // e.g. `ifBlah` or `isSomething` will register as `if`/`is` keywords)
+    //        not(and!(reserved_keyword(), space1(min_indent))),
+    //        // Don't parse operators, because they have a higher precedence than function application.
+    //        // If we encounter one, we're done parsing function args!
+    //        specialize(
+    //            |e, _, _| SyntaxError::Expr(e),
+    //            move |arena, state| loc_parse_function_arg_help(min_indent, arena, state)
+    //        )
+    //    )
+    specialize(
+        |e, _, _| SyntaxError::Expr(e),
+        move |arena, state| loc_parse_function_arg_help(min_indent, arena, state),
     )
 }
 
@@ -1270,17 +1274,6 @@ fn loc_parse_function_arg_help<'a>(
         loc!(ident_without_apply_help())
     )
     .parse(arena, state)
-}
-
-fn reserved_keyword<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    one_of!(
-        ascii_string(keyword::IF),
-        ascii_string(keyword::THEN),
-        ascii_string(keyword::ELSE),
-        ascii_string(keyword::WHEN),
-        ascii_string(keyword::IS),
-        ascii_string(keyword::AS)
-    )
 }
 
 fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
@@ -1742,7 +1735,7 @@ fn loc_function_args<'a>(
 /// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
 
 fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a>> {
-    specialize(|_, r, c| EExpr::Ident(r, c), ident())
+    crate::ident::parse_ident_help
 }
 
 fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
@@ -1968,7 +1961,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             answer
         }
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
-        Ident::Malformed(string) => Expr::MalformedIdent(string),
+        Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }
 

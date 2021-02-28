@@ -982,15 +982,14 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
-    // TODO restore this test - it fails, but is not worth fixing right now.
-    // #[test]
-    // fn qualified_private_tag() {
-    //     let arena = Bump::new();
-    //     let expected = Expr::MalformedIdent("One.Two.@Whee");
-    //     let actual = parse_expr_with(&arena, "One.Two.@Whee");
+    #[test]
+    fn private_qualified_tag() {
+        let arena = Bump::new();
+        let expected = Expr::MalformedIdent("@One.Two.Whee");
+        let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
-    //     assert_eq!(Ok(expected), actual);
-    // }
+        assert_eq!(Ok(expected), actual);
+    }
 
     #[test]
     fn tag_pattern() {
@@ -999,15 +998,6 @@ mod test_parse {
         let patterns = &[pattern];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 10, 12, Num("42"))));
         let actual = parse_expr_with(&arena, "\\Thing -> 42");
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn private_qualified_tag() {
-        let arena = Bump::new();
-        let expected = Expr::MalformedIdent("@One.Two.Whee");
-        let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }

@@ -737,10 +737,10 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
             (RuntimeError(MalformedClosure(region)), Output::default())
         }
-        ast::Expr::MalformedIdent(name) => {
+        ast::Expr::MalformedIdent(name, bad_ident) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = MalformedIdentifier((*name).into(), region);
+            let problem = MalformedIdentifier((*name).into(), *bad_ident, region);
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())

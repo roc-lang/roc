@@ -404,6 +404,7 @@ pub enum EExpr<'a> {
     Ident(Row, Col),
     ElmStyleFunction(Region, Row, Col),
     MalformedPattern(Row, Col),
+    QualifiedTag(Row, Col),
 
     Syntax(&'a SyntaxError<'a>, Row, Col),
 

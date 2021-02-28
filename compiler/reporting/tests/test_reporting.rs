@@ -4020,11 +4020,87 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                The `Foo.Bar` identifier is malformed:
-
+                
+                I am trying to parse a qualified name here:
+                
                 1│  Foo.Bar
-                    ^^^^^^^
+                           ^
+                
+                This looks like a qualified tag name to me, but tags cannot be
+                qualified! Maybe you wanted a qualified name, something like
+                Json.Decode.string?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn module_ident_ends_with_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo.Bar.
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I am trying to parse a qualified name here:
+                
+                1│  Foo.Bar.
+                            ^
+                
+                I was expecting to see an identifier next, like height. A complete
+                qualified name looks something like Json.Decode.string.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_access_ends_with_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo.bar.
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I trying to parse a record field accessor here:
+                
+                1│  foo.bar.
+                            ^
+                
+                Something like .name or .height that accesses a value from a record.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_private_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                @Foo.Bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I am trying to parse a qualified name here:
+                
+                1│  @Foo.Bar
+                            ^
+                
+                This looks like a qualified tag name to me, but tags cannot be
+                qualified! Maybe you wanted a qualified name, something like
+                Json.Decode.string?
             "#
             ),
         )
@@ -5296,6 +5372,179 @@ mod test_reporting {
                 
                 You could change it to something like """to be or not to be""" or even
                 just """""".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn keyword_record_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = {}
+
+                foo.if
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                This expression is used in an unexpected way:
+                
+                3│  foo.if
+                    ^^^^^^
+                
+                This `foo` value is a:
+                
+                    {}
+                
+                But you are trying to use it as:
+                
+                    { if : a }b
+                
+
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn keyword_qualified_import() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Num.if
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                The Num module does not expose a if value:
+                
+                1│  Num.if
+                    ^^^^^^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn stray_dot_expr() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Num.add . 23
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I trying to parse a record field accessor here:
+                
+                1│  Num.add . 23
+                             ^
+                
+                Something like .name or .height that accesses a value from a record.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn private_tag_not_uppercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Num.add @foo 23
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I am trying to parse a private tag here:
+                
+                1│  Num.add @foo 23
+                             ^
+                
+                But after the `@` symbol I found a lowercase letter. All tag names
+                (global and private) must start with an uppercase letter, like @UUID
+                or @Secrets.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn private_tag_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                @UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I am very confused by this field access:
+                
+                1│  @UUID.bar
+                    ^^^^^^^^^
+                
+                It looks like a record field access on a private tag.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn weird_accessor() {
+        report_problem_as(
+            indoc!(
+                r#"
+                .foo.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I am very confused by this field access
+                
+                1│  .foo.bar
+                    ^^^^^^^^
+                
+                It looks like a field access on an accessor. I parse.client.name as
+                (.client).name. Maybe use an anonymous function like
+                (\r -> r.client.name) instead?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn part_starts_with_number() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo.100
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I trying to parse a record field access here:
+                
+                1│  foo.100
+                        ^
+                
+                So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
         )

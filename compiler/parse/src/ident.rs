@@ -1,11 +1,13 @@
 use crate::ast::Attempting;
 use crate::keyword;
 use crate::parser::Progress::{self, *};
-use crate::parser::{peek_utf8_char, unexpected, ParseResult, Parser, State, SyntaxError};
+use crate::parser::{
+    peek_utf8_char, unexpected, BadInputError, Col, EExpr, ParseResult, Parser, Row, State,
+    SyntaxError,
+};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_collections::all::arena_join;
 use roc_region::all::Region;
 
 /// The parser accepts all of these in any position where any one of them could
@@ -26,7 +28,7 @@ pub enum Ident<'a> {
     /// .foo
     AccessorFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
-    Malformed(&'a str),
+    Malformed(&'a str, BadIdent),
 }
 
 impl<'a> Ident<'a> {
@@ -50,7 +52,7 @@ impl<'a> Ident<'a> {
                 len - 1
             }
             AccessorFunction(string) => string.len(),
-            Malformed(string) => string.len(),
+            Malformed(string, _) => string.len(),
         }
     }
 
@@ -59,274 +61,8 @@ impl<'a> Ident<'a> {
     }
 }
 
-/// Parse an identifier into a string.
-///
-/// This is separate from the `ident` Parser because string interpolation
-/// wants to use it this way.
-///
-/// By design, this does not check for reserved keywords like "if", "else", etc.
-/// Sometimes we may want to check for those later in the process, and give
-/// more contextually-aware error messages than "unexpected `if`" or the like.
-#[inline(always)]
-pub fn parse_ident<'a>(
-    arena: &'a Bump,
-    mut state: State<'a>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>), SyntaxError<'a>> {
-    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
-    let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
-    let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
-    let mut is_capitalized;
-    let is_accessor_fn;
-    let mut is_private_tag = false;
-
-    let start_bytes_len = state.bytes.len();
-
-    // Identifiers and accessor functions must start with either a letter or a dot.
-    // If this starts with neither, it must be something else!
-    match peek_utf8_char(&state) {
-        Ok((first_ch, bytes_parsed)) => {
-            if first_ch.is_alphabetic() {
-                part_buf.push(first_ch);
-
-                is_capitalized = first_ch.is_uppercase();
-                is_accessor_fn = false;
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            } else if first_ch == '.' {
-                is_capitalized = false;
-                is_accessor_fn = true;
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            } else if first_ch == '@' {
-                state = state.advance_without_indenting(bytes_parsed)?;
-
-                // '@' must always be followed by a capital letter!
-                match peek_utf8_char(&state) {
-                    Ok((next_ch, next_bytes_parsed)) => {
-                        if next_ch.is_uppercase() {
-                            state = state.advance_without_indenting(next_bytes_parsed)?;
-
-                            part_buf.push('@');
-                            part_buf.push(next_ch);
-
-                            is_private_tag = true;
-                            is_capitalized = true;
-                            is_accessor_fn = false;
-                        } else {
-                            return Err(unexpected(
-                                bytes_parsed + next_bytes_parsed,
-                                Attempting::Identifier,
-                                state,
-                            ));
-                        }
-                    }
-                    Err(reason) => {
-                        let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-                        return state.fail(arena, progress, reason);
-                    }
-                }
-            } else {
-                return Err(unexpected(0, Attempting::Identifier, state));
-            }
-        }
-        Err(reason) => {
-            let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-            return state.fail(arena, progress, reason);
-        }
-    }
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                // After the first character, only these are allowed:
-                //
-                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                // * A dot ('.')
-                if ch.is_alphabetic() {
-                    if part_buf.is_empty() {
-                        // Capitalization is determined by the first character in the part.
-                        is_capitalized = ch.is_uppercase();
-                    }
-
-                    part_buf.push(ch);
-                } else if ch.is_ascii_digit() {
-                    // Parts may not start with numbers!
-                    if part_buf.is_empty() {
-                        return malformed(
-                            Some(ch),
-                            arena,
-                            state,
-                            capitalized_parts,
-                            noncapitalized_parts,
-                        );
-                    }
-
-                    part_buf.push(ch);
-                } else if ch == '.' {
-                    // There are two posssible errors here:
-                    //
-                    // 1. Having two consecutive dots is an error.
-                    // 2. Having capitalized parts after noncapitalized (e.g. `foo.Bar`) is an error.
-                    if part_buf.is_empty() || (is_capitalized && !noncapitalized_parts.is_empty()) {
-                        return malformed(
-                            Some(ch),
-                            arena,
-                            state,
-                            capitalized_parts,
-                            noncapitalized_parts,
-                        );
-                    }
-
-                    if is_capitalized {
-                        capitalized_parts.push(part_buf.into_bump_str());
-                    } else {
-                        noncapitalized_parts.push(part_buf.into_bump_str());
-                    }
-
-                    // Now that we've recorded the contents of the current buffer, reset it.
-                    part_buf = String::new_in(arena);
-                } else {
-                    // This must be the end of the identifier. We're done!
-
-                    break;
-                }
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            }
-            Err(reason) => {
-                let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-                return state.fail(arena, progress, reason);
-            }
-        }
-    }
-
-    if part_buf.is_empty() {
-        // We probably had a trailing dot, e.g. `Foo.bar.` - this is malformed!
-        //
-        // This condition might also occur if we encounter a malformed accessor like `.|`
-        //
-        // If we made it this far and don't have a next_char, then necessarily
-        // we have consumed a '.' char previously.
-        return malformed(
-            Some('.'),
-            arena,
-            state,
-            capitalized_parts,
-            noncapitalized_parts,
-        );
-    }
-
-    // Record the final parts.
-    if is_capitalized {
-        capitalized_parts.push(part_buf.into_bump_str());
-    } else {
-        noncapitalized_parts.push(part_buf.into_bump_str());
-    }
-
-    let answer = if is_accessor_fn {
-        // Handle accessor functions first because they have the strictest requirements.
-        // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
-        if capitalized_parts.is_empty() && noncapitalized_parts.len() == 1 && !is_private_tag {
-            let value = noncapitalized_parts.iter().next().unwrap();
-
-            Ident::AccessorFunction(value)
-        } else {
-            return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-        }
-    } else if noncapitalized_parts.is_empty() {
-        // We have capitalized parts only, so this must be a tag.
-        match capitalized_parts.first() {
-            Some(value) => {
-                if capitalized_parts.len() == 1 {
-                    if is_private_tag {
-                        Ident::PrivateTag(value)
-                    } else {
-                        Ident::GlobalTag(value)
-                    }
-                } else {
-                    // This is a qualified tag, which is not allowed!
-                    return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-                }
-            }
-            None => {
-                // We had neither capitalized nor noncapitalized parts,
-                // yet we made it this far. The only explanation is that this was
-                // a stray '.' drifting through the cosmos.
-                return Err(unexpected(1, Attempting::Identifier, state));
-            }
-        }
-    } else if is_private_tag {
-        // This is qualified field access with an '@' in front, which does not make sense!
-        return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
-    } else {
-        // We have multiple noncapitalized parts, so this must be field access.
-        Ident::Access {
-            module_name: join_module_parts(arena, capitalized_parts.into_bump_slice()),
-            parts: noncapitalized_parts.into_bump_slice(),
-        }
-    };
-
-    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-    debug_assert_eq!(progress, Progress::MadeProgress,);
-    Ok((Progress::MadeProgress, (answer, None), state))
-}
-
-fn malformed<'a>(
-    opt_bad_char: Option<char>,
-    arena: &'a Bump,
-    mut state: State<'a>,
-    capitalized_parts: Vec<&'a str>,
-    noncapitalized_parts: Vec<&'a str>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>), SyntaxError<'a>> {
-    // Reconstruct the original string that we've been parsing.
-    let mut full_string = String::new_in(arena);
-
-    full_string
-        .push_str(arena_join(arena, &mut capitalized_parts.into_iter(), ".").into_bump_str());
-    full_string
-        .push_str(arena_join(arena, &mut noncapitalized_parts.into_iter(), ".").into_bump_str());
-
-    if let Some(bad_char) = opt_bad_char {
-        full_string.push(bad_char);
-    }
-
-    // Consume the remaining chars in the identifier.
-    let mut next_char = None;
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                // We can't use ch.is_alphanumeric() here because that passes for
-                // things that are "numeric" but not ASCII digits, like `¾`
-                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
-                    full_string.push(ch);
-                } else {
-                    next_char = Some(ch);
-
-                    break;
-                }
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-            }
-            Err(reason) => return state.fail(arena, MadeProgress, reason),
-        }
-    }
-
-    Ok((
-        MadeProgress,
-        (Ident::Malformed(full_string.into_bump_str()), next_char),
-        state,
-    ))
-}
-
 pub fn ident<'a>() -> impl Parser<'a, Ident<'a>, SyntaxError<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
-        // Discard next_char; we don't need it.
-        let (progress, (string, _), state) = parse_ident(arena, state)?;
-
-        Ok((progress, string, state))
-    }
+    crate::parser::specialize(|e, _, _| SyntaxError::Expr(e), parse_ident_help)
 }
 
 pub fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str, SyntaxError<'a>>
@@ -434,4 +170,333 @@ pub fn join_module_parts<'a>(arena: &'a Bump, module_parts: &[&str]) -> &'a str 
     }
 
     buf.into_bump_str()
+}
+
+macro_rules! advance_state {
+    ($state:expr, $n:expr) => {
+        $state.advance_without_indenting_ee($n, |r, c| {
+            BadIdent::Space(crate::parser::BadInputError::LineTooLong, r, c)
+        })
+    };
+}
+
+pub fn parse_ident_help<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+    let initial = state.clone();
+
+    match parse_ident_help_help(arena, state) {
+        Ok((progress, (ident, _), state)) => {
+            if let Ident::Access { module_name, parts } = ident {
+                if module_name.is_empty() {
+                    if let Some(first) = parts.first() {
+                        for keyword in crate::keyword::KEYWORDS.iter() {
+                            if first == keyword {
+                                return Err((
+                                    NoProgress,
+                                    EExpr::Start(initial.line, initial.column),
+                                    initial,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok((progress, ident, state))
+        }
+        Err((NoProgress, _, state)) => {
+            Err((NoProgress, EExpr::Start(state.line, state.column), state))
+        }
+        Err((MadeProgress, fail, state)) => match fail {
+            BadIdent::Start(r, c) => Err((NoProgress, EExpr::Start(r, c), state)),
+            BadIdent::Space(e, r, c) => Err((NoProgress, EExpr::Space(e, r, c), state)),
+            _ => malformed_identifier(initial.bytes, fail, arena, state),
+        },
+    }
+}
+
+fn malformed_identifier<'a>(
+    initial_bytes: &'a [u8],
+    problem: BadIdent,
+    _arena: &'a Bump,
+    mut state: State<'a>,
+) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+    // skip forward to the next non-identifier character
+    while !state.bytes.is_empty() {
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // We can't use ch.is_alphanumeric() here because that passes for
+                // things that are "numeric" but not ASCII digits, like `¾`
+                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
+                    state = state.advance_without_indenting_ee(bytes_parsed, |r, c| {
+                        EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
+                    })?;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            Err(_reason) => {
+                break;
+            }
+        }
+    }
+
+    let parsed = &initial_bytes[..(initial_bytes.len() - state.bytes.len())];
+
+    let parsed_str = unsafe { std::str::from_utf8_unchecked(parsed) };
+
+    Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadIdent {
+    Start(Row, Col),
+    Space(BadInputError, Row, Col),
+    QualifiedTag(Row, Col),
+    PrivateTagNotUppercase(Row, Col),
+    PartStartsWithNumber(Row, Col),
+    WeirdAccessor(Row, Col),
+    PrivateTagFieldAccess(Row, Col),
+
+    WeirdDotAccess(Row, Col),
+    WeirdDotQualified(Row, Col),
+    DoubleDot(Row, Col),
+    StrayDot(Row, Col),
+}
+
+/// Parse an identifier into a string.
+///
+/// This is separate from the `ident` Parser because string interpolation
+/// wants to use it this way.
+pub fn parse_ident_help_help<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+) -> ParseResult<'a, (Ident<'a>, Option<char>), BadIdent> {
+    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
+    let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
+    let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
+    let mut is_capitalized;
+    let is_accessor_fn;
+    let mut is_private_tag = false;
+
+    // Identifiers and accessor functions must start with either a letter or a dot.
+    // If this starts with neither, it must be something else!
+    match peek_utf8_char(&state) {
+        Ok((first_ch, bytes_parsed)) => {
+            if first_ch.is_alphabetic() {
+                part_buf.push(first_ch);
+
+                is_capitalized = first_ch.is_uppercase();
+                is_accessor_fn = false;
+
+                state = advance_state!(state, bytes_parsed)?;
+            } else if first_ch == '.' {
+                is_capitalized = false;
+                is_accessor_fn = true;
+
+                state = advance_state!(state, bytes_parsed)?;
+            } else if first_ch == '@' {
+                state = advance_state!(state, bytes_parsed)?;
+
+                // '@' must always be followed by a capital letter!
+                match peek_utf8_char(&state) {
+                    Ok((next_ch, next_bytes_parsed)) => {
+                        if next_ch.is_uppercase() {
+                            state = advance_state!(state, next_bytes_parsed)?;
+
+                            part_buf.push('@');
+                            part_buf.push(next_ch);
+
+                            is_private_tag = true;
+                            is_capitalized = true;
+                            is_accessor_fn = false;
+                        } else {
+                            return Err((
+                                MadeProgress,
+                                BadIdent::PrivateTagNotUppercase(state.line, state.column),
+                                state,
+                            ));
+                        }
+                    }
+                    Err(_reason) => {
+                        return Err((
+                            MadeProgress,
+                            BadIdent::PrivateTagNotUppercase(state.line, state.column),
+                            state,
+                        ));
+                    }
+                }
+            } else {
+                return Err((NoProgress, BadIdent::Start(state.line, state.column), state));
+            }
+        }
+        Err(_reason) => {
+            return Err((NoProgress, BadIdent::Start(state.line, state.column), state));
+        }
+    }
+
+    while !state.bytes.is_empty() {
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // After the first character, only these are allowed:
+                //
+                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
+                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                // * A dot ('.')
+                if ch.is_alphabetic() {
+                    if part_buf.is_empty() {
+                        // Capitalization is determined by the first character in the part.
+                        is_capitalized = ch.is_uppercase();
+                    }
+
+                    part_buf.push(ch);
+                } else if ch.is_ascii_digit() {
+                    // Parts may not start with numbers!
+                    if part_buf.is_empty() {
+                        return Err((
+                            MadeProgress,
+                            BadIdent::PartStartsWithNumber(state.line, state.column),
+                            state,
+                        ));
+                    }
+
+                    part_buf.push(ch);
+                } else if ch == '.' {
+                    // There are two posssible errors here:
+                    //
+                    // 1. Having two consecutive dots is an error.
+                    // 2. Having capitalized parts after noncapitalized (e.g. `foo.Bar`) is an error.
+                    if part_buf.is_empty() {
+                        return Err((
+                            MadeProgress,
+                            BadIdent::DoubleDot(state.line, state.column),
+                            state,
+                        ));
+                    }
+
+                    if is_capitalized && !noncapitalized_parts.is_empty() {
+                        return Err((
+                            MadeProgress,
+                            BadIdent::WeirdDotQualified(state.line, state.column),
+                            state,
+                        ));
+                    }
+
+                    if is_capitalized {
+                        capitalized_parts.push(part_buf.into_bump_str());
+                    } else {
+                        noncapitalized_parts.push(part_buf.into_bump_str());
+                    }
+
+                    // Now that we've recorded the contents of the current buffer, reset it.
+                    part_buf = String::new_in(arena);
+                } else {
+                    // This must be the end of the identifier. We're done!
+
+                    break;
+                }
+
+                state = advance_state!(state, bytes_parsed)?;
+            }
+            Err(_reason) => {
+                //
+                return Err((
+                    MadeProgress,
+                    BadIdent::Start(state.line, state.column),
+                    state,
+                ));
+            }
+        }
+    }
+
+    if part_buf.is_empty() {
+        // We probably had a trailing dot, e.g. `Foo.bar.` - this is malformed!
+        //
+        // This condition might also occur if we encounter a malformed accessor like `.|`
+        //
+        // If we made it this far and don't have a next_char, then necessarily
+        // we have consumed a '.' char previously.
+        let fail = if noncapitalized_parts.is_empty() {
+            if capitalized_parts.is_empty() {
+                BadIdent::StrayDot(state.line, state.column)
+            } else {
+                BadIdent::WeirdDotQualified(state.line, state.column)
+            }
+        } else {
+            BadIdent::WeirdDotAccess(state.line, state.column)
+        };
+
+        return Err((MadeProgress, fail, state));
+    }
+
+    // Record the final parts.
+    if is_capitalized {
+        capitalized_parts.push(part_buf.into_bump_str());
+    } else {
+        noncapitalized_parts.push(part_buf.into_bump_str());
+    }
+
+    let answer = if is_accessor_fn {
+        // Handle accessor functions first because they have the strictest requirements.
+        // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
+        if capitalized_parts.is_empty() && noncapitalized_parts.len() == 1 && !is_private_tag {
+            let value = noncapitalized_parts.iter().next().unwrap();
+
+            Ident::AccessorFunction(value)
+        } else {
+            return Err((
+                MadeProgress,
+                BadIdent::WeirdAccessor(state.line, state.column),
+                state,
+            ));
+        }
+    } else if noncapitalized_parts.is_empty() {
+        // We have capitalized parts only, so this must be a tag.
+        match capitalized_parts.first() {
+            Some(value) => {
+                if capitalized_parts.len() == 1 {
+                    if is_private_tag {
+                        Ident::PrivateTag(value)
+                    } else {
+                        Ident::GlobalTag(value)
+                    }
+                } else {
+                    // This is a qualified tag, which is not allowed!
+                    return Err((
+                        MadeProgress,
+                        BadIdent::QualifiedTag(state.line, state.column),
+                        state,
+                    ));
+                }
+            }
+            None => {
+                // We had neither capitalized nor noncapitalized parts,
+                // yet we made it this far. The only explanation is that this was
+                // a stray '.' drifting through the cosmos.
+                return Err((
+                    MadeProgress,
+                    BadIdent::StrayDot(state.line, state.column),
+                    state,
+                ));
+            }
+        }
+    } else if is_private_tag {
+        // This is qualified field access with an '@' in front, which does not make sense!
+        return Err((
+            MadeProgress,
+            BadIdent::PrivateTagFieldAccess(state.line, state.column),
+            state,
+        ));
+    } else {
+        // We have multiple noncapitalized parts, so this must be field access.
+        Ident::Access {
+            module_name: join_module_parts(arena, capitalized_parts.into_bump_slice()),
+            parts: noncapitalized_parts.into_bump_slice(),
+        }
+    };
+
+    Ok((Progress::MadeProgress, (answer, None), state))
 }
