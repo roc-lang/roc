@@ -975,8 +975,10 @@ mod test_parse {
 
     #[test]
     fn qualified_global_tag() {
+        use roc_parse::ident::BadIdent;
+
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("One.Two.Whee");
+        let expected = Expr::MalformedIdent("One.Two.Whee", BadIdent::QualifiedTag(0, 12));
         let actual = parse_expr_with(&arena, "One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
@@ -984,8 +986,10 @@ mod test_parse {
 
     #[test]
     fn private_qualified_tag() {
+        use roc_parse::ident::BadIdent;
+
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("@One.Two.Whee");
+        let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::QualifiedTag(0, 13));
         let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);

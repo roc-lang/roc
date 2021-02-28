@@ -1,7 +1,7 @@
 use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
     line_comment, space0, space0_after_e, space0_around_ee, space0_before, space0_before_e,
-    space0_e, space1, spaces_exactly_e,
+    space0_e, spaces_exactly_e,
 };
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -95,27 +95,31 @@ fn loc_expr_in_parens_etc_help<'a>(
     then(
         loc!(and!(
             specialize(EExpr::InParens, loc_expr_in_parens_help(min_indent)),
-            optional(either!(
-                // There may optionally be function args after the ')'
-                // e.g. ((foo bar) baz)
-                loc_function_args_help(min_indent),
-                // If there aren't any args, there may be a '=' or ':' after it.
-                //
-                // (It's a syntax error to write e.g. `foo bar =` - so if there
-                // were any args, there is definitely no need to parse '=' or ':'!)
-                //
-                // Also, there may be a '.' for field access (e.g. `(foo).bar`),
-                // but we only want to look for that if there weren't any args,
-                // as if there were any args they'd have consumed it anyway
-                // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
-                either!(
-                    record_field_access_chain(),
+            and!(
+                one_of![record_field_access_chain(), |a, s| Ok((
+                    NoProgress,
+                    Vec::new_in(a),
+                    s
+                ))],
+                optional(either!(
+                    // There may optionally be function args after the ')'
+                    // e.g. ((foo bar) baz)
+                    loc_function_args_help(min_indent),
+                    // If there aren't any args, there may be a '=' or ':' after it.
+                    //
+                    // (It's a syntax error to write e.g. `foo bar =` - so if there
+                    // were any args, there is definitely no need to parse '=' or ':'!)
+                    //
+                    // Also, there may be a '.' for field access (e.g. `(foo).bar`),
+                    // but we only want to look for that if there weren't any args,
+                    // as if there were any args they'd have consumed it anyway
+                    // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
                     and!(
                         space0_e(min_indent, EExpr::Space, EExpr::IndentEquals),
                         equals_with_indent_help()
                     )
-                )
-            ))
+                ))
+            )
         )),
         move |arena, state, _progress, parsed| helper_help(arena, state, parsed, min_indent),
     )
@@ -156,12 +160,10 @@ fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
 
 type Extras<'a> = Located<(
     Located<Expr<'a>>,
-    Option<
-        Either<
-            Vec<'a, Located<Expr<'a>>>,
-            Either<Vec<'a, &'a str>, (&'a [CommentOrNewline<'a>], u16)>,
-        >,
-    >,
+    (
+        Vec<'a, &'a str>,
+        Option<Either<Vec<'a, Located<Expr<'a>>>, (&'a [CommentOrNewline<'a>], u16)>>,
+    ),
 )>;
 
 fn helper_help<'a>(
@@ -172,7 +174,21 @@ fn helper_help<'a>(
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     // We parse the parenthetical expression *and* the arguments after it
     // in one region, so that (for example) the region for Apply includes its args.
-    let (loc_expr, opt_extras) = loc_expr_with_extras.value;
+    let (mut loc_expr, (accesses, opt_extras)) = loc_expr_with_extras.value;
+
+    let mut value = loc_expr.value;
+
+    for field in accesses {
+        // Wrap the previous answer in the new one, so we end up
+        // with a nested Expr. That way, `foo.bar.baz` gets represented
+        // in the AST as if it had been written (foo.bar).baz all along.
+        value = Expr::Access(arena.alloc(value), field);
+    }
+
+    loc_expr = Located {
+        region: loc_expr.region,
+        value,
+    };
 
     match opt_extras {
         Some(Either::First(loc_args)) => Ok((
@@ -180,7 +196,7 @@ fn helper_help<'a>(
             expr_in_parens_then_arguments(arena, loc_expr, loc_args, loc_expr_with_extras.region),
             state,
         )),
-        Some(Either::Second(Either::Second((spaces_before_equals, equals_indent)))) => {
+        Some(Either::Second((spaces_before_equals, equals_indent))) => {
             // '=' after optional spaces
             expr_in_parens_then_equals_help(
                 min_indent,
@@ -190,14 +206,6 @@ fn helper_help<'a>(
                 loc_expr_with_extras.region.start_col,
             )
             .parse(arena, state)
-        }
-        Some(Either::Second(Either::First(fields))) => {
-            // '.' and a record field immediately after ')', no optional spaces
-            Ok((
-                MadeProgress,
-                expr_in_parens_then_access(arena, loc_expr, fields),
-                state,
-            ))
         }
         None => Ok((MadeProgress, loc_expr, state)),
     }
@@ -1234,28 +1242,6 @@ fn parse_def_signature_help<'a>(
     }
 }
 
-fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    //    skip_first!(
-    //        // If this is a reserved keyword ("if", "then", "case, "when"),
-    //        // followed by a blank space, then it is not a function argument!
-    //        //
-    //        // (The space is necessary because otherwise we'll get a false
-    //        // positive on function arguments beginning with keywords,
-    //        // e.g. `ifBlah` or `isSomething` will register as `if`/`is` keywords)
-    //        not(and!(reserved_keyword(), space1(min_indent))),
-    //        // Don't parse operators, because they have a higher precedence than function application.
-    //        // If we encounter one, we're done parsing function args!
-    //        specialize(
-    //            |e, _, _| SyntaxError::Expr(e),
-    //            move |arena, state| loc_parse_function_arg_help(min_indent, arena, state)
-    //        )
-    //    )
-    specialize(
-        |e, _, _| SyntaxError::Expr(e),
-        move |arena, state| loc_parse_function_arg_help(min_indent, arena, state),
-    )
-}
-
 fn loc_parse_function_arg_help<'a>(
     min_indent: u16,
     arena: &'a Bump,
@@ -1642,15 +1628,6 @@ fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
 /// any time we encounter a '-' it is unary iff it is both preceded by spaces
 /// and is *not* followed by a whitespace character.
 #[inline(always)]
-fn unary_negate_function_arg<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Expr(e),
-        unary_negate_function_arg_help(min_indent),
-    )
-}
-
 fn unary_negate_function_arg_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
@@ -1697,33 +1674,29 @@ fn unary_negate_function_arg_help<'a>(
 fn loc_function_args_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>, EExpr<'a>> {
-    specialize_ref(EExpr::Syntax, loc_function_args(min_indent))
-}
-
-fn loc_function_args<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>, SyntaxError<'a>> {
-    one_or_more!(move |arena: &'a Bump, s| {
-        map!(
-            and!(
-                backtrackable(space1(min_indent)),
-                one_of!(
-                    unary_negate_function_arg(min_indent),
-                    loc_function_arg(min_indent)
-                )
-            ),
-            |(spaces, loc_expr): (&'a [_], Located<Expr<'a>>)| {
-                if spaces.is_empty() {
-                    loc_expr
-                } else {
-                    arena
-                        .alloc(loc_expr.value)
-                        .with_spaces_before(spaces, loc_expr.region)
+    one_or_more_e!(
+        move |arena: &'a Bump, s| {
+            map!(
+                and!(
+                    backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentStart)),
+                    one_of!(unary_negate_function_arg_help(min_indent), |a, s| {
+                        loc_parse_function_arg_help(min_indent, a, s)
+                    })
+                ),
+                |(spaces, loc_expr): (&'a [_], Located<Expr<'a>>)| {
+                    if spaces.is_empty() {
+                        loc_expr
+                    } else {
+                        arena
+                            .alloc(loc_expr.value)
+                            .with_spaces_before(spaces, loc_expr.region)
+                    }
                 }
-            }
-        )
-        .parse(arena, s)
-    })
+            )
+            .parse(arena, s)
+        },
+        EExpr::Start
+    )
 }
 
 /// When we parse an ident like `foo ` it could be any of these:

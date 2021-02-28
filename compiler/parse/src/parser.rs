@@ -1969,6 +1969,47 @@ macro_rules! one_or_more {
 }
 
 #[macro_export]
+macro_rules! one_or_more_e {
+    ($parser:expr, $to_error:expr) => {
+        move |arena, state: State<'a>| {
+            use bumpalo::collections::Vec;
+
+            match $parser.parse(arena, state) {
+                Ok((_, first_output, next_state)) => {
+                    let mut state = next_state;
+                    let mut buf = Vec::with_capacity_in(1, arena);
+
+                    buf.push(first_output);
+
+                    loop {
+                        match $parser.parse(arena, state) {
+                            Ok((_, next_output, next_state)) => {
+                                state = next_state;
+                                buf.push(next_output);
+                            }
+                            Err((NoProgress, _, old_state)) => {
+                                return Ok((MadeProgress, buf, old_state));
+                            }
+                            Err((MadeProgress, fail, old_state)) => {
+                                return Err((MadeProgress, fail, old_state));
+                            }
+                        }
+                    }
+                }
+                Err((progress, _, new_state)) => {
+                    debug_assert_eq!(progress, NoProgress, "{:?}", &new_state);
+                    Err((
+                        progress,
+                        $to_error(new_state.line, new_state.column),
+                        new_state,
+                    ))
+                }
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! debug {
     ($parser:expr) => {
         move |arena, state: $crate::parser::State<'a>| dbg!($parser.parse(arena, state))
