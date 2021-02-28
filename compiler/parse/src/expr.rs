@@ -1,6 +1,4 @@
-use crate::ast::{
-    AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
-};
+use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
     line_comment, space0, space0_after_e, space0_around_ee, space0_before, space0_before_e,
     space0_e, space1, space1_before, spaces_exactly_e,
@@ -10,9 +8,8 @@ use crate::keyword;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, ascii_string, backtrackable, map,
     newline_char, not, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
-    trailing_sep_by0, unexpected, unexpected_eof, word1, word2, EExpr, EInParens, ELambda,
-    EPattern, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State, SyntaxError,
-    Type, When,
+    trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either,
+    If, List, Number, ParseResult, Parser, State, SyntaxError, Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -22,6 +19,7 @@ use roc_module::operator::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Located, Region};
 
 use crate::parser::Progress::{self, *};
+
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
     // as this causes rustc to stack overflow. Thus, parse_expr must be a
@@ -778,6 +776,28 @@ fn equals_for_def_help<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     }
 }
 
+fn parse_defs<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, SyntaxError<'a>> {
+    specialize(|e, _, _| SyntaxError::Expr(e), parse_defs_help(min_indent))
+}
+
+fn parse_defs_help<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, EExpr<'a>> {
+    let parse_def = move |a, s| {
+        space0_before_e(
+            loc!(def_help(min_indent)),
+            min_indent,
+            EExpr::Space,
+            EExpr::IndentStart,
+        )
+        .parse(a, s)
+    };
+
+    zero_or_more!(allocated(parse_def))
+}
+
 /// A definition, consisting of one of these:
 ///
 /// * A type alias using `:`
@@ -1006,14 +1026,6 @@ fn annotation_or_alias<'a>(
     }
 }
 
-fn parse_defs<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, SyntaxError<'a>> {
-    let parse_def = move |a, s| space1_before(loc!(def(min_indent)), min_indent).parse(a, s);
-
-    zero_or_more!(allocated(parse_def))
-}
-
 fn parse_def_expr_help<'a>(
     min_indent: u16,
     def_start_col: u16,
@@ -1066,27 +1078,24 @@ fn parse_def_expr<'a>(
         let indented_more = def_start_col + 1;
 
         then(
-            attempt!(
-                Attempting::Def,
+            and!(
+                // Parse the body of the first def. It doesn't need any spaces
+                // around it parsed, because both the subsquent defs and the
+                // final body will have space1_before on them.
+                //
+                // It should be indented more than the original, and it will
+                // end when outdented again.
+                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
                 and!(
-                    // Parse the body of the first def. It doesn't need any spaces
-                    // around it parsed, because both the subsquent defs and the
-                    // final body will have space1_before on them.
-                    //
-                    // It should be indented more than the original, and it will
-                    // end when outdented again.
-                    loc!(move |arena, state| parse_expr(indented_more, arena, state)),
-                    and!(
-                        // Optionally parse additional defs.
-                        parse_defs(def_start_col),
-                        // Parse the final expression that will be returned.
-                        // It should be indented the same amount as the original.
-                        space1_before(
-                            loc!(move |arena, state: State<'a>| {
-                                parse_expr(def_start_col, arena, state)
-                            }),
-                            def_start_col,
-                        )
+                    // Optionally parse additional defs.
+                    parse_defs(def_start_col),
+                    // Parse the final expression that will be returned.
+                    // It should be indented the same amount as the original.
+                    space1_before(
+                        loc!(move |arena, state: State<'a>| {
+                            parse_expr(def_start_col, arena, state)
+                        }),
+                        def_start_col,
                     )
                 )
             ),
@@ -1598,7 +1607,7 @@ fn if_branch<'a>(
     }
 }
 
-pub fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
+fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
     move |arena: &'a Bump, state| {
         let (_, _, state) = parser::keyword_e(keyword::IF, If::If).parse(arena, state)?;
 
@@ -1909,7 +1918,7 @@ fn ident_without_apply_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 }
 
 /// Like equals_for_def(), except it produces the indent_col of the state rather than ()
-pub fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
+fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
     move |_arena, state: State<'a>| {
         let equals = EExpr::Equals(state.line, state.column);
         let indent_col = state.indent_col;
@@ -1934,32 +1943,6 @@ pub fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
 }
 
 /// Like equals_for_def(), except it produces the indent_col of the state rather than ()
-pub fn equals_with_indent<'a>() -> impl Parser<'a, u16, SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        match state.bytes.first() {
-            Some(b'=') => {
-                match state.bytes.get(1) {
-                    // The '=' must not be followed by another `=` or `>`
-                    // (See equals_for_def() for explanation)
-                    Some(b'=') | Some(b'>') => Err(unexpected(0, Attempting::Def, state)),
-                    Some(_) => Ok((
-                        MadeProgress,
-                        state.indent_col,
-                        state.advance_without_indenting(1)?,
-                    )),
-                    None => Err(unexpected_eof(
-                        arena,
-                        state.advance_without_indenting(1)?,
-                        1,
-                    )),
-                }
-            }
-            Some(_) => Err(unexpected(0, Attempting::Def, state)),
-            None => Err(unexpected_eof(arena, state, 0)),
-        }
-    }
-}
-
 fn colon_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
     move |_arena, state: State<'a>| {
         let equals = EExpr::Colon(state.line, state.column);
@@ -1976,7 +1959,7 @@ fn colon_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
     }
 }
 
-pub fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
+fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
         Ident::PrivateTag(string) => Expr::PrivateTag(string),
