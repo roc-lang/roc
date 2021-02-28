@@ -1,7 +1,7 @@
 use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
     line_comment, space0, space0_after_e, space0_around_ee, space0_before, space0_before_e,
-    space0_e, space1, space1_before, spaces_exactly_e,
+    space0_e, space1, spaces_exactly_e,
 };
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -776,26 +776,30 @@ fn equals_for_def_help<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     }
 }
 
-fn parse_defs<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Expr(e), parse_defs_help(min_indent))
-}
-
 fn parse_defs_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, EExpr<'a>> {
-    let parse_def = move |a, s| {
-        space0_before_e(
-            loc!(def_help(min_indent)),
-            min_indent,
-            EExpr::Space,
-            EExpr::IndentStart,
+    let parse_def = move |arena, state| {
+        let (_, (spaces, def), state) = and!(
+            backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentStart)),
+            loc!(def_help(min_indent))
         )
-        .parse(a, s)
+        .parse(arena, state)?;
+
+        let result = if spaces.is_empty() {
+            &*arena.alloc(def)
+        } else {
+            &*arena.alloc(
+                arena
+                    .alloc(def.value)
+                    .with_spaces_before(spaces, def.region),
+            )
+        };
+
+        Ok((MadeProgress, result, state))
     };
 
-    zero_or_more!(allocated(parse_def))
+    zero_or_more!(parse_def)
 }
 
 /// A definition, consisting of one of these:
@@ -1035,44 +1039,19 @@ fn parse_def_expr_help<'a>(
     loc_first_pattern: Located<Pattern<'a>>,
     spaces_after_equals: &'a [CommentOrNewline<'a>],
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let result = parse_def_expr(
-        min_indent,
-        def_start_col,
-        equals_sign_indent,
-        arena,
-        state,
-        loc_first_pattern,
-        spaces_after_equals,
-    );
-
-    match result {
-        Ok(good) => Ok(good),
-        Err((progress, fail, state)) => {
-            let row = state.line;
-            let col = state.column;
-            Err((progress, EExpr::Def(arena.alloc(fail), row, col), state))
-        }
-    }
-}
-
-fn parse_def_expr<'a>(
-    min_indent: u16,
-    def_start_col: u16,
-    equals_sign_indent: u16,
-    arena: &'a Bump,
-    state: State<'a>,
-    loc_first_pattern: Located<Pattern<'a>>,
-    spaces_after_equals: &'a [CommentOrNewline<'a>],
-) -> ParseResult<'a, Expr<'a>, SyntaxError<'a>> {
     if def_start_col < min_indent {
-        Err((NoProgress, SyntaxError::OutdentedTooFar, state))
-    // `<` because '=' should be same indent (or greater) as the entire def-expr
+        Err((
+            NoProgress,
+            EExpr::IndentDefBody(state.line, state.column),
+            state,
+        ))
     } else if equals_sign_indent < def_start_col {
-        let msg = format!(
-            r"TODO the = in this declaration seems outdented. equals_sign_indent was {} and def_start_col was {}",
-            equals_sign_indent, def_start_col
-        );
-        Err((NoProgress, SyntaxError::NotYetImplemented(msg), state))
+        // `<` because '=' should be same indent or greater
+        Err((
+            NoProgress,
+            EExpr::IndentDefBody(state.line, state.column),
+            state,
+        ))
     } else {
         // Indented more beyond the original indent of the entire def-expr.
         let indented_more = def_start_col + 1;
@@ -1085,18 +1064,20 @@ fn parse_def_expr<'a>(
                 //
                 // It should be indented more than the original, and it will
                 // end when outdented again.
-                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
+                loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
                 and!(
                     // Optionally parse additional defs.
-                    parse_defs(def_start_col),
+                    debug!(parse_defs_help(def_start_col)),
                     // Parse the final expression that will be returned.
                     // It should be indented the same amount as the original.
-                    space1_before(
+                    debug!(space0_before_e(
                         loc!(move |arena, state: State<'a>| {
-                            parse_expr(def_start_col, arena, state)
+                            parse_expr_help(def_start_col, arena, state)
                         }),
                         def_start_col,
-                    )
+                        EExpr::Space,
+                        EExpr::IndentStart,
+                    ))
                 )
             ),
             move |arena, state, progress, (loc_first_body, (mut defs, loc_ret))| {

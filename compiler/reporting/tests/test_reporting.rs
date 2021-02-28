@@ -4103,6 +4103,7 @@ mod test_reporting {
                 
                 I am partway through parsing a definition, but I got stuck here:
                 
+                1│  main =
                 2│      5 ** 3
                           ^
                 
