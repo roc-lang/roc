@@ -24,7 +24,10 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
     // as this causes rustc to stack overflow. Thus, parse_expr must be a
     // separate function which recurses by calling itself directly.
-    move |arena, state: State<'a>| parse_expr(min_indent, arena, state)
+    specialize(
+        |e, _, _| SyntaxError::Expr(e),
+        move |arena, state: State<'a>| parse_expr_help(min_indent, arena, state),
+    )
 }
 
 fn loc_expr_in_parens_help<'a>(
@@ -456,56 +459,6 @@ fn parse_expr_help<'a>(
                     min_indent,
                     EExpr::Space,
                     EExpr::IndentEnd,
-                )
-            ))
-        ),
-        |arena, (loc_expr1, opt_operator)| match opt_operator {
-            Some(((spaces_before_op, loc_op), loc_expr2)) => {
-                let loc_expr1 = if spaces_before_op.is_empty() {
-                    loc_expr1
-                } else {
-                    // Attach the spaces retroactively to the expression preceding the operator.
-                    arena
-                        .alloc(loc_expr1.value)
-                        .with_spaces_after(spaces_before_op, loc_expr1.region)
-                };
-                let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
-
-                Expr::BinOp(tuple)
-            }
-            None => loc_expr1.value,
-        },
-    );
-
-    expr_parser.parse(arena, state)
-}
-
-fn parse_expr<'a>(
-    min_indent: u16,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, SyntaxError<'a>> {
-    let expr_parser = crate::parser::map_with_arena(
-        and!(
-            // First parse the body without operators, then try to parse possible operators after.
-            specialize(
-                |e, _, _| SyntaxError::Expr(e),
-                move |arena, state| loc_parse_expr_body_without_operators_help(
-                    min_indent, arena, state
-                ),
-            ),
-            // Parse the operator, with optional spaces before it.
-            //
-            // Since spaces can only wrap an Expr, not an BinOp, we have to first
-            // parse the spaces and then attach them retroactively to the expression
-            // preceding the operator (the one we parsed before considering operators).
-            optional(and!(
-                and!(space0(min_indent), loc!(binop())),
-                // The spaces *after* the operator can be attached directly to
-                // the expression following the operator.
-                space0_before(
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent,
                 )
             ))
         ),
@@ -1960,34 +1913,6 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
-}
-
-fn binop<'a>() -> impl Parser<'a, BinOp, SyntaxError<'a>> {
-    one_of!(
-        // Sorted from highest to lowest predicted usage in practice,
-        // so that successful matches short-circuit as early as possible.
-        // The only exception to this is that operators which begin
-        // with other valid operators (e.g. "<=" begins with "<") must
-        // come before the shorter ones; otherwise, they will never
-        // be reached because the shorter one will pass and consume!
-        map!(ascii_string("|>"), |_| BinOp::Pizza),
-        map!(ascii_string("=="), |_| BinOp::Equals),
-        map!(ascii_string("!="), |_| BinOp::NotEquals),
-        map!(ascii_string("&&"), |_| BinOp::And),
-        map!(ascii_string("||"), |_| BinOp::Or),
-        map!(ascii_char(b'+'), |_| BinOp::Plus),
-        map!(ascii_char(b'*'), |_| BinOp::Star),
-        map!(ascii_char(b'-'), |_| BinOp::Minus),
-        map!(ascii_string("//"), |_| BinOp::DoubleSlash),
-        map!(ascii_char(b'/'), |_| BinOp::Slash),
-        map!(ascii_string("<="), |_| BinOp::LessThanOrEq),
-        map!(ascii_char(b'<'), |_| BinOp::LessThan),
-        map!(ascii_string(">="), |_| BinOp::GreaterThanOrEq),
-        map!(ascii_char(b'>'), |_| BinOp::GreaterThan),
-        map!(ascii_char(b'^'), |_| BinOp::Caret),
-        map!(ascii_string("%%"), |_| BinOp::DoublePercent),
-        map!(ascii_char(b'%'), |_| BinOp::Percent)
-    )
 }
 
 fn binop_help<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
