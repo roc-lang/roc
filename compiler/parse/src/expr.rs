@@ -1,7 +1,7 @@
 use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
     line_comment, space0, space0_after_e, space0_around_ee, space0_before, space0_before_e,
-    space0_e, spaces_exactly_e,
+    space0_e, space1_e, spaces_exactly_e,
 };
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -360,10 +360,26 @@ fn unary_not<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
 fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     move |_arena: &'a Bump, state: State<'a>| {
+        // a minus is unary iff
+        //
+        // - it is preceded by whitespace (spaces, newlines, comments)
+        // - it is not followed by whitespace
+        // - it is not followed by a number literal
+        //
+        // The last condition is because of overflow, this would overflow
+        //
+        //      Num.negate 125
+        //
+        // while
+        //
+        //      -125
+        //
+        // is perfectly fine (assuming I8 here). So it is vital the minus is
+        // parses as part of the number literal, and not as a unary minus
         let followed_by_whitespace = state
             .bytes
             .get(1)
-            .map(|c| c.is_ascii_whitespace() || *c == b'#')
+            .map(|c| c.is_ascii_whitespace() || *c == b'#' || c.is_ascii_digit())
             .unwrap_or(false);
 
         if state.bytes.starts_with(b"-") && !followed_by_whitespace {
@@ -1075,17 +1091,17 @@ fn parse_def_expr_help<'a>(
                 loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
                 and!(
                     // Optionally parse additional defs.
-                    debug!(parse_defs_help(def_start_col)),
+                    parse_defs_help(def_start_col),
                     // Parse the final expression that will be returned.
                     // It should be indented the same amount as the original.
-                    debug!(space0_before_e(
+                    space0_before_e(
                         loc!(move |arena, state: State<'a>| {
                             parse_expr_help(def_start_col, arena, state)
                         }),
                         def_start_col,
                         EExpr::Space,
                         EExpr::IndentStart,
-                    ))
+                    )
                 )
             ),
             move |arena, state, progress, (loc_first_body, (mut defs, loc_ret))| {
@@ -1678,7 +1694,12 @@ fn loc_function_args_help<'a>(
         move |arena: &'a Bump, s| {
             map!(
                 and!(
-                    backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentStart)),
+                    backtrackable(space1_e(
+                        min_indent,
+                        EExpr::Space,
+                        EExpr::IndentStart,
+                        EExpr::Start
+                    )),
                     one_of!(unary_negate_function_arg_help(min_indent), |a, s| {
                         loc_parse_function_arg_help(min_indent, a, s)
                     })
@@ -1723,7 +1744,7 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                 // The = might be because someone is trying to use Elm or Haskell
                 // syntax for defining functions, e.g. `foo a b = ...` - so give a nice error!
                 optional(and!(
-                    backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals)),
+                    backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals,)),
                     either!(equals_with_indent_help(), colon_with_indent_help())
                 ))
             )

@@ -337,6 +337,28 @@ where
     })
 }
 
+pub fn space1_e<'a, E>(
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+    no_parse_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
+    move |arena, state| match space0_e(min_indent, space_problem, indent_problem)
+        .parse(arena, state)
+    {
+        Ok((NoProgress, _, state)) => Err((
+            NoProgress,
+            no_parse_problem(state.line, state.column),
+            state,
+        )),
+        Ok((MadeProgress, spaces, state)) => Ok((MadeProgress, spaces, state)),
+        Err(bad) => Err(bad),
+    }
+}
+
 /// One or more (spaces/comments/newlines).
 pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     // TODO try benchmarking a short-circuit for the typical case: see if there is
