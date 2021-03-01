@@ -45,44 +45,63 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ENV SCCACHE_DIR=/earthbuild/sccache_dir
     ENV CARGO_INCREMENTAL=0 # no need to recompile package when using new function
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo install cargo-chef
 
 deps-image:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     SAVE IMAGE roc-deps:latest
 
+copy-dirs:
+    FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    # If you edit this, make sure to update copy-dirs-and-cache below.
+    COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
+
 copy-dirs-and-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    # roc dirs
+    COPY +save-cache/target ./target
+    COPY +save-cache/cargo_home $CARGO_HOME
+    # This needs to be kept in sync with copy-dirs above.
+    # The reason this is at the end is to maximize caching.
+    # Lines above this should be cached even if the code changes.
     COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
+
+prepare-cache:
+    FROM +copy-dirs
+    RUN cargo chef prepare
+    SAVE ARTIFACT recipe.json
+
+save-cache:
+    FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    COPY +prepare-cache/recipe.json ./
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo chef cook; sccache --show-stats # for clippy
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo chef cook --release --tests; sccache --show-stats
+    SAVE ARTIFACT target
+    SAVE ARTIFACT $CARGO_HOME cargo_home
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir compiler/builtins/bitcode ./
     RUN cd bitcode; ./run-tests.sh;
 
-build-rust:
-    FROM +copy-dirs-and-cache
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo build; sccache --show-stats # for clippy
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --no-run; sccache --show-stats
-
 check-clippy:
-    FROM +build-rust
+    FROM +copy-dirs-and-cache
     RUN cargo clippy -V
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo clippy -- -D warnings
 
 check-rustfmt:
-    FROM +copy-dirs-and-cache
+    FROM +copy-dirs
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
 test-rust:
-    FROM +build-rust
+    FROM +copy-dirs-and-cache
     ENV RUST_BACKTRACE=1
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release 
+        cargo test --release; sccache --show-stats
 
 test-all:
     BUILD +test-zig
