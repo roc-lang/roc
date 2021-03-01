@@ -1,15 +1,15 @@
 use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
-    line_comment, space0, space0_after_e, space0_around_ee, space0_before, space0_before_e,
-    space0_e, space1_e, spaces_exactly_e,
+    line_comment, space0_after_e, space0_around_ee, space0_before_e, space0_e, space1_e,
+    spaces_exactly_e,
 };
 use crate::ident::{ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, allocated, and_then_with_indent_level, ascii_char, ascii_string, backtrackable, map,
-    newline_char, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then, trailing_sep_by0,
-    word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either, If, List, Number,
-    ParseResult, Parser, State, SyntaxError, Type, When,
+    self, allocated, and_then_with_indent_level, ascii_char, backtrackable, map, newline_char,
+    optional, sep_by1, sep_by1_e, specialize, specialize_ref, then, trailing_sep_by0, word1, word2,
+    EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either, If, List, Number, ParseResult,
+    Parser, State, SyntaxError, Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -489,6 +489,13 @@ pub fn expr_to_pattern<'a>(
     arena: &'a Bump,
     expr: &Expr<'a>,
 ) -> Result<Pattern<'a>, SyntaxError<'a>> {
+    match expr_to_pattern_help(arena, expr) {
+        Ok(good) => Ok(good),
+        Err(_bad) => Err(SyntaxError::InvalidPattern),
+    }
+}
+
+fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, EPattern<'a>> {
     match expr {
         Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
@@ -501,14 +508,14 @@ pub fn expr_to_pattern<'a>(
         Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
-            let value = expr_to_pattern(arena, &loc_val.value)?;
+            let value = expr_to_pattern_help(arena, &loc_val.value)?;
             let val_pattern = arena.alloc(Located { region, value });
 
             let mut arg_patterns = Vec::with_capacity_in(loc_args.len(), arena);
 
             for loc_arg in loc_args.iter() {
                 let region = loc_arg.region;
-                let value = expr_to_pattern(arena, &loc_arg.value)?;
+                let value = expr_to_pattern_help(arena, &loc_arg.value)?;
 
                 arg_patterns.push(Located { region, value });
             }
@@ -519,15 +526,17 @@ pub fn expr_to_pattern<'a>(
         }
 
         Expr::SpaceBefore(sub_expr, spaces) => Ok(Pattern::SpaceBefore(
-            arena.alloc(expr_to_pattern(arena, sub_expr)?),
+            arena.alloc(expr_to_pattern_help(arena, sub_expr)?),
             spaces,
         )),
         Expr::SpaceAfter(sub_expr, spaces) => Ok(Pattern::SpaceAfter(
-            arena.alloc(expr_to_pattern(arena, sub_expr)?),
+            arena.alloc(expr_to_pattern_help(arena, sub_expr)?),
             spaces,
         )),
 
-        Expr::ParensAround(sub_expr) | Expr::Nested(sub_expr) => expr_to_pattern(arena, sub_expr),
+        Expr::ParensAround(sub_expr) | Expr::Nested(sub_expr) => {
+            expr_to_pattern_help(arena, sub_expr)
+        }
 
         Expr::Record {
             fields,
@@ -538,7 +547,7 @@ pub fn expr_to_pattern<'a>(
 
             for loc_assigned_field in fields.iter() {
                 let region = loc_assigned_field.region;
-                let value = assigned_expr_field_to_pattern(arena, &loc_assigned_field.value)?;
+                let value = assigned_expr_field_to_pattern_help(arena, &loc_assigned_field.value)?;
 
                 loc_patterns.push(Located { region, value });
             }
@@ -571,7 +580,10 @@ pub fn expr_to_pattern<'a>(
         | Expr::Record {
             update: Some(_), ..
         }
-        | Expr::UnaryOp(_, _) => Err(SyntaxError::InvalidPattern),
+        | Expr::UnaryOp(_, _) => {
+            // TODO nonsense region
+            Err(EPattern::Start(0, 0))
+        }
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
         Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
@@ -579,7 +591,7 @@ pub fn expr_to_pattern<'a>(
 }
 
 /// use for expressions like { x: a + b }
-pub fn assigned_expr_field_to_pattern<'a>(
+fn assigned_expr_field_to_pattern<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
 ) -> Result<Pattern<'a>, SyntaxError<'a>> {
@@ -627,68 +639,51 @@ pub fn assigned_expr_field_to_pattern<'a>(
     })
 }
 
-/// Used for patterns like { x: Just _ }
-pub fn assigned_pattern_field_to_pattern<'a>(
+fn assigned_expr_field_to_pattern_help<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
-    backup_region: Region,
-) -> Result<Located<Pattern<'a>>, SyntaxError<'a>> {
+) -> Result<Pattern<'a>, EPattern<'a>> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
         AssignedField::RequiredValue(name, spaces, value) => {
-            let pattern = expr_to_pattern(arena, &value.value)?;
-            let region = Region::span_across(&value.region, &value.region);
+            let pattern = expr_to_pattern_help(arena, &value.value)?;
             let result = arena.alloc(Located {
                 region: value.region,
                 value: pattern,
             });
             if spaces.is_empty() {
-                Located::at(region, Pattern::RequiredField(name.value, result))
+                Pattern::RequiredField(name.value, result)
             } else {
-                Located::at(
-                    region,
-                    Pattern::SpaceAfter(
-                        arena.alloc(Pattern::RequiredField(name.value, result)),
-                        spaces,
-                    ),
+                Pattern::SpaceAfter(
+                    arena.alloc(Pattern::RequiredField(name.value, result)),
+                    spaces,
                 )
             }
         }
         AssignedField::OptionalValue(name, spaces, value) => {
-            let pattern = value.value.clone();
-            let region = Region::span_across(&value.region, &value.region);
             let result = arena.alloc(Located {
                 region: value.region,
-                value: pattern,
+                value: value.value.clone(),
             });
             if spaces.is_empty() {
-                Located::at(region, Pattern::OptionalField(name.value, result))
+                Pattern::OptionalField(name.value, result)
             } else {
-                Located::at(
-                    region,
-                    Pattern::SpaceAfter(
-                        arena.alloc(Pattern::OptionalField(name.value, result)),
-                        spaces,
-                    ),
+                Pattern::SpaceAfter(
+                    arena.alloc(Pattern::OptionalField(name.value, result)),
+                    spaces,
                 )
             }
         }
-        AssignedField::LabelOnly(name) => Located::at(name.region, Pattern::Identifier(name.value)),
-        AssignedField::SpaceBefore(nested, spaces) => {
-            let can_nested = assigned_pattern_field_to_pattern(arena, nested, backup_region)?;
-            Located::at(
-                can_nested.region,
-                Pattern::SpaceBefore(arena.alloc(can_nested.value), spaces),
-            )
-        }
-        AssignedField::SpaceAfter(nested, spaces) => {
-            let can_nested = assigned_pattern_field_to_pattern(arena, nested, backup_region)?;
-            Located::at(
-                can_nested.region,
-                Pattern::SpaceAfter(arena.alloc(can_nested.value), spaces),
-            )
-        }
-        AssignedField::Malformed(string) => Located::at(backup_region, Pattern::Malformed(string)),
+        AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
+        AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
+            arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
+            spaces,
+        ),
+        AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
+            arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
+            spaces,
+        ),
+        AssignedField::Malformed(string) => Pattern::Malformed(string),
     })
 }
 
