@@ -225,12 +225,12 @@ fn expr_in_parens_then_equals_help<'a>(
         let region = loc_expr.region;
 
         // Re-parse the Expr as a Pattern.
-        let pattern = match expr_to_pattern(arena, &loc_expr.value) {
+        let pattern = match expr_to_pattern_help(arena, &loc_expr.value) {
             Ok(valid) => valid,
-            Err(fail) => {
+            Err(_) => {
                 return Err((
                     MadeProgress,
-                    EExpr::Syntax(arena.alloc(fail), state.line, state.column),
+                    EExpr::MalformedPattern(state.line, state.column),
                     state,
                 ))
             }
@@ -485,17 +485,7 @@ fn parse_expr_help<'a>(
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
-pub fn expr_to_pattern<'a>(
-    arena: &'a Bump,
-    expr: &Expr<'a>,
-) -> Result<Pattern<'a>, SyntaxError<'a>> {
-    match expr_to_pattern_help(arena, expr) {
-        Ok(good) => Ok(good),
-        Err(_bad) => Err(SyntaxError::InvalidPattern),
-    }
-}
-
-fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, EPattern<'a>> {
+fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
     match expr {
         Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
@@ -580,10 +570,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Record {
             update: Some(_), ..
         }
-        | Expr::UnaryOp(_, _) => {
-            // TODO nonsense region
-            Err(EPattern::Start(0, 0))
-        }
+        | Expr::UnaryOp(_, _) => Err(()),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
         Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
@@ -594,11 +581,11 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 fn assigned_expr_field_to_pattern<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
-) -> Result<Pattern<'a>, SyntaxError<'a>> {
+) -> Result<Pattern<'a>, ()> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
         AssignedField::RequiredValue(name, spaces, value) => {
-            let pattern = expr_to_pattern(arena, &value.value)?;
+            let pattern = expr_to_pattern_help(arena, &value.value)?;
             let result = arena.alloc(Located {
                 region: value.region,
                 value: pattern,
@@ -642,7 +629,7 @@ fn assigned_expr_field_to_pattern<'a>(
 fn assigned_expr_field_to_pattern_help<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
-) -> Result<Pattern<'a>, EPattern<'a>> {
+) -> Result<Pattern<'a>, ()> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
         AssignedField::RequiredValue(name, spaces, value) => {
@@ -1776,7 +1763,7 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                                 let mut arg_patterns = Vec::with_capacity_in(loc_args.len(), arena);
 
                                 for loc_arg in loc_args {
-                                    match expr_to_pattern(arena, &loc_arg.value) {
+                                    match expr_to_pattern_help(arena, &loc_arg.value) {
                                         Ok(arg_pat) => {
                                             arg_patterns.push(Located {
                                                 value: arg_pat,
@@ -2224,5 +2211,21 @@ fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
 }
 
 fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
-    crate::number_literal::number_literal()
+    map!(crate::number_literal::number_literal(), |literal| {
+        use crate::number_literal::NumLiteral::*;
+
+        match literal {
+            Num(s) => Expr::Num(s),
+            Float(s) => Expr::Float(s),
+            NonBase10Int {
+                string,
+                base,
+                is_negative,
+            } => Expr::NonBase10Int {
+                string,
+                base,
+                is_negative,
+            },
+        }
+    })
 }

@@ -572,6 +572,7 @@ pub enum EPattern<'a> {
     Space(BadInputError, Row, Col),
 
     PInParens(PInParens<'a>, Row, Col),
+    NumLiteral(Number, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),

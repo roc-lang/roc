@@ -1,7 +1,6 @@
 use crate::ast::Pattern;
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{ident, lowercase_ident, Ident};
-use crate::number_literal::number_literal;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
@@ -144,9 +143,23 @@ fn loc_pattern_in_parens_help<'a>(
 
 fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     specialize(
-        |_, r, c| EPattern::Start(r, c),
-        map_with_arena!(number_literal(), |arena, expr| {
-            crate::expr::expr_to_pattern(arena, &expr).unwrap()
+        EPattern::NumLiteral,
+        map!(crate::number_literal::number_literal(), |literal| {
+            use crate::number_literal::NumLiteral::*;
+
+            match literal {
+                Num(s) => Pattern::NumLiteral(s),
+                Float(s) => Pattern::FloatLiteral(s),
+                NonBase10Int {
+                    string,
+                    base,
+                    is_negative,
+                } => Pattern::NonBase10Literal {
+                    string,
+                    base,
+                    is_negative,
+                },
+            }
         }),
     )
 }
