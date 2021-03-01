@@ -356,6 +356,7 @@ pub enum Pattern<'a> {
 
     // Malformed
     Malformed(&'a str),
+    MalformedIdent(&'a str, crate::ident::BadIdent),
     QualifiedIdentifier {
         module_name: &'a str,
         ident: &'a str,

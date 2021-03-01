@@ -1028,6 +1028,9 @@ fn annotation_or_alias<'a>(
         Malformed(_) => {
             Def::NotYetImplemented("TODO translate a malformed pattern into a malformed annotation")
         }
+        MalformedIdent(_, _) => {
+            Def::NotYetImplemented("TODO translate a malformed pattern into a malformed annotation")
+        }
         Identifier(ident) => {
             // This is a regular Annotation
             Def::Annotation(

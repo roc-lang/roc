@@ -1495,15 +1495,26 @@ mod test_parse {
     }
 
     #[test]
-    #[ignore]
     fn malformed_ident_due_to_underscore() {
         // This is a regression test against a bug where if you included an
         // underscore in an argument name, it would parse as three arguments
         // (and would ignore the underscore as if it had been blank space).
         let arena = Bump::new();
+
+        let pattern = Located::new(
+            0,
+            0,
+            1,
+            11,
+            Pattern::MalformedIdent(&"the_answer", roc_parse::ident::BadIdent::Underscore(0, 5)),
+        );
+        let patterns = &[pattern];
+        let expr = Located::new(0, 0, 15, 17, Expr::Num("42"));
+
+        let expected = Closure(patterns, &expr);
         let actual = parse_expr_with(&arena, "\\the_answer -> 42");
 
-        assert_eq!(Ok(MalformedClosure), actual);
+        assert_eq!(Ok(expected), actual);
     }
 
     #[test]

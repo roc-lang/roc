@@ -267,12 +267,15 @@ fn loc_ident_pattern_help<'a>(
                 },
                 state,
             )),
-            Ident::Malformed(malformed, _problem) => {
+            Ident::Malformed(malformed, problem) => {
                 debug_assert!(!malformed.is_empty());
 
-                Err((
+                Ok((
                     MadeProgress,
-                    EPattern::Start(state.line, state.column),
+                    Located {
+                        region: loc_ident.region,
+                        value: Pattern::MalformedIdent(malformed, problem),
+                    },
                     state,
                 ))
             }

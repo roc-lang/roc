@@ -229,7 +229,7 @@ fn malformed_identifier<'a>(
             Ok((ch, bytes_parsed)) => {
                 // We can't use ch.is_alphanumeric() here because that passes for
                 // things that are "numeric" but not ASCII digits, like `¾`
-                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
+                if ch == '.' || ch == '_' || ch.is_alphabetic() || ch.is_ascii_digit() {
                     state = state.advance_without_indenting_ee(bytes_parsed, |r, c| {
                         EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
                     })?;
@@ -255,6 +255,7 @@ fn malformed_identifier<'a>(
 pub enum BadIdent {
     Start(Row, Col),
     Space(BadInputError, Row, Col),
+    Underscore(Row, Col),
     QualifiedTag(Row, Col),
     PrivateTagNotUppercase(Row, Col),
     PartStartsWithNumber(Row, Col),
@@ -393,6 +394,16 @@ pub fn parse_ident_help_help<'a>(
 
                     // Now that we've recorded the contents of the current buffer, reset it.
                     part_buf = String::new_in(arena);
+                } else if ch == '_' {
+                    // we don't allow underscores in the middle of an identifier
+                    // but still parse them (and generate a malformed identifier)
+                    // to give good error messages for this case
+                    state = advance_state!(state, bytes_parsed)?;
+                    return Err((
+                        MadeProgress,
+                        BadIdent::Underscore(state.line, state.column),
+                        state,
+                    ));
                 } else {
                     // This must be the end of the identifier. We're done!
 

@@ -5549,4 +5549,27 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn closure_underscore_ident() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \the_answer -> 100
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I am trying to parse an identifier here:
+                
+                1│  \the_answer -> 100
+                        ^
+                
+                Underscores are not allowed in identifiers. Use camelCase instead!
+            "#
+            ),
+        )
+    }
 }

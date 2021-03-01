@@ -344,6 +344,253 @@ pub fn can_problem<'b>(
     }
 }
 
+fn to_bad_ident_expr_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    bad_ident: roc_parse::ident::BadIdent,
+    surroundings: Region,
+) -> RocDocBuilder<'b> {
+    use roc_parse::ident::BadIdent::*;
+
+    match bad_ident {
+        Start(_, _) | Space(_, _, _) => unreachable!("these are handled in the parser"),
+        WeirdDotAccess(row, col) | StrayDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow(r"I trying to parse a record field accessor here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Something like "),
+                    alloc.parser_suggestion(".name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion(".height"),
+                    alloc.reflow(" that accesses a value from a record."),
+                ]),
+            ])
+        }
+
+        PartStartsWithNumber(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I trying to parse a record field access here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("So I expect to see a lowercase letter next, like "),
+                    alloc.parser_suggestion(".name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion(".height"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
+
+        WeirdAccessor(_row, _col) => alloc.stack(vec![
+            alloc.reflow("I am very confused by this field access"),
+            alloc.region(surroundings),
+            alloc.concat(vec![
+                alloc.reflow("It looks like a field access on an accessor. I parse"),
+                alloc.parser_suggestion(".client.name"),
+                alloc.reflow(" as "),
+                alloc.parser_suggestion("(.client).name"),
+                alloc.reflow(". Maybe use an anonymous function like "),
+                alloc.parser_suggestion("(\\r -> r.client.name)"),
+                alloc.reflow(" instead"),
+                alloc.reflow("?"),
+            ]),
+        ]),
+
+        WeirdDotQualified(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I was expecting to see an identifier next, like "),
+                    alloc.parser_suggestion("height"),
+                    alloc.reflow(". A complete qualified name looks something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("."),
+                ]),
+            ])
+        }
+        QualifiedTag(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"This looks like a qualified tag name to me, "),
+                    alloc.reflow(r"but tags cannot be qualified! "),
+                    alloc.reflow(r"Maybe you wanted a qualified name, something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("?"),
+                ]),
+            ])
+        }
+        PrivateTagNotUppercase(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a private tag here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"But after the "),
+                    alloc.keyword("@"),
+                    alloc.reflow(r" symbol I found a lowercase letter. "),
+                    alloc.reflow(r"All tag names (global and private)"),
+                    alloc.reflow(r" must start with an uppercase letter, like "),
+                    alloc.parser_suggestion("@UUID"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("@Secrets"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
+
+        PrivateTagFieldAccess(_row, _col) => alloc.stack(vec![
+            alloc.reflow("I am very confused by this field access:"),
+            alloc.region(surroundings),
+            alloc.concat(vec![
+                alloc.reflow(r"It looks like a record field access on a private tag.")
+            ]),
+        ]),
+        _ => todo!(),
+    }
+}
+
+fn to_bad_ident_pattern_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    bad_ident: roc_parse::ident::BadIdent,
+    surroundings: Region,
+) -> RocDocBuilder<'b> {
+    use roc_parse::ident::BadIdent::*;
+
+    match bad_ident {
+        Start(_, _) | Space(_, _, _) => unreachable!("these are handled in the parser"),
+        WeirdDotAccess(row, col) | StrayDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow(r"I trying to parse a record field accessor here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Something like "),
+                    alloc.parser_suggestion(".name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion(".height"),
+                    alloc.reflow(" that accesses a value from a record."),
+                ]),
+            ])
+        }
+
+        PartStartsWithNumber(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I trying to parse a record field access here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("So I expect to see a lowercase letter next, like "),
+                    alloc.parser_suggestion(".name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion(".height"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
+
+        WeirdAccessor(_row, _col) => alloc.stack(vec![
+            alloc.reflow("I am very confused by this field access"),
+            alloc.region(surroundings),
+            alloc.concat(vec![
+                alloc.reflow("It looks like a field access on an accessor. I parse"),
+                alloc.parser_suggestion(".client.name"),
+                alloc.reflow(" as "),
+                alloc.parser_suggestion("(.client).name"),
+                alloc.reflow(". Maybe use an anonymous function like "),
+                alloc.parser_suggestion("(\\r -> r.client.name)"),
+                alloc.reflow(" instead"),
+                alloc.reflow("?"),
+            ]),
+        ]),
+
+        WeirdDotQualified(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I was expecting to see an identifier next, like "),
+                    alloc.parser_suggestion("height"),
+                    alloc.reflow(". A complete qualified name looks something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("."),
+                ]),
+            ])
+        }
+        QualifiedTag(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"This looks like a qualified tag name to me, "),
+                    alloc.reflow(r"but tags cannot be qualified! "),
+                    alloc.reflow(r"Maybe you wanted a qualified name, something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("?"),
+                ]),
+            ])
+        }
+        PrivateTagNotUppercase(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a private tag here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"But after the "),
+                    alloc.keyword("@"),
+                    alloc.reflow(r" symbol I found a lowercase letter. "),
+                    alloc.reflow(r"All tag names (global and private)"),
+                    alloc.reflow(r" must start with an uppercase letter, like "),
+                    alloc.parser_suggestion("@UUID"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("@Secrets"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
+
+        PrivateTagFieldAccess(_row, _col) => alloc.stack(vec![
+            alloc.reflow("I am very confused by this field access:"),
+            alloc.region(surroundings),
+            alloc.concat(vec![
+                alloc.reflow(r"It looks like a record field access on a private tag.")
+            ]),
+        ]),
+
+        Underscore(row, col) => {
+            let region = Region::from_row_col(row, col - 1);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse an identifier here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow(
+                    r"Underscores are not allowed in identifiers. Use camelCase instead!",
+                )]),
+            ])
+        }
+
+        _ => todo!(),
+    }
+}
+
 fn pretty_runtime_error<'b>(
     alloc: &'b RocDocAllocator<'b>,
     runtime_error: RuntimeError,
@@ -432,6 +679,7 @@ fn pretty_runtime_error<'b>(
                 MalformedBase(Base::Binary) => " binary integer ",
                 MalformedBase(Base::Octal) => " octal integer ",
                 MalformedBase(Base::Decimal) => " integer ",
+                BadIdent(bad_ident) => return to_bad_ident_pattern_report(alloc, bad_ident, region),
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
             };
@@ -440,7 +688,7 @@ fn pretty_runtime_error<'b>(
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
                     .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
-                Unknown => alloc.nil(),
+                Unknown | BadIdent(_) => alloc.nil(),
                 QualifiedIdentifier => alloc.tip().append(
                     alloc.reflow("In patterns, only private and global tags can be qualified"),
                 ),
@@ -483,125 +731,8 @@ fn pretty_runtime_error<'b>(
             unreachable!()
         }
         RuntimeError::MalformedIdentifier(_box_str, bad_ident, surroundings) => {
-            // we re-parse the identifier, to learn exactly what is going on
-            use roc_parse::ident::BadIdent::*;
+            to_bad_ident_expr_report(alloc, bad_ident, surroundings)
 
-
-
-                 match bad_ident {
-                    Start(_,_) | Space(_,_,_) => unreachable!("these are handled in the parser"),
-                    WeirdDotAccess(row, col) | StrayDot(row, col) => { 
-                        let region = Region::from_row_col(row, col);
-
-                        alloc.stack(vec![
-                            alloc.reflow("I trying to parse a record field accessor here:"),
-                            alloc.region_with_subregion(surroundings, region),
-                            alloc.concat(vec![
-                            alloc.reflow("Something like "),
-                            alloc.parser_suggestion(".name"),
-                            alloc.reflow(" or "),
-                            alloc.parser_suggestion(".height"),
-                            alloc.reflow(" that accesses a value from a record."),
-                            ])
-                        ])
-                    }
-
-                    PartStartsWithNumber(row, col) => { 
-                        let region = Region::from_row_col(row, col);
-
-                        alloc.stack(vec![
-                            alloc.reflow("I trying to parse a record field access here:"),
-                            alloc.region_with_subregion(surroundings, region),
-                            alloc.concat(vec![
-                            alloc.reflow("So I expect to see a lowercase letter next, like "),
-                            alloc.parser_suggestion(".name"),
-                            alloc.reflow(" or "),
-                            alloc.parser_suggestion(".height"),
-                            alloc.reflow("."),
-                            ])
-                        ])
-                    }
-
-                    WeirdAccessor(_row, _col) => { 
-
-                        alloc.stack(vec![
-                            alloc.reflow("I am very confused by this field access"),
-                            alloc.region(surroundings),
-                            alloc.concat(vec![
-                            alloc.reflow("It looks like a field access on an accessor. I parse"),
-                            alloc.parser_suggestion(".client.name"),
-                            alloc.reflow(" as "),
-                            alloc.parser_suggestion("(.client).name"),
-                            alloc.reflow(". Maybe use an anonymous function like "),
-                            alloc.parser_suggestion("(\\r -> r.client.name)"),
-                            alloc.reflow(" instead"),
-                            alloc.reflow("?"),
-                            ])
-                        ])
-                    }
-
-
-                    WeirdDotQualified(row, col) => { 
-                        let region = Region::from_row_col(row, col);
-
-                        alloc.stack(vec![
-                            alloc.reflow("I am trying to parse a qualified name here:"),
-                            alloc.region_with_subregion(surroundings, region),
-                            alloc.concat(vec![
-                            alloc.reflow("I was expecting to see an identifier next, like "),
-                            alloc.parser_suggestion("height"),
-                            alloc.reflow(". A complete qualified name looks something like "),
-                            alloc.parser_suggestion("Json.Decode.string"),
-                            alloc.text(".")
-                            ])
-                        ])
-                    }
-                    QualifiedTag(row, col) => { 
-                        let region = Region::from_row_col(row, col);
-
-                        alloc.stack(vec![
-                            alloc.reflow("I am trying to parse a qualified name here:"),
-                            alloc.region_with_subregion(surroundings, region),
-                            alloc.concat(vec![
-                            alloc.reflow("This looks like a qualified tag name to me, but tags cannot be qualified! "),
-                            alloc.reflow("Maybe you wanted a qualified name, something like "),
-                            alloc.parser_suggestion("Json.Decode.string"),
-                            alloc.text("?")
-                            ])
-                        ])
-                    }
-                    PrivateTagNotUppercase(row, col) => { 
-                        let region = Region::from_row_col(row, col);
-
-                        alloc.stack(vec![
-                            alloc.reflow("I am trying to parse a private tag here:"),
-                            alloc.region_with_subregion(surroundings, region),
-                            alloc.concat(vec![
-                            alloc.reflow(r"But after the "),
-                            alloc.keyword("@"),
-                            alloc.reflow(r" symbol I found a lowercase letter. "),
-                            alloc.reflow(r"All tag names (global and private) must start with an uppercase letter, like "),
-                            alloc.parser_suggestion("@UUID"),
-                            alloc.reflow(" or "),
-                            alloc.parser_suggestion("@Secrets"),
-                            alloc.reflow("."),
-                            ])
-                        ])
-                    }
-
-                    PrivateTagFieldAccess(_row, _col) => { 
-
-                        alloc.stack(vec![
-                            alloc.reflow("I am very confused by this field access:"),
-                            alloc.region(surroundings),
-                            alloc.concat(vec![
-                            alloc.reflow(r"It looks like a record field access on a private tag."),
-                            ])
-                        ])
-                    }
-                    _ => todo!(),
-                 }
-                
 
         }
         RuntimeError::MalformedClosure(_) => todo!(""),

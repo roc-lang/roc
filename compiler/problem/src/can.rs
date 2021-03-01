@@ -167,4 +167,5 @@ pub enum MalformedPatternProblem {
     MalformedBase(Base),
     Unknown,
     QualifiedIdentifier,
+    BadIdent(roc_parse::ident::BadIdent),
 }
