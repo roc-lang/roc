@@ -1001,14 +1001,7 @@ fn parse_def_expr_help<'a>(
     loc_first_pattern: Located<Pattern<'a>>,
     spaces_after_equals: &'a [CommentOrNewline<'a>],
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    if def_start_col < min_indent {
-        Err((
-            NoProgress,
-            EExpr::IndentDefBody(state.line, state.column),
-            state,
-        ))
-    } else if equals_sign_indent < def_start_col {
-        // `<` because '=' should be same indent or greater
+    if def_start_col < min_indent || equals_sign_indent < def_start_col {
         Err((
             NoProgress,
             EExpr::IndentDefBody(state.line, state.column),
@@ -1089,14 +1082,8 @@ fn parse_def_signature_help<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let original_indent = state.indent_col;
 
-    if original_indent < min_indent {
-        Err((
-            NoProgress,
-            EExpr::IndentDefBody(state.line, state.column),
-            state,
-        ))
-    // `<` because ':' should be same indent or greater
-    } else if colon_indent < original_indent {
+    if original_indent < min_indent || colon_indent < original_indent {
+        // `colon_indent < original_indent` because ':' should be same indent or greater
         Err((
             NoProgress,
             EExpr::IndentDefBody(state.line, state.column),
