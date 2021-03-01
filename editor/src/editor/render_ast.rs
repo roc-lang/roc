@@ -6,10 +6,10 @@ use wgpu_glyph::GlyphBrush;
 use winit::dpi::PhysicalSize;
 
 use crate::{
-    editor::colors::CODE_COL,
+    editor::settings::Settings,
     graphics::{
+        colors,
         primitives::text::{queue_code_text_draw, Text},
-        style::CODE_FONT_SIZE,
     },
     lang::{ast::Expr2, expr::Env},
 };
@@ -151,6 +151,7 @@ pub fn render_expr2<'a>(
     expr2: &Expr2,
     size: &PhysicalSize<u32>,
     position: Vector2<f32>,
+    settings: &Settings,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
     let area_bounds = (size.width as f32, size.height as f32).into();
@@ -162,9 +163,9 @@ pub fn render_expr2<'a>(
     let code_text = Text {
         position,
         area_bounds,
-        color: CODE_COL.into(),
+        color: colors::WHITE,
         text: &expr_str,
-        size: CODE_FONT_SIZE,
+        size: settings.code_font_size,
         ..Default::default()
     };
 

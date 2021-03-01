@@ -4,8 +4,8 @@
 use super::rect::Rect;
 use crate::editor::syntax_highlight;
 use crate::graphics::colors;
-use crate::graphics::colors::ColorTup;
-use crate::graphics::style::{CODE_FONT_SIZE, CODE_TXT_XY};
+use crate::graphics::colors::RgbaTup;
+use crate::graphics::style::{CODE_TXT_XY, DEFAULT_FONT_SIZE};
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
@@ -14,7 +14,7 @@ use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section
 pub struct Text<'a> {
     pub position: Vector2<f32>,
     pub area_bounds: Vector2<f32>,
-    pub color: Vector4<f32>,
+    pub color: RgbaTup,
     pub text: &'a str,
     pub size: f32,
     pub visible: bool,
@@ -26,9 +26,9 @@ impl<'a> Default for Text<'a> {
         Self {
             position: (0.0, 0.0).into(),
             area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
-            color: (1.0, 1.0, 1.0, 1.0).into(),
+            color: colors::WHITE,
             text: "",
-            size: CODE_FONT_SIZE,
+            size: DEFAULT_FONT_SIZE,
             visible: true,
             centered: false,
         }
@@ -40,9 +40,9 @@ pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
     let code_text = Text {
         position: CODE_TXT_XY.into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
-        color: (1.0, 1.0, 1.0, 1.0).into(),
+        color: colors::WHITE,
         text: "a",
-        size: CODE_FONT_SIZE,
+        size: DEFAULT_FONT_SIZE,
         ..Default::default()
     };
 
@@ -79,7 +79,7 @@ fn section_from_text<'a>(
     }
     .add_text(
         wgpu_glyph::Text::new(&text.text)
-            .with_color(text.color)
+            .with_color(Vector4::from(text.color))
             .with_scale(text.size),
     )
 }
@@ -98,13 +98,13 @@ fn section_from_glyph_text(
     }
 }
 
-fn colored_text_to_glyph_text(text_tups: &[(String, ColorTup)]) -> Vec<wgpu_glyph::Text> {
+fn colored_text_to_glyph_text(text_tups: &[(String, RgbaTup)]) -> Vec<wgpu_glyph::Text> {
     text_tups
         .iter()
         .map(|(word_string, color_tup)| {
             wgpu_glyph::Text::new(&word_string)
                 .with_color(colors::to_slice(*color_tup))
-                .with_scale(CODE_FONT_SIZE)
+                .with_scale(DEFAULT_FONT_SIZE)
         })
         .collect()
 }
@@ -117,11 +117,14 @@ pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
     glyph_brush.queue(section.clone());
 }
 
+// TODO move this out of graphics folder and make syntax_theme an argument
 pub fn queue_code_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
     let layout = layout_from_text(text);
 
-    let mut all_text_tups: Vec<(String, ColorTup)> = Vec::new();
-    syntax_highlight::highlight_code(text, &mut all_text_tups);
+    let mut all_text_tups: Vec<(String, RgbaTup)> = Vec::new();
+
+    let syntax_theme = crate::editor::colors::SyntaxHighlightTheme::default();
+    syntax_highlight::highlight_code(text, &mut all_text_tups, &syntax_theme);
     let glyph_text_vec = colored_text_to_glyph_text(&all_text_tups);
 
     let section = section_from_glyph_text(
