@@ -1,157 +1,146 @@
-#[macro_use]
-extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
+#![cfg(test)]
 
-extern crate bumpalo;
-extern crate inkwell;
-extern crate libc;
-extern crate roc_gen;
+use crate::assert_evals_to;
+use crate::assert_llvm_evals_to;
+use indoc::indoc;
 
-#[macro_use]
-mod helpers;
+#[test]
+fn basic_hash() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Dict.hashTestOnly 0 0
+            "#
+        ),
+        9718519427346233646,
+        u64
+    );
+}
 
-#[cfg(test)]
-mod gen_hash {
+#[test]
+fn hash_str_with_seed() {
+    assert_evals_to!("Dict.hashTestOnly 1 \"a\"", 0xbed235177f41d328, u64);
+    assert_evals_to!("Dict.hashTestOnly 2 \"abc\"", 0xbe348debe59b27c3, u64);
+}
 
-    #[test]
-    fn basic_hash() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    Dict.hashTestOnly 0 0
-                "#
-            ),
-            9718519427346233646,
-            u64
-        );
-    }
+#[test]
+fn hash_record() {
+    assert_evals_to!("Dict.hashTestOnly 1 { x: \"a\" } ", 0xbed235177f41d328, u64);
+    assert_evals_to!(
+        "Dict.hashTestOnly 1 { x: 42, y: 3.14 } ",
+        5348189196103430707,
+        u64
+    );
+}
 
-    #[test]
-    fn hash_str_with_seed() {
-        assert_evals_to!("Dict.hashTestOnly 1 \"a\"", 0xbed235177f41d328, u64);
-        assert_evals_to!("Dict.hashTestOnly 2 \"abc\"", 0xbe348debe59b27c3, u64);
-    }
+#[test]
+fn hash_result() {
+    assert_evals_to!(
+        "Dict.hashTestOnly 0 (List.get [ 0x1 ] 0) ",
+        2878521786781103245,
+        u64
+    );
+}
 
-    #[test]
-    fn hash_record() {
-        assert_evals_to!("Dict.hashTestOnly 1 { x: \"a\" } ", 0xbed235177f41d328, u64);
-        assert_evals_to!(
-            "Dict.hashTestOnly 1 { x: 42, y: 3.14 } ",
-            5348189196103430707,
-            u64
-        );
-    }
+#[test]
+fn hash_linked_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-    #[test]
-    fn hash_result() {
-        assert_evals_to!(
-            "Dict.hashTestOnly 0 (List.get [ 0x1 ] 0) ",
-            2878521786781103245,
-            u64
-        );
-    }
+                input : LinkedList I64
+                input = Nil
 
-    #[test]
-    fn hash_linked_list() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                Dict.hashTestOnly 0 input 
+            "#
+        ),
+        0,
+        u64
+    );
 
-                    input : LinkedList I64
-                    input = Nil
+    assert_evals_to!(
+        indoc!(
+            r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                    Dict.hashTestOnly 0 input 
-                "#
-            ),
-            0,
-            u64
-        );
+                input : LinkedList I64
+                input = Cons 4 (Cons 3 Nil)
 
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                Dict.hashTestOnly 0 input 
+            "#
+        ),
+        8287696503006938486,
+        u64
+    );
+}
 
-                    input : LinkedList I64
-                    input = Cons 4 (Cons 3 Nil)
+#[test]
+fn hash_expr() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Var I64 ]
 
-                    Dict.hashTestOnly 0 input 
-                "#
-            ),
-            8287696503006938486,
-            u64
-        );
-    }
+                x : Expr 
+                x = Val 1
 
-    #[test]
-    fn hash_expr() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Var I64 ]
+                Dict.hashTestOnly 0 (Add x x) 
+            "#
+        ),
+        18264046914072177411,
+        u64
+    );
+}
 
-                    x : Expr 
-                    x = Val 1
+#[test]
+fn hash_nullable_expr() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Empty ]
 
-                    Dict.hashTestOnly 0 (Add x x) 
-                "#
-            ),
-            18264046914072177411,
-            u64
-        );
-    }
+                x : Expr 
+                x = Val 1
 
-    #[test]
-    fn hash_nullable_expr() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Empty ]
+                Dict.hashTestOnly 0 (Add x x) 
+            "#
+        ),
+        11103255846683455235,
+        u64
+    );
+}
 
-                    x : Expr 
-                    x = Val 1
+#[test]
+fn hash_rosetree() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Rose a : [ Rose (List (Rose a)) ]
 
-                    Dict.hashTestOnly 0 (Add x x) 
-                "#
-            ),
-            11103255846683455235,
-            u64
-        );
-    }
+            x : Rose I64 
+            x = Rose [] 
 
-    #[test]
-    fn hash_rosetree() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                Rose a : [ Rose (List (Rose a)) ]
+            Dict.hashTestOnly 0 x
+            "#
+        ),
+        0,
+        u64
+    );
+}
 
-                x : Rose I64 
-                x = Rose [] 
+#[test]
+fn hash_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : List Str 
+            x = [ "foo", "bar", "baz" ] 
 
-                Dict.hashTestOnly 0 x
-                "#
-            ),
-            0,
-            u64
-        );
-    }
-
-    #[test]
-    fn hash_list() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                x : List Str 
-                x = [ "foo", "bar", "baz" ] 
-
-                Dict.hashTestOnly 0 x
-                "#
-            ),
-            10731521034618280801,
-            u64
-        );
-    }
+            Dict.hashTestOnly 0 x
+            "#
+        ),
+        10731521034618280801,
+        u64
+    );
 }
