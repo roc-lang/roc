@@ -1,18 +1,10 @@
-#[macro_use]
-extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
-
-extern crate bumpalo;
-extern crate inkwell;
-extern crate libc;
-extern crate roc_gen;
-
-#[macro_use]
-mod helpers;
-
 #[cfg(test)]
 mod gen_primitives {
+
+    use crate::assert_evals_to;
+    use crate::assert_llvm_evals_to;
+    use crate::assert_non_opt_evals_to;
+    use indoc::indoc;
     use roc_std::RocStr;
 
     #[test]

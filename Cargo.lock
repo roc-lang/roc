@@ -3653,6 +3653,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_gen"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "either",
+ "im",
+ "im-rc",
+ "indoc",
+ "inkwell",
+ "inlinable_string",
+ "libc",
+ "libloading",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_gen",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_std",
+ "roc_types",
+ "roc_unify",
+ "target-lexicon",
+ "tokio",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
