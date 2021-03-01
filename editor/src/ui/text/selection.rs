@@ -1,6 +1,6 @@
 use super::lines::Lines;
 use super::text_pos::TextPos;
-use crate::ui::colors;
+use crate::ui::colors::UITheme;
 use crate::ui::ui_error::{InvalidSelection, UIResult};
 use bumpalo::collections::Vec as BumpVec;
 use snafu::ensure;
@@ -64,6 +64,7 @@ pub fn create_selection_rects<'a>(
     valid_sel: Selection,
     lines: &dyn Lines,
     glyph_dim_rect: &Rect,
+    theme: &UITheme,
     arena: &'a Bump,
 ) -> UIResult<BumpVec<'a, Rect>> {
     let Selection { start_pos, end_pos } = valid_sel;
@@ -83,7 +84,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords: (sel_rect_x, start_y).into(),
             width,
             height,
-            color: colors::SELECT_COL,
+            color: theme.select_highlight,
         });
 
         Ok(all_rects)
@@ -99,7 +100,7 @@ pub fn create_selection_rects<'a>(
             top_left_coords: (sel_rect_x, start_y).into(),
             width,
             height,
-            color: colors::SELECT_COL,
+            color: theme.select_highlight,
         });
 
         //middle lines
@@ -117,7 +118,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords: (line_start_x, sel_rect_y).into(),
                 width,
                 height,
-                color: colors::SELECT_COL,
+                color: theme.select_highlight,
             });
         }
 
@@ -132,7 +133,7 @@ pub fn create_selection_rects<'a>(
                 top_left_coords: (line_start_x, sel_rect_y).into(),
                 width,
                 height,
-                color: colors::SELECT_COL,
+                color: theme.select_highlight,
             });
         }
 

@@ -70,6 +70,7 @@ pest_derive = "2.1"
 ropey = "1.2.0"
 copypasta = "0.7.1"
 indoc = "0.3.3"
+palette = "0.5"
 
 [dependencies.bytemuck]
 version = "1.4"
