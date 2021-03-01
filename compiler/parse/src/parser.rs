@@ -372,19 +372,109 @@ pub type Col = u16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpr<'a> {
-    // Record(PRecord<'a>, Row, Col),
     Start(Row, Col),
     End(Row, Col),
     Space(BadInputError, Row, Col),
 
+    Dot(Row, Col),
+    Access(Row, Col),
+
+    Def(&'a SyntaxError<'a>, Row, Col),
+    IndentDefBody(Row, Col),
+    IndentEquals(Row, Col),
+    Equals(Row, Col),
+
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
     When(When<'a>, Row, Col),
     If(If<'a>, Row, Col),
 
+    Lambda(ELambda<'a>, Row, Col),
+
+    InParens(EInParens<'a>, Row, Col),
+    Record(ERecord<'a>, Row, Col),
+    Str(EString, Row, Col),
+    Number(Number, Row, Col),
     List(List<'a>, Row, Col),
 
-    // EInParens(PInParens<'a>, Row, Col),
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Number {
+    NumberEnd,
+    NumberDot(i64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EString {
+    EndlessSingle,
+    EndlessMulti,
+    StringEscape(Escape),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Escape {
+    EscapeUnknown,
+    BadUnicodeFormat(u16),
+    BadUnicodeCode(u16),
+    BadUnicodeLength(u16, i32, i32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ERecord<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+
+    Updateable(Row, Col),
+    Field(Row, Col),
+    Colon(Row, Col),
+    QuestionMark(Row, Col),
+    Bar(Row, Col),
+    Ampersand(Row, Col),
+
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    Space(BadInputError, Row, Col),
+
+    IndentOpen(Row, Col),
+    IndentColon(Row, Col),
+    IndentBar(Row, Col),
+    IndentAmpersand(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EInParens<'a> {
+    End(Row, Col),
+    Open(Row, Col),
+    ///
+    // TODO remove
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    ///
+    Space(BadInputError, Row, Col),
+    ///
+    IndentOpen(Row, Col),
+    IndentEnd(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ELambda<'a> {
+    Space(BadInputError, Row, Col),
+    Start(Row, Col),
+    Arrow(Row, Col),
+    Comma(Row, Col),
+    Arg(Row, Col),
+    // TODO make EEXpr
+    Pattern(EPattern<'a>, Row, Col),
+    Syntax(&'a SyntaxError<'a>, Row, Col),
+
+    IndentArrow(Row, Col),
+    IndentBody(Row, Col),
+    IndentArg(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1223,8 +1313,6 @@ where
                                     buf.push(next_output);
                                 }
                                 Err((element_progress, fail, state)) => {
-                                    // If the delimiter parsed, but the following
-                                    // element did not, that's a fatal error.
                                     return Err((element_progress, fail, state));
                                 }
                             }
@@ -1248,6 +1336,80 @@ where
                 }
             }
             Err((fail_progress, fail, new_state)) => Err((fail_progress, fail, new_state)),
+        }
+    }
+}
+
+/// Parse one or more values separated by a delimiter (e.g. a comma) whose
+/// values are discarded
+pub fn sep_by1_e<'a, P, V, D, Val, Error>(
+    delimiter: D,
+    parser: P,
+    to_element_error: V,
+) -> impl Parser<'a, Vec<'a, Val>, Error>
+where
+    D: Parser<'a, (), Error>,
+    P: Parser<'a, Val, Error>,
+    V: Fn(Row, Col) -> Error,
+    Error: 'a,
+{
+    move |arena, state: State<'a>| {
+        let start_bytes_len = state.bytes.len();
+
+        match parser.parse(arena, state) {
+            Ok((progress, first_output, next_state)) => {
+                debug_assert_eq!(progress, MadeProgress);
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
+
+                buf.push(first_output);
+
+                loop {
+                    match delimiter.parse(arena, state) {
+                        Ok((_, (), next_state)) => {
+                            // If the delimiter passed, check the element parser.
+                            match parser.parse(arena, next_state) {
+                                Ok((_, next_output, next_state)) => {
+                                    state = next_state;
+                                    buf.push(next_output);
+                                }
+                                Err((MadeProgress, fail, state)) => {
+                                    return Err((MadeProgress, fail, state));
+                                }
+                                Err((NoProgress, _fail, state)) => {
+                                    return Err((
+                                        NoProgress,
+                                        to_element_error(state.line, state.column),
+                                        state,
+                                    ));
+                                }
+                            }
+                        }
+                        Err((delim_progress, fail, old_state)) => {
+                            match delim_progress {
+                                MadeProgress => {
+                                    // fail if the delimiter made progress
+                                    return Err((MadeProgress, fail, old_state));
+                                }
+                                NoProgress => {
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        old_state.bytes.len(),
+                                    );
+                                    return Ok((progress, buf, old_state));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
+            Err((NoProgress, _fail, state)) => Err((
+                NoProgress,
+                to_element_error(state.line, state.column),
+                state,
+            )),
         }
     }
 }
@@ -1458,7 +1620,7 @@ macro_rules! collection_trailing_sep_e {
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
                 zero_or_more!($crate::parser::word1(b' ', |row, col| $space_problem(
-                    BadInputError::LineTooLong,
+                    crate::parser::BadInputError::LineTooLong,
                     row,
                     col
                 ))),
@@ -1852,112 +2014,6 @@ macro_rules! either {
 macro_rules! between {
     ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
         skip_first!($opening_brace, skip_second!($parser, $closing_brace))
-    };
-}
-
-#[macro_export]
-macro_rules! record_field {
-    ($val_parser:expr, $min_indent:expr) => {
-        move |arena: &'a bumpalo::Bump,
-              state: $crate::parser::State<'a>|
-              -> $crate::parser::ParseResult<'a, $crate::ast::AssignedField<'a, _>, _> {
-            use $crate::ast::AssignedField::*;
-            use $crate::blankspace::{space0, space0_before};
-            use $crate::ident::lowercase_ident;
-            use $crate::parser::ascii_char;
-            use $crate::parser::Either::*;
-
-            // You must have a field name, e.g. "email"
-            let (progress, loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
-            debug_assert_eq!(progress, MadeProgress);
-
-            let (_, spaces, state) = space0($min_indent).parse(arena, state)?;
-
-            // Having a value is optional; both `{ email }` and `{ email: blah }` work.
-            // (This is true in both literals and types.)
-            let (_, opt_loc_val, state) = $crate::parser::optional(either!(
-                skip_first!(ascii_char(b':'), space0_before($val_parser, $min_indent)),
-                skip_first!(ascii_char(b'?'), space0_before($val_parser, $min_indent))
-            ))
-            .parse(arena, state)?;
-
-            let answer = match opt_loc_val {
-                Some(either) => match either {
-                    First(loc_val) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
-                    Second(loc_val) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
-                },
-                // If no value was provided, record it as a Var.
-                // Canonicalize will know what to do with a Var later.
-                None => {
-                    if !spaces.is_empty() {
-                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                    } else {
-                        LabelOnly(loc_label)
-                    }
-                }
-            };
-
-            Ok((MadeProgress, answer, state))
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! record_without_update {
-    ($val_parser:expr, $min_indent:expr) => {
-        collection_trailing_sep!(
-            ascii_char(b'{'),
-            loc!(record_field!($val_parser, $min_indent)),
-            ascii_char(b','),
-            ascii_char(b'}'),
-            $min_indent
-        )
-    };
-}
-
-#[macro_export]
-macro_rules! record {
-    ($val_parser:expr, $min_indent:expr) => {
-        skip_first!(
-            $crate::parser::ascii_char(b'{'),
-            and!(
-                // You can optionally have an identifier followed by an '&' to
-                // make this a record update, e.g. { Foo.user & username: "blah" }.
-                $crate::parser::optional(skip_second!(
-                    $crate::blankspace::space0_around(
-                        // We wrap the ident in an Expr here,
-                        // so that we have a Spaceable value to work with,
-                        // and then in canonicalization verify that it's an Expr::Var
-                        // (and not e.g. an `Expr::Access`) and extract its string.
-                        loc!(map_with_arena!(
-                            $crate::expr::ident(),
-                            $crate::expr::ident_to_expr
-                        )),
-                        $min_indent
-                    ),
-                    $crate::parser::ascii_char(b'&')
-                )),
-                loc!(skip_first!(
-                    // We specifically allow space characters inside here, so that
-                    // `{  }` can be successfully parsed as an empty record, and then
-                    // changed by the formatter back into `{}`.
-                    zero_or_more!($crate::parser::ascii_char(b' ')),
-                    skip_second!(
-                        and!(
-                            $crate::parser::trailing_sep_by0(
-                                $crate::parser::ascii_char(b','),
-                                $crate::blankspace::space0_around(
-                                    loc!(record_field!($val_parser, $min_indent)),
-                                    $min_indent
-                                ),
-                            ),
-                            $crate::blankspace::space0($min_indent)
-                        ),
-                        $crate::parser::ascii_char(b'}')
-                    )
-                ))
-            )
-        )
     };
 }
 

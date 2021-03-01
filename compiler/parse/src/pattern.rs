@@ -4,8 +4,8 @@ use crate::ident::{ident, lowercase_ident, Ident};
 use crate::number_literal::number_literal;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, optional, specialize, specialize_ref, word1, BadInputError, EPattern, PInParens,
-    PRecord, ParseResult, Parser, State, SyntaxError,
+    backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
+    ParseResult, Parser, State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -26,11 +26,8 @@ pub enum PatternType {
 
 pub fn loc_closure_param<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Pattern(e),
-        move |arena, state| parse_closure_param(arena, state, min_indent),
-    )
+) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+    move |arena, state| parse_closure_param(arena, state, min_indent)
 }
 
 fn parse_closure_param<'a>(

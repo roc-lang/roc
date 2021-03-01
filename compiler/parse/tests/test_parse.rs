@@ -1501,6 +1501,7 @@ mod test_parse {
     }
 
     #[test]
+    #[ignore]
     fn malformed_ident_due_to_underscore() {
         // This is a regression test against a bug where if you included an
         // underscore in an argument name, it would parse as three arguments

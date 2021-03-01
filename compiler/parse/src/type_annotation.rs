@@ -4,7 +4,7 @@ use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
     allocated, backtrackable, not_e, optional, peek_utf8_char_e, specialize, specialize_ref, word1,
-    word2, BadInputError, ParseResult, Parser,
+    word2, ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };

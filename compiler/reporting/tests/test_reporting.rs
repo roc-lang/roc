@@ -4914,6 +4914,56 @@ mod test_reporting {
     }
 
     #[test]
+    fn lambda_double_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \a,,b -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
+                
+                I am in the middle of parsing a function argument list, but I got
+                stuck at this comma:
+                
+                1│  \a,,b -> 1
+                       ^
+                
+                I was expecting an argument pattern before this, so try adding an
+                argument before the comma and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn lambda_leading_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \,b -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
+                
+                I am in the middle of parsing a function argument list, but I got
+                stuck at this comma:
+                
+                1│  \,b -> 1
+                     ^
+                
+                I was expecting an argument pattern before this, so try adding an
+                argument before the comma and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn when_outdented_branch() {
         // this should get better with time
         report_problem_as(
