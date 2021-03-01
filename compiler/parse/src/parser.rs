@@ -1996,14 +1996,11 @@ macro_rules! one_or_more_e {
                         }
                     }
                 }
-                Err((progress, _, new_state)) => {
-                    debug_assert_eq!(progress, NoProgress, "{:?}", &new_state);
-                    Err((
-                        progress,
-                        $to_error(new_state.line, new_state.column),
-                        new_state,
-                    ))
-                }
+                Err((progress, _, new_state)) => Err((
+                    progress,
+                    $to_error(new_state.line, new_state.column),
+                    new_state,
+                )),
             }
         }
     };

@@ -363,7 +363,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
         let followed_by_whitespace = state
             .bytes
             .get(1)
-            .map(|c| c.is_ascii_whitespace())
+            .map(|c| c.is_ascii_whitespace() || *c == b'#')
             .unwrap_or(false);
 
         if state.bytes.starts_with(b"-") && !followed_by_whitespace {
