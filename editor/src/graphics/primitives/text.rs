@@ -2,7 +2,6 @@
 // by Benjamin Hansen, licensed under the MIT license
 
 use super::rect::Rect;
-use crate::editor::syntax_highlight;
 use crate::graphics::colors;
 use crate::graphics::colors::RgbaTup;
 use crate::graphics::style::{CODE_TXT_XY, DEFAULT_FONT_SIZE};
@@ -59,7 +58,7 @@ pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
     }
 }
 
-fn layout_from_text(text: &Text) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker> {
+pub fn layout_from_text(text: &Text) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker> {
     wgpu_glyph::Layout::default().h_align(if text.centered {
         wgpu_glyph::HorizontalAlign::Center
     } else {
@@ -84,7 +83,7 @@ fn section_from_text<'a>(
     )
 }
 
-fn section_from_glyph_text(
+pub fn section_from_glyph_text(
     text: Vec<wgpu_glyph::Text>,
     screen_position: (f32, f32),
     area_bounds: (f32, f32),
@@ -98,41 +97,10 @@ fn section_from_glyph_text(
     }
 }
 
-fn colored_text_to_glyph_text(text_tups: &[(String, RgbaTup)]) -> Vec<wgpu_glyph::Text> {
-    text_tups
-        .iter()
-        .map(|(word_string, color_tup)| {
-            wgpu_glyph::Text::new(&word_string)
-                .with_color(colors::to_slice(*color_tup))
-                .with_scale(DEFAULT_FONT_SIZE)
-        })
-        .collect()
-}
-
 pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
     let layout = layout_from_text(text);
 
     let section = section_from_text(text, layout);
-
-    glyph_brush.queue(section.clone());
-}
-
-// TODO move this out of graphics folder and make syntax_theme an argument
-pub fn queue_code_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
-    let layout = layout_from_text(text);
-
-    let mut all_text_tups: Vec<(String, RgbaTup)> = Vec::new();
-
-    let syntax_theme = crate::editor::colors::SyntaxHighlightTheme::default();
-    syntax_highlight::highlight_code(text, &mut all_text_tups, &syntax_theme);
-    let glyph_text_vec = colored_text_to_glyph_text(&all_text_tups);
-
-    let section = section_from_glyph_text(
-        glyph_text_vec,
-        text.position.into(),
-        text.area_bounds.into(),
-        layout,
-    );
 
     glyph_brush.queue(section.clone());
 }
