@@ -5736,7 +5736,9 @@ fn call_by_pointer<'a>(
             Layout::FunctionPointer(arg_layouts, ret_layout) if !is_thunk => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
                     if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
-                        return Expr::FunctionPointer(*wrapper, layout);
+                        if procs.specialized.contains_key(&(*wrapper, layout.clone())) {
+                            return Expr::FunctionPointer(*wrapper, layout);
+                        }
                     }
 
                     let name = env.unique_symbol();
@@ -5796,7 +5798,9 @@ fn call_by_pointer<'a>(
             Layout::FunctionPointer(arg_layouts, ret_layout) => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
                     if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
-                        return Expr::FunctionPointer(*wrapper, layout);
+                        if procs.specialized.contains_key(&(*wrapper, layout.clone())) {
+                            return Expr::FunctionPointer(*wrapper, layout);
+                        }
                     }
 
                     let name = env.unique_symbol();
