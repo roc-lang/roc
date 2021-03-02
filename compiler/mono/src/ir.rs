@@ -277,6 +277,7 @@ pub struct Procs<'a> {
     pub module_thunks: MutSet<Symbol>,
     pub pending_specializations: Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
+    pub call_by_pointer_wrappers: MutMap<Symbol, Symbol>,
     pub runtime_errors: MutMap<Symbol, &'a str>,
     pub externals_others_need: ExternalSpecializations,
     pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
@@ -291,6 +292,7 @@ impl<'a> Default for Procs<'a> {
             pending_specializations: Some(MutMap::default()),
             specialized: MutMap::default(),
             runtime_errors: MutMap::default(),
+            call_by_pointer_wrappers: MutMap::default(),
             externals_we_need: MutMap::default(),
             externals_others_need: ExternalSpecializations::default(),
         }
@@ -5733,6 +5735,10 @@ fn call_by_pointer<'a>(
         match layout {
             Layout::FunctionPointer(arg_layouts, ret_layout) if !is_thunk => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
+                    if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
+                        return Expr::FunctionPointer(*wrapper, layout);
+                    }
+
                     let name = env.unique_symbol();
                     let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
                     let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
@@ -5777,6 +5783,9 @@ fn call_by_pointer<'a>(
                     procs
                         .specialized
                         .insert((name, layout.clone()), InProgressProc::Done(proc));
+
+                    procs.call_by_pointer_wrappers.insert(symbol, name);
+
                     Expr::FunctionPointer(name, layout)
                 } else {
                     // if none of the arguments is refcounted, then owning the arguments has no
@@ -5786,6 +5795,10 @@ fn call_by_pointer<'a>(
             }
             Layout::FunctionPointer(arg_layouts, ret_layout) => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
+                    if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
+                        return Expr::FunctionPointer(*wrapper, layout);
+                    }
+
                     let name = env.unique_symbol();
                     let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
                     let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
@@ -5834,6 +5847,9 @@ fn call_by_pointer<'a>(
                     procs
                         .specialized
                         .insert((name, layout.clone()), InProgressProc::Done(proc));
+
+                    procs.call_by_pointer_wrappers.insert(symbol, name);
+
                     Expr::FunctionPointer(name, layout)
                 } else {
                     // if none of the arguments is refcounted, then owning the arguments has no
