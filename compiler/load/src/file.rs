@@ -642,7 +642,7 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     header_src: &'a str,
-    src: &'a [u8],
+    parse_state: roc_parse::parser::State<'a>,
     module_timing: ModuleTiming,
 }
 
@@ -2930,7 +2930,7 @@ fn send_header<'a>(
                 deps_by_name,
                 exposes: exposed,
                 header_src,
-                src: parse_state.bytes,
+                parse_state,
                 exposed_imports: scope,
                 module_timing,
             },
@@ -3150,7 +3150,7 @@ fn send_header_two<'a>(
                 deps_by_name,
                 exposes: exposed,
                 header_src: "#builtin effect header",
-                src: parse_state.bytes,
+                parse_state,
                 exposed_imports: scope,
                 module_timing,
             },
@@ -3678,12 +3678,13 @@ where
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new_in(arena, &header.src, Attempting::Module);
+    let source = header.parse_state.bytes;
+    let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(&arena, parse_state) {
         Ok((_, success, _state)) => success,
         Err((_, fail, _)) => {
             return Err(LoadingProblem::ParsingFailed(
-                fail.into_parse_problem(header.module_path, header.src),
+                fail.into_parse_problem(header.module_path, source),
             ));
         }
     };
@@ -3701,7 +3702,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     // SAFETY: By this point we've already incrementally verified that there
     // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
     // we'd have bailed out before now.
-    let src = unsafe { from_utf8_unchecked(header.src) };
+    let src = unsafe { from_utf8_unchecked(source) };
 
     let ModuleHeader {
         module_id,
