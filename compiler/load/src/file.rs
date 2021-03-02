@@ -918,26 +918,19 @@ impl ModuleTiming {
             end_time,
         } = self;
 
-        end_time
-            .duration_since(*start_time)
-            .ok()
-            .and_then(|t| {
-                t.checked_sub(*make_specializations).and_then(|t| {
-                    t.checked_sub(*find_specializations).and_then(|t| {
-                        t.checked_sub(*solve).and_then(|t| {
-                            t.checked_sub(*constrain).and_then(|t| {
-                                t.checked_sub(*canonicalize).and_then(|t| {
-                                    t.checked_sub(*parse_body).and_then(|t| {
-                                        t.checked_sub(*parse_header)
-                                            .and_then(|t| t.checked_sub(*read_roc_file))
-                                    })
-                                })
-                            })
-                        })
-                    })
-                })
-            })
-            .unwrap_or_else(Duration::default)
+        let calculate = |t: Result<Duration, std::time::SystemTimeError>| -> Option<Duration> {
+            t.ok()?
+                .checked_sub(*make_specializations)?
+                .checked_sub(*find_specializations)?
+                .checked_sub(*solve)?
+                .checked_sub(*constrain)?
+                .checked_sub(*canonicalize)?
+                .checked_sub(*parse_body)?
+                .checked_sub(*parse_header)?
+                .checked_sub(*read_roc_file)
+        };
+
+        calculate(end_time.duration_since(*start_time)).unwrap_or_else(Duration::default)
     }
 }
 
