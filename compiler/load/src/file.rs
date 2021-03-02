@@ -366,6 +366,7 @@ struct ModuleCache<'a> {
     mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
+    header_sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
@@ -616,6 +617,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -639,6 +641,7 @@ struct ModuleHeader<'a> {
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
+    header_src: &'a str,
     src: &'a [u8],
     module_timing: ModuleTiming,
 }
@@ -698,6 +701,7 @@ pub struct MonomorphizedModule<'a> {
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -1680,6 +1684,11 @@ fn update<'a>(
 
             state
                 .module_cache
+                .header_sources
+                .insert(home, (header.module_path.clone(), header.header_src));
+
+            state
+                .module_cache
                 .imports
                 .entry(header.module_id)
                 .or_default()
@@ -2115,10 +2124,16 @@ fn finish_specialization(
         type_problems,
         can_problems,
         sources,
+        header_sources,
         ..
     } = module_cache;
 
     let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
+
+    let header_sources: MutMap<ModuleId, (PathBuf, Box<str>)> = header_sources
         .into_iter()
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
@@ -2224,6 +2239,7 @@ fn finish_specialization(
         interns,
         procedures,
         sources,
+        header_sources,
         timings: state.timings,
     })
 }
@@ -2251,6 +2267,13 @@ fn finish(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
+    let header_sources = state
+        .module_cache
+        .header_sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
+
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -2259,6 +2282,7 @@ fn finish(
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+        header_sources,
         sources,
         timings: state.timings,
         documentation,
@@ -2468,41 +2492,63 @@ fn parse_header<'a>(
     module_timing.parse_header = parse_header_duration;
 
     match parsed {
-        Ok((_, ast::Module::Interface { header }, parse_state)) => Ok(send_header(
-            Located {
-                region: header.name.region,
-                value: ModuleNameEnum::Interface(header.name.value),
-            },
-            filename,
-            is_root_module,
-            opt_shorthand,
-            &[],
-            header.exposes.into_bump_slice(),
-            header.imports.into_bump_slice(),
-            None,
-            parse_state,
-            module_ids,
-            ident_ids_by_module,
-            module_timing,
-        )),
+        Ok((_, ast::Module::Interface { header }, parse_state)) => {
+            let header_src = unsafe {
+                let chomped = src_bytes.len() - parse_state.bytes.len();
+                std::str::from_utf8_unchecked(&src_bytes[..chomped])
+            };
+
+            let info = HeaderInfo {
+                loc_name: Located {
+                    region: header.name.region,
+                    value: ModuleNameEnum::Interface(header.name.value),
+                },
+                filename,
+                is_root_module,
+                opt_shorthand,
+                header_src,
+                packages: &[],
+                exposes: header.exposes.into_bump_slice(),
+                imports: header.imports.into_bump_slice(),
+                to_platform: None,
+            };
+
+            Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ))
+        }
         Ok((_, ast::Module::App { header }, parse_state)) => {
             let mut pkg_config_dir = filename.clone();
             pkg_config_dir.pop();
 
+            let header_src = unsafe {
+                let chomped = src_bytes.len() - parse_state.bytes.len();
+                std::str::from_utf8_unchecked(&src_bytes[..chomped])
+            };
+
             let packages = header.packages.into_bump_slice();
 
-            let (module_id, app_module_header_msg) = send_header(
-                Located {
+            let info = HeaderInfo {
+                loc_name: Located {
                     region: header.name.region,
                     value: ModuleNameEnum::App(header.name.value),
                 },
                 filename,
                 is_root_module,
                 opt_shorthand,
+                header_src,
                 packages,
-                header.provides.into_bump_slice(),
-                header.imports.into_bump_slice(),
-                Some(header.to.value.clone()),
+                exposes: header.provides.into_bump_slice(),
+                imports: header.imports.into_bump_slice(),
+                to_platform: Some(header.to.value.clone()),
+            };
+
+            let (module_id, app_module_header_msg) = send_header(
+                info,
                 parse_state,
                 module_ids.clone(),
                 ident_ids_by_module.clone(),
@@ -2673,22 +2719,40 @@ enum ModuleNameEnum<'a> {
     PkgConfig,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn send_header<'a>(
+#[derive(Debug)]
+struct HeaderInfo<'a> {
     loc_name: Located<ModuleNameEnum<'a>>,
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
+    header_src: &'a str,
     packages: &'a [Located<PackageEntry<'a>>],
     exposes: &'a [Located<ExposesEntry<'a, &'a str>>],
     imports: &'a [Located<ImportsEntry<'a>>],
     to_platform: Option<To<'a>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_header<'a>(
+    info: HeaderInfo<'a>,
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     use ModuleNameEnum::*;
+
+    let HeaderInfo {
+        loc_name,
+        filename,
+        is_root_module,
+        opt_shorthand,
+        packages,
+        exposes,
+        imports,
+        to_platform,
+        header_src,
+    } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
         PkgConfig => unreachable!(),
@@ -2872,6 +2936,7 @@ fn send_header<'a>(
                 package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
+                header_src,
                 src: parse_state.bytes,
                 exposed_imports: scope,
                 module_timing,
@@ -3091,6 +3156,7 @@ fn send_header_two<'a>(
                 package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
+                header_src: "#builtin effect header",
                 src: parse_state.bytes,
                 exposed_imports: scope,
                 module_timing,
