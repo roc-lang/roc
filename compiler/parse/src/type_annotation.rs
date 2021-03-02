@@ -19,6 +19,10 @@ pub fn located<'a>(
     specialize(|x, _, _| SyntaxError::Type(x), expression(min_indent))
 }
 
+pub fn located_help<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
+    expression(min_indent)
+}
+
 #[inline(always)]
 fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TTagUnion<'a>> {
     move |arena, state| {

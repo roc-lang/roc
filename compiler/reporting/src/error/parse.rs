@@ -145,23 +145,32 @@ fn to_syntax_report<'a>(
         }
         Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
         Pattern(pat) => to_pattern_report(alloc, filename, &pat, 0, 0),
-        Expr(expr) => to_expr_report(alloc, filename, Context::InDef, &expr, 0, 0),
+        Expr(expr) => to_expr_report(
+            alloc,
+            filename,
+            Context::InDef(start_row, start_col),
+            &expr,
+            0,
+            0,
+        ),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
 
 enum Context {
     InNode(Node, Row, Col, Box<Context>),
-    InDef,
+    InDef(Row, Col),
 }
 
 enum Node {
     WhenCondition,
     WhenBranch,
+    WhenIfGuard,
     IfCondition,
     IfThenBranch,
     IfElseBranch,
     ListElement,
+    InsideParens,
 }
 
 fn to_expr_report<'a>(
@@ -169,8 +178,8 @@ fn to_expr_report<'a>(
     filename: PathBuf,
     context: Context,
     parse_problem: &roc_parse::parser::EExpr<'a>,
-    _start_row: Row,
-    _start_col: Col,
+    start_row: Row,
+    start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::EExpr;
 
@@ -184,6 +193,134 @@ fn to_expr_report<'a>(
         EExpr::Str(string, row, col) => {
             to_str_report(alloc, filename, context, &string, *row, *col)
         }
+        EExpr::InParens(expr, row, col) => {
+            to_expr_in_parens_report(alloc, filename, context, &expr, *row, *col)
+        }
+        EExpr::Type(tipe, row, col) => to_type_report(alloc, filename, &tipe, *row, *col),
+        EExpr::Def(syntax, row, col) => to_syntax_report(alloc, filename, syntax, *row, *col),
+
+        EExpr::ElmStyleFunction(region, row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = *region;
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am in the middle of parsing a definition, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Looks like you are trying to define a function. "),
+                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.parser_suggestion("increment = \\n -> n + 1"),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ARGUMENTS BEFORE EQUALS".to_string(),
+            }
+        }
+
+        EExpr::Ident(_row, _col) => unreachable!("another branch would be taken"),
+
+        EExpr::QualifiedTag(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am very confused by this identifier:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Are you trying to qualify a name? I am execting something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.reflow(". Maybe you are trying to qualify a tag? Tags like "),
+                    alloc.parser_suggestion("Err"),
+                    alloc.reflow(" are globally scoped in roc, and cannot be qualified."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD IDENTIFIER".to_string(),
+            }
+        }
+
+        EExpr::Start(row, col) => {
+            let (context_row, context_col, a_thing) = match context {
+                Context::InNode(node, r, c, _) => match node {
+                    Node::WhenCondition | Node::WhenBranch | Node::WhenIfGuard => (
+                        r,
+                        c,
+                        alloc.concat(vec![
+                            alloc.text("an "),
+                            alloc.keyword("when"),
+                            alloc.text(" expression"),
+                        ]),
+                    ),
+                    Node::IfCondition | Node::IfThenBranch | Node::IfElseBranch => (
+                        r,
+                        c,
+                        alloc.concat(vec![
+                            alloc.text("an "),
+                            alloc.keyword("if"),
+                            alloc.text(" expression"),
+                        ]),
+                    ),
+                    Node::ListElement => (r, c, alloc.text("a list")),
+                    Node::InsideParens => (r, c, alloc.text("some parentheses")),
+                },
+                Context::InDef(r, c) => (r, c, alloc.text("a definition")),
+            };
+
+            let surroundings = Region::from_rows_cols(context_row, context_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow(r"I am partway through parsing "),
+                    a_thing,
+                    alloc.reflow(", but I got stuck here:"),
+                ]),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I was expecting to see an expression like "),
+                    alloc.parser_suggestion("42"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("\"hello\""),
+                    alloc.text("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING EXPRESSION".to_string(),
+            }
+        }
+
+        EExpr::Colon(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am in the middle of parsing a definition, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Looks like you are trying to define a function. "),
+                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.parser_suggestion("increment = \\n -> n + 1"),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ARGUMENTS BEFORE EQUALS".to_string(),
+            }
+        }
+
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -334,7 +471,14 @@ fn to_lambda_report<'a>(
 
         ELambda::Start(_row, _col) => unreachable!("another branch would have been taken"),
 
-        ELambda::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        ELambda::Body(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InDef(start_row, start_col),
+            expr,
+            row,
+            col,
+        ),
         ELambda::Pattern(ref pattern, row, col) => {
             to_pattern_report(alloc, filename, pattern, row, col)
         }
@@ -534,6 +678,75 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS STRING".to_string(),
+            }
+        }
+    }
+}
+fn to_expr_in_parens_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    context: Context,
+    parse_problem: &roc_parse::parser::EInParens<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EInParens;
+
+    match *parse_problem {
+        EInParens::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EInParens::Expr(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::InsideParens, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
+        EInParens::End(row, col) | EInParens::IndentEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc
+                    .reflow("I am partway through parsing a record pattern, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(
+                        r"I was expecting to see a closing parenthesis next, so try adding a ",
+                    ),
+                    alloc.parser_suggestion(")"),
+                    alloc.reflow(" and see if that helps?"),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
+            }
+        }
+        EInParens::Open(row, col) | EInParens::IndentOpen(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I just started parsing an expression in parentheses, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"An expression in parentheses looks like "),
+                    alloc.parser_suggestion("(32)"),
+                    alloc.reflow(r" or "),
+                    alloc.parser_suggestion("(\"hello\")"),
+                    alloc.reflow(" so I was expecting to see an expression next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
             }
         }
     }
@@ -799,18 +1012,14 @@ fn to_when_report<'a>(
                     title: "IF GUARD NO CONDITION".to_string(),
                 }
             }
-            _ => {
-                //            to_expr_report(
-                //                alloc,
-                //                filename,
-                //                Context::InNode(Node::WhenIfGuard, start_row, start_col, Box::new(context)),
-                //                expr,
-                //                row,
-                //                col,
-                //            )
-
-                to_syntax_report(alloc, filename, nested, row, col)
-            }
+            _ => to_expr_report(
+                alloc,
+                filename,
+                Context::InNode(Node::WhenIfGuard, start_row, start_col, Box::new(context)),
+                nested,
+                row,
+                col,
+            ),
         },
         When::Arrow(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
