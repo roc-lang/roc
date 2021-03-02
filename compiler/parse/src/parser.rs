@@ -135,20 +135,31 @@ impl<'a> State<'a> {
     /// they weren't eligible to indent anyway.
     pub fn advance_without_indenting(
         self,
-        arena: &'a Bump,
         quantity: usize,
     ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.advance_without_indenting_e(arena, quantity, bad_input_to_syntax_error)
+        self.advance_without_indenting_ee(quantity, |line, _| SyntaxError::LineTooLong(line))
     }
 
     pub fn advance_without_indenting_e<TE, E>(
         self,
-        arena: &'a Bump,
         quantity: usize,
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
     where
         TE: Fn(BadInputError, Row, Col) -> E,
+    {
+        self.advance_without_indenting_ee(quantity, |r, c| {
+            to_error(BadInputError::LineTooLong, r, c)
+        })
+    }
+
+    pub fn advance_without_indenting_ee<TE, E>(
+        self,
+        quantity: usize,
+        to_error: TE,
+    ) -> Result<Self, (Progress, E, Self)>
+    where
+        TE: Fn(Row, Col) -> E,
     {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
@@ -160,7 +171,7 @@ impl<'a> State<'a> {
                     ..self
                 })
             }
-            _ => Err(line_too_long_e(arena, self.clone(), to_error)),
+            _ => Err(line_too_long_e(self.clone(), to_error)),
         }
     }
 
@@ -169,7 +180,7 @@ impl<'a> State<'a> {
         arena: &'a Bump,
         spaces: usize,
     ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.advance_spaces_e(arena, spaces, bad_input_to_syntax_error)
+        self.advance_spaces_e(arena, spaces, |line, _| SyntaxError::LineTooLong(line))
     }
 
     /// Advance the parser while also indenting as appropriate.
@@ -181,7 +192,7 @@ impl<'a> State<'a> {
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
     where
-        TE: Fn(BadInputError, Row, Col) -> E,
+        TE: Fn(Row, Col) -> E,
     {
         match (self.column as usize).checked_add(spaces) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
@@ -214,7 +225,7 @@ impl<'a> State<'a> {
                     original_len: self.original_len,
                 })
             }
-            _ => Err(line_too_long_e(arena, self.clone(), to_error)),
+            _ => Err(line_too_long_e(self.clone(), to_error)),
         }
     }
 
@@ -393,7 +404,7 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),
-    Str(EString, Row, Col),
+    Str(EString<'a>, Row, Col),
     Number(Number, Row, Col),
     List(List<'a>, Row, Col),
 
@@ -403,24 +414,31 @@ pub enum EExpr<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Number {
-    NumberEnd,
-    NumberDot(i64),
+    End,
+    LineTooLong,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EString {
-    EndlessSingle,
-    EndlessMulti,
-    StringEscape(Escape),
+pub enum EString<'a> {
+    Open(Row, Col),
+
+    CodePointOpen(Row, Col),
+    CodePointEnd(Row, Col),
+
+    Space(BadInputError, Row, Col),
+    EndlessSingle(Row, Col),
+    EndlessMulti(Row, Col),
+    UnknownEscape(Row, Col),
+    Format(&'a SyntaxError<'a>, Row, Col),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Escape {
-    EscapeUnknown,
-    BadUnicodeFormat(u16),
-    BadUnicodeCode(u16),
-    BadUnicodeLength(u16, i32, i32),
-}
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// pub enum Escape {
+//     EscapeUnknown,
+//     BadUnicodeFormat(u16),
+//     BadUnicodeCode(u16),
+//     BadUnicodeLength(u16, i32, i32),
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERecord<'a> {
@@ -874,24 +892,21 @@ where
 }
 
 pub fn unexpected_eof<'a>(
-    arena: &'a Bump,
+    _arena: &'a Bump,
     state: State<'a>,
     chars_consumed: usize,
 ) -> (Progress, SyntaxError<'a>, State<'a>) {
-    checked_unexpected(arena, state, chars_consumed, |region| {
-        SyntaxError::Eof(region)
-    })
+    checked_unexpected(state, chars_consumed, SyntaxError::Eof)
 }
 
-pub fn unexpected<'a>(
-    arena: &'a Bump,
+pub fn unexpected(
     chars_consumed: usize,
     _attempting: Attempting,
-    state: State<'a>,
-) -> (Progress, SyntaxError<'a>, State<'a>) {
+    state: State,
+) -> (Progress, SyntaxError, State) {
     // NOTE state is the last argument because chars_consumed often depends on the state's fields
     // having state be the final argument prevents borrowing issues
-    checked_unexpected(arena, state, chars_consumed, |region| {
+    checked_unexpected(state, chars_consumed, |region| {
         SyntaxError::Unexpected(region)
     })
 }
@@ -901,7 +916,6 @@ pub fn unexpected<'a>(
 /// If maximum line length was exceeded, return a Problem indicating as much.
 #[inline(always)]
 fn checked_unexpected<'a, F>(
-    arena: &'a Bump,
     state: State<'a>,
     chars_consumed: usize,
     problem_from_region: F,
@@ -926,21 +940,17 @@ where
             (Progress::NoProgress, problem_from_region(region), state)
         }
         _ => {
-            let (_progress, fail, state) = line_too_long(arena, state);
+            let (_progress, fail, state) = line_too_long(state);
             (Progress::NoProgress, fail, state)
         }
     }
 }
 
-fn line_too_long_e<'a, TE, E>(
-    _arena: &'a Bump,
-    state: State<'a>,
-    to_error: TE,
-) -> (Progress, E, State<'a>)
+fn line_too_long_e<TE, E>(state: State, to_error: TE) -> (Progress, E, State)
 where
-    TE: Fn(BadInputError, Row, Col) -> E,
+    TE: Fn(Row, Col) -> E,
 {
-    let problem = to_error(BadInputError::LineTooLong, state.line, state.column);
+    let problem = to_error(state.line, state.column);
     // Set column to MAX and advance the parser to end of input.
     // This way, all future parsers will fail on EOF, and then
     // unexpected_eof will take them back here - thus propagating
@@ -961,8 +971,8 @@ where
     (Progress::NoProgress, problem, state)
 }
 
-fn line_too_long<'a>(arena: &'a Bump, state: State<'a>) -> (Progress, SyntaxError<'a>, State<'a>) {
-    line_too_long_e(arena, state, |_, line, _| SyntaxError::LineTooLong(line))
+fn line_too_long(state: State) -> (Progress, SyntaxError, State) {
+    line_too_long_e(state, |line, _| SyntaxError::LineTooLong(line))
 }
 
 /// A single ASCII char that isn't a newline.
@@ -975,9 +985,9 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
         Some(&actual) if expected == actual => Ok((
             Progress::MadeProgress,
             (),
-            state.advance_without_indenting(arena, 1)?,
+            state.advance_without_indenting(1)?,
         )),
-        Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
+        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(arena, state, 0)),
     }
 }
@@ -988,7 +998,7 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
 pub fn newline_char<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     move |arena, state: State<'a>| match state.bytes.first() {
         Some(b'\n') => Ok((Progress::MadeProgress, (), state.newline(arena)?)),
-        Some(_) => Err(unexpected(arena, 0, Attempting::Keyword, state)),
+        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(arena, state, 0)),
     }
 }
@@ -1004,9 +1014,9 @@ pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
                 buf.push(byte as char);
             } else if buf.is_empty() {
                 // We didn't find any hex digits!
-                return Err(unexpected(arena, 0, Attempting::Keyword, state));
+                return Err(unexpected(0, Attempting::Keyword, state));
             } else {
-                let state = state.advance_without_indenting(arena, buf.len())?;
+                let state = state.advance_without_indenting(buf.len())?;
 
                 return Ok((Progress::MadeProgress, buf.into_bump_str(), state));
             }
@@ -1142,7 +1152,7 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxErro
     // the row in the state, only the column.
     debug_assert!(keyword.chars().all(|ch| ch.len_utf8() == 1 && ch != '\n'));
 
-    move |arena, state: State<'a>| {
+    move |_arena, state: State<'a>| {
         let len = keyword.len();
 
         // TODO do this comparison in one SIMD instruction (on supported systems)
@@ -1150,10 +1160,10 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxErro
             Ok((
                 Progress::MadeProgress,
                 (),
-                state.advance_without_indenting(arena, len)?,
+                state.advance_without_indenting(len)?,
             ))
         } else {
-            let (_, fail, state) = unexpected(arena, len, Attempting::Keyword, state);
+            let (_, fail, state) = unexpected(len, Attempting::Keyword, state);
             Err((NoProgress, fail, state))
         }
     }

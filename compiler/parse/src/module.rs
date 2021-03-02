@@ -99,7 +99,7 @@ pub fn parse_package_part<'a>(
                 if ch == '-' || ch.is_ascii_alphanumeric() {
                     part_buf.push(ch);
 
-                    state = state.advance_without_indenting(arena, bytes_parsed)?;
+                    state = state.advance_without_indenting(bytes_parsed)?;
                 } else {
                     let progress = Progress::progress_when(!part_buf.is_empty());
                     return Ok((progress, part_buf.into_bump_str(), state));
@@ -121,14 +121,14 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
         match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !first_letter.is_uppercase() {
-                    return Err(unexpected(arena, 0, Attempting::Module, state));
+                    return Err(unexpected(0, Attempting::Module, state));
                 };
 
                 let mut buf = String::with_capacity_in(4, arena);
 
                 buf.push(first_letter);
 
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting(bytes_parsed)?;
 
                 while !state.bytes.is_empty() {
                     match peek_utf8_char(&state) {
@@ -139,7 +139,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
                             // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
                             // * A '.' separating module parts
                             if ch.is_alphabetic() || ch.is_ascii_digit() {
-                                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                                state = state.advance_without_indenting(bytes_parsed)?;
 
                                 buf.push(ch);
                             } else if ch == '.' {
@@ -151,7 +151,6 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
                                             buf.push(next);
 
                                             state = state.advance_without_indenting(
-                                                arena,
                                                 bytes_parsed + next_bytes_parsed,
                                             )?;
                                         } else {
@@ -190,7 +189,13 @@ pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
         and!(
             skip_first!(
                 ascii_string("app"),
-                and!(space1(1), loc!(string_literal::parse()))
+                and!(
+                    space1(1),
+                    loc!(crate::parser::specialize(
+                        |e, r, c| SyntaxError::Expr(crate::parser::EExpr::Str(e, r, c)),
+                        string_literal::parse()
+                    ))
+                )
             ),
             and!(
                 optional(packages()),

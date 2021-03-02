@@ -140,6 +140,21 @@ mod test_can {
     }
 
     #[test]
+    fn float_double_dot() {
+        let string = "1.1.1";
+        let region = Region::zero();
+
+        assert_can(
+            &string.clone(),
+            RuntimeError(RuntimeError::InvalidFloat(
+                FloatErrorKind::Error,
+                region,
+                string.into(),
+            )),
+        );
+    }
+
+    #[test]
     fn zero() {
         assert_can_num("0", 0);
     }
@@ -157,6 +172,16 @@ mod test_can {
     #[test]
     fn minus_zero_point_zero() {
         assert_can_float("-0.0", -0.0);
+    }
+
+    #[test]
+    fn scientific_positive() {
+        assert_can_float("5e4", 50000.0);
+    }
+
+    #[test]
+    fn scientific_negative() {
+        assert_can_float("5e-4", 0.0005);
     }
 
     #[test]
@@ -1530,6 +1555,26 @@ mod test_can {
     fn string_with_valid_unicode_escapes() {
         assert_can(r#""x\u(00A0)x""#, expr_str("x\u{00A0}x"));
         assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
+    }
+
+    #[test]
+    fn block_string() {
+        assert_can(
+            r#"
+            """foobar"""
+            "#,
+            expr_str("foobar"),
+        );
+
+        assert_can(
+            indoc!(
+                r#"
+            """foo
+            bar"""
+            "#
+            ),
+            expr_str("foo\nbar"),
+        );
     }
 
     //     #[test]

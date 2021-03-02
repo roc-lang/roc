@@ -5134,4 +5134,161 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn number_double_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1.1.1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                This float literal contains an invalid digit:
+                
+                1│  1.1.1
+                    ^^^^^
+                
+                Floating point literals can only contain the digits 0-9, or use
+                scientific notation 10e4
+                
+                Tip: Learn more about number literals at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unicode_not_hex() {
+        report_problem_as(
+            r#""abc\u(zzzz)def""#,
+            indoc!(
+                r#"
+                ── WEIRD CODE POINT ────────────────────────────────────────────────────────────
+                
+                I am partway through parsing a unicode code point, but I got stuck
+                here:
+                
+                1│  "abc\u(zzzz)def"
+                           ^
+                
+                I was expecting a hexadecimal number, like \u(1100) or \u(00FF).
+                
+                Learn more about working with unicode in roc at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn interpolate_not_identifier() {
+        report_problem_as(
+            r#""abc\(32)def""#,
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                This string interpolation is invalid:
+                
+                1│  "abc\(32)def"
+                          ^^
+                
+                I was expecting an identifier, like \u(message) or
+                \u(LoremIpsum.text).
+                
+                Learn more about string interpolation at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unicode_too_large() {
+        report_problem_as(
+            r#""abc\u(110000)def""#,
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                This unicode code point is invalid:
+                
+                1│  "abc\u(110000)def"
+                           ^^^^^^
+                
+                Learn more about working with unicode in roc at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn weird_escape() {
+        report_problem_as(
+            r#""abc\qdef""#,
+            indoc!(
+                r#"
+                ── WEIRD ESCAPE ────────────────────────────────────────────────────────────────
+                
+                I was partway through parsing a  string literal, but I got stuck here:
+                
+                1│  "abc\qdef"
+                        ^^
+                
+                This is not an escape sequence I recognize. After a backslash, I am
+                looking for one of these:
+                
+                    - A newline: \n
+                    - A caret return: \r
+                    - A tab: \t
+                    - An escaped quote: \"
+                    - An escaped backslash: \\
+                    - A unicode code point: \u(00FF)
+                    - An interpolated string: \(myVariable)
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn single_no_end() {
+        report_problem_as(
+            r#""there is no end"#,
+            indoc!(
+                r#"
+                ── ENDLESS STRING ──────────────────────────────────────────────────────────────
+                
+                I cannot find the end of this string:
+                
+                1│  "there is no end
+                     ^
+                
+                You could change it to something like "to be or not to be" or even
+                just "".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn multi_no_end() {
+        report_problem_as(
+            r#""""there is no end"#,
+            indoc!(
+                r#"
+                ── ENDLESS STRING ──────────────────────────────────────────────────────────────
+                
+                I cannot find the end of this block string:
+                
+                1│  """there is no end
+                       ^
+                
+                You could change it to something like """to be or not to be""" or even
+                just """""".
+            "#
+            ),
+        )
+    }
 }
