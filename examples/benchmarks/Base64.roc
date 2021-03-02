@@ -1,6 +1,6 @@
-interface Base64 exposes [ fromBytes ] imports [ Bytes.Decode ]
+interface Base64 exposes [ fromBytes ] imports [ Bytes.Decode.{ Decoder } ]
 
-Decoder a : Bytes.Decode.Decoder a
+# Decoder a : Bytes.Decode.Decoder a
 
 
 fromBytes : List U8 -> Result Str Bytes.Decode.DecodeError
