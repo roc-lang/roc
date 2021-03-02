@@ -1,14 +1,11 @@
-interface Base64 exposes [ fromBytes ] imports [ Bytes.Decode.{ Decoder } ]
+interface Base64 exposes [ fromBytes ] imports [ Bytes.Decode.{ Decoder, DecodeProblem }, Bytes.Encode ]
 
-# Decoder a : Bytes.Decode.Decoder a
-
-
-fromBytes : List U8 -> Result Str Bytes.Decode.DecodeError
+fromBytes : List U8 -> Result Str DecodeProblem
 fromBytes = \bytes ->
     Bytes.Decode.decode  bytes (decodeBase64 (List.len bytes))
 
 
-decodeBase64 : Nat -> Bytes.Decode.Decoder Str
+decodeBase64 : Nat -> Decoder Str
 decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string:  "" }
 
 loopHelp : { remaining : Nat, string : Str } -> Decoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
