@@ -1,5 +1,6 @@
-interface Base64.Encode 
-    exposes [ toBytes ] imports [ Bytes.Encode.{ Encoder } ]
+interface Base64.Encode
+    exposes [ toBytes ]
+    imports [ Bytes.Encode.{ Encoder } ]
 
 InvalidChar : U8
 
@@ -42,7 +43,7 @@ folder = \char, { output, accum } ->
 
 #  SGVs bG8g V29y bGQ=
 
-# encodeResidual : { output : List Encoder, accum : State } -> List Encoder 
+# encodeResidual : { output : List Encoder, accum : State } -> List Encoder
 encodeResidual = \{ output, accum } ->
     when accum is
         Unreachable _ -> output
@@ -146,7 +147,7 @@ isValidChar = \c ->
     else
         when c is
             43 ->
-                # '+' 
+                # '+'
                 True
 
             47 ->
@@ -161,7 +162,7 @@ isValidChar = \c ->
                 False
 
 isAlphaNum : U8 -> Bool
-isAlphaNum = \key -> 
+isAlphaNum = \key ->
     (key >= 48 && key <= 57) || (key >= 64 && key <= 90) || (key >= 97 && key <= 122)
 
 
@@ -184,7 +185,7 @@ unsafeConvertChar = \key ->
     else
         when key is
             43 ->
-                # '+' 
+                # '+'
                 62
 
             47 ->
