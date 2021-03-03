@@ -40,7 +40,7 @@ pub fn gen_from_mono_module(
 
         if let Some((_, header_src)) = loaded.header_sources.get(&home) {
             src_lines.extend(header_src.split('\n'));
-            src_lines.extend(src.split('\n'));
+            src_lines.extend(src.split('\n').skip(1));
         } else {
             src_lines.extend(src.split('\n'));
         }
