@@ -300,7 +300,7 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
         while (i > 0) {
             i -= 1;
             const element = source_ptr + i * element_width;
-            stepper_caller(stepper, element, output, output);
+            stepper_caller(stepper, element, b2, b1);
 
             const temp = b1;
             b2 = b1;
