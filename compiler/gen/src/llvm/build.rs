@@ -1104,7 +1104,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let tag_field_layouts = &fields[*tag_id as usize];
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, val_layout) = load_symbol_and_layout(scope, field_symbol);
+                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -1127,7 +1127,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         field_vals.push(ptr);
                     } else {
                         // this check fails for recursive tag unions, but can be helpful while debugging
-                        debug_assert_eq!(tag_field_layout, val_layout);
+                        // debug_assert_eq!(tag_field_layout, val_layout);
 
                         field_vals.push(val);
                     }

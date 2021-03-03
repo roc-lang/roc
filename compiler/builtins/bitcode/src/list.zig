@@ -95,6 +95,7 @@ pub const RocList = extern struct {
             const dest_ptr = first_slot;
 
             @memcpy(dest_ptr, source_ptr, old_length * element_width);
+            @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
 
         // NOTE the newly added elements are left uninitialized
@@ -246,19 +247,35 @@ pub fn listWalk(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: 
         return;
     }
 
-    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+    if (list.isEmpty()) {
+        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+        return;
+    }
+
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    var b1 = output orelse unreachable;
+    var b2 = alloc;
+
+    @memcpy(b2, accum orelse unreachable, accum_width);
 
     if (list.bytes) |source_ptr| {
         var i: usize = 0;
         const size = list.len();
         while (i < size) : (i += 1) {
             const element = source_ptr + i * element_width;
-            stepper_caller(stepper, element, output, output);
-        }
+            stepper_caller(stepper, element, b2, b1);
 
-        const data_bytes = list.len() * element_width;
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+            const temp = b1;
+            b2 = b1;
+            b1 = temp;
+        }
     }
+
+    @memcpy(output orelse unreachable, b2, accum_width);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
+
+    const data_bytes = list.len() * element_width;
+    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
 }
 
 pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
@@ -266,7 +283,16 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
         return;
     }
 
-    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+    if (list.isEmpty()) {
+        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+        return;
+    }
+
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    var b1 = output orelse unreachable;
+    var b2 = alloc;
+
+    @memcpy(b2, accum orelse unreachable, accum_width);
 
     if (list.bytes) |source_ptr| {
         const size = list.len();
@@ -275,11 +301,21 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
             i -= 1;
             const element = source_ptr + i * element_width;
             stepper_caller(stepper, element, output, output);
+
+            const temp = b1;
+            b2 = b1;
+            b1 = temp;
         }
 
         const data_bytes = list.len() * element_width;
         utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
     }
+
+    @memcpy(output orelse unreachable, b2, accum_width);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
+
+    const data_bytes = list.len() * element_width;
+    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
 }
 
 // List.contains : List k, k -> Bool
