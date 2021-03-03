@@ -1,8 +1,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    BuildClosureData, Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout,
-    WrappedVariant, TAG_SIZE,
+    BuildClosureData, Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, MemoryMode,
+    UnionLayout, WrappedVariant, TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -3357,10 +3357,33 @@ pub fn with_hole<'a>(
             }
         }
 
-        List { loc_elems, .. } if loc_elems.is_empty() => {
+        List {
+            loc_elems,
+            elem_var,
+            ..
+        } if loc_elems.is_empty() => {
             // because an empty list has an unknown element type, it is handled differently
-            let expr = Expr::EmptyArray;
-            Stmt::Let(assigned, expr, Layout::Builtin(Builtin::EmptyList), hole)
+            let opt_elem_layout = layout_cache.from_var(env.arena, elem_var, env.subs);
+
+            match opt_elem_layout {
+                Ok(elem_layout) => {
+                    let expr = Expr::EmptyArray;
+                    Stmt::Let(
+                        assigned,
+                        expr,
+                        Layout::Builtin(Builtin::List(
+                            MemoryMode::Refcounted,
+                            env.arena.alloc(elem_layout),
+                        )),
+                        hole,
+                    )
+                }
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    let expr = Expr::EmptyArray;
+                    Stmt::Let(assigned, expr, Layout::Builtin(Builtin::EmptyList), hole)
+                }
+                Err(LayoutProblem::Erroneous) => panic!("list element is error type"),
+            }
         }
 
         List {
