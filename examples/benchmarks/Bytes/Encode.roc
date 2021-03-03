@@ -1,13 +1,26 @@
-interface Bytes.Encode exposes [ Encoder, empty, sequence, u8, bytes, encode ] imports []
+interface Bytes.Encode exposes [ Encoder, sequence, u8, u16, bytes, empty, encode ] imports []
 
-Encoder : [ Signed8 I8, Unsigned8 U8, Sequence Nat (List Encoder), Bytes (List U8) ]
+Endianness : [ BE, LE ]
 
-empty : Encoder
-empty = 
-    Sequence 0 []
+Encoder : [ Signed8 I8, Unsigned8 U8, Signed16 Endianness I16, Unsigned16 Endianness U16, Sequence Nat (List Encoder), Bytes (List U8) ]
+
 
 u8 : U8 -> Encoder
 u8 = \value -> Unsigned8 value
+
+empty : Encoder
+empty = 
+    foo : List Encoder
+    foo = []
+
+    Sequence 0 foo
+
+u16 : Endianness, U16 -> Encoder
+u16 = \endianness, value -> Unsigned16 endianness value
+
+bytes : List U8 -> Encoder
+bytes = \bs -> Bytes bs
+
 
 sequence : List Encoder -> Encoder
 sequence = \encoders ->
@@ -18,8 +31,8 @@ getWidth = \encoder ->
     when encoder is
         Signed8 _ -> 1
         Unsigned8 _ -> 1
-        # Signed16 _ -> 2
-        # Unsigned16 _ -> 2
+        Signed16 _ _ -> 2
+        Unsigned16 _ _ -> 2
         # Signed32 _ -> 4
         # Unsigned32 _ -> 4
         # Signed64 _ -> 8
@@ -29,10 +42,9 @@ getWidth = \encoder ->
         Sequence w _ -> w
         Bytes bs -> List.len bs 
 
+getWidths : List Encoder, Nat -> Nat
 getWidths = \encoders, initial -> List.walk encoders (\encoder, accum -> accum + getWidth encoder) initial
 
-bytes : List U8 -> Encoder
-bytes = \bs -> Bytes bs
 
 
 encode : Encoder -> List U8
@@ -56,6 +68,52 @@ encodeHelp = \encoder, offset, output ->
 
             {
                 output: List.set output offset cast,
+                offset: offset + 1
+            }
+
+        Unsigned16 endianness value ->
+            a : U8
+            a = Num.intCast (Num.shiftRightBy 8 value)
+
+            b : U8
+            b = Num.intCast value
+
+            newOutput = 
+                when endianness is
+                    BE ->
+                        output
+                            |> List.set (offset + 0) a
+                            |> List.set (offset + 1) b
+                    LE -> 
+                        output
+                            |> List.set (offset + 0) b
+                            |> List.set (offset + 1) a
+
+            {
+                output: newOutput,
+                offset: offset + 2
+            }
+
+        Signed16 endianness value ->
+            a : U8
+            a = Num.intCast (Num.shiftRightBy 8 value)
+
+            b : U8
+            b = Num.intCast value
+
+            newOutput = 
+                when endianness is
+                    BE ->
+                        output
+                            |> List.set (offset + 0) a
+                            |> List.set (offset + 1) b
+                    LE -> 
+                        output
+                            |> List.set (offset + 0) b
+                            |> List.set (offset + 1) a
+
+            {
+                output: newOutput, 
                 offset: offset + 1
             }
 
