@@ -35,10 +35,3 @@ pub fn from_winit(winit_mods: &winit::event::ModifiersState) -> Modifiers {
         logo: winit_mods.logo(),
     }
 }
-
-pub fn shift_pressed() -> Modifiers {
-    Modifiers {
-        shift: true,
-        ..Default::default()
-    }
-}

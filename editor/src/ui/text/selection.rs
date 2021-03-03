@@ -44,10 +44,10 @@ pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<Sele
     );
 
     ensure!(
-        !(start_pos.line == end_pos.line && start_pos.column > end_pos.column),
+        !(start_pos.line == end_pos.line && start_pos.column >= end_pos.column),
         InvalidSelection {
             err_msg: format!(
-                "start_pos.column ({}) should be smaller than or equal to end_pos.column ({}) when start_pos.line equals end_pos.line",
+                "start_pos.column ({}) should be smaller than end_pos.column ({}) when start_pos.line equals end_pos.line",
                 start_pos.column,
                 end_pos.column
             )

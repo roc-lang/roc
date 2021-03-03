@@ -7,6 +7,7 @@ use crate::ui::text::{
 };
 use crate::ui::ui_error::UIResult;
 use winit::event::{ModifiersState, VirtualKeyCode};
+use crate::window::keyboard_input::from_winit;
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
@@ -92,13 +93,15 @@ pub fn handle_cut(app_model: &mut AppModel) -> EdResult<()> {
 }
 
 pub fn pass_keydown_to_focused(
-    modifiers: &ModifiersState,
+    modifiers_winit: &ModifiersState,
     virtual_keycode: VirtualKeyCode,
     app_model: &mut AppModel,
 ) -> UIResult<()> {
+    let modifiers = from_winit(modifiers_winit);
+
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_model.text.handle_key_down(modifiers, virtual_keycode)?;
+            ed_model.text.handle_key_down(&modifiers, virtual_keycode)?;
         }
     }
 

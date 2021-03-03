@@ -449,8 +449,12 @@ impl SelectableLines for BigSelectableText {
         let curr_line_nr = self.caret_w_select.caret_pos.line;
         let curr_line_len = self.line_len(curr_line_nr)?;
 
-        let new_col = if curr_line_len > 0 {
-            curr_line_len - 1
+        let new_col = if let Some(last_char) = self.last_char(curr_line_nr)? {
+            if is_newline(&last_char) {
+                curr_line_len - 1
+            } else {
+                curr_line_len
+            }
         } else {
             0
         };
@@ -519,6 +523,10 @@ impl SelectableLines for BigSelectableText {
 
     fn last_text_pos(&self) -> TextPos {
         self.char_indx_to_pos(self.nr_of_chars())
+    }
+
+    fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
+        Ok(self.get_line(line_nr)?.chars().last())
     }
 
     fn handle_key_down(
@@ -735,7 +743,14 @@ pub mod test_big_sel_text {
     use pest::Parser;
     use snafu::OptionExt;
     use std::{collections::HashMap, slice::SliceIndex};
-    use crate::window::keyboard_input::{Modifiers, no_mods, shift_pressed};
+    use crate::window::keyboard_input::{Modifiers, no_mods};
+
+    fn shift_pressed() -> Modifiers {
+        Modifiers {
+            shift: true,
+            ..Default::default()
+        }
+    }
 
     // replace vec methods that return Option with ones that return Result and proper Error
     pub fn slice_get<T>(
@@ -1120,10 +1135,6 @@ pub mod test_big_sel_text {
 
         Ok(())
     }
-
-    // TODO hometest
-
-    // TODO endtest
 
     type MoveCaretFun = fn(&mut BigSelectableText, &Modifiers) -> UIResult<()>;
 
@@ -1577,14 +1588,133 @@ pub mod test_big_sel_text {
         Ok(())
     }
 
-    // #[test]
-    // fn move_end() -> Result<(), String> {
-    //     let move_caret_end = SelectableLines::move_caret_end;
+    #[test]
+    fn move_home() -> Result<(), String> {
+        let move_caret_home = BigSelectableText::move_caret_home;
+        assert_move(&["|"], &["|"], &no_mods(), move_caret_home)?;
+        assert_move(&["a|"], &["|a"], &no_mods(), move_caret_home)?;
+        assert_move(&["|a"], &["|a"], &no_mods(), move_caret_home)?;
+        assert_move(&[" a|"], &[" |a"], &no_mods(), move_caret_home)?;
+        assert_move(&[" abc |"], &[" |abc "], &no_mods(), move_caret_home)?;
+        assert_move(&["\tabc |"], &["\t|abc "], &no_mods(), move_caret_home)?;
+        assert_move(&[" abc def\tghi|"], &[" |abc def\tghi"], &no_mods(), move_caret_home)?;
 
-    //     // TODO
+        assert_move(
+            &["abc\n", "de|\n", "ghi"],
+            &["abc\n", "|de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", " d|e\n", "ghi"],
+            &["abc\n", " |de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc|\n", "de\n", "ghi"],
+            &["|abc\n", "de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "de\n", "ghi|"],
+            &["abc\n", "de\n", "|ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc \n", "de \n", "|ghi "],
+            &["abc \n", "de \n", "|ghi "],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc \n", "|de \n", "ghi "],
+            &["abc \n", "|de \n", "ghi "],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["|abc \n", "de \n", "ghi "],
+            &["|abc \n", "de \n", "ghi "],
+            &no_mods(),
+            move_caret_home,
+        )?;
 
-    //     Ok(())
-    // }
+
+        Ok(())
+    }
+
+    #[test]
+    fn move_end() -> Result<(), String> {
+        let move_caret_end = BigSelectableText::move_caret_end;
+        assert_move(&["|"], &["|"], &no_mods(), move_caret_end)?;
+        assert_move(&["|a"], &["a|"], &no_mods(), move_caret_end)?;
+        assert_move(&["a|"], &["a|"], &no_mods(), move_caret_end)?;
+        assert_move(&[" a| "], &[" a |"], &no_mods(), move_caret_end)?;
+        assert_move(&["| abc "], &[" abc |"], &no_mods(), move_caret_end)?;
+        assert_move(&["|\tabc "], &["\tabc |"], &no_mods(), move_caret_end)?;
+        assert_move(&[" abc d|ef\tghi"], &[" abc def\tghi|"], &no_mods(), move_caret_end)?;
+
+        assert_move(
+            &["abc\n", "|de\n", "ghi"],
+            &["abc\n", "de|\n", "ghi"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc\n", " d|e\n", "ghi"],
+            &["abc\n", " de|\n", "ghi"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["|abc\n", "de\n", "ghi"],
+            &["abc|\n", "de\n", "ghi"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc\n", "de\n", "g|hi"],
+            &["abc\n", "de\n", "ghi|"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc \n", "de \n", "ghi| "],
+            &["abc \n", "de \n", "ghi |"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc \n", "|de \n", "ghi "],
+            &["abc \n", "de |\n", "ghi "],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc |\n", "de \n", "ghi "],
+            &["abc |\n", "de \n", "ghi "],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc \n", "de |\n", "ghi "],
+            &["abc \n", "de |\n", "ghi "],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc \n", "de \n", "ghi |"],
+            &["abc \n", "de \n", "ghi |"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+
+
+        Ok(())
+    }
 
     #[test]
     fn start_selection_right() -> Result<(), String> {
@@ -2071,6 +2201,45 @@ pub mod test_big_sel_text {
         assert_move(&["abc de|f gh "], &["|[abc de]f gh "], &shift_pressed(), move_caret_up)?;
         assert_move(&["ab|c def gh "], &["|[ab]c def gh "], &shift_pressed(), move_caret_up)?;
         assert_move(&["a|bc def gh "], &["|[a]bc def gh "], &shift_pressed(), move_caret_up)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_selection_home() -> Result<(), String> {
+        let move_caret_home = BigSelectableText::move_caret_home;
+        assert_move(&["|"], &["|"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["|a"], &["|a"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["a|"], &["|[a]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" a|"], &[" |[a]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" |a"], &["|[ ]a"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["\ta|"], &["\t|[a]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["abc|"], &["|[abc]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" abc|"], &[" |[abc]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["\tabc|"], &["\t|[abc]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["ab|c"], &["|[ab]c"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" ab|c"], &[" |[ab]c"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["\tab|c"], &["\t|[ab]c"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" abc def ghi|"], &[" |[abc def ghi]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["abc def ghi|"], &["|[abc def ghi]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["abc def |ghi"], &["|[abc def ]ghi"], &shift_pressed(), move_caret_home)?;
+
+        assert_move(&["abc\n", "def\n", "ghi|"], &["abc\n", "def\n", "|[ghi]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["abc\n", "def|\n", "ghi"], &["abc\n", "|[def]\n", "ghi"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["abc|\n", "def\n", "ghi"], &["|[abc]\n", "def\n", "ghi"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["|abc\n", "def\n", "ghi"], &["|abc\n", "def\n", "ghi"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["abc\n", "|def\n", "ghi"], &["abc\n", "|def\n", "ghi"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["abc\n", "def\n", "|ghi"], &["abc\n", "def\n", "|ghi"], &shift_pressed(), move_caret_home)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_selection_end() -> Result<(), String> {
+        let move_caret_end = BigSelectableText::move_caret_end;
+        assert_move(&["|"], &["|"], &shift_pressed(), move_caret_end)?;
+
+        //TODO
 
         Ok(())
     }

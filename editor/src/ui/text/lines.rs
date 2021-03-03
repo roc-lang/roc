@@ -54,6 +54,8 @@ pub trait SelectableLines {
 
     fn last_text_pos(&self) -> TextPos;
 
+    fn last_char(&self, line_nr: usize) -> UIResult<Option<char>>;
+
     fn handle_key_down(
         &mut self,
         modifiers: &Modifiers,

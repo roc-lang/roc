@@ -11,7 +11,11 @@ pub struct CaretWSelect {
 }
 
 fn mk_some_sel(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
-    Ok(Some(validate_selection(start_pos, end_pos)?))
+    if start_pos == end_pos {
+        Ok(None)
+    } else {
+        Ok(Some(validate_selection(start_pos, end_pos)?))
+    }
 }
 
 impl Default for CaretWSelect {
