@@ -86,21 +86,21 @@ pub const RocList = extern struct {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
-        const data_bytes = new_capacity * slot_size;
-        const first_slot = allocateWithRefcount(allocator, alignment, data_bytes);
+        const data_bytes = new_length * element_width;
+        const first_slot = utils.allocateWithRefcount(allocator, alignment, data_bytes);
 
         // transfer the memory
 
         if (self.bytes) |source_ptr| {
             const dest_ptr = first_slot;
 
-            @memcpy(dest_ptr, source_ptr, old_length);
+            @memcpy(dest_ptr, source_ptr, old_length * element_width);
         }
 
         // NOTE the newly added elements are left uninitialized
 
         const result = RocList{
-            .dict_bytes = first_slot,
+            .bytes = first_slot,
             .length = new_length,
         };
 
@@ -323,4 +323,17 @@ pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width
     } else {
         unreachable;
     }
+}
+
+pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {
+    const old_length = list.len();
+    var output = list.reallocate(std.heap.c_allocator, alignment, old_length + 1, element_width);
+
+    if (output.bytes) |target| {
+        if (element) |source| {
+            @memcpy(target + old_length * element_width, source, element_width);
+        }
+    }
+
+    return output;
 }
