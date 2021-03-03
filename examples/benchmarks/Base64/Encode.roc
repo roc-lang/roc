@@ -75,10 +75,6 @@ encodeCharacters = \a,b,c,d ->
         Err a
     else if !(isValidChar b) then
         Err b
-    else if !(isValidChar c) then
-        Err c
-    else if !(isValidChar d) then
-        Err d
     else
         # `=` is the padding character, and must be special-cased
         # only the `c` and `d` char are allowed to be padding
@@ -101,7 +97,11 @@ encodeCharacters = \a,b,c,d ->
 
                 Ok (Bytes.Encode.u8 b1)
 
+            else if !(isValidChar c) then
+                Err c
+
             else
+
                 n3 = unsafeConvertChar c
 
                 z : U32
@@ -113,6 +113,9 @@ encodeCharacters = \a,b,c,d ->
                 combined = Num.intCast (Num.shiftRightBy 8 n)
 
                 Ok (Bytes.Encode.u16 BE combined)
+
+        else if !(isValidChar d) then
+            Err d
 
         else
             n3 = unsafeConvertChar c
@@ -152,10 +155,6 @@ isValidChar = \c ->
 
             47 ->
                 # '/'
-                True
-
-            61 ->
-                # '='
                 True
 
             _ ->
