@@ -4686,27 +4686,11 @@ fn from_can_when<'a>(
     }
     let opt_branches = to_opt_branches(env, region, branches, layout_cache);
 
-    let cond_layout = match layout_cache.from_var(env.arena, cond_var, env.subs) {
-        Ok(cached) => cached,
-        Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-            return Stmt::RuntimeError(env.arena.alloc(format!(
-                "UnresolvedTypeVar {} line {}",
-                file!(),
-                line!()
-            )));
-        }
-        Err(LayoutProblem::Erroneous) => {
-            return Stmt::RuntimeError(env.arena.alloc(format!(
-                "Erroneous {} line {}",
-                file!(),
-                line!()
-            )));
-        }
-    };
+    let cond_layout =
+        return_on_layout_error!(env, layout_cache.from_var(env.arena, cond_var, env.subs));
 
-    let ret_layout = layout_cache
-        .from_var(env.arena, expr_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+    let ret_layout =
+        return_on_layout_error!(env, layout_cache.from_var(env.arena, expr_var, env.subs));
 
     let arena = env.arena;
     let it = opt_branches
