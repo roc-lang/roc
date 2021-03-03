@@ -1743,7 +1743,7 @@ pub fn specialize_all<'a>(
                     partial_proc,
                 ) {
                     Ok((proc, layout)) => {
-                        debug_assert_eq!(outside_layout, layout);
+                        debug_assert_eq!(outside_layout, layout, " in {:?}", name);
 
                         if let Layout::Closure(args, closure, ret) = layout {
                             procs.specialized.remove(&(name, outside_layout));
@@ -3656,18 +3656,27 @@ pub fn with_hole<'a>(
                     captured_symbols.sort();
                     let captured_symbols = captured_symbols.into_bump_slice();
 
-                    procs
-                        .insert_anonymous(
-                            env,
-                            name,
-                            function_type,
-                            arguments,
-                            loc_body,
-                            CapturedSymbols::Captured(captured_symbols),
-                            return_type,
-                            layout_cache,
-                        )
-                        .unwrap();
+                    let inserted = procs.insert_anonymous(
+                        env,
+                        name,
+                        function_type,
+                        arguments,
+                        loc_body,
+                        CapturedSymbols::Captured(captured_symbols),
+                        return_type,
+                        layout_cache,
+                    );
+
+                    if let Err(runtime_error) = inserted {
+                        return Stmt::RuntimeError(env.arena.alloc(format!(
+                            "RuntimeError {} line {} {:?}",
+                            file!(),
+                            line!(),
+                            runtime_error,
+                        )));
+                    } else {
+                        drop(inserted);
+                    }
 
                     let closure_data_layout = closure_layout.as_block_of_memory_layout();
                     // define the function pointer
@@ -6221,8 +6230,7 @@ fn call_by_name<'a>(
 
                                         procs.runtime_errors.insert(proc_name, error_msg);
 
-                                        panic!();
-                                        // Stmt::RuntimeError(error_msg)
+                                        Stmt::RuntimeError(error_msg)
                                     }
                                 }
                             }
