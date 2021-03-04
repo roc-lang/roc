@@ -401,10 +401,13 @@ pub enum EExpr<'a> {
     IndentAnnotation(Row, Col),
     Equals(Row, Col),
     Colon(Row, Col),
+    DoubleColon(Row, Col),
     Ident(Row, Col),
     ElmStyleFunction(Region, Row, Col),
     MalformedPattern(Row, Col),
     QualifiedTag(Row, Col),
+    BackpassComma(Row, Col),
+    BackpassArrow(Row, Col),
 
     Syntax(&'a SyntaxError<'a>, Row, Col),
 

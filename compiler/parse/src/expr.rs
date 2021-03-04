@@ -1658,6 +1658,13 @@ fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a
 }
 
 fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    enum Next {
+        Equals(u16),
+        Colon(u16),
+        Comma(u16),
+        Backarrow(u16),
+    }
+
     then(
         and!(
             loc!(assign_or_destructure_identifier()),
@@ -1671,8 +1678,8 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                 optional(and!(
                     backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals)),
                     one_of![
-                        map!(equals_with_indent_help(), Either::First),
-                        map!(colon_with_indent_help(), Either::Second),
+                        map!(equals_with_indent_help(), Next::Equals),
+                        map!(colon_with_indent(), Next::Colon),
                     ]
                 ))
             )
@@ -1682,13 +1689,13 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
             // This appears to be a var, keyword, or function application.
             match opt_extras {
-                (Some(loc_args), Some((_spaces_before_equals, Either::First(_equals_indent)))) => {
+                (Some(loc_args), Some((_spaces_before_equals, Next::Equals(_equals_indent)))) => {
                     // We got args with an '=' after them, e.g. `foo a b = ...` This is a syntax error!
                     let region = Region::across_all(loc_args.iter().map(|v| &v.region));
                     let fail = EExpr::ElmStyleFunction(region, state.line, state.column);
                     Err((MadeProgress, fail, state))
                 }
-                (None, Some((spaces_before_equals, Either::First(equals_indent)))) => {
+                (None, Some((spaces_before_equals, Next::Equals(equals_indent)))) => {
                     // We got '=' with no args before it
                     let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
                     let value = if spaces_before_equals.is_empty() {
@@ -1739,7 +1746,7 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                         state,
                     ))
                 }
-                (opt_args, Some((spaces_before_colon, Either::Second(colon_indent)))) => {
+                (opt_args, Some((spaces_before_colon, Next::Colon(colon_indent)))) => {
                     // We may have gotten args, but we definitely got a ':'
                     // (meaning this is an annotation or alias;
                     // parse_def_signature will translate it into one or the other.)
@@ -1799,6 +1806,7 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
                     Ok((MadeProgress, ident_to_expr(arena, ident), state))
                 }
+                _ => todo!(),
             }
         },
     )
@@ -1813,44 +1821,87 @@ fn ident_without_apply_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     )
 }
 
-/// Like equals_for_def(), except it produces the indent_col of the state rather than ()
-fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
-    move |_arena, state: State<'a>| {
-        let equals = EExpr::Equals(state.line, state.column);
+#[allow(dead_code)]
+fn with_indent<'a, E, T, P>(parser: P) -> impl Parser<'a, u16, E>
+where
+    P: Parser<'a, T, E>,
+    E: 'a,
+{
+    move |arena, state: State<'a>| {
         let indent_col = state.indent_col;
 
-        match state.bytes.first() {
-            Some(b'=') => {
-                match state.bytes.get(1) {
-                    // The '=' must not be followed by another `=` or `>`
-                    // (See equals_for_def() for explanation)
-                    Some(b'=') | Some(b'>') => Err((NoProgress, equals, state)),
-                    Some(_) => match state.advance_without_indenting_e(1, EExpr::Space) {
-                        Err(bad) => Err(bad),
-                        Ok(good) => Ok((MadeProgress, indent_col, good)),
-                    },
-                    None => Err((NoProgress, equals, state)),
-                }
+        let (progress, _, state) = parser.parse(arena, state)?;
+
+        Ok((progress, indent_col, state))
+    }
+}
+
+fn equals_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
+    move |_arena, state: State<'a>| {
+        let indent_col = state.indent_col;
+        let good = state.bytes.starts_with(b"=") && !state.bytes.starts_with(b"==");
+
+        if good {
+            match state.advance_without_indenting_e(1, EExpr::Space) {
+                Err(bad) => Err(bad),
+                Ok(good) => Ok((MadeProgress, indent_col, good)),
             }
-            Some(_) => Err((NoProgress, equals, state)),
-            None => Err((NoProgress, equals, state)),
+        } else {
+            let equals = EExpr::Equals(state.line, state.column);
+            Err((NoProgress, equals, state))
         }
     }
 }
 
-/// Like equals_for_def(), except it produces the indent_col of the state rather than ()
-fn colon_with_indent_help<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
+fn colon_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
     move |_arena, state: State<'a>| {
-        let equals = EExpr::Colon(state.line, state.column);
         let indent_col = state.indent_col;
 
-        match state.bytes.first() {
-            Some(b':') => match state.advance_without_indenting_e(1, EExpr::Space) {
+        if let Some(b':') = state.bytes.get(0) {
+            if let Some(b':') = state.bytes.get(1) {
+                let double = EExpr::DoubleColon(state.line, state.column);
+                Err((NoProgress, double, state))
+            } else {
+                match state.advance_without_indenting_e(1, EExpr::Space) {
+                    Err(bad) => Err(bad),
+                    Ok(good) => Ok((MadeProgress, indent_col, good)),
+                }
+            }
+        } else {
+            let colon = EExpr::Colon(state.line, state.column);
+            Err((NoProgress, colon, state))
+        }
+    }
+}
+
+fn comma_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
+    move |_arena, state: State<'a>| {
+        let indent_col = state.indent_col;
+
+        if let Some(b',') = state.bytes.get(0) {
+            match state.advance_without_indenting_e(1, EExpr::Space) {
                 Err(bad) => Err(bad),
                 Ok(good) => Ok((MadeProgress, indent_col, good)),
-            },
-            Some(_) => Err((NoProgress, equals, state)),
-            None => Err((NoProgress, equals, state)),
+            }
+        } else {
+            let colon = EExpr::BackpassComma(state.line, state.column);
+            Err((NoProgress, colon, state))
+        }
+    }
+}
+
+fn backarrow_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
+    move |_arena, state: State<'a>| {
+        let indent_col = state.indent_col;
+
+        if state.bytes.starts_with(b"<-") {
+            match state.advance_without_indenting_e(2, EExpr::Space) {
+                Err(bad) => Err(bad),
+                Ok(good) => Ok((MadeProgress, indent_col, good)),
+            }
+        } else {
+            let colon = EExpr::BackpassArrow(state.line, state.column);
+            Err((NoProgress, colon, state))
         }
     }
 }
@@ -2085,7 +2136,7 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
             loc!(specialize(EExpr::Record, record_help(min_indent))),
             optional(and!(
                 space0_e(min_indent, EExpr::Space, EExpr::IndentEquals),
-                either!(equals_with_indent_help(), colon_with_indent_help())
+                either!(equals_with_indent_help(), colon_with_indent())
             ))
         ),
         move |arena, state, progress, (loc_record, opt_def)| {
