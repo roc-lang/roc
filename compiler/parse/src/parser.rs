@@ -1711,6 +1711,9 @@ macro_rules! one_of {
     ($p1:expr, $($others:expr),+) => {
         one_of!($p1, one_of!($($others),+))
     };
+    ($p1:expr, $($others:expr),+ $(,)?) => {
+        one_of!($p1, $($others),+)
+    };
 }
 
 #[macro_export]

@@ -1669,8 +1669,11 @@ fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                 // The = might be because someone is trying to use Elm or Haskell
                 // syntax for defining functions, e.g. `foo a b = ...` - so give a nice error!
                 optional(and!(
-                    backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals,)),
-                    either!(equals_with_indent_help(), colon_with_indent_help())
+                    backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals)),
+                    one_of![
+                        map!(equals_with_indent_help(), Either::First),
+                        map!(colon_with_indent_help(), Either::Second),
+                    ]
                 ))
             )
         ),
