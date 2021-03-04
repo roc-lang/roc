@@ -152,6 +152,10 @@ pub fn listMapWithIndex(list: RocList, transform: Opaque, caller: Caller2, align
     }
 }
 
+pub fn listMap2(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
+    unreachable;
+}
+
 pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, element_width: usize, inc: Inc, dec: Dec) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
