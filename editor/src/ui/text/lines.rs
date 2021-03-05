@@ -8,7 +8,7 @@ use crate::ui::ui_error::UIResult;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
-use winit::event::{VirtualKeyCode};
+use winit::event::VirtualKeyCode;
 
 pub trait Lines {
     fn get_line(&self, line_nr: usize) -> UIResult<&str>;

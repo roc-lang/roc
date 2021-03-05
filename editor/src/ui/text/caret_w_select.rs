@@ -36,41 +36,41 @@ impl CaretWSelect {
     }
 
     pub fn move_caret_w_mods(&mut self, new_pos: TextPos, mods: &Modifiers) -> UIResult<()> {
-        let caret_pos = self.caret_pos;
+        let old_caret_pos = self.caret_pos;
 
         // one does not simply move the caret
-        let valid_sel_opt = if new_pos != caret_pos {
-            if mods.shift {
+        let valid_sel_opt = if mods.shift {
+            if new_pos != old_caret_pos {
                 if let Some(old_sel) = self.selection_opt {
                     if new_pos < old_sel.start_pos {
-                        if caret_pos > old_sel.start_pos {
+                        if old_caret_pos > old_sel.start_pos {
                             mk_some_sel(new_pos, old_sel.start_pos)?
                         } else {
                             mk_some_sel(new_pos, old_sel.end_pos)?
                         }
                     } else if new_pos > old_sel.end_pos {
-                        if caret_pos < old_sel.end_pos {
+                        if old_caret_pos < old_sel.end_pos {
                             mk_some_sel(old_sel.end_pos, new_pos)?
                         } else {
                             mk_some_sel(old_sel.start_pos, new_pos)?
                         }
-                    } else if new_pos > caret_pos {
+                    } else if new_pos > old_caret_pos {
                         mk_some_sel(new_pos, old_sel.end_pos)?
-                    } else if new_pos < caret_pos {
+                    } else if new_pos < old_caret_pos {
                         mk_some_sel(old_sel.start_pos, new_pos)?
                     } else {
                         None
                     }
                 } else if new_pos < self.caret_pos {
-                    mk_some_sel(new_pos, caret_pos)?
+                    mk_some_sel(new_pos, old_caret_pos)?
                 } else {
-                    mk_some_sel(caret_pos, new_pos)?
+                    mk_some_sel(old_caret_pos, new_pos)?
                 }
             } else {
-                None
+                self.selection_opt
             }
         } else {
-            self.selection_opt
+            None
         };
 
         self.caret_pos = new_pos;

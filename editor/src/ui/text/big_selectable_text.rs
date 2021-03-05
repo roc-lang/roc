@@ -12,6 +12,7 @@ use crate::ui::ui_error::{
     UIResult,
 };
 use crate::ui::util::is_newline;
+use crate::window::keyboard_input::{no_mods, Modifiers};
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use ropey::Rope;
@@ -24,7 +25,6 @@ use std::{
     path::Path,
 };
 use winit::event::{VirtualKeyCode, VirtualKeyCode::*};
-use crate::window::keyboard_input::{Modifiers, no_mods};
 
 pub struct BigSelectableText {
     pub caret_w_select: CaretWSelect,
@@ -135,7 +135,7 @@ impl SelectableLines for BigSelectableText {
         let old_caret_pos = self.caret_w_select.caret_pos;
         let old_line_nr = old_caret_pos.line;
         let old_col_nr = old_caret_pos.column;
-        
+
         let shift_pressed = modifiers.shift;
 
         let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
@@ -416,6 +416,7 @@ impl SelectableLines for BigSelectableText {
 
     fn move_caret_home(&mut self, modifiers: &Modifiers) -> UIResult<()> {
         let curr_line_nr = self.caret_w_select.caret_pos.line;
+        let old_col_nr = self.caret_w_select.caret_pos.column;
 
         let curr_line_str = self.get_line(curr_line_nr)?;
         let line_char_iter = curr_line_str.chars();
@@ -436,10 +437,16 @@ impl SelectableLines for BigSelectableText {
             first_no_space_char_col = 0;
         }
 
+        let new_col_nr = if first_no_space_char_col == old_col_nr {
+            0
+        } else {
+            first_no_space_char_col
+        };
+
         self.caret_w_select.move_caret_w_mods(
             TextPos {
                 line: curr_line_nr,
-                column: first_no_space_char_col,
+                column: new_col_nr,
             },
             modifiers,
         )
@@ -547,12 +554,8 @@ impl SelectableLines for BigSelectableText {
                     Ok(())
                 }
             }
-            Home => {
-                self.move_caret_home(modifiers)
-            }
-            End => {
-                self.move_caret_end(modifiers)
-            }
+            Home => self.move_caret_home(modifiers),
+            End => self.move_caret_end(modifiers),
             _ => Ok(()),
         }
     }
@@ -739,11 +742,11 @@ pub mod test_big_sel_text {
         text_pos::TextPos,
     };
     use crate::ui::ui_error::{OutOfBounds, UIResult};
+    use crate::window::keyboard_input::{no_mods, Modifiers};
     use core::cmp::Ordering;
     use pest::Parser;
     use snafu::OptionExt;
     use std::{collections::HashMap, slice::SliceIndex};
-    use crate::window::keyboard_input::{Modifiers, no_mods};
 
     fn shift_pressed() -> Modifiers {
         Modifiers {
@@ -1178,8 +1181,18 @@ pub mod test_big_sel_text {
         assert_move(&["abc|"], &["abc|"], &no_mods(), move_caret_right)?;
         assert_move(&["| abc"], &[" |abc"], &no_mods(), move_caret_right)?;
         assert_move(&["abc| "], &["abc |"], &no_mods(), move_caret_right)?;
-        assert_move(&["abc|\n", "d"], &["abc\n", "|d"], &no_mods(), move_caret_right)?;
-        assert_move(&["abc|\n", ""], &["abc\n", "|"], &no_mods(), move_caret_right)?;
+        assert_move(
+            &["abc|\n", "d"],
+            &["abc\n", "|d"],
+            &no_mods(),
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc|\n", ""],
+            &["abc\n", "|"],
+            &no_mods(),
+            move_caret_right,
+        )?;
         assert_move(
             &["abc\n", "|def"],
             &["abc\n", "d|ef"],
@@ -1238,8 +1251,18 @@ pub mod test_big_sel_text {
         assert_move(&["abc|"], &["ab|c"], &no_mods(), move_caret_left)?;
         assert_move(&[" |abc"], &["| abc"], &no_mods(), move_caret_left)?;
         assert_move(&["abc |"], &["abc| "], &no_mods(), move_caret_left)?;
-        assert_move(&["abc\n", "|d"], &["abc|\n", "d"], &no_mods(), move_caret_left)?;
-        assert_move(&["abc\n", "|"], &["abc|\n", ""], &no_mods(), move_caret_left)?;
+        assert_move(
+            &["abc\n", "|d"],
+            &["abc|\n", "d"],
+            &no_mods(),
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "|"],
+            &["abc|\n", ""],
+            &no_mods(),
+            move_caret_left,
+        )?;
         assert_move(
             &["abc\n", "d|ef"],
             &["abc\n", "|def"],
@@ -1296,11 +1319,36 @@ pub mod test_big_sel_text {
         assert_move(&["a|bc"], &["|abc"], &no_mods(), move_caret_up)?;
         assert_move(&["ab|c"], &["|abc"], &no_mods(), move_caret_up)?;
         assert_move(&["abc|"], &["|abc"], &no_mods(), move_caret_up)?;
-        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], &no_mods(), move_caret_up)?;
-        assert_move(&["abc\n", "|def"], &["|abc\n", "def"], &no_mods(), move_caret_up)?;
-        assert_move(&["abc\n", "d|ef"], &["a|bc\n", "def"], &no_mods(), move_caret_up)?;
-        assert_move(&["abc\n", "de|f"], &["ab|c\n", "def"], &no_mods(), move_caret_up)?;
-        assert_move(&["abc\n", "def|"], &["abc|\n", "def"], &no_mods(), move_caret_up)?;
+        assert_move(
+            &["|abc\n", "def"],
+            &["|abc\n", "def"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "|def"],
+            &["|abc\n", "def"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "d|ef"],
+            &["a|bc\n", "def"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "de|f"],
+            &["ab|c\n", "def"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "def|"],
+            &["abc|\n", "def"],
+            &no_mods(),
+            move_caret_up,
+        )?;
         assert_move(
             &["abc\n", "def \n", "|ghi"],
             &["abc\n", "|def \n", "ghi"],
@@ -1331,9 +1379,24 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_up,
         )?;
-        assert_move(&["abc\n", "de|"], &["ab|c\n", "de"], &no_mods(), move_caret_up)?;
-        assert_move(&["abc\n", "d|e"], &["a|bc\n", "de"], &no_mods(), move_caret_up)?;
-        assert_move(&["abc\n", "|de"], &["|abc\n", "de"], &no_mods(), move_caret_up)?;
+        assert_move(
+            &["abc\n", "de|"],
+            &["ab|c\n", "de"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "d|e"],
+            &["a|bc\n", "de"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "|de"],
+            &["|abc\n", "de"],
+            &no_mods(),
+            move_caret_up,
+        )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
             &["ab\n", "cdef\n", "ghijkl|\n", "mnopqrst"],
@@ -1412,10 +1475,30 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_up,
         )?;
-        assert_move(&["abc def gh |"], &["|abc def gh "], &no_mods(), move_caret_up)?;
-        assert_move(&["abc de|f gh "], &["|abc def gh "], &no_mods(), move_caret_up)?;
-        assert_move(&["ab|c def gh "], &["|abc def gh "], &no_mods(), move_caret_up)?;
-        assert_move(&["a|bc def gh "], &["|abc def gh "], &no_mods(), move_caret_up)?;
+        assert_move(
+            &["abc def gh |"],
+            &["|abc def gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc de|f gh "],
+            &["|abc def gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab|c def gh "],
+            &["|abc def gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["a|bc def gh "],
+            &["|abc def gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
 
         Ok(())
     }
@@ -1515,10 +1598,30 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_down,
         )?;
-        assert_move(&["abc|\n", "de"], &["abc\n", "de|"], &no_mods(), move_caret_down)?;
-        assert_move(&["ab|c\n", "de"], &["abc\n", "de|"], &no_mods(), move_caret_down)?;
-        assert_move(&["a|bc\n", "de"], &["abc\n", "d|e"], &no_mods(), move_caret_down)?;
-        assert_move(&["|abc\n", "de"], &["abc\n", "|de"], &no_mods(), move_caret_down)?;
+        assert_move(
+            &["abc|\n", "de"],
+            &["abc\n", "de|"],
+            &no_mods(),
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|c\n", "de"],
+            &["abc\n", "de|"],
+            &no_mods(),
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|bc\n", "de"],
+            &["abc\n", "d|e"],
+            &no_mods(),
+            move_caret_down,
+        )?;
+        assert_move(
+            &["|abc\n", "de"],
+            &["abc\n", "|de"],
+            &no_mods(),
+            move_caret_down,
+        )?;
         assert_move(
             &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
             &["ab\n", "cd|ef\n", "ghijkl\n", "mnopqrst"],
@@ -1579,11 +1682,36 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_down,
         )?;
-        assert_move(&["abc def gh |"], &["abc def gh |"], &no_mods(), move_caret_down)?;
-        assert_move(&["abc de|f gh "], &["abc def gh |"], &no_mods(), move_caret_down)?;
-        assert_move(&["ab|c def gh "], &["abc def gh |"], &no_mods(), move_caret_down)?;
-        assert_move(&["a|bc def gh "], &["abc def gh |"], &no_mods(), move_caret_down)?;
-        assert_move(&["|abc def gh "], &["abc def gh |"], &no_mods(), move_caret_down)?;
+        assert_move(
+            &["abc def gh |"],
+            &["abc def gh |"],
+            &no_mods(),
+            move_caret_down,
+        )?;
+        assert_move(
+            &["abc de|f gh "],
+            &["abc def gh |"],
+            &no_mods(),
+            move_caret_down,
+        )?;
+        assert_move(
+            &["ab|c def gh "],
+            &["abc def gh |"],
+            &no_mods(),
+            move_caret_down,
+        )?;
+        assert_move(
+            &["a|bc def gh "],
+            &["abc def gh |"],
+            &no_mods(),
+            move_caret_down,
+        )?;
+        assert_move(
+            &["|abc def gh "],
+            &["abc def gh |"],
+            &no_mods(),
+            move_caret_down,
+        )?;
 
         Ok(())
     }
@@ -1594,10 +1722,31 @@ pub mod test_big_sel_text {
         assert_move(&["|"], &["|"], &no_mods(), move_caret_home)?;
         assert_move(&["a|"], &["|a"], &no_mods(), move_caret_home)?;
         assert_move(&["|a"], &["|a"], &no_mods(), move_caret_home)?;
+        assert_move(&[" |a"], &["| a"], &no_mods(), move_caret_home)?;
+        assert_move(&["| a"], &[" |a"], &no_mods(), move_caret_home)?;
         assert_move(&[" a|"], &[" |a"], &no_mods(), move_caret_home)?;
         assert_move(&[" abc |"], &[" |abc "], &no_mods(), move_caret_home)?;
         assert_move(&["\tabc |"], &["\t|abc "], &no_mods(), move_caret_home)?;
-        assert_move(&[" abc def\tghi|"], &[" |abc def\tghi"], &no_mods(), move_caret_home)?;
+        assert_move(&["\t|abc "], &["|\tabc "], &no_mods(), move_caret_home)?;
+        assert_move(&["|\tabc "], &["\t|abc "], &no_mods(), move_caret_home)?;
+        assert_move(
+            &[" abc def\tghi|"],
+            &[" |abc def\tghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &[" |abc def\tghi"],
+            &["| abc def\tghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["| abc def\tghi"],
+            &[" |abc def\tghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
 
         assert_move(
             &["abc\n", "de|\n", "ghi"],
@@ -1612,8 +1761,32 @@ pub mod test_big_sel_text {
             move_caret_home,
         )?;
         assert_move(
+            &["abc\n", "| de\n", "ghi"],
+            &["abc\n", " |de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", " |de\n", "ghi"],
+            &["abc\n", "| de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
             &["abc|\n", "de\n", "ghi"],
             &["|abc\n", "de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &[" |abc\n", "de\n", "ghi"],
+            &["| abc\n", "de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["| abc\n", "de\n", "ghi"],
+            &[" |abc\n", "de\n", "ghi"],
             &no_mods(),
             move_caret_home,
         )?;
@@ -1624,6 +1797,18 @@ pub mod test_big_sel_text {
             move_caret_home,
         )?;
         assert_move(
+            &["abc\n", "de\n", " |ghi"],
+            &["abc\n", "de\n", "| ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "de\n", "| ghi"],
+            &["abc\n", "de\n", " |ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
             &["abc \n", "de \n", "|ghi "],
             &["abc \n", "de \n", "|ghi "],
             &no_mods(),
@@ -1641,7 +1826,6 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_home,
         )?;
-
 
         Ok(())
     }
@@ -1655,7 +1839,12 @@ pub mod test_big_sel_text {
         assert_move(&[" a| "], &[" a |"], &no_mods(), move_caret_end)?;
         assert_move(&["| abc "], &[" abc |"], &no_mods(), move_caret_end)?;
         assert_move(&["|\tabc "], &["\tabc |"], &no_mods(), move_caret_end)?;
-        assert_move(&[" abc d|ef\tghi"], &[" abc def\tghi|"], &no_mods(), move_caret_end)?;
+        assert_move(
+            &[" abc d|ef\tghi"],
+            &[" abc def\tghi|"],
+            &no_mods(),
+            move_caret_end,
+        )?;
 
         assert_move(
             &["abc\n", "|de\n", "ghi"],
@@ -1712,7 +1901,6 @@ pub mod test_big_sel_text {
             move_caret_end,
         )?;
 
-
         Ok(())
     }
 
@@ -1728,8 +1916,18 @@ pub mod test_big_sel_text {
         assert_move(&["abc|"], &["abc|"], &shift_pressed(), move_caret_right)?;
         assert_move(&["| abc"], &["[ ]|abc"], &shift_pressed(), move_caret_right)?;
         assert_move(&["abc| "], &["abc[ ]|"], &shift_pressed(), move_caret_right)?;
-        assert_move(&["abc|\n", "d"], &["abc[\n", "]|d"], &shift_pressed(), move_caret_right)?;
-        assert_move(&["abc|\n", ""], &["abc[\n", "]|"], &shift_pressed(), move_caret_right)?;
+        assert_move(
+            &["abc|\n", "d"],
+            &["abc[\n", "]|d"],
+            &shift_pressed(),
+            move_caret_right,
+        )?;
+        assert_move(
+            &["abc|\n", ""],
+            &["abc[\n", "]|"],
+            &shift_pressed(),
+            move_caret_right,
+        )?;
         assert_move(
             &["abc\n", "|def"],
             &["abc\n", "[d]|ef"],
@@ -1788,9 +1986,24 @@ pub mod test_big_sel_text {
         assert_move(&["abc|"], &["ab|[c]"], &shift_pressed(), move_caret_left)?;
         assert_move(&[" |abc"], &["|[ ]abc"], &shift_pressed(), move_caret_left)?;
         assert_move(&["abc |"], &["abc|[ ]"], &shift_pressed(), move_caret_left)?;
-        assert_move(&["abc|\n", "d"], &["ab|[c]\n", "d"], &shift_pressed(), move_caret_left)?;
-        assert_move(&["abc\n", "|d"], &["abc|[\n", "]d"], &shift_pressed(), move_caret_left)?;
-        assert_move(&["abc\n", "|"], &["abc|[\n", "]"], &shift_pressed(), move_caret_left)?;
+        assert_move(
+            &["abc|\n", "d"],
+            &["ab|[c]\n", "d"],
+            &shift_pressed(),
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "|d"],
+            &["abc|[\n", "]d"],
+            &shift_pressed(),
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc\n", "|"],
+            &["abc|[\n", "]"],
+            &shift_pressed(),
+            move_caret_left,
+        )?;
         assert_move(
             &["abc\n", " |def"],
             &["abc\n", "|[ ]def"],
@@ -2022,7 +2235,12 @@ pub mod test_big_sel_text {
             &shift_pressed(),
             move_caret_down,
         )?;
-        assert_move(&["abc def gh |"], &["abc def gh |"], &shift_pressed(), move_caret_down)?;
+        assert_move(
+            &["abc def gh |"],
+            &["abc def gh |"],
+            &shift_pressed(),
+            move_caret_down,
+        )?;
         assert_move(
             &["abc de|f gh "],
             &["abc de[f gh ]|"],
@@ -2061,7 +2279,12 @@ pub mod test_big_sel_text {
         assert_move(&["a|bc"], &["|[a]bc"], &shift_pressed(), move_caret_up)?;
         assert_move(&["ab|c"], &["|[ab]c"], &shift_pressed(), move_caret_up)?;
         assert_move(&["abc|"], &["|[abc]"], &shift_pressed(), move_caret_up)?;
-        assert_move(&["|abc\n", "def"], &["|abc\n", "def"], &shift_pressed(), move_caret_up)?;
+        assert_move(
+            &["|abc\n", "def"],
+            &["|abc\n", "def"],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
         assert_move(
             &["abc\n", "|def"],
             &["|[abc\n", "]def"],
@@ -2116,9 +2339,24 @@ pub mod test_big_sel_text {
             &shift_pressed(),
             move_caret_up,
         )?;
-        assert_move(&["abc\n", "de|"], &["ab|[c\n", "de]"], &shift_pressed(), move_caret_up)?;
-        assert_move(&["abc\n", "d|e"], &["a|[bc\n", "d]e"], &shift_pressed(), move_caret_up)?;
-        assert_move(&["abc\n", "|de"], &["|[abc\n", "]de"], &shift_pressed(), move_caret_up)?;
+        assert_move(
+            &["abc\n", "de|"],
+            &["ab|[c\n", "de]"],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "d|e"],
+            &["a|[bc\n", "d]e"],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc\n", "|de"],
+            &["|[abc\n", "]de"],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "mnopqrst|"],
             &["ab\n", "cdef\n", "ghijkl|[\n", "mnopqrst]"],
@@ -2197,10 +2435,30 @@ pub mod test_big_sel_text {
             &shift_pressed(),
             move_caret_up,
         )?;
-        assert_move(&["abc def gh |"], &["|[abc def gh ]"], &shift_pressed(), move_caret_up)?;
-        assert_move(&["abc de|f gh "], &["|[abc de]f gh "], &shift_pressed(), move_caret_up)?;
-        assert_move(&["ab|c def gh "], &["|[ab]c def gh "], &shift_pressed(), move_caret_up)?;
-        assert_move(&["a|bc def gh "], &["|[a]bc def gh "], &shift_pressed(), move_caret_up)?;
+        assert_move(
+            &["abc def gh |"],
+            &["|[abc def gh ]"],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["abc de|f gh "],
+            &["|[abc de]f gh "],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab|c def gh "],
+            &["|[ab]c def gh "],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["a|bc def gh "],
+            &["|[a]bc def gh "],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
 
         Ok(())
     }
@@ -2216,20 +2474,111 @@ pub mod test_big_sel_text {
         assert_move(&["\ta|"], &["\t|[a]"], &shift_pressed(), move_caret_home)?;
         assert_move(&["abc|"], &["|[abc]"], &shift_pressed(), move_caret_home)?;
         assert_move(&[" abc|"], &[" |[abc]"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["\tabc|"], &["\t|[abc]"], &shift_pressed(), move_caret_home)?;
+        assert_move(
+            &["\tabc|"],
+            &["\t|[abc]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
         assert_move(&["ab|c"], &["|[ab]c"], &shift_pressed(), move_caret_home)?;
         assert_move(&[" ab|c"], &[" |[ab]c"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["\tab|c"], &["\t|[ab]c"], &shift_pressed(), move_caret_home)?;
-        assert_move(&[" abc def ghi|"], &[" |[abc def ghi]"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["abc def ghi|"], &["|[abc def ghi]"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["abc def |ghi"], &["|[abc def ]ghi"], &shift_pressed(), move_caret_home)?;
+        assert_move(
+            &["\tab|c"],
+            &["\t|[ab]c"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &[" abc def ghi|"],
+            &[" |[abc def ghi]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc def ghi|"],
+            &["|[abc def ghi]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc def |ghi"],
+            &["|[abc def ]ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
 
-        assert_move(&["abc\n", "def\n", "ghi|"], &["abc\n", "def\n", "|[ghi]"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["abc\n", "def|\n", "ghi"], &["abc\n", "|[def]\n", "ghi"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["abc|\n", "def\n", "ghi"], &["|[abc]\n", "def\n", "ghi"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["|abc\n", "def\n", "ghi"], &["|abc\n", "def\n", "ghi"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["abc\n", "|def\n", "ghi"], &["abc\n", "|def\n", "ghi"], &shift_pressed(), move_caret_home)?;
-        assert_move(&["abc\n", "def\n", "|ghi"], &["abc\n", "def\n", "|ghi"], &shift_pressed(), move_caret_home)?;
+        assert_move(
+            &["abc\n", "def\n", "ghi|"],
+            &["abc\n", "def\n", "|[ghi]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "def|\n", "ghi"],
+            &["abc\n", "|[def]\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc|\n", "def\n", "ghi"],
+            &["|[abc]\n", "def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["|abc\n", "def\n", "ghi"],
+            &["|abc\n", "def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "|def\n", "ghi"],
+            &["abc\n", "|def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "|ghi"],
+            &["abc\n", "def\n", "|ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &[" |abc\n", "def\n", "ghi"],
+            &["|[ ]abc\n", "def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", " |def\n", "ghi"],
+            &["abc\n", "|[ ]def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", " |ghi"],
+            &["abc\n", "def\n", "|[ ]ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["| abc\n", "def\n", "ghi"],
+            &["[ ]|abc\n", "def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "| def\n", "ghi"],
+            &["abc\n", "[ ]|def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "| ghi"],
+            &["abc\n", "def\n", "[ ]|ghi"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
 
         Ok(())
     }
@@ -2238,8 +2587,52 @@ pub mod test_big_sel_text {
     fn start_selection_end() -> Result<(), String> {
         let move_caret_end = BigSelectableText::move_caret_end;
         assert_move(&["|"], &["|"], &shift_pressed(), move_caret_end)?;
-
-        //TODO
+        assert_move(&["|a"], &["[a]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["a|"], &["a|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&[" a |"], &[" a |"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["| a "], &["[ a ]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["|abc"], &["[abc]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["|abc\t"], &["[abc\t]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["|abc "], &["[abc ]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["| abc "], &["[ abc ]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&[" abc| "], &[" abc[ ]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&[" ab|c"], &[" ab[c]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(
+            &["abc\n", "def\n", "|ghi"],
+            &["abc\n", "def\n", "[ghi]|"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc\n", "|def\n", "ghi"],
+            &["abc\n", "[def]|\n", "ghi"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["|abc\n", "def\n", "ghi"],
+            &["[abc]|\n", "def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "|ghi "],
+            &["abc\n", "def\n", "[ghi ]|"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc\n", "|def \n", "ghi"],
+            &["abc\n", "[def ]|\n", "ghi"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["|abc \n", "def\n", "ghi"],
+            &["[abc ]|\n", "def\n", "ghi"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
 
         Ok(())
     }
@@ -2267,7 +2660,12 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_right,
         )?;
-        assert_move(&["abc|[\n", "]"], &["abc\n", "|"], &no_mods(), move_caret_right)?;
+        assert_move(
+            &["abc|[\n", "]"],
+            &["abc\n", "|"],
+            &no_mods(),
+            move_caret_right,
+        )?;
         assert_move(
             &["abc\n", "[d]|ef"],
             &["abc\n", "d|ef"],
@@ -2357,9 +2755,24 @@ pub mod test_big_sel_text {
         assert_move(&["[ ]|abc"], &["| abc"], &no_mods(), move_caret_left)?;
         assert_move(&["|[ ]abc"], &["| abc"], &no_mods(), move_caret_left)?;
         assert_move(&["a|[b]c"], &["a|bc"], &no_mods(), move_caret_left)?;
-        assert_move(&["abc[\n", "]|d"], &["abc|\n", "d"], &no_mods(), move_caret_left)?;
-        assert_move(&["abc|[\n", "]d"], &["abc|\n", "d"], &no_mods(), move_caret_left)?;
-        assert_move(&["abc|[\n", "]"], &["abc|\n", ""], &no_mods(), move_caret_left)?;
+        assert_move(
+            &["abc[\n", "]|d"],
+            &["abc|\n", "d"],
+            &no_mods(),
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc|[\n", "]d"],
+            &["abc|\n", "d"],
+            &no_mods(),
+            move_caret_left,
+        )?;
+        assert_move(
+            &["abc|[\n", "]"],
+            &["abc|\n", ""],
+            &no_mods(),
+            move_caret_left,
+        )?;
         assert_move(
             &["abc\n", "[d]|ef"],
             &["abc\n", "|def"],
@@ -2724,10 +3137,30 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_up,
         )?;
-        assert_move(&["abc|[\n", "de]"], &["abc|\n", "de"], &no_mods(), move_caret_up)?;
-        assert_move(&["ab[c\n", "de]|"], &["ab|c\n", "de"], &no_mods(), move_caret_up)?;
-        assert_move(&["a|[bc\n", "d]e"], &["a|bc\n", "de"], &no_mods(), move_caret_up)?;
-        assert_move(&["[abc\n", "]|de"], &["|abc\n", "de"], &no_mods(), move_caret_up)?;
+        assert_move(
+            &["abc|[\n", "de]"],
+            &["abc|\n", "de"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab[c\n", "de]|"],
+            &["ab|c\n", "de"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["a|[bc\n", "d]e"],
+            &["a|bc\n", "de"],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["[abc\n", "]|de"],
+            &["|abc\n", "de"],
+            &no_mods(),
+            move_caret_up,
+        )?;
         assert_move(
             &["ab[\n", "cd]|ef\n", "ghijkl\n", "mnopqrst"],
             &["ab|\n", "cdef\n", "ghijkl\n", "mnopqrst"],
@@ -2788,10 +3221,141 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_up,
         )?;
-        assert_move(&["abc de[f gh ]|"], &["abc de|f gh "], &no_mods(), move_caret_up)?;
-        assert_move(&["ab|[c def gh ]"], &["ab|c def gh "], &no_mods(), move_caret_up)?;
-        assert_move(&["a[bc def gh ]|"], &["a|bc def gh "], &no_mods(), move_caret_up)?;
-        assert_move(&["[abc def gh ]|"], &["|abc def gh "], &no_mods(), move_caret_up)?;
+        assert_move(
+            &["abc de[f gh ]|"],
+            &["abc de|f gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["ab|[c def gh ]"],
+            &["ab|c def gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["a[bc def gh ]|"],
+            &["a|bc def gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
+        assert_move(
+            &["[abc def gh ]|"],
+            &["|abc def gh "],
+            &no_mods(),
+            move_caret_up,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn end_selection_home() -> Result<(), String> {
+        let move_caret_home = BigSelectableText::move_caret_home;
+        assert_move(&["[a]|"], &["|a"], &no_mods(), move_caret_home)?;
+        assert_move(&["|[a]"], &["|a"], &no_mods(), move_caret_home)?;
+        assert_move(&[" |[a]"], &["| a"], &no_mods(), move_caret_home)?;
+        assert_move(&["|[ a]"], &[" |a"], &no_mods(), move_caret_home)?;
+        assert_move(&[" [a]|"], &[" |a"], &no_mods(), move_caret_home)?;
+        assert_move(&[" a[bc ]|"], &[" |abc "], &no_mods(), move_caret_home)?;
+        assert_move(&["\t[abc ]|"], &["\t|abc "], &no_mods(), move_caret_home)?;
+        assert_move(&["\t|[abc] "], &["|\tabc "], &no_mods(), move_caret_home)?;
+        assert_move(&["|[\tabc] "], &["\t|abc "], &no_mods(), move_caret_home)?;
+        assert_move(
+            &["[ abc def\tghi]|"],
+            &[" |abc def\tghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &[" |[abc] def\tghi"],
+            &["| abc def\tghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["|[ abc def\tghi]"],
+            &[" |abc def\tghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+
+        assert_move(
+            &["abc\n", "d[e]|\n", "ghi"],
+            &["abc\n", "|de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", " [d]|e\n", "ghi"],
+            &["abc\n", " |de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["[abc\n", "]| de\n", "ghi"],
+            &["abc\n", " |de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", " |[de\n]", "ghi"],
+            &["abc\n", "| de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc|[\n", "de\n", "ghi]"],
+            &["|abc\n", "de\n", "ghi"],
+            &no_mods(),
+            move_caret_home,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn end_selection_end() -> Result<(), String> {
+        let move_caret_end = BigSelectableText::move_caret_end;
+        assert_move(&["|[a]"], &["a|"], &no_mods(), move_caret_end)?;
+        assert_move(&["[a]|"], &["a|"], &no_mods(), move_caret_end)?;
+        assert_move(&[" a|[ ]"], &[" a |"], &no_mods(), move_caret_end)?;
+        assert_move(&["[ a]| "], &[" a |"], &no_mods(), move_caret_end)?;
+        assert_move(&[" [a]| "], &[" a |"], &no_mods(), move_caret_end)?;
+        assert_move(&["[ a ]|"], &[" a |"], &no_mods(), move_caret_end)?;
+        assert_move(&["|[ a]bc "], &[" abc |"], &no_mods(), move_caret_end)?;
+        assert_move(&["|[\tabc] "], &["\tabc |"], &no_mods(), move_caret_end)?;
+        assert_move(
+            &[" abc d|[ef\tg]hi"],
+            &[" abc def\tghi|"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+
+        assert_move(
+            &["abc\n", "|[de\n", "ghi]"],
+            &["abc\n", "de|\n", "ghi"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["[abc\n", " d]|e\n", "ghi"],
+            &["abc\n", " de|\n", "ghi"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["|[abc\n", "de\n", "ghi]"],
+            &["abc|\n", "de\n", "ghi"],
+            &no_mods(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc\n", "de\n", "g|[hi]"],
+            &["abc\n", "de\n", "ghi|"],
+            &no_mods(),
+            move_caret_end,
+        )?;
 
         Ok(())
     }
@@ -2803,7 +3367,12 @@ pub mod test_big_sel_text {
         assert_move(&["[a]|bc"], &["[ab]|c"], &shift_pressed(), move_caret_right)?;
         assert_move(&["a[b]|c"], &["a[bc]|"], &shift_pressed(), move_caret_right)?;
         assert_move(&["[ab]|c"], &["[abc]|"], &shift_pressed(), move_caret_right)?;
-        assert_move(&["[ ]|abc"], &["[ a]|bc"], &shift_pressed(), move_caret_right)?;
+        assert_move(
+            &["[ ]|abc"],
+            &["[ a]|bc"],
+            &shift_pressed(),
+            move_caret_right,
+        )?;
         assert_move(&["[abc]|"], &["[abc]|"], &shift_pressed(), move_caret_right)?;
         assert_move(&["a[bc]|"], &["a[bc]|"], &shift_pressed(), move_caret_right)?;
         assert_move(&["ab[c]|"], &["ab[c]|"], &shift_pressed(), move_caret_right)?;
@@ -2813,7 +3382,12 @@ pub mod test_big_sel_text {
             &shift_pressed(),
             move_caret_right,
         )?;
-        assert_move(&["ab[c]|\n", ""], &["ab[c\n", "]|"], &shift_pressed(), move_caret_right)?;
+        assert_move(
+            &["ab[c]|\n", ""],
+            &["ab[c\n", "]|"],
+            &shift_pressed(),
+            move_caret_right,
+        )?;
         assert_move(
             &["ab[c]|\n", "d"],
             &["ab[c\n", "]|d"],
@@ -2863,7 +3437,12 @@ pub mod test_big_sel_text {
         assert_move(&["|[abc]"], &["|[abc]"], &shift_pressed(), move_caret_left)?;
         assert_move(&["|[ab]c"], &["|[ab]c"], &shift_pressed(), move_caret_left)?;
         assert_move(&["|[a]bc"], &["|[a]bc"], &shift_pressed(), move_caret_left)?;
-        assert_move(&[" |[a]bc"], &["|[ a]bc"], &shift_pressed(), move_caret_left)?;
+        assert_move(
+            &[" |[a]bc"],
+            &["|[ a]bc"],
+            &shift_pressed(),
+            move_caret_left,
+        )?;
         assert_move(
             &["abc|[\n", "]d"],
             &["ab|[c\n", "]d"],
@@ -2876,7 +3455,12 @@ pub mod test_big_sel_text {
             &shift_pressed(),
             move_caret_left,
         )?;
-        assert_move(&["ab|[c\n", "]"], &["a|[bc\n", "]"], &shift_pressed(), move_caret_left)?;
+        assert_move(
+            &["ab|[c\n", "]"],
+            &["a|[bc\n", "]"],
+            &shift_pressed(),
+            move_caret_left,
+        )?;
         assert_move(
             &["abc\n", "def|[\n", "ghi\n", "j]kl"],
             &["abc\n", "de|[f\n", "ghi\n", "j]kl"],
@@ -2912,7 +3496,12 @@ pub mod test_big_sel_text {
         assert_move(&["ab[c]|"], &["|[ab]c"], &shift_pressed(), move_caret_up)?;
         assert_move(&["[a]|"], &["|a"], &shift_pressed(), move_caret_up)?;
         assert_move(&["[a]|bc"], &["|abc"], &shift_pressed(), move_caret_up)?;
-        assert_move(&["[a]|bc\n", "d"], &["|abc\n", "d"], &shift_pressed(), move_caret_up)?;
+        assert_move(
+            &["[a]|bc\n", "d"],
+            &["|abc\n", "d"],
+            &shift_pressed(),
+            move_caret_up,
+        )?;
         assert_move(
             &["abc\n", "de[f]|"],
             &["abc|[\n", "de]f"],
@@ -2980,7 +3569,12 @@ pub mod test_big_sel_text {
             &shift_pressed(),
             move_caret_down,
         )?;
-        assert_move(&["[a]|bc\n", ""], &["[abc\n", "]|"], &shift_pressed(), move_caret_down)?;
+        assert_move(
+            &["[a]|bc\n", ""],
+            &["[abc\n", "]|"],
+            &shift_pressed(),
+            move_caret_down,
+        )?;
         assert_move(
             &["ab\n", "cdef\n", "ghijkl\n", "[mnopqr]|st"],
             &["ab\n", "cdef\n", "ghijkl\n", "[mnopqrst]|"],
@@ -3010,6 +3604,129 @@ pub mod test_big_sel_text {
             &["abcd[efgh\n", "ijklm]|n\n", "opqr\n", "st"],
             &shift_pressed(),
             move_caret_down,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn extend_selection_home() -> Result<(), String> {
+        let move_caret_home = SelectableLines::move_caret_home;
+
+        assert_move(&["ab|[c]"], &["|[abc]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["a|[bc]"], &["|[abc]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["|[abc]"], &["|[abc]"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["|[ab]c"], &["|[ab]c"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["|[a]bc"], &["|[a]bc"], &shift_pressed(), move_caret_home)?;
+        assert_move(
+            &[" |[a]bc"],
+            &["|[ a]bc"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(&["ab[c]|"], &["|[ab]c"], &shift_pressed(), move_caret_home)?;
+        assert_move(
+            &["abc\n", "de[f]|"],
+            &["abc\n", "|[de]f"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f]"],
+            &["abc\n", "|[def]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["ab|[c\n", "def]"],
+            &["|[abc\n", "def]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &[" ab|[c\n", "def]"],
+            &[" |[abc\n", "def]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &[" |[abc\n", "def]"],
+            &["|[ abc\n", "def]"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "|[mnopqr]st"],
+            &["ab\n", "cdef\n", "ghijkl\n", "|[mnopqr]st"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "gh|[ijkl]\n", "mnopqrst"],
+            &["ab\n", "cdef\n", "|[ghijkl]\n", "mnopqrst"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abcdefgh\n", "ijklmn\n", "op[qr]|\n", "st"],
+            &["abcdefgh\n", "ijklmn\n", "|[op]qr\n", "st"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn extend_selection_end() -> Result<(), String> {
+        let move_caret_end = SelectableLines::move_caret_end;
+
+        assert_move(&["[ab]|c"], &["[abc]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["[a]|bc"], &["[abc]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["[abc]|"], &["[abc]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["|[ab]c"], &["ab[c]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(&["|[a]bc"], &["a[bc]|"], &shift_pressed(), move_caret_end)?;
+        assert_move(
+            &["[a]|bc\n", "d"],
+            &["[abc]|\n", "d"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["[a]|bc \n", "de"],
+            &["[abc ]|\n", "de"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["[abc\n", "d]|e"],
+            &["[abc\n", "de]|"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["ab\n", "cdef\n", "ghijkl\n", "[mnopqr]|st"],
+            &["ab\n", "cdef\n", "ghijkl\n", "[mnopqrst]|"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["a[b\n", "cdef\n", "ghijkl\n", "mnopqr]|st"],
+            &["a[b\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            &["[ab\n", "cdef\n", "ghijkl\n", "mnopqrst]|"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abcd[e]|fgh\n", "ijklmn\n", "opqr\n", "st"],
+            &["abcd[efgh]|\n", "ijklmn\n", "opqr\n", "st"],
+            &shift_pressed(),
+            move_caret_end,
         )?;
 
         Ok(())
@@ -3179,6 +3896,123 @@ pub mod test_big_sel_text {
             &["abcdef\n", "gh|[ij\n", "kl]"],
             &shift_pressed(),
             move_caret_down,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn shrink_selection_home() -> Result<(), String> {
+        let move_caret_home = SelectableLines::move_caret_home;
+
+        assert_move(&["[abc]|"], &["|abc"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["[ab]|c"], &["|abc"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["[a]|bc"], &["|abc"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" [abc]|"], &[" |abc"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" [ab]|c"], &[" |abc"], &shift_pressed(), move_caret_home)?;
+        assert_move(&[" [a]|bc"], &[" |abc"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["ab[c]|"], &["|[ab]c"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["a[b]|c"], &["|[a]bc"], &shift_pressed(), move_caret_home)?;
+        assert_move(&["a[bc]|"], &["|[a]bc"], &shift_pressed(), move_caret_home)?;
+
+        assert_move(
+            &["[abc\n", "def]|"],
+            &["[abc\n", "]|def"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["[abc\n", " de]|f"],
+            &["[abc\n", " ]|def"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["[abc\n", "def\n", "ghi\n", "jkl]|"],
+            &["[abc\n", "def\n", "ghi\n", "]|jkl"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "def\n", "ghi[\n", "jkl]|"],
+            &["abc\n", "def\n", "ghi[\n", "]|jkl"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["abc\n", "d[ef\n", " ghi\n", " jk]|l"],
+            &["abc\n", "d[ef\n", " ghi\n", " ]|jkl"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["[abc\n", "d]|ef\n", "ghi\n", "jkl"],
+            &["[abc\n", "]|def\n", "ghi\n", "jkl"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+        assert_move(
+            &["[abc\n", "d]|ef\n", "ghi\n", "jkl"],
+            &["[abc\n", "]|def\n", "ghi\n", "jkl"],
+            &shift_pressed(),
+            move_caret_home,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn shrink_selection_end() -> Result<(), String> {
+        let move_caret_end = SelectableLines::move_caret_end;
+
+        assert_move(&["|[abc]"], &["abc|"], &shift_pressed(), move_caret_end)?;
+        assert_move(
+            &["|[abc\n", "def]"],
+            &["abc|[\n", "def]"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["a|[bc\n", "def]"],
+            &["abc|[\n", "def]"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["a|[bc\n", "def\n", "ghi]"],
+            &["abc|[\n", "def\n", "ghi]"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["ab|[c\n", "def\n", "ghi]"],
+            &["abc|[\n", "def\n", "ghi]"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abc\n", "de|[f\n", "ghi]"],
+            &["abc\n", "def|[\n", "ghi]"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abcdef|[\n", "ghij\n", "kl]"],
+            &["abcdef|[\n", "ghij\n", "kl]"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["|[ abcdef\n", "ghij\n", "kl]"],
+            &[" abcdef|[\n", "ghij\n", "kl]"],
+            &shift_pressed(),
+            move_caret_end,
+        )?;
+        assert_move(
+            &["abcdef\n", "ghij\n", "|[kl]"],
+            &["abcdef\n", "ghij\n", "kl|"],
+            &shift_pressed(),
+            move_caret_end,
         )?;
 
         Ok(())

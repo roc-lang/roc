@@ -6,8 +6,8 @@ use crate::ui::text::{
     text_pos::TextPos,
 };
 use crate::ui::ui_error::UIResult;
-use winit::event::{ModifiersState, VirtualKeyCode};
 use crate::window::keyboard_input::from_winit;
+use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {

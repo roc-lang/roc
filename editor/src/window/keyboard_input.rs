@@ -1,5 +1,3 @@
-
-
 pub struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,
@@ -13,7 +11,7 @@ impl Default for Modifiers {
             shift: false,
             ctrl: false,
             alt: false,
-            logo: false
+            logo: false,
         }
     }
 }
@@ -23,7 +21,7 @@ pub fn no_mods() -> Modifiers {
         shift: false,
         ctrl: false,
         alt: false,
-        logo: false
+        logo: false,
     }
 }
 
