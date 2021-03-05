@@ -14,23 +14,22 @@ decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string: 
 loopHelp : { remaining : Nat, string : Str } -> Decoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
 loopHelp = \{ remaining, string } ->
     if remaining >= 3 then
-        Bytes.Decode.map3
-            Bytes.Decode.u8
-            Bytes.Decode.u8
-            Bytes.Decode.u8
-            \x, y, z ->
-                a : U32
-                a = Num.intCast x
-                b : U32
-                b = Num.intCast y
-                c : U32
-                c = Num.intCast z
-                combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy 16 a) (Num.shiftLeftBy 8 b)) c
-                Loop
-                    {
-                        remaining: remaining - 3,
-                        string: Str.concat string (bitsToChars combined 0)
-                    }
+
+        x, y, z <- Bytes.Decode.map3 Bytes.Decode.u8 Bytes.Decode.u8 Bytes.Decode.u8
+
+        a : U32
+        a = Num.intCast x
+        b : U32
+        b = Num.intCast y
+        c : U32
+        c = Num.intCast z
+
+        combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy 16 a) (Num.shiftLeftBy 8 b)) c
+        Loop
+            {
+                remaining: remaining - 3,
+                string: Str.concat string (bitsToChars combined 0)
+            }
 
     else if remaining == 0 then
         Bytes.Decode.succeed (Done string)

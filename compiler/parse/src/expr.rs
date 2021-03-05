@@ -1766,6 +1766,7 @@ fn ident_then_no_args<'a>(
         Equals(u16),
         Colon(u16),
         Backarrow(u16),
+        Comma(u16),
     }
 
     let parser = optional(and!(
@@ -1774,6 +1775,7 @@ fn ident_then_no_args<'a>(
             map!(equals_with_indent_help(), Next::Equals),
             map!(colon_with_indent(), Next::Colon),
             map!(backarrow_with_indent(), Next::Backarrow),
+            // map!(comma_with_indent(), Next::Comma),
         ]
     ));
 
@@ -1781,8 +1783,7 @@ fn ident_then_no_args<'a>(
 
     // no arguments, that limits the options
     match next {
-        Some((ident_spaces, Next::Equals(equals_indent))) => {
-            // We got '=' with no args before it
+        Some((ident_spaces, next)) => {
             let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
             let value = if ident_spaces.is_empty() {
                 pattern
@@ -1790,64 +1791,73 @@ fn ident_then_no_args<'a>(
                 Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
             };
             let region = loc_ident.region;
-            let def_start_col = state.indent_col;
-            let loc_pattern = Located { region, value };
-            // TODO use equals_indent below?
-            let (_, spaces_after_equals, state) =
-                space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody).parse(arena, state)?;
-
-            let (_, parsed_expr, state) = parse_def_expr_help(
-                min_indent,
-                def_start_col,
-                equals_indent,
-                arena,
-                state,
-                loc_pattern,
-                spaces_after_equals,
-            )?;
-
-            Ok((MadeProgress, parsed_expr, state))
-        }
-        Some((ident_spaces, Next::Backarrow(equals_indent))) => {
-            // We got '<-' with no args before it
-            let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
-            let value = if ident_spaces.is_empty() {
-                pattern
-            } else {
-                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
-            };
-            let region = loc_ident.region;
-            let def_start_col = state.indent_col;
             let loc_pattern = Located { region, value };
 
-            let (_, spaces_after_equals, state) =
-                space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody).parse(arena, state)?;
+            match next {
+                Next::Equals(equals_indent) => {
+                    // We got '=' with no args before it
+                    let def_start_col = state.indent_col;
+                    // TODO use equals_indent below?
+                    let (_, spaces_after_equals, state) =
+                        space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody)
+                            .parse(arena, state)?;
 
-            // let (_, parsed_expr, state) = parse_def_expr_help(
-            let (_, parsed_expr, state) = parse_backarrow_help(
-                min_indent,
-                def_start_col,
-                equals_indent,
-                arena,
-                state,
-                loc_pattern,
-                spaces_after_equals,
-            )?;
+                    let (_, parsed_expr, state) = parse_def_expr_help(
+                        min_indent,
+                        def_start_col,
+                        equals_indent,
+                        arena,
+                        state,
+                        loc_pattern,
+                        spaces_after_equals,
+                    )?;
 
-            Ok((MadeProgress, parsed_expr, state))
-        }
-        Some((ident_spaces, Next::Colon(colon_indent))) => {
-            let pattern = Pattern::from_ident(arena, loc_ident.value);
+                    Ok((MadeProgress, parsed_expr, state))
+                }
+                Next::Backarrow(equals_indent) => {
+                    // We got '<-' with no args before it
+                    let def_start_col = state.indent_col;
 
-            let value = if ident_spaces.is_empty() {
-                pattern
-            } else {
-                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
-            };
-            let region = loc_ident.region;
-            let loc_pattern = Located { region, value };
+                    let (_, spaces_after_equals, state) =
+                        space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody)
+                            .parse(arena, state)?;
 
-            parse_def_signature_help(min_indent, colon_indent, arena, state, loc_pattern)
+                    let (_, parsed_expr, state) = parse_backarrow_help(
+                        min_indent,
+                        def_start_col,
+                        equals_indent,
+                        arena,
+                        state,
+                        loc_pattern,
+                        spaces_after_equals,
+                    )?;
+
+                    Ok((MadeProgress, parsed_expr, state))
+                }
+                Next::Comma(equals_indent) => {
+                    // We got '<-' with no args before it
+                    let def_start_col = state.indent_col;
+
+                    let (_, spaces_after_equals, state) =
+                        space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody)
+                            .parse(arena, state)?;
+
+                    let (_, parsed_expr, state) = parse_backarrow_help(
+                        min_indent,
+                        def_start_col,
+                        equals_indent,
+                        arena,
+                        state,
+                        loc_pattern,
+                        spaces_after_equals,
+                    )?;
+
+                    Ok((MadeProgress, parsed_expr, state))
+                }
+                Next::Colon(colon_indent) => {
+                    parse_def_signature_help(min_indent, colon_indent, arena, state, loc_pattern)
+                }
+            }
         }
         None => {
             let ident = loc_ident.value.clone();
