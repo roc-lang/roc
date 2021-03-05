@@ -1,9 +1,12 @@
-use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0;
 use crate::ident::lowercase_ident;
 use crate::module::package_name;
 use crate::parser::{ascii_char, optional, Either, Parser, Progress::*, State, SyntaxError};
 use crate::string_literal;
+use crate::{
+    ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation},
+    parser::specialize,
+};
 use bumpalo::collections::Vec;
 use inlinable_string::InlinableString;
 use roc_region::all::Loc;
@@ -272,7 +275,10 @@ pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, SyntaxError<'a>>
 pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, SyntaxError<'a>> {
     map!(
         either!(
-            string_literal::parse(),
+            specialize(
+                |e, r, c| SyntaxError::Expr(crate::parser::EExpr::Str(e, r, c)),
+                string_literal::parse()
+            ),
             and!(
                 package_name(),
                 skip_first!(one_or_more!(ascii_char(b' ')), package_version())

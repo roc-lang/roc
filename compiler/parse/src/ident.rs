@@ -91,20 +91,20 @@ pub fn parse_ident<'a>(
                 is_capitalized = first_ch.is_uppercase();
                 is_accessor_fn = false;
 
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting(bytes_parsed)?;
             } else if first_ch == '.' {
                 is_capitalized = false;
                 is_accessor_fn = true;
 
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting(bytes_parsed)?;
             } else if first_ch == '@' {
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting(bytes_parsed)?;
 
                 // '@' must always be followed by a capital letter!
                 match peek_utf8_char(&state) {
                     Ok((next_ch, next_bytes_parsed)) => {
                         if next_ch.is_uppercase() {
-                            state = state.advance_without_indenting(arena, next_bytes_parsed)?;
+                            state = state.advance_without_indenting(next_bytes_parsed)?;
 
                             part_buf.push('@');
                             part_buf.push(next_ch);
@@ -114,7 +114,6 @@ pub fn parse_ident<'a>(
                             is_accessor_fn = false;
                         } else {
                             return Err(unexpected(
-                                arena,
                                 bytes_parsed + next_bytes_parsed,
                                 Attempting::Identifier,
                                 state,
@@ -127,7 +126,7 @@ pub fn parse_ident<'a>(
                     }
                 }
             } else {
-                return Err(unexpected(arena, 0, Attempting::Identifier, state));
+                return Err(unexpected(0, Attempting::Identifier, state));
             }
         }
         Err(reason) => {
@@ -193,7 +192,7 @@ pub fn parse_ident<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting(bytes_parsed)?;
             }
             Err(reason) => {
                 let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
@@ -254,7 +253,7 @@ pub fn parse_ident<'a>(
                 // We had neither capitalized nor noncapitalized parts,
                 // yet we made it this far. The only explanation is that this was
                 // a stray '.' drifting through the cosmos.
-                return Err(unexpected(arena, 1, Attempting::Identifier, state));
+                return Err(unexpected(1, Attempting::Identifier, state));
             }
         }
     } else if is_private_tag {
@@ -308,7 +307,7 @@ fn malformed<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting(arena, bytes_parsed)?;
+                state = state.advance_without_indenting(bytes_parsed)?;
             }
             Err(reason) => return state.fail(arena, MadeProgress, reason),
         }
@@ -339,7 +338,7 @@ where
         let (first_letter, bytes_parsed) = match peek_utf8_char(&state) {
             Ok((first_letter, bytes_parsed)) => {
                 if !pred(first_letter) {
-                    return Err(unexpected(arena, 0, Attempting::RecordFieldLabel, state));
+                    return Err(unexpected(0, Attempting::RecordFieldLabel, state));
                 }
 
                 (first_letter, bytes_parsed)
@@ -351,7 +350,7 @@ where
 
         buf.push(first_letter);
 
-        state = state.advance_without_indenting(arena, bytes_parsed)?;
+        state = state.advance_without_indenting(bytes_parsed)?;
 
         while !state.bytes.is_empty() {
             match peek_utf8_char(&state) {
@@ -364,7 +363,7 @@ where
                     if ch.is_alphabetic() || ch.is_ascii_digit() {
                         buf.push(ch);
 
-                        state = state.advance_without_indenting(arena, bytes_parsed)?;
+                        state = state.advance_without_indenting(bytes_parsed)?;
                     } else {
                         // This is the end of the field. We're done!
                         break;

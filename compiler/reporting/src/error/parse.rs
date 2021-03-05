@@ -175,10 +175,367 @@ fn to_expr_report<'a>(
     use roc_parse::parser::EExpr;
 
     match parse_problem {
-        EExpr::When(when, row, col) => to_when_report(alloc, filename, context, &when, *row, *col),
         EExpr::If(if_, row, col) => to_if_report(alloc, filename, context, &if_, *row, *col),
+        EExpr::When(when, row, col) => to_when_report(alloc, filename, context, &when, *row, *col),
+        EExpr::Lambda(lambda, row, col) => {
+            to_lambda_report(alloc, filename, context, &lambda, *row, *col)
+        }
         EExpr::List(list, row, col) => to_list_report(alloc, filename, context, &list, *row, *col),
+        EExpr::Str(string, row, col) => {
+            to_str_report(alloc, filename, context, &string, *row, *col)
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_lambda_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    _context: Context,
+    parse_problem: &roc_parse::parser::ELambda<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::ELambda;
+
+    match *parse_problem {
+        ELambda::Arrow(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Token("=>") => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc
+                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting a "),
+                        alloc.parser_suggestion("->"),
+                        alloc.reflow(" next."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "WEIRD ARROW".to_string(),
+                }
+            }
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc
+                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting a "),
+                        alloc.parser_suggestion("->"),
+                        alloc.reflow(" next."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "MISSING ARROW".to_string(),
+                }
+            }
+        },
+
+        ELambda::Comma(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Token("=>") => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc
+                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting a "),
+                        alloc.parser_suggestion("->"),
+                        alloc.reflow(" next."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "WEIRD ARROW".to_string(),
+                }
+            }
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc
+                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting a "),
+                        alloc.parser_suggestion("->"),
+                        alloc.reflow(" next."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "MISSING ARROW".to_string(),
+                }
+            }
+        },
+
+        ELambda::Arg(row, col) => match what_is_next(alloc.src_lines, row, col) {
+            Next::Other(Some(',')) => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc
+                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck at this comma:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting an argument pattern before this, "),
+                        alloc.reflow("so try adding an argument before the comma and see if that helps?"),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED ARGUMENT LIST".to_string(),
+                }
+            }
+            _ => {
+                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                let region = Region::from_row_col(row, col);
+
+                let doc = alloc.stack(vec![
+                    alloc
+                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting an argument pattern before this, "),
+                        alloc.reflow("so try adding an argument and see if that helps?"),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "MISSING ARROW".to_string(),
+                }
+            }
+        },
+
+        ELambda::Start(_row, _col) => unreachable!("another branch would have been taken"),
+
+        ELambda::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        ELambda::Pattern(ref pattern, row, col) => {
+            to_pattern_report(alloc, filename, pattern, row, col)
+        }
+        ELambda::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        ELambda::IndentArrow(row, col) => to_unfinished_lambda_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
+                alloc.parser_suggestion("->"),
+                alloc.reflow(" next."),
+            ]),
+        ),
+
+        ELambda::IndentBody(row, col) => to_unfinished_lambda_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
+                alloc.parser_suggestion("->"),
+                alloc.reflow(" next."),
+            ]),
+        ),
+
+        ELambda::IndentArg(row, col) => to_unfinished_lambda_report(
+            alloc,
+            filename,
+            row,
+            col,
+            start_row,
+            start_col,
+            alloc.concat(vec![
+                alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
+                alloc.parser_suggestion("->"),
+                alloc.reflow(" next."),
+                alloc.reflow(r"I was expecting to see a expression next"),
+            ]),
+        ),
+    }
+}
+
+fn to_unfinished_lambda_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    row: Row,
+    col: Col,
+    start_row: Row,
+    start_col: Col,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+    let region = Region::from_row_col(row, col);
+
+    let doc = alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.reflow(r"I was partway through parsing a "),
+            alloc.reflow(r" function, but I got stuck here:"),
+        ]),
+        alloc.region_with_subregion(surroundings, region),
+        message,
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED FUNCTION".to_string(),
+    }
+}
+
+fn to_str_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    _context: Context,
+    parse_problem: &roc_parse::parser::EString<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EString;
+
+    match *parse_problem {
+        EString::Open(_row, _col) => unreachable!("another branch would be taken"),
+        EString::Format(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        EString::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EString::UnknownEscape(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_rows_cols(row, col, row, col + 2);
+
+            let suggestion = |msg, sugg| {
+                alloc
+                    .text("- ")
+                    .append(alloc.reflow(msg))
+                    .append(alloc.parser_suggestion(sugg))
+            };
+
+            let doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow(r"I was partway through parsing a "),
+                    alloc.reflow(r" string literal, but I got stuck here:"),
+                ]),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"This is not an escape sequence I recognize."),
+                    alloc.reflow(r" After a backslash, I am looking for one of these:"),
+                ]),
+                alloc
+                    .vcat(vec![
+                        suggestion("A newline: ", "\\n"),
+                        suggestion("A caret return: ", "\\r"),
+                        suggestion("A tab: ", "\\t"),
+                        suggestion("An escaped quote: ", "\\\""),
+                        suggestion("An escaped backslash: ", "\\\\"),
+                        suggestion("A unicode code point: ", "\\u(00FF)"),
+                        suggestion("An interpolated string: ", "\\(myVariable)"),
+                    ])
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD ESCAPE".to_string(),
+            }
+        }
+        EString::CodePointOpen(row, col) | EString::CodePointEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I am partway through parsing a unicode code point, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"I was expecting a hexadecimal number, like "),
+                    alloc.parser_suggestion("\\u(1100)"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("\\u(00FF)"),
+                    alloc.text("."),
+                ]),
+                alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD CODE POINT".to_string(),
+            }
+        }
+        EString::EndlessSingle(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this string:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("\"to be or not to be\""),
+                    alloc.reflow(" or even just "),
+                    alloc.parser_suggestion("\"\""),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ENDLESS STRING".to_string(),
+            }
+        }
+        EString::EndlessMulti(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this block string:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("\"\"\"to be or not to be\"\"\""),
+                    alloc.reflow(" or even just "),
+                    alloc.parser_suggestion("\"\"\"\"\"\""),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ENDLESS STRING".to_string(),
+            }
+        }
     }
 }
 
@@ -1886,6 +2243,7 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a>
                         ']' => Next::Close("square bracket", ']'),
                         '}' => Next::Close("curly brace", '}'),
                         '-' if it.next() == Some('>') => Next::Token("->"),
+                        '=' if it.next() == Some('>') => Next::Token("=>"),
                         // _ if is_symbol(c) => todo!("it's an operator"),
                         _ => Next::Other(Some(c)),
                     },

@@ -4,7 +4,7 @@ use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
     allocated, backtrackable, not_e, optional, peek_utf8_char_e, specialize, specialize_ref, word1,
-    word2, BadInputError, ParseResult, Parser,
+    word2, ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
@@ -208,19 +208,19 @@ where
                             buf.push('@');
                             buf.push(second_letter);
 
-                            state = state
-                                .advance_without_indenting(arena, total_parsed)
-                                .map_err(|(progress, _, state)| {
+                            state = state.advance_without_indenting(total_parsed).map_err(
+                                |(progress, _, state)| {
                                     (progress, to_problem(state.line, state.column), state)
-                                })?;
+                                },
+                            )?;
                         }
                         _ => {
                             // important for error messages
-                            state = state
-                                .advance_without_indenting(arena, bytes_parsed)
-                                .map_err(|(progress, _, state)| {
+                            state = state.advance_without_indenting(bytes_parsed).map_err(
+                                |(progress, _, state)| {
                                     (progress, to_problem(state.line, state.column), state)
-                                })?;
+                                },
+                            )?;
 
                             let row = state.line;
                             let col = state.column;
@@ -234,11 +234,11 @@ where
 
                     buf.push(first_letter);
 
-                    state = state
-                        .advance_without_indenting(arena, bytes_parsed)
-                        .map_err(|(progress, _, state)| {
+                    state = state.advance_without_indenting(bytes_parsed).map_err(
+                        |(progress, _, state)| {
                             (progress, to_problem(state.line, state.column), state)
-                        })?;
+                        },
+                    )?;
                 }
 
                 _ => {
@@ -265,11 +265,11 @@ where
                     if ch.is_alphabetic() || ch.is_ascii_digit() {
                         buf.push(ch);
 
-                        state = state
-                            .advance_without_indenting(arena, bytes_parsed)
-                            .map_err(|(progress, _, state)| {
+                        state = state.advance_without_indenting(bytes_parsed).map_err(
+                            |(progress, _, state)| {
                                 (progress, to_problem(state.line, state.column), state)
-                            })?;
+                            },
+                        )?;
                     } else {
                         // This is the end of the field. We're done!
                         break;
@@ -528,7 +528,7 @@ fn parse_concrete_type<'a>(
                 return Err((NoProgress, problem, state));
             }
 
-            state = state.advance_without_indenting_e(arena, bytes_parsed, TApply::Space)?;
+            state = state.advance_without_indenting_e(bytes_parsed, TApply::Space)?;
         }
         Err(reason) => return Err((NoProgress, reason, state)),
     }
@@ -582,7 +582,7 @@ fn parse_concrete_type<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting_e(arena, bytes_parsed, TApply::Space)?;
+                state = state.advance_without_indenting_e(bytes_parsed, TApply::Space)?;
             }
             Err(reason) => {
                 return Err((MadeProgress, reason, state));
@@ -634,7 +634,7 @@ fn parse_type_variable<'a>(
                 ));
             }
 
-            state = state.advance_without_indenting_e(arena, bytes_parsed, TVariable::Space)?;
+            state = state.advance_without_indenting_e(bytes_parsed, TVariable::Space)?;
         }
         Err(reason) => return Err((NoProgress, reason, state)),
     }
@@ -653,7 +653,7 @@ fn parse_type_variable<'a>(
                     break;
                 }
 
-                state = state.advance_without_indenting_e(arena, bytes_parsed, TVariable::Space)?;
+                state = state.advance_without_indenting_e(bytes_parsed, TVariable::Space)?;
             }
             Err(reason) => {
                 return state.fail(arena, MadeProgress, reason);

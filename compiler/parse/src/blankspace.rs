@@ -358,7 +358,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
         and!(ascii_char(b'#'), optional(ascii_string("# "))),
         |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
             if opt_doc != None {
-                return Err(unexpected(arena, 3, Attempting::LineComment, state));
+                return Err(unexpected(3, Attempting::LineComment, state));
             }
             let mut length = 0;
 
@@ -371,7 +371,7 @@ pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
             }
 
             let comment = &state.bytes[..length];
-            let state = state.advance_without_indenting(arena, length + 1)?;
+            let state = state.advance_without_indenting(length + 1)?;
             match parse_utf8(comment) {
                 Ok(comment_str) => Ok((MadeProgress, comment_str, state)),
                 Err(reason) => state.fail(arena, MadeProgress, reason),
@@ -401,7 +401,6 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
                 }
                 Ok(_) => {
                     return Err(unexpected(
-                        arena,
                         spaces_seen.into(),
                         Attempting::TODO,
                         state.clone(),
@@ -418,7 +417,6 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
                         return Err(unexpected_eof(arena, state, 0));
                     } else {
                         return Err(unexpected(
-                            arena,
                             spaces_seen.into(),
                             Attempting::TODO,
                             state.clone(),
@@ -431,12 +429,7 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
         if spaces_seen == 0 {
             Err(unexpected_eof(arena, state, 0))
         } else {
-            Err(unexpected(
-                arena,
-                spaces_seen.into(),
-                Attempting::TODO,
-                state,
-            ))
+            Err(unexpected(spaces_seen.into(), Attempting::TODO, state))
         }
     }
 }
@@ -491,11 +484,15 @@ where
                                 ' ' => {
                                     // Don't check indentation here; it might not be enough
                                     // indentation yet, but maybe it will be after more spaces happen!
-                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
+                                    state = state.advance_spaces_e(arena, 1, |r, c| {
+                                        space_problem(BadInputError::LineTooLong, r, c)
+                                    })?;
                                 }
                                 '\r' => {
                                     // Ignore carriage returns.
-                                    state = state.advance_spaces_e(arena, 1, space_problem)?;
+                                    state = state.advance_spaces_e(arena, 1, |r, c| {
+                                        space_problem(BadInputError::LineTooLong, r, c)
+                                    })?;
                                 }
                                 '\n' => {
                                     // don't need to check the indent here since we'll reset it
@@ -535,7 +532,7 @@ where
                                         .map_err(|(fail, _)| {
                                             (progress, fail, original_state.clone())
                                         })?
-                                        .advance_without_indenting_e(arena, 1, space_problem)?;
+                                        .advance_without_indenting_e(1, space_problem)?;
 
                                     // We're now parsing a line comment!
                                     line_state = LineState::Comment;
@@ -584,11 +581,7 @@ where
                             match ch {
                                 ' ' => {
                                     // If we're in a line comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting_e(
-                                        arena,
-                                        1,
-                                        space_problem,
-                                    )?;
+                                    state = state.advance_without_indenting_e(1, space_problem)?;
 
                                     if comment_line_buf.len() == 1 {
                                         match comment_line_buf.chars().next() {
@@ -650,7 +643,6 @@ where
                                 nonblank => {
                                     // Chars can have btye lengths of more than 1!
                                     state = state.advance_without_indenting_e(
-                                        arena,
                                         nonblank.len_utf8(),
                                         space_problem,
                                     )?;
@@ -663,11 +655,7 @@ where
                             match ch {
                                 ' ' => {
                                     // If we're in a doc comment, this won't affect indentation anyway.
-                                    state = state.advance_without_indenting_e(
-                                        arena,
-                                        1,
-                                        space_problem,
-                                    )?;
+                                    state = state.advance_without_indenting_e(1, space_problem)?;
 
                                     comment_line_buf.push(ch);
                                 }
@@ -692,11 +680,8 @@ where
                                     ));
                                 }
                                 nonblank => {
-                                    state = state.advance_without_indenting_e(
-                                        arena,
-                                        utf8_len,
-                                        space_problem,
-                                    )?;
+                                    state = state
+                                        .advance_without_indenting_e(utf8_len, space_problem)?;
 
                                     comment_line_buf.push(nonblank);
                                 }
