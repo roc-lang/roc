@@ -1658,185 +1658,196 @@ fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a
 }
 
 fn ident_etc_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
-    enum Next {
-        Equals(u16),
-        Colon(u16),
-        // Comma(u16),
-        // Backarrow(u16),
-    }
-
     then(
         and!(
             loc!(assign_or_destructure_identifier()),
-            and!(
-                // There may optionally be function args after this ident
-                optional(loc_function_args_help(min_indent)),
-                // There may also be a '=' or ':' after it.
-                // The : might be because this is a type alias, e.g. (List a : ...`
-                // The = might be because someone is trying to use Elm or Haskell
-                // syntax for defining functions, e.g. `foo a b = ...` - so give a nice error!
-                optional(and!(
-                    backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals)),
-                    one_of![
-                        map!(equals_with_indent_help(), Next::Equals),
-                        map!(colon_with_indent(), Next::Colon),
-                    ]
-                ))
-            )
+            optional(loc_function_args_help(min_indent))
         ),
-        move |arena, state, progress, (loc_ident, (opt_arguments, next))| {
+        move |arena, state, progress, (loc_ident, opt_arguments)| {
             debug_assert_eq!(progress, MadeProgress);
 
             // This appears to be a var, keyword, or function application.
             match opt_arguments {
-                Some(arguments) => {
-                    match next {
-                        Some((_ident_spaces, Next::Equals(_equals_indent))) => {
-                            // We got args with an '=' after them, e.g. `foo a b = ...` This is a syntax error!
-                            let region = Region::across_all(arguments.iter().map(|v| &v.region));
-                            let fail = EExpr::ElmStyleFunction(region, state.line, state.column);
-                            Err((MadeProgress, fail, state))
-                        }
-                        Some((ident_spaces, Next::Colon(colon_indent))) => {
-                            let pattern: Pattern<'a> = {
-                                let pattern = Pattern::from_ident(arena, loc_ident.value);
-
-                                // Translate the loc_args Exprs into a Pattern::Apply
-                                // They are probably type alias variables (e.g. `List a : ...`)
-                                let mut arg_patterns =
-                                    Vec::with_capacity_in(arguments.len(), arena);
-
-                                for loc_arg in arguments {
-                                    match expr_to_pattern_help(arena, &loc_arg.value) {
-                                        Ok(arg_pat) => {
-                                            arg_patterns.push(Located {
-                                                value: arg_pat,
-                                                region: loc_arg.region,
-                                            });
-                                        }
-                                        Err(_malformed) => {
-                                            return Err((
-                                                MadeProgress,
-                                                EExpr::MalformedPattern(state.line, state.column),
-                                                state,
-                                            ));
-                                        }
-                                    }
-                                }
-
-                                let loc_pattern = Located {
-                                    region: loc_ident.region,
-                                    value: pattern,
-                                };
-
-                                Pattern::Apply(
-                                    arena.alloc(loc_pattern),
-                                    arg_patterns.into_bump_slice(),
-                                )
-                            };
-                            let region = loc_ident.region;
-
-                            let value = if ident_spaces.is_empty() {
-                                pattern
-                            } else {
-                                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
-                            };
-
-                            let loc_pattern = Located { region, value };
-
-                            parse_def_signature_help(
-                                min_indent,
-                                colon_indent,
-                                arena,
-                                state,
-                                loc_pattern,
-                            )
-                        }
-                        None => {
-                            // We got args and nothing else
-                            let loc_expr = Located {
-                                region: loc_ident.region,
-                                value: ident_to_expr(arena, loc_ident.value),
-                            };
-
-                            let mut allocated_args = Vec::with_capacity_in(arguments.len(), arena);
-
-                            for loc_arg in arguments {
-                                allocated_args.push(&*arena.alloc(loc_arg));
-                            }
-
-                            Ok((
-                                MadeProgress,
-                                Expr::Apply(
-                                    arena.alloc(loc_expr),
-                                    allocated_args.into_bump_slice(),
-                                    CalledVia::Space,
-                                ),
-                                state,
-                            ))
-                        }
-                    }
-                }
-                None => {
-                    // no arguments, that limits the options
-                    match next {
-                        Some((ident_spaces, Next::Equals(equals_indent))) => {
-                            // We got '=' with no args before it
-                            let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
-                            let value = if ident_spaces.is_empty() {
-                                pattern
-                            } else {
-                                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
-                            };
-                            let region = loc_ident.region;
-                            let def_start_col = state.indent_col;
-                            let loc_pattern = Located { region, value };
-                            // TODO use equals_indent below?
-                            let (_, spaces_after_equals, state) =
-                                space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody)
-                                    .parse(arena, state)?;
-
-                            let (_, parsed_expr, state) = parse_def_expr_help(
-                                min_indent,
-                                def_start_col,
-                                equals_indent,
-                                arena,
-                                state,
-                                loc_pattern,
-                                spaces_after_equals,
-                            )?;
-
-                            Ok((MadeProgress, parsed_expr, state))
-                        }
-                        Some((ident_spaces, Next::Colon(colon_indent))) => {
-                            let pattern = Pattern::from_ident(arena, loc_ident.value);
-
-                            let value = if ident_spaces.is_empty() {
-                                pattern
-                            } else {
-                                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
-                            };
-                            let region = loc_ident.region;
-                            let loc_pattern = Located { region, value };
-
-                            parse_def_signature_help(
-                                min_indent,
-                                colon_indent,
-                                arena,
-                                state,
-                                loc_pattern,
-                            )
-                        }
-                        None => {
-                            let ident = loc_ident.value.clone();
-
-                            Ok((MadeProgress, ident_to_expr(arena, ident), state))
-                        }
-                    }
-                }
+                Some(arguments) => ident_then_args(min_indent, loc_ident, arguments, arena, state),
+                None => ident_then_no_args(min_indent, loc_ident, arena, state),
             }
         },
     )
+}
+
+fn ident_then_no_args<'a>(
+    min_indent: u16,
+    loc_ident: Located<Ident<'a>>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    #[derive(Debug)]
+    enum Next {
+        Equals(u16),
+        Colon(u16),
+    }
+
+    let parser = optional(and!(
+        backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals)),
+        one_of![
+            map!(equals_with_indent_help(), Next::Equals),
+            map!(colon_with_indent(), Next::Colon),
+        ]
+    ));
+
+    let (_, next, state) = parser.parse(arena, state)?;
+
+    // no arguments, that limits the options
+    match next {
+        Some((ident_spaces, Next::Equals(equals_indent))) => {
+            // We got '=' with no args before it
+            let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
+            let value = if ident_spaces.is_empty() {
+                pattern
+            } else {
+                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
+            };
+            let region = loc_ident.region;
+            let def_start_col = state.indent_col;
+            let loc_pattern = Located { region, value };
+            // TODO use equals_indent below?
+            let (_, spaces_after_equals, state) =
+                space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody).parse(arena, state)?;
+
+            let (_, parsed_expr, state) = parse_def_expr_help(
+                min_indent,
+                def_start_col,
+                equals_indent,
+                arena,
+                state,
+                loc_pattern,
+                spaces_after_equals,
+            )?;
+
+            Ok((MadeProgress, parsed_expr, state))
+        }
+        Some((ident_spaces, Next::Colon(colon_indent))) => {
+            let pattern = Pattern::from_ident(arena, loc_ident.value);
+
+            let value = if ident_spaces.is_empty() {
+                pattern
+            } else {
+                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
+            };
+            let region = loc_ident.region;
+            let loc_pattern = Located { region, value };
+
+            parse_def_signature_help(min_indent, colon_indent, arena, state, loc_pattern)
+        }
+        None => {
+            let ident = loc_ident.value.clone();
+
+            Ok((MadeProgress, ident_to_expr(arena, ident), state))
+        }
+    }
+}
+
+fn ident_then_args<'a>(
+    min_indent: u16,
+    loc_ident: Located<Ident<'a>>,
+    arguments: Vec<'a, Located<Expr<'a>>>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    debug_assert!(!arguments.is_empty());
+
+    #[derive(Debug)]
+    enum Next {
+        Equals(u16),
+        Colon(u16),
+    }
+
+    let parser = optional(and!(
+        backtrackable(space0_e(min_indent, EExpr::Space, EExpr::IndentEquals)),
+        one_of![
+            map!(equals_with_indent_help(), Next::Equals),
+            map!(colon_with_indent(), Next::Colon),
+        ]
+    ));
+
+    let (_, next, state) = parser.parse(arena, state)?;
+
+    match next {
+        Some((_ident_spaces, Next::Equals(_equals_indent))) => {
+            // We got args with an '=' after them, e.g. `foo a b = ...` This is a syntax error!
+            let region = Region::across_all(arguments.iter().map(|v| &v.region));
+            let fail = EExpr::ElmStyleFunction(region, state.line, state.column);
+            Err((MadeProgress, fail, state))
+        }
+        Some((ident_spaces, Next::Colon(colon_indent))) => {
+            let pattern: Pattern<'a> = {
+                let pattern = Pattern::from_ident(arena, loc_ident.value);
+
+                // Translate the loc_args Exprs into a Pattern::Apply
+                // They are probably type alias variables (e.g. `List a : ...`)
+                let mut arg_patterns = Vec::with_capacity_in(arguments.len(), arena);
+
+                for loc_arg in arguments {
+                    match expr_to_pattern_help(arena, &loc_arg.value) {
+                        Ok(arg_pat) => {
+                            arg_patterns.push(Located {
+                                value: arg_pat,
+                                region: loc_arg.region,
+                            });
+                        }
+                        Err(_malformed) => {
+                            return Err((
+                                MadeProgress,
+                                EExpr::MalformedPattern(state.line, state.column),
+                                state,
+                            ));
+                        }
+                    }
+                }
+
+                let loc_pattern = Located {
+                    region: loc_ident.region,
+                    value: pattern,
+                };
+
+                Pattern::Apply(arena.alloc(loc_pattern), arg_patterns.into_bump_slice())
+            };
+            let region = loc_ident.region;
+
+            let value = if ident_spaces.is_empty() {
+                pattern
+            } else {
+                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
+            };
+
+            let loc_pattern = Located { region, value };
+
+            parse_def_signature_help(min_indent, colon_indent, arena, state, loc_pattern)
+        }
+        None => {
+            // We got args and nothing else
+            let loc_expr = Located {
+                region: loc_ident.region,
+                value: ident_to_expr(arena, loc_ident.value),
+            };
+
+            let mut allocated_args = Vec::with_capacity_in(arguments.len(), arena);
+
+            for loc_arg in arguments {
+                allocated_args.push(&*arena.alloc(loc_arg));
+            }
+
+            Ok((
+                MadeProgress,
+                Expr::Apply(
+                    arena.alloc(loc_expr),
+                    allocated_args.into_bump_slice(),
+                    CalledVia::Space,
+                ),
+                state,
+            ))
+        }
+    }
 }
 
 fn ident_without_apply_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
