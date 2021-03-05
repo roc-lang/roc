@@ -1351,6 +1351,7 @@ fn to_pending_def<'a>(
     use roc_parse::ast::Def::*;
 
     match def {
+        Backpassing(_, _) => unreachable!("should never get this far"),
         Annotation(loc_pattern, loc_ann) => {
             // This takes care of checking for shadowing and adding idents to scope.
             let (output, loc_can_pattern) = canonicalize_pattern(

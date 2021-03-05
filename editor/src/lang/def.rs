@@ -153,6 +153,8 @@ fn to_pending_def<'a>(
             ))
         }
 
+        Backpassing(_, _) => unreachable!("should have been desugared at this point"),
+
         AnnotatedBody {
             ann_pattern,
             ann_type,

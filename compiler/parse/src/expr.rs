@@ -715,26 +715,6 @@ fn assigned_expr_field_to_pattern_help<'a>(
 //     }
 // }
 
-/// The '=' used in a def can't be followed by another '=' (or else it's actually
-/// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
-fn equals_for_def_help<'a>() -> impl Parser<'a, (), EExpr<'a>> {
-    |_arena, state: State<'a>| match state.bytes.get(0) {
-        Some(b'=') => match state.bytes.get(1) {
-            Some(b'=') | Some(b'>') => {
-                Err((NoProgress, EExpr::Equals(state.line, state.column), state))
-            }
-            _ => {
-                let state = state.advance_without_indenting_ee(1, |r, c| {
-                    EExpr::Space(parser::BadInputError::LineTooLong, r, c)
-                })?;
-
-                Ok((MadeProgress, (), state))
-            }
-        },
-        _ => Err((NoProgress, EExpr::Equals(state.line, state.column), state)),
-    }
-}
-
 fn parse_defs_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, EExpr<'a>> {
@@ -777,11 +757,13 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     enum DefKind {
         DefColon,
         DefEqual,
+        DefArrow,
     }
 
     let def_colon_or_equals = one_of![
-        map!(equals_for_def_help(), |_| DefKind::DefEqual),
-        map!(word1(b':', EExpr::Colon), |_| DefKind::DefColon)
+        map!(equals_with_indent_help(), |_| DefKind::DefEqual),
+        map!(colon_with_indent(), |_| DefKind::DefColon),
+        map!(backarrow_with_indent(), |_| DefKind::DefArrow),
     ];
 
     then(
@@ -848,6 +830,23 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
                     state,
                 ))
             }
+            DefKind::DefArrow => {
+                // Spaces after the '=' (at a normal indentation level) and then the expr.
+                // The expr itself must be indented more than the pattern and '='
+                let (_, body_expr, state) = space0_before_e(
+                    loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
+                    min_indent,
+                    EExpr::Space,
+                    EExpr::IndentStart,
+                )
+                .parse(arena, state)?;
+
+                Ok((
+                    MadeProgress,
+                    Def::Backpassing(arena.alloc([loc_pattern]), arena.alloc(body_expr)),
+                    state,
+                ))
+            }
         },
     )
 }
@@ -889,7 +888,7 @@ fn body_at_indent_help<'a>(indent_level: u16) -> impl Parser<'a, Body<'a>, EExpr
     and!(
         skip_first!(spaces_exactly_e(indent_level), pattern_help(indent_level)),
         skip_first!(
-            equals_for_def_help(),
+            equals_with_indent_help(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
             // The expr itself must be indented more than the pattern and '='
             space0_before_e(
@@ -1053,6 +1052,87 @@ fn parse_def_expr_help<'a>(
                 let first_def: Def<'a> =
                     // TODO is there some way to eliminate this .clone() here?
                     Def::Body(arena.alloc(loc_first_pattern.clone()), arena.alloc(loc_first_body));
+
+                let loc_first_def = Located {
+                    value: first_def,
+                    region: def_region,
+                };
+
+                // for formatting reasons, we must insert the first def first!
+                defs.insert(0, &*arena.alloc(loc_first_def));
+
+                Ok((
+                    progress,
+                    Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
+                    state,
+                ))
+            },
+        )
+        .parse(arena, state)
+    }
+}
+
+fn parse_backarrow_help<'a>(
+    min_indent: u16,
+    def_start_col: u16,
+    equals_sign_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+    loc_first_pattern: Located<Pattern<'a>>,
+    spaces_after_equals: &'a [CommentOrNewline<'a>],
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    if def_start_col < min_indent || equals_sign_indent < def_start_col {
+        Err((
+            NoProgress,
+            EExpr::IndentDefBody(state.line, state.column),
+            state,
+        ))
+    } else {
+        // Indented more beyond the original indent of the entire def-expr.
+        let indented_more = def_start_col + 1;
+
+        then(
+            and!(
+                // Parse the body of the first def. It doesn't need any spaces
+                // around it parsed, because both the subsquent defs and the
+                // final body will have space1_before on them.
+                //
+                // It should be indented more than the original, and it will
+                // end when outdented again.
+                loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
+                and!(
+                    // Optionally parse additional defs.
+                    parse_defs_help(def_start_col),
+                    // Parse the final expression that will be returned.
+                    // It should be indented the same amount as the original.
+                    space0_before_e(
+                        loc!(move |arena, state: State<'a>| {
+                            parse_expr_help(def_start_col, arena, state)
+                        }),
+                        def_start_col,
+                        EExpr::Space,
+                        EExpr::IndentStart,
+                    )
+                )
+            ),
+            move |arena, state, progress, (loc_first_body, (mut defs, loc_ret))| {
+                let loc_first_body = if spaces_after_equals.is_empty() {
+                    loc_first_body
+                } else {
+                    Located {
+                        value: Expr::SpaceBefore(
+                            arena.alloc(loc_first_body.value),
+                            spaces_after_equals,
+                        ),
+                        region: loc_first_body.region,
+                    }
+                };
+                let def_region =
+                    Region::span_across(&loc_first_pattern.region, &loc_first_body.region);
+
+                let first_def: Def<'a> =
+                    // TODO is there some way to eliminate this .clone() here?
+                    Def::Backpassing(arena.alloc([loc_first_pattern.clone()]), arena.alloc(loc_first_body));
 
                 let loc_first_def = Located {
                     value: first_def,
@@ -1685,6 +1765,7 @@ fn ident_then_no_args<'a>(
     enum Next {
         Equals(u16),
         Colon(u16),
+        Backarrow(u16),
     }
 
     let parser = optional(and!(
@@ -1692,6 +1773,7 @@ fn ident_then_no_args<'a>(
         one_of![
             map!(equals_with_indent_help(), Next::Equals),
             map!(colon_with_indent(), Next::Colon),
+            map!(backarrow_with_indent(), Next::Backarrow),
         ]
     ));
 
@@ -1715,6 +1797,34 @@ fn ident_then_no_args<'a>(
                 space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody).parse(arena, state)?;
 
             let (_, parsed_expr, state) = parse_def_expr_help(
+                min_indent,
+                def_start_col,
+                equals_indent,
+                arena,
+                state,
+                loc_pattern,
+                spaces_after_equals,
+            )?;
+
+            Ok((MadeProgress, parsed_expr, state))
+        }
+        Some((ident_spaces, Next::Backarrow(equals_indent))) => {
+            // We got '<-' with no args before it
+            let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
+            let value = if ident_spaces.is_empty() {
+                pattern
+            } else {
+                Pattern::SpaceAfter(arena.alloc(pattern), ident_spaces)
+            };
+            let region = loc_ident.region;
+            let def_start_col = state.indent_col;
+            let loc_pattern = Located { region, value };
+
+            let (_, spaces_after_equals, state) =
+                space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody).parse(arena, state)?;
+
+            // let (_, parsed_expr, state) = parse_def_expr_help(
+            let (_, parsed_expr, state) = parse_backarrow_help(
                 min_indent,
                 def_start_col,
                 equals_indent,

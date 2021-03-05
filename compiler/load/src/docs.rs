@@ -120,7 +120,7 @@ fn generate_module_doc<'a>(
             (acc, None)
         }
 
-        Body(_, _) | Nested(_) => (acc, None),
+        Backpassing(_, _) | Body(_, _) | Nested(_) => (acc, None),
 
         NotYetImplemented(s) => todo!("{}", s),
     }

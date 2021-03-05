@@ -187,6 +187,8 @@ pub enum Def<'a> {
         body_expr: &'a Loc<Expr<'a>>,
     },
 
+    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
+
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
