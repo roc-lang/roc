@@ -29,7 +29,6 @@ bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
 either = "1.6.1"
 indoc = "0.3.3"
-pretty_assertions = "0.5.1"
 libc = "0.2"
 # NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #

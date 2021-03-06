@@ -12,7 +12,6 @@ roc_module = { path = "../module" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
-roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
@@ -40,7 +39,6 @@ either = "1.6.1"
 # This way, GitHub Actions works and nobody's builds get broken.
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release3" }
 target-lexicon = "0.10"
-libloading = "0.6"
 
 [dev-dependencies]
 roc_can = { path = "../can" }
