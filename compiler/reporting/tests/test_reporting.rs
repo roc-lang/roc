@@ -5572,4 +5572,38 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    #[ignore]
+    fn double_binop() {
+        report_problem_as(
+            indoc!(
+                r#"
+                key >= 97 && <= 122
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn case_of() {
+        report_problem_as(
+            indoc!(
+                r#"
+                case 1 of
+                    1 -> True
+                    _ -> False
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
 }

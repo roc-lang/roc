@@ -86,21 +86,22 @@ pub const RocList = extern struct {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
-        const data_bytes = new_capacity * slot_size;
-        const first_slot = allocateWithRefcount(allocator, alignment, data_bytes);
+        const data_bytes = new_length * element_width;
+        const first_slot = utils.allocateWithRefcount(allocator, alignment, data_bytes);
 
         // transfer the memory
 
         if (self.bytes) |source_ptr| {
             const dest_ptr = first_slot;
 
-            @memcpy(dest_ptr, source_ptr, old_length);
+            @memcpy(dest_ptr, source_ptr, old_length * element_width);
+            @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
 
         // NOTE the newly added elements are left uninitialized
 
         const result = RocList{
-            .dict_bytes = first_slot,
+            .bytes = first_slot,
             .length = new_length,
         };
 
@@ -246,19 +247,35 @@ pub fn listWalk(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: 
         return;
     }
 
-    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+    if (list.isEmpty()) {
+        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+        return;
+    }
+
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    var b1 = output orelse unreachable;
+    var b2 = alloc;
+
+    @memcpy(b2, accum orelse unreachable, accum_width);
 
     if (list.bytes) |source_ptr| {
         var i: usize = 0;
         const size = list.len();
         while (i < size) : (i += 1) {
             const element = source_ptr + i * element_width;
-            stepper_caller(stepper, element, output, output);
-        }
+            stepper_caller(stepper, element, b2, b1);
 
-        const data_bytes = list.len() * element_width;
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+            const temp = b1;
+            b2 = b1;
+            b1 = temp;
+        }
     }
+
+    @memcpy(output orelse unreachable, b2, accum_width);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
+
+    const data_bytes = list.len() * element_width;
+    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
 }
 
 pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
@@ -266,7 +283,16 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
         return;
     }
 
-    @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+    if (list.isEmpty()) {
+        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+        return;
+    }
+
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    var b1 = output orelse unreachable;
+    var b2 = alloc;
+
+    @memcpy(b2, accum orelse unreachable, accum_width);
 
     if (list.bytes) |source_ptr| {
         const size = list.len();
@@ -274,12 +300,22 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
         while (i > 0) {
             i -= 1;
             const element = source_ptr + i * element_width;
-            stepper_caller(stepper, element, output, output);
+            stepper_caller(stepper, element, b2, b1);
+
+            const temp = b1;
+            b2 = b1;
+            b1 = temp;
         }
 
         const data_bytes = list.len() * element_width;
         utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
     }
+
+    @memcpy(output orelse unreachable, b2, accum_width);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
+
+    const data_bytes = list.len() * element_width;
+    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
 }
 
 // List.contains : List k, k -> Bool
@@ -323,4 +359,17 @@ pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width
     } else {
         unreachable;
     }
+}
+
+pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {
+    const old_length = list.len();
+    var output = list.reallocate(std.heap.c_allocator, alignment, old_length + 1, element_width);
+
+    if (output.bytes) |target| {
+        if (element) |source| {
+            @memcpy(target + old_length * element_width, source, element_width);
+        }
+    }
+
+    return output;
 }

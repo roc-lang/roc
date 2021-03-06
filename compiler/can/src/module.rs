@@ -122,8 +122,19 @@ where
         } else {
             // This is a type alias
 
-            // the should already be added to the scope when this module is canonicalized
+            // the symbol should already be added to the scope when this module is canonicalized
             debug_assert!(scope.contains_alias(symbol));
+
+            // but now we know this symbol by a different identifier, so we still need to add it to
+            // the scope
+            match scope.import(ident, symbol, region) {
+                Ok(()) => {
+                    // here we do nothing special
+                }
+                Err((_shadowed_symbol, _region)) => {
+                    panic!("TODO gracefully handle shadowing in imports.")
+                }
+            }
         }
     }
 

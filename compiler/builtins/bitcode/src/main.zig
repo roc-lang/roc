@@ -15,6 +15,7 @@ comptime {
     exportListFn(list.listKeepErrs, "keep_errs");
     exportListFn(list.listContains, "contains");
     exportListFn(list.listRepeat, "repeat");
+    exportListFn(list.listAppend, "append");
 }
 
 // Dict Module

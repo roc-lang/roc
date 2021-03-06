@@ -246,7 +246,7 @@ mod cli_run {
             &example_file("benchmarks", "TestBase64.roc"),
             "test-base64",
             &[],
-            "SGVsbG8gV29ybGQ=\n",
+            "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
             true,
         );
     }

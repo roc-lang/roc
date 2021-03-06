@@ -659,7 +659,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
-        ListAppend => arena.alloc_slice_copy(&[borrowed, owned]),
+        ListAppend => arena.alloc_slice_copy(&[owned, owned]),
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
 

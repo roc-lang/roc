@@ -246,7 +246,7 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Start(row, col) => {
+        EExpr::Start(row, col) | EExpr::IndentStart(row, col) => {
             let (context_row, context_col, a_thing) = match context {
                 Context::InNode(node, r, c, _) => match node {
                     Node::WhenCondition | Node::WhenBranch | Node::WhenIfGuard => (
