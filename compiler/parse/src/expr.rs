@@ -973,6 +973,23 @@ fn annotation_or_alias<'a>(
     }
 }
 
+fn check_def_indent<'a>(
+    min_indent: u16,
+    def_start_column: u16,
+    special_token_indent: u16,
+    state: State<'a>,
+) -> Result<State<'a>, (Progress, EExpr<'a>, State<'a>)> {
+    if def_start_column < min_indent || special_token_indent < def_start_column {
+        Err((
+            NoProgress,
+            EExpr::IndentDefBody(state.line, state.column),
+            state,
+        ))
+    } else {
+        Ok(state)
+    }
+}
+
 fn parse_def_expr_help<'a>(
     min_indent: u16,
     def_start_col: u16,
@@ -982,76 +999,69 @@ fn parse_def_expr_help<'a>(
     loc_first_pattern: Located<Pattern<'a>>,
     spaces_after_equals: &'a [CommentOrNewline<'a>],
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    if def_start_col < min_indent || equals_sign_indent < def_start_col {
-        Err((
-            NoProgress,
-            EExpr::IndentDefBody(state.line, state.column),
-            state,
-        ))
-    } else {
-        // Indented more beyond the original indent of the entire def-expr.
-        let indented_more = def_start_col + 1;
+    let state = check_def_indent(min_indent, def_start_col, equals_sign_indent, state)?;
 
-        then(
+    // Indented more beyond the original indent of the entire def-expr.
+    let indented_more = def_start_col + 1;
+
+    then(
+        and!(
+            // Parse the body of the first def. It doesn't need any spaces
+            // around it parsed, because both the subsquent defs and the
+            // final body will have space1_before on them.
+            //
+            // It should be indented more than the original, and it will
+            // end when outdented again.
+            loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
             and!(
-                // Parse the body of the first def. It doesn't need any spaces
-                // around it parsed, because both the subsquent defs and the
-                // final body will have space1_before on them.
-                //
-                // It should be indented more than the original, and it will
-                // end when outdented again.
-                loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
-                and!(
-                    // Optionally parse additional defs.
-                    parse_defs_help(def_start_col),
-                    // Parse the final expression that will be returned.
-                    // It should be indented the same amount as the original.
-                    space0_before_e(
-                        loc!(move |arena, state: State<'a>| {
-                            parse_expr_help(def_start_col, arena, state)
-                        }),
-                        def_start_col,
-                        EExpr::Space,
-                        EExpr::IndentStart,
-                    )
+                // Optionally parse additional defs.
+                parse_defs_help(def_start_col),
+                // Parse the final expression that will be returned.
+                // It should be indented the same amount as the original.
+                space0_before_e(
+                    loc!(move |arena, state: State<'a>| {
+                        parse_expr_help(def_start_col, arena, state)
+                    }),
+                    def_start_col,
+                    EExpr::Space,
+                    EExpr::IndentStart,
                 )
-            ),
-            move |arena, state, progress, (loc_first_body, (mut defs, loc_ret))| {
-                let loc_first_body = if spaces_after_equals.is_empty() {
-                    loc_first_body
-                } else {
-                    Located {
-                        value: Expr::SpaceBefore(
-                            arena.alloc(loc_first_body.value),
-                            spaces_after_equals,
-                        ),
-                        region: loc_first_body.region,
-                    }
-                };
-                let def_region =
-                    Region::span_across(&loc_first_pattern.region, &loc_first_body.region);
+            )
+        ),
+        move |arena, state, progress, (loc_first_body, (mut defs, loc_ret))| {
+            let loc_first_body = if spaces_after_equals.is_empty() {
+                loc_first_body
+            } else {
+                Located {
+                    value: Expr::SpaceBefore(
+                        arena.alloc(loc_first_body.value),
+                        spaces_after_equals,
+                    ),
+                    region: loc_first_body.region,
+                }
+            };
+            let def_region = Region::span_across(&loc_first_pattern.region, &loc_first_body.region);
 
-                let first_def: Def<'a> =
+            let first_def: Def<'a> =
                     // TODO is there some way to eliminate this .clone() here?
                     Def::Body(arena.alloc(loc_first_pattern.clone()), arena.alloc(loc_first_body));
 
-                let loc_first_def = Located {
-                    value: first_def,
-                    region: def_region,
-                };
+            let loc_first_def = Located {
+                value: first_def,
+                region: def_region,
+            };
 
-                // for formatting reasons, we must insert the first def first!
-                defs.insert(0, &*arena.alloc(loc_first_def));
+            // for formatting reasons, we must insert the first def first!
+            defs.insert(0, &*arena.alloc(loc_first_def));
 
-                Ok((
-                    progress,
-                    Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
-                    state,
-                ))
-            },
-        )
-        .parse(arena, state)
-    }
+            Ok((
+                progress,
+                Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
+                state,
+            ))
+        },
+    )
+    .parse(arena, state)
 }
 
 fn parse_backarrow_help<'a>(
@@ -1063,75 +1073,69 @@ fn parse_backarrow_help<'a>(
     loc_first_pattern: Located<Pattern<'a>>,
     spaces_after_equals: &'a [CommentOrNewline<'a>],
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    if def_start_col < min_indent || equals_sign_indent < def_start_col {
-        Err((
-            NoProgress,
-            EExpr::IndentDefBody(state.line, state.column),
-            state,
-        ))
-    } else {
-        // Indented more beyond the original indent of the entire def-expr.
-        let indented_more = def_start_col + 1;
+    let state = check_def_indent(min_indent, def_start_col, equals_sign_indent, state)?;
 
-        then(
+    // Indented more beyond the original indent of the entire def-expr.
+    let indented_more = def_start_col + 1;
+
+    then(
+        and!(
+            // Parse the body of the first def. It doesn't need any spaces
+            // around it parsed, because both the subsquent defs and the
+            // final body will have space1_before on them.
+            //
+            // It should be indented more than the original, and it will
+            // end when outdented again.
+            loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
             and!(
-                // Parse the body of the first def. It doesn't need any spaces
-                // around it parsed, because both the subsquent defs and the
-                // final body will have space1_before on them.
-                //
-                // It should be indented more than the original, and it will
-                // end when outdented again.
-                loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
-                and!(
-                    // Optionally parse additional defs.
-                    parse_defs_help(def_start_col),
-                    // Parse the final expression that will be returned.
-                    // It should be indented the same amount as the original.
-                    space0_before_e(
-                        loc!(move |arena, state: State<'a>| {
-                            parse_expr_help(def_start_col, arena, state)
-                        }),
-                        def_start_col,
-                        EExpr::Space,
-                        EExpr::IndentStart,
-                    )
+                // Optionally parse additional defs.
+                parse_defs_help(def_start_col),
+                // Parse the final expression that will be returned.
+                // It should be indented the same amount as the original.
+                space0_before_e(
+                    loc!(move |arena, state: State<'a>| {
+                        parse_expr_help(def_start_col, arena, state)
+                    }),
+                    def_start_col,
+                    EExpr::Space,
+                    EExpr::IndentStart,
                 )
-            ),
-            move |arena, state, progress, (loc_first_body, (defs, loc_ret))| {
-                let loc_first_body = if spaces_after_equals.is_empty() {
-                    loc_first_body
-                } else {
-                    Located {
-                        value: Expr::SpaceBefore(
-                            arena.alloc(loc_first_body.value),
-                            spaces_after_equals,
-                        ),
-                        region: loc_first_body.region,
-                    }
-                };
-                let defs_region = Region::span_across(
-                    &defs.get(0).map(|r| r.region).unwrap_or(Region::zero()),
-                    &loc_first_body.region,
-                );
-
-                let loc_defs = Located::at(
-                    defs_region,
-                    Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
-                );
-
-                Ok((
-                    progress,
-                    Expr::Backpassing(
-                        arena.alloc([loc_first_pattern.clone()]),
-                        arena.alloc(loc_first_body),
-                        arena.alloc(loc_defs),
+            )
+        ),
+        move |arena, state, progress, (loc_first_body, (defs, loc_ret))| {
+            let loc_first_body = if spaces_after_equals.is_empty() {
+                loc_first_body
+            } else {
+                Located {
+                    value: Expr::SpaceBefore(
+                        arena.alloc(loc_first_body.value),
+                        spaces_after_equals,
                     ),
-                    state,
-                ))
-            },
-        )
-        .parse(arena, state)
-    }
+                    region: loc_first_body.region,
+                }
+            };
+            let defs_region = Region::span_across(
+                &defs.get(0).map(|r| r.region).unwrap_or(Region::zero()),
+                &loc_first_body.region,
+            );
+
+            let loc_defs = Located::at(
+                defs_region,
+                Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
+            );
+
+            Ok((
+                progress,
+                Expr::Backpassing(
+                    arena.alloc([loc_first_pattern.clone()]),
+                    arena.alloc(loc_first_body),
+                    arena.alloc(loc_defs),
+                ),
+                state,
+            ))
+        },
+    )
+    .parse(arena, state)
 }
 
 fn parse_def_signature_help<'a>(
@@ -1142,106 +1146,97 @@ fn parse_def_signature_help<'a>(
     loc_first_pattern: Located<Pattern<'a>>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let original_indent = state.indent_col;
+    let state = check_def_indent(min_indent, original_indent, colon_indent, state)?;
 
-    if original_indent < min_indent || colon_indent < original_indent {
-        // `colon_indent < original_indent` because ':' should be same indent or greater
-        Err((
-            NoProgress,
-            EExpr::IndentDefBody(state.line, state.column),
-            state,
-        ))
-    } else {
-        // Indented more beyond the original indent.
-        let indented_more = original_indent + 1;
+    // Indented more beyond the original indent.
+    let indented_more = original_indent + 1;
 
-        and!(
-            // Parse the first annotation. It doesn't need any spaces
-            // around it parsed, because both the subsquent defs and the
-            // final body will have space1_before on them.
-            //
-            // It should be indented more than the original, and it will
-            // end when outdented again.
-            and_then_with_indent_level(
-                space0_before_e(
-                    specialize(EExpr::Type, type_annotation::located_help(indented_more)),
-                    min_indent,
-                    EExpr::Space,
-                    EExpr::IndentAnnotation
-                ),
-                // The first annotation may be immediately (spaces_then_comment_or_newline())
-                // followed by a body at the exact same indent_level
-                // leading to an AnnotatedBody in this case
-                |_progress, type_ann, indent_level| map(
-                    optional(and!(
-                        backtrackable(spaces_then_comment_or_newline_help()),
-                        body_at_indent_help(indent_level)
-                    )),
-                    move |opt_body| (type_ann.clone(), opt_body)
-                )
+    and!(
+        // Parse the first annotation. It doesn't need any spaces
+        // around it parsed, because both the subsquent defs and the
+        // final body will have space1_before on them.
+        //
+        // It should be indented more than the original, and it will
+        // end when outdented again.
+        and_then_with_indent_level(
+            space0_before_e(
+                specialize(EExpr::Type, type_annotation::located_help(indented_more)),
+                min_indent,
+                EExpr::Space,
+                EExpr::IndentAnnotation
             ),
-            and!(
-                // Optionally parse additional defs.
-                zero_or_more!(backtrackable(allocated(space0_before_e(
-                    loc!(specialize_ref(EExpr::Syntax, def(original_indent))),
-                    original_indent,
-                    EExpr::Space,
-                    EExpr::IndentStart,
-                )))),
-                // Parse the final expression that will be returned.
-                // It should be indented the same amount as the original.
-                space0_before_e(
-                    loc!(|arena, state| parse_expr_help(original_indent, arena, state)),
-                    original_indent,
-                    EExpr::Space,
-                    EExpr::IndentEnd,
-                )
+            // The first annotation may be immediately (spaces_then_comment_or_newline())
+            // followed by a body at the exact same indent_level
+            // leading to an AnnotatedBody in this case
+            |_progress, type_ann, indent_level| map(
+                optional(and!(
+                    backtrackable(spaces_then_comment_or_newline_help()),
+                    body_at_indent_help(indent_level)
+                )),
+                move |opt_body| (type_ann.clone(), opt_body)
+            )
+        ),
+        and!(
+            // Optionally parse additional defs.
+            zero_or_more!(backtrackable(allocated(space0_before_e(
+                loc!(specialize_ref(EExpr::Syntax, def(original_indent))),
+                original_indent,
+                EExpr::Space,
+                EExpr::IndentStart,
+            )))),
+            // Parse the final expression that will be returned.
+            // It should be indented the same amount as the original.
+            space0_before_e(
+                loc!(|arena, state| parse_expr_help(original_indent, arena, state)),
+                original_indent,
+                EExpr::Space,
+                EExpr::IndentEnd,
             )
         )
-        .parse(arena, state)
-        .map(
-            move |(progress, ((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
-                let loc_first_def: Located<Def<'a>> = match opt_body {
-                    None => {
-                        let region = Region::span_across(
-                            &loc_first_pattern.region,
-                            &loc_first_annotation.region,
-                        );
-                        Located {
-                            value: annotation_or_alias(
-                                arena,
-                                &loc_first_pattern.value,
-                                loc_first_pattern.region,
-                                loc_first_annotation,
-                            ),
-                            region,
-                        }
+    )
+    .parse(arena, state)
+    .map(
+        move |(progress, ((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
+            let loc_first_def: Located<Def<'a>> = match opt_body {
+                None => {
+                    let region = Region::span_across(
+                        &loc_first_pattern.region,
+                        &loc_first_annotation.region,
+                    );
+                    Located {
+                        value: annotation_or_alias(
+                            arena,
+                            &loc_first_pattern.value,
+                            loc_first_pattern.region,
+                            loc_first_annotation,
+                        ),
+                        region,
                     }
-                    Some((opt_comment, (body_pattern, body_expr))) => {
-                        let region =
-                            Region::span_across(&loc_first_pattern.region, &body_expr.region);
-                        Located {
-                            value: Def::AnnotatedBody {
-                                ann_pattern: arena.alloc(loc_first_pattern),
-                                ann_type: arena.alloc(loc_first_annotation),
-                                comment: opt_comment,
-                                body_pattern: arena.alloc(body_pattern),
-                                body_expr: arena.alloc(body_expr),
-                            },
-                            region,
-                        }
+                }
+                Some((opt_comment, (body_pattern, body_expr))) => {
+                    let region = Region::span_across(&loc_first_pattern.region, &body_expr.region);
+                    Located {
+                        value: Def::AnnotatedBody {
+                            ann_pattern: arena.alloc(loc_first_pattern),
+                            ann_type: arena.alloc(loc_first_annotation),
+                            comment: opt_comment,
+                            body_pattern: arena.alloc(body_pattern),
+                            body_expr: arena.alloc(body_expr),
+                        },
+                        region,
                     }
-                };
+                }
+            };
 
-                // contrary to defs with an expression body, we must ensure the annotation comes just before its
-                // corresponding definition (the one with the body).
-                defs.insert(0, &*arena.alloc(loc_first_def));
+            // contrary to defs with an expression body, we must ensure the annotation comes just before its
+            // corresponding definition (the one with the body).
+            defs.insert(0, &*arena.alloc(loc_first_def));
 
-                let defs = defs.into_bump_slice();
+            let defs = defs.into_bump_slice();
 
-                (progress, Expr::Defs(defs, arena.alloc(loc_ret)), state)
-            },
-        )
-    }
+            (progress, Expr::Defs(defs, arena.alloc(loc_ret)), state)
+        },
+    )
 }
 
 fn loc_parse_function_arg_help<'a>(
