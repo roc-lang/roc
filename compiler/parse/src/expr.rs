@@ -973,12 +973,12 @@ fn annotation_or_alias<'a>(
     }
 }
 
-fn check_def_indent<'a>(
+fn check_def_indent(
     min_indent: u16,
     def_start_column: u16,
     special_token_indent: u16,
-    state: State<'a>,
-) -> Result<State<'a>, (Progress, EExpr<'a>, State<'a>)> {
+    state: State,
+) -> Result<State, (Progress, EExpr, State)> {
     if def_start_column < min_indent || special_token_indent < def_start_column {
         Err((
             NoProgress,
@@ -1115,7 +1115,7 @@ fn parse_backarrow_help<'a>(
                 }
             };
             let defs_region = Region::span_across(
-                &defs.get(0).map(|r| r.region).unwrap_or(Region::zero()),
+                &defs.get(0).map(|r| r.region).unwrap_or_else(Region::zero),
                 &loc_first_body.region,
             );
 
