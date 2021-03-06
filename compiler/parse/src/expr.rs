@@ -763,7 +763,7 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     let def_colon_or_equals = one_of![
         map!(equals_with_indent_help(), |_| DefKind::DefEqual),
         map!(colon_with_indent(), |_| DefKind::DefColon),
-        map!(backarrow_with_indent(), |_| DefKind::DefArrow),
+        map!(backpassing_with_indent(), |_| DefKind::DefArrow),
     ];
 
     then(
@@ -1766,7 +1766,6 @@ fn ident_then_no_args<'a>(
         Equals(u16),
         Colon(u16),
         Backarrow(u16),
-        Comma(u16),
     }
 
     let parser = optional(and!(
@@ -1774,14 +1773,12 @@ fn ident_then_no_args<'a>(
         one_of![
             map!(equals_with_indent_help(), Next::Equals),
             map!(colon_with_indent(), Next::Colon),
-            map!(backarrow_with_indent(), Next::Backarrow),
-            // map!(comma_with_indent(), Next::Comma),
+            map!(backpassing_with_indent(), Next::Backarrow),
         ]
     ));
 
     let (_, next, state) = parser.parse(arena, state)?;
 
-    // no arguments, that limits the options
     match next {
         Some((ident_spaces, next)) => {
             let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
@@ -1815,26 +1812,6 @@ fn ident_then_no_args<'a>(
                     Ok((MadeProgress, parsed_expr, state))
                 }
                 Next::Backarrow(equals_indent) => {
-                    // We got '<-' with no args before it
-                    let def_start_col = state.indent_col;
-
-                    let (_, spaces_after_equals, state) =
-                        space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody)
-                            .parse(arena, state)?;
-
-                    let (_, parsed_expr, state) = parse_backarrow_help(
-                        min_indent,
-                        def_start_col,
-                        equals_indent,
-                        arena,
-                        state,
-                        loc_pattern,
-                        spaces_after_equals,
-                    )?;
-
-                    Ok((MadeProgress, parsed_expr, state))
-                }
-                Next::Comma(equals_indent) => {
                     // We got '<-' with no args before it
                     let def_start_col = state.indent_col;
 
@@ -2048,7 +2025,7 @@ fn comma_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
     }
 }
 
-fn backarrow_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
+fn backpassing_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
     move |_arena, state: State<'a>| {
         let indent_col = state.indent_col;
 
