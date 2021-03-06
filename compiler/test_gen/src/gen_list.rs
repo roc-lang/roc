@@ -569,6 +569,35 @@ fn list_map_closure() {
 }
 
 #[test]
+fn list_map2_pair() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map2 [1,2,3] [3,2,1] (\a,b -> Pair a b)
+            "#
+        ),
+        RocList::from_slice(&[(1, 3), (2, 2), (3, 1)]),
+        RocList<(i64, i64)>
+    );
+}
+
+#[test]
+fn list_map2_different_lengths() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map2
+                ["a", "b", "lllllllllllllongnggg" ]
+                ["b"]
+                Str.concat
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from_slice("ab".as_bytes()),]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
 fn list_join_empty_list() {
     assert_evals_to!("List.join []", RocList::from_slice(&[]), RocList<i64>);
 }

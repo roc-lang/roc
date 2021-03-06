@@ -12,7 +12,6 @@ roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
-roc_constrain = { path = "../constrain" }
 roc_solve = { path = "../solve" }
 roc_problem = { path = "../problem" }
 ven_pretty = { path = "../../vendor/pretty" }
@@ -21,7 +20,6 @@ ven_ena = { path = "../../vendor/ena" }
 linked-hash-map = "0.5.4"
 
 [dev-dependencies]
-roc_constrain = { path = "../constrain" }
 roc_load= { path = "../load" }
 roc_builtins = { path = "../builtins" }
 roc_parse = { path = "../parse" }

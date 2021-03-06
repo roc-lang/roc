@@ -9,8 +9,6 @@ license = "Apache-2.0"
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
-roc_parse = { path = "../parse" }
-roc_problem = { path = "../problem" }
 ven_ena = { path = "../../vendor/ena" }
 inlinable_string = "0.1"
 

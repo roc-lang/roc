@@ -36,7 +36,14 @@ pub fn gen_from_mono_module(
     let code_gen_start = SystemTime::now();
 
     for (home, (module_path, src)) in loaded.sources {
-        let src_lines: Vec<&str> = src.split('\n').collect();
+        let mut src_lines: Vec<&str> = Vec::new();
+
+        if let Some((_, header_src)) = loaded.header_sources.get(&home) {
+            src_lines.extend(header_src.split('\n'));
+            src_lines.extend(src.split('\n').skip(1));
+        } else {
+            src_lines.extend(src.split('\n'));
+        }
         let palette = DEFAULT_PALETTE;
 
         // Report parsing and canonicalization problems

@@ -551,63 +551,51 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 /// List.append : List elem, elem -> List elem
 pub fn list_append<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
+    _inplace: InPlace,
     original_wrapper: StructValue<'ctx>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
-    // Load the usize length from the wrapper.
-    let list_len = list_len(builder, original_wrapper);
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-    let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
-
-    // The output list length, which is the old list length + 1
-    let new_list_len = env.builder.build_int_add(
-        ctx.i64_type().const_int(1_u64, false),
-        list_len,
-        "new_list_length",
+    let list_i128 = complex_bitcast(
+        env.builder,
+        original_wrapper.into(),
+        env.context.i128_type().into(),
+        "to_i128",
     );
 
-    let ptr_bytes = env.ptr_bytes;
-
-    // Calculate the number of bytes we'll need to allocate.
-    let elem_bytes = env
+    let element_width = env
         .ptr_int()
-        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    // This is the size of the list coming in, before we have added an element
-    // to the end.
-    let list_size = env
-        .builder
-        .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
+    let element_ptr = builder.build_alloca(element.get_type(), "element");
+    builder.build_store(element_ptr, element);
 
-    // Allocate space for the new array that we'll copy into.
-    let clone_ptr = allocate_list(env, inplace, elem_layout, new_list_len);
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-    // TODO check if malloc returned null; if so, runtime error for OOM!
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_i128,
+            alignment_iv.into(),
+            builder.build_bitcast(
+                element_ptr,
+                env.context.i8_type().ptr_type(AddressSpace::Generic),
+                "to_opaque",
+            ),
+            element_width.into(),
+        ],
+        &bitcode::LIST_APPEND,
+    );
 
-    if elem_layout.safe_to_memcpy() {
-        // Copy the bytes from the original array into the new
-        // one we just malloc'd.
-        //
-        // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder
-            .build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
-            .unwrap();
-    } else {
-        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
-    }
-
-    let elem_ptr = unsafe { builder.build_in_bounds_gep(clone_ptr, &[list_len], "load_index") };
-
-    builder.build_store(elem_ptr, elem);
-
-    store_list(env, clone_ptr, new_list_len)
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
 }
 
 /// List.set : List elem, Int, elem -> List elem
@@ -1220,6 +1208,93 @@ fn list_map_generic<'a, 'ctx, 'env>(
             new_element_width.into(),
         ],
         op,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
+}
+
+pub fn list_map2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list1: BasicValueEnum<'ctx>,
+    list2: BasicValueEnum<'ctx>,
+    element1_layout: &Layout<'a>,
+    element2_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let return_layout = match transform_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
+    };
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let list1_i128 = complex_bitcast(
+        env.builder,
+        list1,
+        env.context.i128_type().into(),
+        "to_i128",
+    );
+
+    let list2_i128 = complex_bitcast(
+        env.builder,
+        list2,
+        env.context.i128_type().into(),
+        "to_i128",
+    );
+
+    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
+    env.builder.build_store(transform_ptr, transform);
+
+    let argument_layouts = [element1_layout.clone(), element2_layout.clone()];
+    let stepper_caller =
+        build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
+            .as_global_value()
+            .as_pointer_value();
+
+    let a_width = env
+        .ptr_int()
+        .const_int(element1_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let b_width = env
+        .ptr_int()
+        .const_int(element2_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let c_width = env
+        .ptr_int()
+        .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = return_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
+    let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list1_i128,
+            list2_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            alignment_iv.into(),
+            a_width.into(),
+            b_width.into(),
+            c_width.into(),
+            dec_a.as_global_value().as_pointer_value().into(),
+            dec_b.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_MAP2,
     );
 
     complex_bitcast(

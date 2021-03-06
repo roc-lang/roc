@@ -8,8 +8,8 @@ app "closure"
 main : Task.Task {} []
 main = closure1 {}
     |> Task.after (\_ -> closure2 {})
-    |> Task.after (\_ -> closure2 {})
-    |> Task.after (\_ -> closure2 {})
+    |> Task.after (\_ -> closure3 {})
+    |> Task.after (\_ -> closure4 {})
 
 # ---
 

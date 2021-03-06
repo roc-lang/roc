@@ -371,7 +371,10 @@ impl SolvedType {
 
         match subs.get_without_compacting(var).content {
             FlexVar(_) => SolvedType::Flex(VarId::from_var(var, subs)),
-            RecursionVar { .. } => SolvedType::Flex(VarId::from_var(var, subs)),
+            RecursionVar { structure, .. } => {
+                // TODO should there be a SolvedType RecursionVar variant?
+                Self::from_var_help(subs, recursion_vars, structure)
+            }
             RigidVar(name) => SolvedType::Rigid(name),
             Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
             Alias(symbol, args, actual_var) => {

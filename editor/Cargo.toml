@@ -15,16 +15,8 @@ roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
 roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
-roc_builtins = { path = "../compiler/builtins" }
-roc_constrain = { path = "../compiler/constrain" }
-roc_unify = { path = "../compiler/unify" }
-roc_solve = { path = "../compiler/solve" }
-roc_mono = { path = "../compiler/mono" }
-roc_load = { path = "../compiler/load" }
-roc_gen = { path = "../compiler/gen" }
 roc_fmt = { path = "../compiler/fmt" }
 
-roc_reporting = { path = "../compiler/reporting" }
  # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 ven_graph = { path = "../vendor/pathfinding" }
 im    = "14" # im and im-rc should always have the same version!
@@ -34,25 +26,6 @@ inlinable_string = "0.1"
 arraystring = "0.3.0"
 libc = "0.2"
 page_size = "0.4"
-# NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
-#
-# The reason for this fork is that the way Inkwell is designed, you have to use
-# a particular branch (e.g. "llvm8-0") in Cargo.toml. That would be fine, except that
-# breaking changes get pushed directly to that branch, which breaks our build
-# without warning.
-#
-# We tried referencing a specific rev on TheDan64/inkwell directly (instead of branch),
-# but although that worked locally, it did not work on GitHub Actions. (After a few
-# hours of investigation, gave up trying to figure out why.) So this is the workaround:
-# having an immutable tag on the rtfeldman/inkwell fork which points to
-# a particular "release" of Inkwell.
-#
-# When we want to update Inkwell, we can sync up rtfeldman/inkwell to the latest
-# commit of TheDan64/inkwell, push a new tag which points to the latest commit,
-# change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
-# This way, GitHub Actions works and nobody's builds get broken.
-inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release3" }
-target-lexicon = "0.10"
 winit = "0.22"
 wgpu = "0.6"
 glyph_brush = "0.7"
@@ -62,7 +35,6 @@ env_logger = "0.7"
 futures = "0.3"
 wgpu_glyph = "0.10"
 cgmath = "0.17.0"
-itertools = "0.9.0"
 snafu = { version = "0.6", features = ["backtraces"] }
 colored = "2"
 pest = "2.1"
