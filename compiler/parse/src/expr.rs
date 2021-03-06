@@ -757,13 +757,11 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     enum DefKind {
         Colon,
         Equal,
-        Backpassing,
     }
 
     let def_colon_or_equals = one_of![
         map!(equals_with_indent_help(), |_| DefKind::Equal),
         map!(colon_with_indent(), |_| DefKind::Colon),
-        map!(backpassing_with_indent(), |_| DefKind::Backpassing),
     ];
 
     then(
@@ -827,23 +825,6 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
                 Ok((
                     MadeProgress,
                     Def::Body(arena.alloc(loc_pattern), arena.alloc(body_expr)),
-                    state,
-                ))
-            }
-            DefKind::Backpassing => {
-                // Spaces after the '=' (at a normal indentation level) and then the expr.
-                // The expr itself must be indented more than the pattern and '='
-                let (_, body_expr, state) = space0_before_e(
-                    loc!(move |arena, state| parse_expr_help(indented_more, arena, state)),
-                    min_indent,
-                    EExpr::Space,
-                    EExpr::IndentStart,
-                )
-                .parse(arena, state)?;
-
-                Ok((
-                    MadeProgress,
-                    Def::Backpassing(arena.alloc([loc_pattern]), arena.alloc(body_expr)),
                     state,
                 ))
             }
