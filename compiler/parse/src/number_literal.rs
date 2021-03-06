@@ -1,9 +1,19 @@
-use crate::ast::{Base, Expr};
+use crate::ast::Base;
 use crate::parser::{parse_utf8, Number, ParseResult, Parser, Progress, State, SyntaxError};
 use std::char;
 use std::str::from_utf8_unchecked;
 
-pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, Number> {
+pub enum NumLiteral<'a> {
+    Float(&'a str),
+    Num(&'a str),
+    NonBase10Int {
+        string: &'a str,
+        base: Base,
+        is_negative: bool,
+    },
+}
+
+pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
     move |_arena, state: State<'a>| {
         match state.bytes.get(0) {
             Some(first_byte) if *first_byte == b'-' => {
@@ -25,7 +35,7 @@ fn parse_number_base<'a>(
     is_negated: bool,
     bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, Number> {
+) -> ParseResult<'a, NumLiteral<'a>, Number> {
     match bytes.get(0..2) {
         Some(b"0b") => chomp_number_base(Base::Binary, is_negated, &bytes[2..], state),
         Some(b"0o") => chomp_number_base(Base::Octal, is_negated, &bytes[2..], state),
@@ -39,7 +49,7 @@ fn chomp_number_base<'a>(
     is_negative: bool,
     bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, Number> {
+) -> ParseResult<'a, NumLiteral<'a>, Number> {
     let (_is_float, chomped) = chomp_number(bytes);
 
     match parse_utf8(&bytes[0..chomped]) {
@@ -48,7 +58,7 @@ fn chomp_number_base<'a>(
                 // all is well
                 Ok((
                     Progress::MadeProgress,
-                    Expr::NonBase10Int {
+                    NumLiteral::NonBase10Int {
                         is_negative,
                         string,
                         base,
@@ -71,7 +81,7 @@ fn chomp_number_dec<'a>(
     is_negative: bool,
     bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, Number> {
+) -> ParseResult<'a, NumLiteral<'a>, Number> {
     let (is_float, chomped) = chomp_number(bytes);
 
     if is_negative && chomped == 0 {
@@ -92,9 +102,9 @@ fn chomp_number_dec<'a>(
             Ok((
                 Progress::MadeProgress,
                 if is_float {
-                    Expr::Float(string)
+                    NumLiteral::Float(string)
                 } else {
-                    Expr::Num(string)
+                    NumLiteral::Num(string)
                 },
                 new,
             ))

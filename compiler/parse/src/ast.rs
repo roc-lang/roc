@@ -150,7 +150,7 @@ pub enum Expr<'a> {
     Nested(&'a Expr<'a>),
 
     // Problems
-    MalformedIdent(&'a str),
+    MalformedIdent(&'a str, crate::ident::BadIdent),
     MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
@@ -356,6 +356,7 @@ pub enum Pattern<'a> {
 
     // Malformed
     Malformed(&'a str),
+    MalformedIdent(&'a str, crate::ident::BadIdent),
     QualifiedIdentifier {
         module_name: &'a str,
         ident: &'a str,
@@ -411,7 +412,7 @@ impl<'a> Pattern<'a> {
                 }
             }
             Ident::AccessorFunction(string) => Pattern::Malformed(string),
-            Ident::Malformed(string) => Pattern::Malformed(string),
+            Ident::Malformed(string, _problem) => Pattern::Malformed(string),
         }
     }
 

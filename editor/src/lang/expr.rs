@@ -807,7 +807,7 @@ pub fn to_expr2<'a>(
             //            (RuntimeError(MalformedClosure(region)), Output::default())
             todo!()
         }
-        MalformedIdent(_name) => {
+        MalformedIdent(_name, _problem) => {
             //            use roc_problem::can::RuntimeError::*;
             //
             //            let problem = MalformedIdentifier((*name).into(), region);
