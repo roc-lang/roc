@@ -755,15 +755,15 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     let indented_more = min_indent + 1;
 
     enum DefKind {
-        DefColon,
-        DefEqual,
-        DefArrow,
+        Colon,
+        Equal,
+        Backpassing,
     }
 
     let def_colon_or_equals = one_of![
-        map!(equals_with_indent_help(), |_| DefKind::DefEqual),
-        map!(colon_with_indent(), |_| DefKind::DefColon),
-        map!(backpassing_with_indent(), |_| DefKind::DefArrow),
+        map!(equals_with_indent_help(), |_| DefKind::Equal),
+        map!(colon_with_indent(), |_| DefKind::Colon),
+        map!(backpassing_with_indent(), |_| DefKind::Backpassing),
     ];
 
     then(
@@ -776,7 +776,7 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
         // backtrack
         and!(backtrackable(pattern_help(min_indent)), def_colon_or_equals),
         move |arena, state, _progress, (loc_pattern, def_kind)| match def_kind {
-            DefKind::DefColon => {
+            DefKind::Colon => {
                 // Spaces after the ':' (at a normal indentation level) and then the type.
                 // The type itself must be indented more than the pattern and ':'
                 let (_, ann_type, state) = specialize(
@@ -813,7 +813,7 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
 
                 Ok((MadeProgress, def, state))
             }
-            DefKind::DefEqual => {
+            DefKind::Equal => {
                 // Spaces after the '=' (at a normal indentation level) and then the expr.
                 // The expr itself must be indented more than the pattern and '='
                 let (_, body_expr, state) = space0_before_e(
@@ -830,7 +830,7 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
                     state,
                 ))
             }
-            DefKind::DefArrow => {
+            DefKind::Backpassing => {
                 // Spaces after the '=' (at a normal indentation level) and then the expr.
                 // The expr itself must be indented more than the pattern and '='
                 let (_, body_expr, state) = space0_before_e(
@@ -2004,22 +2004,6 @@ fn colon_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
             }
         } else {
             let colon = EExpr::Colon(state.line, state.column);
-            Err((NoProgress, colon, state))
-        }
-    }
-}
-
-fn comma_with_indent<'a>() -> impl Parser<'a, u16, EExpr<'a>> {
-    move |_arena, state: State<'a>| {
-        let indent_col = state.indent_col;
-
-        if let Some(b',') = state.bytes.get(0) {
-            match state.advance_without_indenting_e(1, EExpr::Space) {
-                Err(bad) => Err(bad),
-                Ok(good) => Ok((MadeProgress, indent_col, good)),
-            }
-        } else {
-            let colon = EExpr::BackpassComma(state.line, state.column);
             Err((NoProgress, colon, state))
         }
     }
