@@ -1,13 +1,13 @@
-interface Bytes.Decode exposes [ Decoder, decode, map, map2, u8, loop, Step, succeed, DecodeError, after, map3 ] imports []
+interface Bytes.Decode exposes [ Decoder, decode, map, map2, u8, loop, Step, succeed, DecodeProblem, after, map3 ] imports []
 
 State : { bytes: List U8, cursor : Nat }
 
-DecodeError : [ OutOfBytes ]
+DecodeProblem : [ OutOfBytes ]
 
 
-Decoder a : [ @Decoder (State -> [Good State a, Bad DecodeError]) ]
+Decoder a : [ @Decoder (State -> [Good State a, Bad DecodeProblem]) ]
 
-decode : List U8, Decoder a -> Result a DecodeError
+decode : List U8, Decoder a -> Result a DecodeProblem
 decode = \bytes, @Decoder decoder ->
     when decoder { bytes, cursor: 0 } is
         Good _ value ->

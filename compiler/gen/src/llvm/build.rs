@@ -7,8 +7,8 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map_with_index, list_prepend, list_repeat, list_reverse, list_set, list_single, list_sum,
-    list_walk, list_walk_backwards,
+    list_map2, list_map_with_index, list_prepend, list_repeat, list_reverse, list_set, list_single,
+    list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -1104,7 +1104,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let tag_field_layouts = &fields[*tag_id as usize];
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, val_layout) = load_symbol_and_layout(scope, field_symbol);
+                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -1127,7 +1127,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         field_vals.push(ptr);
                     } else {
                         // this check fails for recursive tag unions, but can be helpful while debugging
-                        debug_assert_eq!(tag_field_layout, val_layout);
+                        // debug_assert_eq!(tag_field_layout, val_layout);
 
                         field_vals.push(val);
                     }
@@ -3716,6 +3716,33 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::List(_, element_layout)) => {
                     list_map(env, layout_ids, func, func_layout, list, element_layout)
                 }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMap2 => {
+            debug_assert_eq!(args.len(), 3);
+
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match (list1_layout, list2_layout) {
+                (
+                    Layout::Builtin(Builtin::List(_, element1_layout)),
+                    Layout::Builtin(Builtin::List(_, element2_layout)),
+                ) => list_map2(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list1,
+                    list2,
+                    element1_layout,
+                    element2_layout,
+                ),
+                (Layout::Builtin(Builtin::EmptyList), _)
+                | (_, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
             }
         }

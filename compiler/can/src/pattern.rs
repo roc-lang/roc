@@ -379,6 +379,11 @@ pub fn canonicalize_pattern<'a>(
             malformed_pattern(env, problem, region)
         }
 
+        MalformedIdent(_str, problem) => {
+            let problem = MalformedPatternProblem::BadIdent(*problem);
+            malformed_pattern(env, problem, region)
+        }
+
         QualifiedIdentifier { .. } => {
             let problem = MalformedPatternProblem::QualifiedIdentifier;
             malformed_pattern(env, problem, region)

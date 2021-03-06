@@ -975,22 +975,25 @@ mod test_parse {
 
     #[test]
     fn qualified_global_tag() {
+        use roc_parse::ident::BadIdent;
+
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("One.Two.Whee");
+        let expected = Expr::MalformedIdent("One.Two.Whee", BadIdent::QualifiedTag(0, 12));
         let actual = parse_expr_with(&arena, "One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
 
-    // TODO restore this test - it fails, but is not worth fixing right now.
-    // #[test]
-    // fn qualified_private_tag() {
-    //     let arena = Bump::new();
-    //     let expected = Expr::MalformedIdent("One.Two.@Whee");
-    //     let actual = parse_expr_with(&arena, "One.Two.@Whee");
+    #[test]
+    fn private_qualified_tag() {
+        use roc_parse::ident::BadIdent;
 
-    //     assert_eq!(Ok(expected), actual);
-    // }
+        let arena = Bump::new();
+        let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::QualifiedTag(0, 13));
+        let actual = parse_expr_with(&arena, "@One.Two.Whee");
+
+        assert_eq!(Ok(expected), actual);
+    }
 
     #[test]
     fn tag_pattern() {
@@ -999,15 +1002,6 @@ mod test_parse {
         let patterns = &[pattern];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 10, 12, Num("42"))));
         let actual = parse_expr_with(&arena, "\\Thing -> 42");
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn private_qualified_tag() {
-        let arena = Bump::new();
-        let expected = Expr::MalformedIdent("@One.Two.Whee");
-        let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1501,15 +1495,26 @@ mod test_parse {
     }
 
     #[test]
-    #[ignore]
     fn malformed_ident_due_to_underscore() {
         // This is a regression test against a bug where if you included an
         // underscore in an argument name, it would parse as three arguments
         // (and would ignore the underscore as if it had been blank space).
         let arena = Bump::new();
+
+        let pattern = Located::new(
+            0,
+            0,
+            1,
+            11,
+            Pattern::MalformedIdent(&"the_answer", roc_parse::ident::BadIdent::Underscore(0, 5)),
+        );
+        let patterns = &[pattern];
+        let expr = Located::new(0, 0, 15, 17, Expr::Num("42"));
+
+        let expected = Closure(patterns, &expr);
         let actual = parse_expr_with(&arena, "\\the_answer -> 42");
 
-        assert_eq!(Ok(MalformedClosure), actual);
+        assert_eq!(Ok(expected), actual);
     }
 
     #[test]

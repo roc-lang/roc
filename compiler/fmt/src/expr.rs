@@ -30,7 +30,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             | Access(_, _)
             | AccessorFunction(_)
             | Var { .. }
-            | MalformedIdent(_)
+            | MalformedIdent(_, _)
             | MalformedClosure
             | GlobalTag(_)
             | PrivateTag(_) => false,
@@ -303,7 +303,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
-            MalformedIdent(_) => {}
+            MalformedIdent(_, _) => {}
             MalformedClosure => {}
             PrecedenceConflict(_, _, _, _) => {}
         }

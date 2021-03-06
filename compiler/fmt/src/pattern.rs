@@ -39,6 +39,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             | Pattern::StrLiteral(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
+            | Pattern::MalformedIdent(_, _)
             | Pattern::QualifiedIdentifier { .. } => false,
         }
     }
@@ -157,7 +158,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             }
 
             // Malformed
-            Malformed(string) => buf.push_str(string),
+            Malformed(string) | MalformedIdent(string, _) => buf.push_str(string),
             QualifiedIdentifier { module_name, ident } => {
                 if !module_name.is_empty() {
                     buf.push_str(module_name);

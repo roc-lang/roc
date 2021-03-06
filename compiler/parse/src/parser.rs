@@ -389,11 +389,22 @@ pub enum EExpr<'a> {
 
     Dot(Row, Col),
     Access(Row, Col),
+    UnaryNot(Row, Col),
+    UnaryNegate(Row, Col),
+    BinOp(roc_module::operator::BinOp, Row, Col),
 
     Def(&'a SyntaxError<'a>, Row, Col),
+    Type(Type<'a>, Row, Col),
+    Pattern(&'a EPattern<'a>, Row, Col),
     IndentDefBody(Row, Col),
     IndentEquals(Row, Col),
+    IndentAnnotation(Row, Col),
     Equals(Row, Col),
+    Colon(Row, Col),
+    Ident(Row, Col),
+    ElmStyleFunction(Region, Row, Col),
+    MalformedPattern(Row, Col),
+    QualifiedTag(Row, Col),
 
     Syntax(&'a SyntaxError<'a>, Row, Col),
 
@@ -469,8 +480,7 @@ pub enum EInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
     ///
-    // TODO remove
-    Syntax(&'a SyntaxError<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Row, Col),
 
     ///
     Space(BadInputError, Row, Col),
@@ -488,8 +498,7 @@ pub enum ELambda<'a> {
     Arg(Row, Col),
     // TODO make EEXpr
     Pattern(EPattern<'a>, Row, Col),
-    Syntax(&'a SyntaxError<'a>, Row, Col),
-
+    Body(&'a EExpr<'a>, Row, Col),
     IndentArrow(Row, Col),
     IndentBody(Row, Col),
     IndentArg(Row, Col),
@@ -516,9 +525,10 @@ pub enum When<'a> {
     Pattern(EPattern<'a>, Row, Col),
     Arrow(Row, Col),
     Bar(Row, Col),
+
     IfToken(Row, Col),
-    // TODO make EEXpr
-    IfGuard(&'a SyntaxError<'a>, Row, Col),
+    IfGuard(&'a EExpr<'a>, Row, Col),
+
     Condition(&'a EExpr<'a>, Row, Col),
     Branch(&'a EExpr<'a>, Row, Col),
     Syntax(&'a SyntaxError<'a>, Row, Col),
@@ -562,6 +572,7 @@ pub enum EPattern<'a> {
     Space(BadInputError, Row, Col),
 
     PInParens(PInParens<'a>, Row, Col),
+    NumLiteral(Number, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
@@ -1953,6 +1964,44 @@ macro_rules! one_or_more {
                     debug_assert_eq!(progress, NoProgress, "{:?}", &new_state);
                     Err($crate::parser::unexpected_eof(arena, new_state, 0))
                 }
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! one_or_more_e {
+    ($parser:expr, $to_error:expr) => {
+        move |arena, state: State<'a>| {
+            use bumpalo::collections::Vec;
+
+            match $parser.parse(arena, state) {
+                Ok((_, first_output, next_state)) => {
+                    let mut state = next_state;
+                    let mut buf = Vec::with_capacity_in(1, arena);
+
+                    buf.push(first_output);
+
+                    loop {
+                        match $parser.parse(arena, state) {
+                            Ok((_, next_output, next_state)) => {
+                                state = next_state;
+                                buf.push(next_output);
+                            }
+                            Err((NoProgress, _, old_state)) => {
+                                return Ok((MadeProgress, buf, old_state));
+                            }
+                            Err((MadeProgress, fail, old_state)) => {
+                                return Err((MadeProgress, fail, old_state));
+                            }
+                        }
+                    }
+                }
+                Err((progress, _, new_state)) => Err((
+                    progress,
+                    $to_error(new_state.line, new_state.column),
+                    new_state,
+                )),
             }
         }
     };

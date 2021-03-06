@@ -88,8 +88,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Nested(AccessorFunction(_))
         | Var { .. }
         | Nested(Var { .. })
-        | MalformedIdent(_)
-        | Nested(MalformedIdent(_))
+        | MalformedIdent(_, _)
+        | Nested(MalformedIdent(_, _))
         | MalformedClosure
         | Nested(MalformedClosure)
         | PrecedenceConflict(_, _, _, _)
