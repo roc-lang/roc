@@ -337,6 +337,28 @@ where
     })
 }
 
+pub fn space1_e<'a, E>(
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+    no_parse_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
+    move |arena, state| match space0_e(min_indent, space_problem, indent_problem)
+        .parse(arena, state)
+    {
+        Ok((NoProgress, _, state)) => Err((
+            NoProgress,
+            no_parse_problem(state.line, state.column),
+            state,
+        )),
+        Ok((MadeProgress, spaces, state)) => Ok((MadeProgress, spaces, state)),
+        Err(bad) => Err(bad),
+    }
+}
+
 /// One or more (spaces/comments/newlines).
 pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     // TODO try benchmarking a short-circuit for the typical case: see if there is
@@ -431,6 +453,62 @@ pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxErr
         } else {
             Err(unexpected(spaces_seen.into(), Attempting::TODO, state))
         }
+    }
+}
+
+#[inline(always)]
+pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser::EExpr<'a>> {
+    use parser::EExpr;
+
+    move |arena: &'a Bump, state: State<'a>| {
+        if spaces_expected == 0 {
+            return Ok((NoProgress, (), state));
+        }
+
+        let mut state = state;
+        let mut spaces_seen: u16 = 0;
+
+        while !state.bytes.is_empty() {
+            match peek_utf8_char(&state) {
+                Ok((' ', _)) => {
+                    spaces_seen += 1;
+                    state = state.advance_spaces_e(arena, 1, EExpr::IndentStart)?;
+                    if spaces_seen == spaces_expected {
+                        return Ok((MadeProgress, (), state));
+                    }
+                }
+                Ok(_) => {
+                    return Err((
+                        NoProgress,
+                        EExpr::IndentStart(state.line, state.column),
+                        state,
+                    ))
+                }
+
+                Err(SyntaxError::BadUtf8) => {
+                    // If we hit an invalid UTF-8 character, bail out immediately.
+                    let progress = Progress::progress_when(spaces_seen != 0);
+                    return Err((
+                        progress,
+                        EExpr::Space(BadInputError::BadUtf8, state.line, state.column),
+                        state,
+                    ));
+                }
+                Err(_) => {
+                    return Err((
+                        NoProgress,
+                        EExpr::IndentStart(state.line, state.column),
+                        state,
+                    ))
+                }
+            }
+        }
+
+        Err((
+            NoProgress,
+            EExpr::IndentStart(state.line, state.column),
+            state,
+        ))
     }
 }
 

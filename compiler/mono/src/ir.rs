@@ -1,8 +1,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    BuildClosureData, Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, UnionLayout,
-    WrappedVariant, TAG_SIZE,
+    BuildClosureData, Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem, MemoryMode,
+    UnionLayout, WrappedVariant, TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -277,6 +277,7 @@ pub struct Procs<'a> {
     pub module_thunks: MutSet<Symbol>,
     pub pending_specializations: Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
+    pub call_by_pointer_wrappers: MutMap<Symbol, Symbol>,
     pub runtime_errors: MutMap<Symbol, &'a str>,
     pub externals_others_need: ExternalSpecializations,
     pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
@@ -291,6 +292,7 @@ impl<'a> Default for Procs<'a> {
             pending_specializations: Some(MutMap::default()),
             specialized: MutMap::default(),
             runtime_errors: MutMap::default(),
+            call_by_pointer_wrappers: MutMap::default(),
             externals_we_need: MutMap::default(),
             externals_others_need: ExternalSpecializations::default(),
         }
@@ -1741,7 +1743,7 @@ pub fn specialize_all<'a>(
                     partial_proc,
                 ) {
                     Ok((proc, layout)) => {
-                        debug_assert_eq!(outside_layout, layout);
+                        debug_assert_eq!(outside_layout, layout, " in {:?}", name);
 
                         if let Layout::Closure(args, closure, ret) = layout {
                             procs.specialized.remove(&(name, outside_layout));
@@ -3355,10 +3357,33 @@ pub fn with_hole<'a>(
             }
         }
 
-        List { loc_elems, .. } if loc_elems.is_empty() => {
+        List {
+            loc_elems,
+            elem_var,
+            ..
+        } if loc_elems.is_empty() => {
             // because an empty list has an unknown element type, it is handled differently
-            let expr = Expr::EmptyArray;
-            Stmt::Let(assigned, expr, Layout::Builtin(Builtin::EmptyList), hole)
+            let opt_elem_layout = layout_cache.from_var(env.arena, elem_var, env.subs);
+
+            match opt_elem_layout {
+                Ok(elem_layout) => {
+                    let expr = Expr::EmptyArray;
+                    Stmt::Let(
+                        assigned,
+                        expr,
+                        Layout::Builtin(Builtin::List(
+                            MemoryMode::Refcounted,
+                            env.arena.alloc(elem_layout),
+                        )),
+                        hole,
+                    )
+                }
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    let expr = Expr::EmptyArray;
+                    Stmt::Let(assigned, expr, Layout::Builtin(Builtin::EmptyList), hole)
+                }
+                Err(LayoutProblem::Erroneous) => panic!("list element is error type"),
+            }
         }
 
         List {
@@ -3654,18 +3679,27 @@ pub fn with_hole<'a>(
                     captured_symbols.sort();
                     let captured_symbols = captured_symbols.into_bump_slice();
 
-                    procs
-                        .insert_anonymous(
-                            env,
-                            name,
-                            function_type,
-                            arguments,
-                            loc_body,
-                            CapturedSymbols::Captured(captured_symbols),
-                            return_type,
-                            layout_cache,
-                        )
-                        .unwrap();
+                    let inserted = procs.insert_anonymous(
+                        env,
+                        name,
+                        function_type,
+                        arguments,
+                        loc_body,
+                        CapturedSymbols::Captured(captured_symbols),
+                        return_type,
+                        layout_cache,
+                    );
+
+                    if let Err(runtime_error) = inserted {
+                        return Stmt::RuntimeError(env.arena.alloc(format!(
+                            "RuntimeError {} line {} {:?}",
+                            file!(),
+                            line!(),
+                            runtime_error,
+                        )));
+                    } else {
+                        drop(inserted);
+                    }
 
                     let closure_data_layout = closure_layout.as_block_of_memory_layout();
                     // define the function pointer
@@ -4652,27 +4686,11 @@ fn from_can_when<'a>(
     }
     let opt_branches = to_opt_branches(env, region, branches, layout_cache);
 
-    let cond_layout = match layout_cache.from_var(env.arena, cond_var, env.subs) {
-        Ok(cached) => cached,
-        Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-            return Stmt::RuntimeError(env.arena.alloc(format!(
-                "UnresolvedTypeVar {} line {}",
-                file!(),
-                line!()
-            )));
-        }
-        Err(LayoutProblem::Erroneous) => {
-            return Stmt::RuntimeError(env.arena.alloc(format!(
-                "Erroneous {} line {}",
-                file!(),
-                line!()
-            )));
-        }
-    };
+    let cond_layout =
+        return_on_layout_error!(env, layout_cache.from_var(env.arena, cond_var, env.subs));
 
-    let ret_layout = layout_cache
-        .from_var(env.arena, expr_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+    let ret_layout =
+        return_on_layout_error!(env, layout_cache.from_var(env.arena, expr_var, env.subs));
 
     let arena = env.arena;
     let it = opt_branches
@@ -5733,6 +5751,12 @@ fn call_by_pointer<'a>(
         match layout {
             Layout::FunctionPointer(arg_layouts, ret_layout) if !is_thunk => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
+                    if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
+                        if procs.specialized.contains_key(&(*wrapper, layout.clone())) {
+                            return Expr::FunctionPointer(*wrapper, layout);
+                        }
+                    }
+
                     let name = env.unique_symbol();
                     let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
                     let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
@@ -5777,6 +5801,9 @@ fn call_by_pointer<'a>(
                     procs
                         .specialized
                         .insert((name, layout.clone()), InProgressProc::Done(proc));
+
+                    procs.call_by_pointer_wrappers.insert(symbol, name);
+
                     Expr::FunctionPointer(name, layout)
                 } else {
                     // if none of the arguments is refcounted, then owning the arguments has no
@@ -5786,6 +5813,12 @@ fn call_by_pointer<'a>(
             }
             Layout::FunctionPointer(arg_layouts, ret_layout) => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
+                    if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
+                        if procs.specialized.contains_key(&(*wrapper, layout.clone())) {
+                            return Expr::FunctionPointer(*wrapper, layout);
+                        }
+                    }
+
                     let name = env.unique_symbol();
                     let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
                     let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), env.arena);
@@ -5834,6 +5867,9 @@ fn call_by_pointer<'a>(
                     procs
                         .specialized
                         .insert((name, layout.clone()), InProgressProc::Done(proc));
+
+                    procs.call_by_pointer_wrappers.insert(symbol, name);
+
                     Expr::FunctionPointer(name, layout)
                 } else {
                     // if none of the arguments is refcounted, then owning the arguments has no
@@ -6201,8 +6237,7 @@ fn call_by_name<'a>(
 
                                         procs.runtime_errors.insert(proc_name, error_msg);
 
-                                        panic!();
-                                        // Stmt::RuntimeError(error_msg)
+                                        Stmt::RuntimeError(error_msg)
                                     }
                                 }
                             }

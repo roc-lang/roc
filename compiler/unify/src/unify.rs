@@ -867,7 +867,11 @@ fn unify_shared_tags(
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch!("Problem with Tag Union")
+        mismatch!(
+            "Problem with Tag Union\nThere should be {:?} matching tags, but I only got \n{:?}",
+            num_shared_tags,
+            &matching_tags
+        )
     }
 }
 

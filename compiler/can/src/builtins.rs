@@ -80,6 +80,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_PREPEND => list_prepend,
         LIST_JOIN => list_join,
         LIST_MAP => list_map,
+        LIST_MAP2 => list_map2,
         LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_KEEP_IF => list_keep_if,
         LIST_KEEP_OKS => list_keep_oks,
@@ -215,6 +216,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
+        Symbol::LIST_MAP2 => list_map2,
         Symbol::LIST_MAP_WITH_INDEX => list_map_with_index,
         Symbol::LIST_KEEP_IF => list_keep_if,
         Symbol::LIST_KEEP_OKS => list_keep_oks,
@@ -2111,6 +2113,11 @@ fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.mapWithIndex : List before, (Nat, before -> after) -> List after
 fn list_map_with_index(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListMapWithIndex, var_store)
+}
+
+/// List.map2 : List a, List b, (a, b -> c) -> List c
+fn list_map2(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_3(symbol, LowLevel::ListMap2, var_store)
 }
 
 /// Dict.hashTestOnly : k, v -> Nat
