@@ -15,9 +15,6 @@ impl<'a> Formattable<'a> for Def<'a> {
                 loc_pattern.is_multiline() || loc_annotation.is_multiline()
             }
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
-            Backpassing(loc_patterns, loc_expr) => {
-                loc_patterns.iter().any(|p| p.is_multiline()) || loc_expr.is_multiline()
-            }
             AnnotatedBody { .. } => true,
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
                 spaces.iter().any(|s| s.is_comment()) || sub_def.is_multiline()
@@ -93,8 +90,6 @@ impl<'a> Formattable<'a> for Def<'a> {
                 buf.push_str("\n");
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
-
-            Backpassing(_, _) => todo!(),
 
             SpaceBefore(sub_def, spaces) => {
                 fmt_spaces(buf, spaces.iter(), indent);

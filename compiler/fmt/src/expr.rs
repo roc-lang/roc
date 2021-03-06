@@ -87,6 +87,14 @@ impl<'a> Formattable<'a> for Expr<'a> {
                         .iter()
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
+            Backpassing(loc_patterns, loc_body, loc_ret) => {
+                // check the body first because it's more likely to be multiline
+                loc_body.is_multiline()
+                    || loc_ret.is_multiline()
+                    || loc_patterns
+                        .iter()
+                        .any(|loc_pattern| loc_pattern.is_multiline())
+            }
 
             Record { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
@@ -240,6 +248,9 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
+            }
+            Backpassing(_loc_patterns, _loc_body, _loc_ret) => {
+                todo!();
             }
             Defs(defs, ret) => {
                 // It should theoretically be impossible to *parse* an empty defs list.

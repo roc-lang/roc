@@ -561,6 +561,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Access(_, _)
         | Expr::List { .. }
         | Expr::Closure(_, _)
+        | Expr::Backpassing(_, _, _)
         | Expr::BinOp(_)
         | Expr::Defs(_, _)
         | Expr::If(_, _)
@@ -1096,7 +1097,7 @@ fn parse_backarrow_help<'a>(
                     )
                 )
             ),
-            move |arena, state, progress, (loc_first_body, (mut defs, loc_ret))| {
+            move |arena, state, progress, (loc_first_body, (defs, loc_ret))| {
                 let loc_first_body = if spaces_after_equals.is_empty() {
                     loc_first_body
                 } else {
@@ -1108,24 +1109,23 @@ fn parse_backarrow_help<'a>(
                         region: loc_first_body.region,
                     }
                 };
-                let def_region =
-                    Region::span_across(&loc_first_pattern.region, &loc_first_body.region);
+                let defs_region = Region::span_across(
+                    &defs.get(0).map(|r| r.region).unwrap_or(Region::zero()),
+                    &loc_first_body.region,
+                );
 
-                let first_def: Def<'a> =
-                    // TODO is there some way to eliminate this .clone() here?
-                    Def::Backpassing(arena.alloc([loc_first_pattern.clone()]), arena.alloc(loc_first_body));
-
-                let loc_first_def = Located {
-                    value: first_def,
-                    region: def_region,
-                };
-
-                // for formatting reasons, we must insert the first def first!
-                defs.insert(0, &*arena.alloc(loc_first_def));
+                let loc_defs = Located::at(
+                    defs_region,
+                    Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
+                );
 
                 Ok((
                     progress,
-                    Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
+                    Expr::Backpassing(
+                        arena.alloc([loc_first_pattern.clone()]),
+                        arena.alloc(loc_first_body),
+                        arena.alloc(loc_defs),
+                    ),
                     state,
                 ))
             },
