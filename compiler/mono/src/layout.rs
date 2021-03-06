@@ -1539,7 +1539,9 @@ pub fn union_sorted_tags_help<'a>(
                             }
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
-                                // then it's zero-sized; drop the argument.
+                                // then it's zero-sized; In the future we may drop this argument
+                                // completely, but for now we represent it with the empty struct
+                                layouts.push(Layout::Struct(&[]))
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 // An erroneous type var will code gen to a runtime
@@ -1616,7 +1618,9 @@ pub fn union_sorted_tags_help<'a>(
                         }
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
-                            // then it's zero-sized; drop the argument.
+                            // then it's zero-sized; In the future we may drop this argument
+                            // completely, but for now we represent it with the empty struct
+                            arg_layouts.push(Layout::Struct(&[]));
                         }
                         Err(LayoutProblem::Erroneous) => {
                             // An erroneous type var will code gen to a runtime

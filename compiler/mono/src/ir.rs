@@ -4139,12 +4139,13 @@ fn sorted_field_symbols<'a>(
     let mut field_symbols_temp = Vec::with_capacity_in(args.len(), env.arena);
 
     for (var, mut arg) in args.drain(..) {
-        // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
+        // Layout will unpack this unwrapped tag if it only has one (non-zero-sized) field
         let layout = match layout_cache.from_var(env.arena, var, env.subs) {
             Ok(cached) => cached,
             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                 // this argument has type `forall a. a`, which is isomorphic to
                 // the empty type (Void, Never, the empty tag union `[]`)
+                // Note it does not catch the use of `[]` currently.
                 use roc_can::expr::Expr;
                 arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
                 Layout::Struct(&[])

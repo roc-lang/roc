@@ -98,3 +98,51 @@ fn result_map_err() {
         i64
     );
 }
+
+#[test]
+fn err_type_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Result.map (Ok 3) (\x -> x + 1)
+                |> Result.withDefault -1
+            "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+fn err_type_var_annotation() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            ok : Result I64 *
+            ok = Ok 3
+
+            Result.map ok (\x -> x + 1)
+                |> Result.withDefault -1
+            "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+fn err_empty_tag_union() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            ok : Result I64 []
+            ok = Ok 3
+
+            Result.map ok (\x -> x + 1)
+                |> Result.withDefault -1
+            "#
+        ),
+        4,
+        i64
+    );
+}
