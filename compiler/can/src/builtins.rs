@@ -160,6 +160,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_INT_CAST=> num_int_cast,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
+        RESULT_AFTER => result_after,
         RESULT_WITH_DEFAULT => result_with_default,
     }
 }
@@ -291,6 +292,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_INT_CAST=> num_int_cast,
         Symbol::RESULT_MAP => result_map,
         Symbol::RESULT_MAP_ERR => result_map_err,
+        Symbol::RESULT_AFTER => result_after,
         Symbol::RESULT_WITH_DEFAULT => result_with_default,
     }
 }
@@ -3132,6 +3134,98 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(result_var, Symbol::ARG_1), (ret_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let mut branches = vec![];
+
+    {
+        let user_function = Box::new((
+            func_var,
+            no_region(Var(Symbol::ARG_2)),
+            var_store.fresh(),
+            var_store.fresh(),
+        ));
+
+        let call_func = Call(
+            user_function,
+            vec![(var_store.fresh(), no_region(Var(Symbol::ARG_5)))],
+            CalledVia::Space,
+        );
+
+        let tag_name = TagName::Global("Ok".into());
+
+        // ok branch
+        let ok = call_func;
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_5)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(ok),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Err".into());
+
+        let err = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: tag_name.clone(),
+            arguments: vec![(var_store.fresh(), no_region(Var(Symbol::ARG_4)))],
+        };
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_4)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(err),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
+    };
+
+    defn(
+        symbol,
+        vec![(result_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
         var_store,
         body,
         ret_var,

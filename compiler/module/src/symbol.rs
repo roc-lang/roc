@@ -915,6 +915,7 @@ define_builtins! {
         1 RESULT_MAP: "map"
         2 RESULT_MAP_ERR: "mapErr"
         3 RESULT_WITH_DEFAULT: "withDefault"
+        4 RESULT_AFTER: "after"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias

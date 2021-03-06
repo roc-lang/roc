@@ -1137,6 +1137,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // after : Result a err, (a -> Result b err) -> Result b err
+    add_type(
+        Symbol::RESULT_AFTER,
+        top_level_function(
+            vec![
+                result_type(flex(TVAR1), flex(TVAR3)),
+                closure(
+                    vec![flex(TVAR1)],
+                    TVAR4,
+                    Box::new(result_type(flex(TVAR2), flex(TVAR3))),
+                ),
+            ],
+            Box::new(result_type(flex(TVAR2), flex(TVAR3))),
+        ),
+    );
+
     // withDefault : Result a x, a -> a
     add_type(
         Symbol::RESULT_WITH_DEFAULT,
