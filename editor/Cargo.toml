@@ -70,7 +70,7 @@ ropey = "1.2.0"
 copypasta = "0.7.1"
 indoc = "0.3.3"
 palette = "0.5"
-confy = "0.4.0"
+confy = { features = ["yaml_conf"], default-features = false }
 serde = { version = "1.0.123", features = ["derive"] }
 
 [dependencies.bytemuck]
