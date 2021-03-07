@@ -313,7 +313,7 @@ fn expr_in_parens_then_access<'a>(
     }
 }
 
-fn cheaty_cheaty<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+fn in_parens_region_fix<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
     // we get the region of the expression inside the parens, but current tests want us to
     // include the parentheses in the region
     map!(
@@ -333,7 +333,7 @@ fn parse_loc_term<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        cheaty_cheaty(min_indent),
+        in_parens_region_fix(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(record_literal_help(min_indent)),
