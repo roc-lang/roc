@@ -436,51 +436,47 @@ fn parse_expr_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let expr_parser = crate::parser::map_with_arena(
-        and!(
-            // First parse the body without operators, then try to parse possible operators after.
-            move |arena, state| loc_parse_expr_body_without_operators_help(
-                min_indent, arena, state
+    let (_, (loc_expr1, opt_operator), state) = and!(
+        // First parse the body without operators, then try to parse possible operators after.
+        move |arena, state| loc_parse_expr_body_without_operators_help(min_indent, arena, state),
+        // Parse the operator, with optional spaces before it.
+        //
+        // Since spaces can only wrap an Expr, not an BinOp, we have to first
+        // parse the spaces and then attach them retroactively to the expression
+        // preceding the operator (the one we parsed before considering operators).
+        optional(and!(
+            and!(
+                space0_e(min_indent, EExpr::Space, EExpr::IndentEnd),
+                loc!(operator())
             ),
-            // Parse the operator, with optional spaces before it.
-            //
-            // Since spaces can only wrap an Expr, not an BinOp, we have to first
-            // parse the spaces and then attach them retroactively to the expression
-            // preceding the operator (the one we parsed before considering operators).
-            optional(and!(
-                and!(
-                    space0_e(min_indent, EExpr::Space, EExpr::IndentEnd),
-                    loc!(operator())
-                ),
-                // The spaces *after* the operator can be attached directly to
-                // the expression following the operator.
-                space0_before_e(
-                    loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
-                    min_indent,
-                    EExpr::Space,
-                    EExpr::IndentEnd,
-                )
-            ))
-        ),
-        |arena, (loc_expr1, opt_operator)| match opt_operator {
-            Some(((spaces_before_op, loc_op), loc_expr2)) => {
-                let loc_expr1 = if spaces_before_op.is_empty() {
-                    loc_expr1
-                } else {
-                    // Attach the spaces retroactively to the expression preceding the operator.
-                    arena
-                        .alloc(loc_expr1.value)
-                        .with_spaces_after(spaces_before_op, loc_expr1.region)
-                };
-                let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
+            // The spaces *after* the operator can be attached directly to
+            // the expression following the operator.
+            space0_before_e(
+                loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
+                min_indent,
+                EExpr::Space,
+                EExpr::IndentEnd,
+            )
+        ))
+    )
+    .parse(arena, state)?;
 
-                Expr::BinOp(tuple)
-            }
-            None => loc_expr1.value,
-        },
-    );
+    match opt_operator {
+        Some(((spaces_before_op, loc_op), loc_expr2)) => {
+            let loc_expr1 = if spaces_before_op.is_empty() {
+                loc_expr1
+            } else {
+                // Attach the spaces retroactively to the expression preceding the operator.
+                arena
+                    .alloc(loc_expr1.value)
+                    .with_spaces_after(spaces_before_op, loc_expr1.region)
+            };
+            let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
 
-    expr_parser.parse(arena, state)
+            Ok((MadeProgress, Expr::BinOp(tuple), state))
+        }
+        None => Ok((MadeProgress, loc_expr1.value, state)),
+    }
 }
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
@@ -2261,5 +2257,5 @@ fn chomp_ops(bytes: &[u8]) -> usize {
         chomped += 1;
     }
 
-    return chomped;
+    chomped
 }

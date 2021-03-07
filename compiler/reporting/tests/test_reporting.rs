@@ -5606,4 +5606,20 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    #[ignore]
+    fn argument_without_space() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ "foo", bar("") ]
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
 }
