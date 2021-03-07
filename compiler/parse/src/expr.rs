@@ -450,7 +450,7 @@ fn parse_expr_help<'a>(
             optional(and!(
                 and!(
                     space0_e(min_indent, EExpr::Space, EExpr::IndentEnd),
-                    loc!(binop_help())
+                    loc!(operator())
                 ),
                 // The spaces *after* the operator can be attached directly to
                 // the expression following the operator.
@@ -1625,9 +1625,10 @@ fn loc_function_args_help<'a>(
                         EExpr::IndentStart,
                         EExpr::Start
                     )),
-                    one_of!(unary_negate_function_arg_help(min_indent), |a, s| {
-                        loc_parse_function_arg_help(min_indent, a, s)
-                    })
+                    one_of![
+                        unary_negate_function_arg_help(min_indent),
+                        |a, s| { loc_parse_function_arg_help(min_indent, a, s) }
+                    ]
                 ),
                 |(spaces, loc_expr): (&'a [_], Located<Expr<'a>>)| {
                     if spaces.is_empty() {
@@ -2215,4 +2216,94 @@ fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
             },
         }
     })
+}
+
+const BINOP_CHAR_SET: &[u8] = b"+-/*=.<>:&|^?%!";
+
+use crate::parser::{Col, Row};
+
+fn operator<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
+    |_, state| operator_help(EExpr::Start, EExpr::BadOperator, state)
+}
+
+#[inline(always)]
+fn operator_help<'a, F, G, E>(
+    to_expectation: F,
+    to_error: G,
+    mut state: State<'a>,
+) -> ParseResult<'a, BinOp, E>
+where
+    F: Fn(Row, Col) -> E,
+    G: Fn(&'a [u8], Row, Col) -> E,
+    E: 'a,
+{
+    let chomped = chomp_ops(state.bytes);
+
+    macro_rules! good {
+        ($op:expr, $width:expr) => {{
+            state.column += $width;
+            state.bytes = &state.bytes[$width..];
+
+            Ok((MadeProgress, $op, state))
+        }};
+    }
+
+    macro_rules! bad_made_progress {
+        ($op:expr) => {{
+            Err((MadeProgress, to_error($op, state.line, state.column), state))
+        }};
+    }
+
+    match chomped {
+        0 => Err((NoProgress, to_expectation(state.line, state.column), state)),
+        1 => {
+            let op = state.bytes[0];
+            match op {
+                b'+' => good!(BinOp::Plus, 1),
+                b'-' => good!(BinOp::Minus, 1),
+                b'*' => good!(BinOp::Star, 1),
+                b'/' => good!(BinOp::Slash, 1),
+                b'%' => good!(BinOp::Percent, 1),
+                b'^' => good!(BinOp::Caret, 1),
+                b'>' => good!(BinOp::GreaterThan, 1),
+                b'<' => good!(BinOp::LessThan, 1),
+                b'.' => {
+                    // a `.` makes no progress, so it does not interfere with `.foo` access(or)
+                    Err((NoProgress, to_error(b".", state.line, state.column), state))
+                }
+                _ => bad_made_progress!(&state.bytes[0..1]),
+            }
+        }
+        2 => {
+            let op0 = state.bytes[0];
+            let op1 = state.bytes[1];
+
+            match (op0, op1) {
+                (b'|', b'>') => good!(BinOp::Pizza, 2),
+                (b'=', b'=') => good!(BinOp::Equals, 2),
+                (b'!', b'=') => good!(BinOp::NotEquals, 2),
+                (b'>', b'=') => good!(BinOp::GreaterThanOrEq, 2),
+                (b'<', b'=') => good!(BinOp::LessThanOrEq, 2),
+                (b'&', b'&') => good!(BinOp::And, 2),
+                (b'|', b'|') => good!(BinOp::Or, 2),
+                (b'/', b'/') => good!(BinOp::DoubleSlash, 2),
+                (b'%', b'%') => good!(BinOp::DoublePercent, 2),
+                _ => bad_made_progress!(&state.bytes[0..2]),
+            }
+        }
+        _ => bad_made_progress!(&state.bytes[0..chomped]),
+    }
+}
+
+fn chomp_ops(bytes: &[u8]) -> usize {
+    let mut chomped = 0;
+
+    for c in bytes.iter() {
+        if !BINOP_CHAR_SET.contains(c) {
+            return chomped;
+        }
+        chomped += 1;
+    }
+
+    return chomped;
 }
