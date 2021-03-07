@@ -4884,7 +4884,7 @@ mod test_reporting {
 
                 1│  when Just 4 is
                 2│      Just 4 | ->
-                                 ^
+                                  ^
 
                 I was expecting to see an expression like 42 or "hello".
                 "#

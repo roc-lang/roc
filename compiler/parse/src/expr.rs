@@ -313,22 +313,66 @@ fn expr_in_parens_then_access<'a>(
     }
 }
 
-fn loc_parse_expr_body_without_operators_help<'a>(
+fn cheaty_cheaty<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+    // we get the region of the expression inside the parens, but current tests want us to
+    // include the parentheses in the region
+    map!(
+        loc!(loc_expr_in_parens_etc_help(min_indent)),
+        |loc_loc_expr: Located<Located<Expr<'a>>>| {
+            let value = loc_loc_expr.value.value;
+            let region = loc_loc_expr.region;
+
+            Located::at(region, value)
+        }
+    )
+}
+
+fn parse_loc_term<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        loc_expr_in_parens_etc_help(min_indent),
+        cheaty_cheaty(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
-        loc!(unary_op_help(min_indent)),
-        loc!(ident_etc_help(min_indent)),
-        fail_expr_start_e()
+        loc!(ident_etc_help(min_indent))
     )
     .parse(arena, state)
+}
+
+fn loc_possibly_negative_or_negated_term<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+    one_of![
+        loc!(map_with_arena!(
+            // slight complication; a unary minus must be part of the number literal for overflow
+            // reasons
+            and!(loc!(unary_negate()), |a, s| parse_loc_term(
+                min_indent, a, s
+            )),
+            |arena: &'a Bump, (loc_op, loc_expr): (Located<_>, _)| {
+                Expr::UnaryOp(
+                    arena.alloc(loc_expr),
+                    Located::at(loc_op.region, UnaryOp::Negate),
+                )
+            }
+        )),
+        loc!(map_with_arena!(
+            and!(loc!(word1(b'!', EExpr::Start)), |a, s| parse_loc_term(
+                min_indent, a, s
+            )),
+            |arena: &'a Bump, (loc_op, loc_expr): (Located<_>, _)| {
+                Expr::UnaryOp(
+                    arena.alloc(loc_expr),
+                    Located::at(loc_op.region, UnaryOp::Not),
+                )
+            }
+        )),
+        |arena, state| parse_loc_term(min_indent, arena, state)
+    ]
 }
 
 fn fail_expr_start_e<'a, T>() -> impl Parser<'a, T, EExpr<'a>>
@@ -434,10 +478,11 @@ fn parse_expr_help<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let (_, loc_expr1, state) = one_of![
-        |arena, state| loc_parse_expr_body_without_operators_help(min_indent, arena, state),
         loc!(specialize(EExpr::If, if_expr_help(min_indent))),
         loc!(specialize(EExpr::When, when::expr_help(min_indent))),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
+        loc_possibly_negative_or_negated_term(min_indent),
+        // |arena, state| loc_term(min_indent, arena, state),
         fail_expr_start_e()
     ]
     .parse(arena, state)?;
