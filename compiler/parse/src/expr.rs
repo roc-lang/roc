@@ -436,46 +436,44 @@ fn parse_expr_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let (_, (loc_expr1, opt_operator), state) = and!(
-        // First parse the body without operators, then try to parse possible operators after.
-        move |arena, state| loc_parse_expr_body_without_operators_help(min_indent, arena, state),
-        // Parse the operator, with optional spaces before it.
-        //
-        // Since spaces can only wrap an Expr, not an BinOp, we have to first
-        // parse the spaces and then attach them retroactively to the expression
-        // preceding the operator (the one we parsed before considering operators).
-        optional(and!(
-            and!(
-                space0_e(min_indent, EExpr::Space, EExpr::IndentEnd),
-                loc!(operator())
-            ),
-            // The spaces *after* the operator can be attached directly to
-            // the expression following the operator.
-            space0_before_e(
-                loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
-                min_indent,
-                EExpr::Space,
-                EExpr::IndentEnd,
-            )
-        ))
-    )
-    .parse(arena, state)?;
+    let (_, loc_expr1, state) =
+        loc_parse_expr_body_without_operators_help(min_indent, arena, state)?;
 
-    match opt_operator {
-        Some(((spaces_before_op, loc_op), loc_expr2)) => {
-            let loc_expr1 = if spaces_before_op.is_empty() {
-                loc_expr1
-            } else {
-                // Attach the spaces retroactively to the expression preceding the operator.
-                arena
-                    .alloc(loc_expr1.value)
-                    .with_spaces_after(spaces_before_op, loc_expr1.region)
-            };
-            let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
+    let initial = state.clone();
 
-            Ok((MadeProgress, Expr::BinOp(tuple), state))
+    match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
+        Err((_, _, state)) => Ok((MadeProgress, loc_expr1.value, state)),
+        Ok((_, spaces_before_op, state)) => {
+            let parser = and!(
+                loc!(operator()),
+                // The spaces *after* the operator can be attached directly to
+                // the expression following the operator.
+                space0_before_e(
+                    loc!(move |arena, state| parse_expr_help(min_indent, arena, state)),
+                    min_indent,
+                    EExpr::Space,
+                    EExpr::IndentEnd,
+                )
+            );
+
+            match parser.parse(arena, state) {
+                Ok((_, (loc_op, loc_expr2), state)) => {
+                    let loc_expr1 = if spaces_before_op.is_empty() {
+                        loc_expr1
+                    } else {
+                        // Attach the spaces retroactively to the expression preceding the operator.
+                        arena
+                            .alloc(loc_expr1.value)
+                            .with_spaces_after(spaces_before_op, loc_expr1.region)
+                    };
+                    let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
+
+                    Ok((MadeProgress, Expr::BinOp(tuple), state))
+                }
+                Err((NoProgress, _, _)) => Ok((MadeProgress, loc_expr1.value, initial)),
+                Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
+            }
         }
-        None => Ok((MadeProgress, loc_expr1.value, state)),
     }
 }
 
@@ -2240,6 +2238,10 @@ where
                 (b'|', b'|') => good!(BinOp::Or, 2),
                 (b'/', b'/') => good!(BinOp::DoubleSlash, 2),
                 (b'%', b'%') => good!(BinOp::DoublePercent, 2),
+                (b'-', b'>') => {
+                    // makes no progress, so it does not interfere with `_ if isGood -> ...`
+                    Err((NoProgress, to_error(b"->", state.line, state.column), state))
+                }
                 _ => bad_made_progress!(&state.bytes[0..2]),
             }
         }

@@ -221,6 +221,82 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::BadOperator(op, row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_rows_cols(*row, *col, *row, *col + op.len() as u16);
+
+            let suggestion = match *op {
+                b"|" => vec![
+                    alloc.reflow("Maybe you want "),
+                    alloc.parser_suggestion("||"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("|>"),
+                    alloc.reflow(" instead?"),
+                ],
+                b"++" => vec![
+                    alloc.reflow("To concatenate two lists or strings, try using "),
+                    alloc.parser_suggestion("List.concat"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("Str.concat"),
+                    alloc.reflow(" instead."),
+                ],
+                b":" => vec![alloc.stack(vec![
+                    alloc.concat(vec![
+                        alloc.reflow("The has-type operator "),
+                        alloc.parser_suggestion(":"),
+                        alloc.reflow(" can only occur in a definition's type signature, like "),
+                    ]),
+                    alloc
+                        .vcat(vec![
+                            alloc.text("increment : I64 -> I64"),
+                            alloc.text("increment = \\x -> x + 1"),
+                        ])
+                        .indent(4),
+                ])],
+                b"->" => vec![alloc.stack(vec![
+                    alloc.concat(vec![
+                        alloc.reflow("The arrow "),
+                        alloc.parser_suggestion("->"),
+                        alloc.reflow(" is only used to define cases in a "),
+                        alloc.keyword("when"),
+                        alloc.reflow("."),
+                    ]),
+                    alloc
+                        .vcat(vec![
+                            alloc.text("when color is"),
+                            alloc.text("Red -> \"stop!\"").indent(4),
+                            alloc.text("Green -> \"go!\"").indent(4),
+                        ])
+                        .indent(4),
+                ])],
+                b"!" => vec![
+                    alloc.reflow("The boolean negation operator "),
+                    alloc.parser_suggestion("!"),
+                    alloc.reflow(" must occur immediately before an expression, like "),
+                    alloc.parser_suggestion("!(List.isEmpty primes)"),
+                    alloc.reflow(". There cannot be a space between the "),
+                    alloc.parser_suggestion("!"),
+                    alloc.reflow(" and the expression after it."),
+                ],
+                _ => vec![
+                    alloc.reflow("I have no specific suggestion for this operator, "),
+                    alloc.reflow("see TODO for the full list of operators in Roc."),
+                ],
+            };
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"This looks like an operator, but it's not one I recognize!"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(suggestion),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNKNOWN OPERATOR".to_string(),
+            }
+        }
+
         EExpr::Ident(_row, _col) => unreachable!("another branch would be taken"),
 
         EExpr::QualifiedTag(row, col) => {
