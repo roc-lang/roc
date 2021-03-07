@@ -391,7 +391,6 @@ pub enum EExpr<'a> {
     Access(Row, Col),
     UnaryNot(Row, Col),
     UnaryNegate(Row, Col),
-    BinOp(roc_module::operator::BinOp, Row, Col),
     BadOperator(&'a [u8], Row, Col),
 
     Def(&'a SyntaxError<'a>, Row, Col),

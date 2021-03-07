@@ -1625,10 +1625,9 @@ fn loc_function_args_help<'a>(
                         EExpr::IndentStart,
                         EExpr::Start
                     )),
-                    one_of![
-                        unary_negate_function_arg_help(min_indent),
-                        |a, s| { loc_parse_function_arg_help(min_indent, a, s) }
-                    ]
+                    one_of![unary_negate_function_arg_help(min_indent), |a, s| {
+                        loc_parse_function_arg_help(min_indent, a, s)
+                    }]
                 ),
                 |(spaces, loc_expr): (&'a [_], Located<Expr<'a>>)| {
                     if spaces.is_empty() {
@@ -1883,49 +1882,6 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
-}
-
-fn binop_help<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
-    macro_rules! binop {
-        ($word1:expr, $op:expr) => {
-            map!(
-                word1($word1, |row, col| EExpr::BinOp($op, row, col)),
-                |_| $op
-            )
-        };
-        ($word1:expr, $word2:expr, $op:expr) => {
-            map!(
-                word2($word1, $word2, |row, col| EExpr::BinOp($op, row, col)),
-                |_| $op
-            )
-        };
-    }
-
-    one_of!(
-        // Sorted from highest to lowest predicted usage in practice,
-        // so that successful matches short-circuit as early as possible.
-        // The only exception to this is that operators which begin
-        // with other valid operators (e.g. "<=" begins with "<") must
-        // come before the shorter ones; otherwise, they will never
-        // be reached because the shorter one will pass and consume!
-        binop!(b'|', b'>', BinOp::Pizza),
-        binop!(b'=', b'=', BinOp::Equals),
-        binop!(b'!', b'=', BinOp::NotEquals),
-        binop!(b'&', b'&', BinOp::And),
-        binop!(b'|', b'|', BinOp::Or),
-        binop!(b'+', BinOp::Plus),
-        binop!(b'*', BinOp::Star),
-        binop!(b'-', BinOp::Minus),
-        binop!(b'/', b'/', BinOp::DoubleSlash),
-        binop!(b'/', BinOp::Slash),
-        binop!(b'<', b'=', BinOp::LessThanOrEq),
-        binop!(b'<', BinOp::LessThan),
-        binop!(b'>', b'=', BinOp::GreaterThanOrEq),
-        binop!(b'>', BinOp::GreaterThan),
-        binop!(b'^', BinOp::Caret),
-        binop!(b'%', b'%', BinOp::DoublePercent),
-        binop!(b'%', BinOp::Percent)
-    )
 }
 
 fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>> {
