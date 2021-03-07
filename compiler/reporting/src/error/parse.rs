@@ -244,7 +244,7 @@ fn to_expr_report<'a>(
                     alloc.concat(vec![
                         alloc.reflow("The has-type operator "),
                         alloc.parser_suggestion(":"),
-                        alloc.reflow(" can only occur in a definition's type signature, like "),
+                        alloc.reflow(" can only occur in a definition's type signature, like"),
                     ]),
                     alloc
                         .vcat(vec![

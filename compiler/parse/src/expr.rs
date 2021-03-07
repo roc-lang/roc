@@ -322,12 +322,9 @@ fn loc_parse_expr_body_without_operators_help<'a>(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, number_literal_help())),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         loc!(unary_op_help(min_indent)),
-        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
-        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
         loc!(ident_etc_help(min_indent)),
         fail_expr_start_e()
     )
@@ -436,8 +433,14 @@ fn parse_expr_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let (_, loc_expr1, state) =
-        loc_parse_expr_body_without_operators_help(min_indent, arena, state)?;
+    let (_, loc_expr1, state) = one_of![
+        |arena, state| loc_parse_expr_body_without_operators_help(min_indent, arena, state),
+        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
+        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
+        fail_expr_start_e()
+    ]
+    .parse(arena, state)?;
 
     let initial = state.clone();
 
