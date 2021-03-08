@@ -22,7 +22,7 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, Attempting, StrLiteral, TypeAnnotation};
+use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
@@ -2304,7 +2304,7 @@ fn load_pkg_config<'a>(
         Ok(bytes_vec) => {
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
-            let parse_state = parser::State::new_in(arena, bytes, Attempting::Module);
+            let parse_state = parser::State::new_in(arena, bytes);
             let parsed = roc_parse::module::header().parse(&arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2474,7 +2474,7 @@ fn parse_header<'a>(
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new_in(arena, src_bytes, Attempting::Module);
+    let parse_state = parser::State::new_in(arena, src_bytes);
     let parsed = roc_parse::module::header().parse(&arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 

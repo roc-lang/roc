@@ -2,7 +2,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_fmt::def::fmt_def;
 use roc_fmt::module::fmt_module;
-use roc_parse::ast::{Attempting, Def, Module};
+use roc_parse::ast::{Def, Module};
 use roc_parse::module::module_defs;
 use roc_parse::parser;
 use roc_parse::parser::{Parser, SyntaxError};
@@ -36,7 +36,7 @@ impl<'a> File<'a> {
 
         let allocation = arena.alloc(bytes);
 
-        let module_parse_state = parser::State::new_in(arena, allocation, Attempting::Module);
+        let module_parse_state = parser::State::new_in(arena, allocation);
         let parsed_module = roc_parse::module::header().parse(&arena, module_parse_state);
 
         match parsed_module {

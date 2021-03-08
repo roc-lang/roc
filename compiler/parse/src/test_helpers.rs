@@ -1,4 +1,4 @@
-use crate::ast::{self, Attempting};
+use crate::ast;
 use crate::blankspace::space0_before;
 use crate::expr::expr;
 use crate::module::{header, module_defs};
@@ -18,7 +18,7 @@ pub fn parse_header_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<ast::Module<'a>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
+    let state = State::new_in(arena, input.trim().as_bytes());
     let answer = header().parse(arena, state);
 
     answer
@@ -31,7 +31,7 @@ pub fn parse_defs_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<Vec<'a, Located<ast::Def<'a>>>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
+    let state = State::new_in(arena, input.trim().as_bytes());
     let answer = module_defs().parse(arena, state);
     answer
         .map(|(_, loc_expr, _)| loc_expr)
@@ -43,7 +43,7 @@ pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
+    let state = State::new_in(arena, input.trim().as_bytes());
     let parser = space0_before(loc(expr(0)), 0);
     let answer = parser.parse(&arena, state);
 
