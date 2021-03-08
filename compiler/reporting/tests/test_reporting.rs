@@ -169,6 +169,36 @@ mod test_reporting {
         }
     }
 
+    fn list_header_reports<F>(arena: &Bump, src: &str, buf: &mut String, callback: F)
+    where
+        F: FnOnce(RocDocBuilder<'_>, &mut String),
+    {
+        use ven_pretty::DocAllocator;
+
+        use roc_parse::parser::State;
+
+        let state = State::new_in(arena, src.as_bytes());
+
+        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        use roc_parse::parser::Parser;
+        match roc_parse::module::header().parse(arena, state) {
+            Err((_, fail, _)) => {
+                let interns = Interns::default();
+                let home = crate::helpers::test_home();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                let problem = fail.into_parse_problem(filename.clone(), src.as_bytes());
+                let doc = parse_problem(&alloc, filename, 0, problem);
+
+                callback(doc.pretty(&alloc).append(alloc.line()), buf)
+            }
+            Ok(_) => todo!(),
+        }
+    }
+
     fn report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
         let arena = Bump::new();
@@ -180,6 +210,30 @@ mod test_reporting {
         };
 
         list_reports(&arena, src, &mut buf, callback);
+
+        // convenient to copy-paste the generated message
+        if true {
+            if buf != expected_rendering {
+                for line in buf.split("\n") {
+                    println!("                {}", line);
+                }
+            }
+        }
+
+        assert_eq!(buf, expected_rendering);
+    }
+
+    fn report_header_problem_as(src: &str, expected_rendering: &str) {
+        let mut buf: String = String::new();
+        let arena = Bump::new();
+
+        let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
+            doc.1
+                .render_raw(70, &mut roc_reporting::report::CiWrite::new(buf))
+                .expect("list_reports")
+        };
+
+        list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
         if true {
@@ -5686,6 +5740,34 @@ mod test_reporting {
             indoc!(
                 r#"
                 main = 5 -> 3
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
+
+                I am partway through parsing a definition, but I got stuck here:
+
+                1│  main = 5 -> 3
+                              ^
+
+                I was expecting to see an expression like 42 or "hello".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn provides_to() {
+        // this is still bad, but changing the order and progress of other parsers should improve it
+        // down the line
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "test-base64"
+                    packages { base: "platform" }
+                    imports [base.Task, Base64 ]
+                    provides [ main, ## ] to base
                 "#
             ),
             indoc!(
