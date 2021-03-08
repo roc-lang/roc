@@ -2126,6 +2126,7 @@ fn multiple_increment() {
             r#"
             app "test" provides [ main ] to "./platform"
 
+
             Color : [ Red, Black ]
 
             Tree a b : [ Leaf, Node Color (Tree a b) a b (Tree a b) ]
@@ -2223,5 +2224,37 @@ fn build_then_apply_closure() {
         ),
         "long string that is malloced",
         &'static str
+    );
+}
+
+#[test]
+fn backpassing_result() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            a : Result I64 Str
+            a = Ok 1
+
+            f = \x -> Ok (x + 1)
+            g = \y -> Ok (y * 2)
+
+            main : I64
+            main =
+                helper =
+                    x <- Result.after a 
+                    y <- Result.after (f x)
+                    z <- Result.after (g y)
+
+                    Ok z
+
+                helper
+                    |> Result.withDefault 0
+                
+            "#
+        ),
+        4,
+        i64
     );
 }

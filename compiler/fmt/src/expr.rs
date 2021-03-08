@@ -87,6 +87,14 @@ impl<'a> Formattable<'a> for Expr<'a> {
                         .iter()
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
+            Backpassing(loc_patterns, loc_body, loc_ret) => {
+                // check the body first because it's more likely to be multiline
+                loc_body.is_multiline()
+                    || loc_ret.is_multiline()
+                    || loc_patterns
+                        .iter()
+                        .any(|loc_pattern| loc_pattern.is_multiline())
+            }
 
             Record { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
@@ -240,6 +248,9 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
+            }
+            Backpassing(loc_patterns, loc_body, loc_ret) => {
+                fmt_backpassing(buf, loc_patterns, loc_body, loc_ret, indent);
             }
             Defs(defs, ret) => {
                 // It should theoretically be impossible to *parse* an empty defs list.
@@ -402,7 +413,7 @@ fn fmt_bin_op<'a>(
     }
 }
 
-pub fn fmt_list<'a>(
+fn fmt_list<'a>(
     buf: &mut String<'a>,
     loc_items: &[&Located<Expr<'a>>],
     final_comments: &'a [CommentOrNewline<'a>],
@@ -486,7 +497,7 @@ pub fn fmt_list<'a>(
     }
 }
 
-pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
+fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
     use roc_parse::ast::Expr::*;
 
     match expr {
@@ -743,7 +754,7 @@ fn fmt_if<'a>(
     final_else.format(buf, return_indent);
 }
 
-pub fn fmt_closure<'a>(
+fn fmt_closure<'a>(
     buf: &mut String<'a>,
     loc_patterns: &'a [Located<Pattern<'a>>],
     loc_ret: &'a Located<Expr<'a>>,
@@ -813,7 +824,77 @@ pub fn fmt_closure<'a>(
     loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
 }
 
-pub fn fmt_record<'a>(
+fn fmt_backpassing<'a>(
+    buf: &mut String<'a>,
+    loc_patterns: &'a [Located<Pattern<'a>>],
+    loc_body: &'a Located<Expr<'a>>,
+    loc_ret: &'a Located<Expr<'a>>,
+    indent: u16,
+) {
+    use self::Expr::*;
+
+    let arguments_are_multiline = loc_patterns
+        .iter()
+        .any(|loc_pattern| loc_pattern.is_multiline());
+
+    // If the arguments are multiline, go down a line and indent.
+    let indent = if arguments_are_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    let mut it = loc_patterns.iter().peekable();
+
+    while let Some(loc_pattern) = it.next() {
+        loc_pattern.format(buf, indent);
+
+        if it.peek().is_some() {
+            if arguments_are_multiline {
+                buf.push(',');
+                newline(buf, indent);
+            } else {
+                buf.push_str(", ");
+            }
+        }
+    }
+
+    if arguments_are_multiline {
+        newline(buf, indent);
+    } else {
+        buf.push(' ');
+    }
+
+    buf.push_str("<-");
+
+    let is_multiline = (&loc_ret.value).is_multiline();
+
+    // If the body is multiline, go down a line and indent.
+    let body_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    // the body of the Backpass can be on the same line, or
+    // on a new line. If it's on the same line, insert a space.
+
+    match &loc_ret.value {
+        SpaceBefore(_, _) => {
+            // the body starts with (first comment and then) a newline
+            // do nothing
+        }
+        _ => {
+            // add a space after the `<-`
+            buf.push(' ');
+        }
+    };
+
+    loc_body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+    loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+}
+
+fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
     loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
