@@ -391,7 +391,7 @@ pub enum EExpr<'a> {
     Access(Row, Col),
     UnaryNot(Row, Col),
     UnaryNegate(Row, Col),
-    BinOp(roc_module::operator::BinOp, Row, Col),
+    BadOperator(&'a [u8], Row, Col),
 
     Def(&'a SyntaxError<'a>, Row, Col),
     Type(Type<'a>, Row, Col),
@@ -401,10 +401,13 @@ pub enum EExpr<'a> {
     IndentAnnotation(Row, Col),
     Equals(Row, Col),
     Colon(Row, Col),
+    DoubleColon(Row, Col),
     Ident(Row, Col),
     ElmStyleFunction(Region, Row, Col),
     MalformedPattern(Row, Col),
     QualifiedTag(Row, Col),
+    BackpassComma(Row, Col),
+    BackpassArrow(Row, Col),
 
     Syntax(&'a SyntaxError<'a>, Row, Col),
 
@@ -1710,6 +1713,9 @@ macro_rules! one_of {
 
     ($p1:expr, $($others:expr),+) => {
         one_of!($p1, one_of!($($others),+))
+    };
+    ($p1:expr, $($others:expr),+ $(,)?) => {
+        one_of!($p1, $($others),+)
     };
 }
 

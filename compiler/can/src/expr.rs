@@ -460,6 +460,9 @@ pub fn canonicalize_expr<'a>(
                 loc_ret,
             )
         }
+        ast::Expr::Backpassing(_, _, _) => {
+            unreachable!("Backpassing should have been desugared by now")
+        }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             // The globally unique symbol that will refer to this closure once it gets converted
             // into a top-level procedure for code gen.

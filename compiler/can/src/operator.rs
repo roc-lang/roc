@@ -31,6 +31,31 @@ fn new_op_expr<'a>(
     }
 }
 
+fn desugar_defs<'a>(
+    arena: &'a Bump,
+    region: Region,
+    defs: &'a [&'a Located<Def<'a>>],
+    loc_ret: &'a Located<Expr<'a>>,
+) -> &'a Located<Expr<'a>> {
+    let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
+
+    for loc_def in defs.iter() {
+        let loc_def = Located {
+            value: desugar_def(arena, &loc_def.value),
+            region: loc_def.region,
+        };
+
+        desugared_defs.push(&*arena.alloc(loc_def));
+    }
+
+    let desugared_defs = desugared_defs.into_bump_slice();
+
+    arena.alloc(Located {
+        value: Defs(desugared_defs, desugar_expr(arena, loc_ret)),
+        region,
+    })
+}
+
 pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
     use roc_parse::ast::Def::*;
 
@@ -171,25 +196,37 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 value: Closure(loc_patterns, desugar_expr(arena, loc_ret)),
             })
         }
+        Backpassing(loc_patterns, loc_body, loc_ret)
+        | Nested(Backpassing(loc_patterns, loc_body, loc_ret)) => {
+            // loc_patterns <- loc_body
+            //
+            // loc_ret
+
+            // first desugar the body, because it may contain |>
+            let desugared_body = desugar_expr(arena, loc_body);
+
+            match &desugared_body.value {
+                Expr::Apply(function, arguments, called_via) => {
+                    let desugared_ret = desugar_expr(arena, loc_ret);
+                    let closure = Expr::Closure(loc_patterns, desugared_ret);
+                    let loc_closure = Located::at_zero(closure);
+
+                    let mut new_arguments: Vec<'a, &'a Located<Expr<'a>>> =
+                        Vec::with_capacity_in(arguments.len() + 1, arena);
+                    new_arguments.extend(arguments.iter());
+                    new_arguments.push(arena.alloc(loc_closure));
+
+                    let call = Expr::Apply(function, new_arguments.into_bump_slice(), *called_via);
+                    let loc_call = Located::at(loc_expr.region, call);
+
+                    arena.alloc(loc_call)
+                }
+                _ => panic!(),
+            }
+        }
         BinOp(_) | Nested(BinOp(_)) => desugar_bin_op(arena, loc_expr),
         Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
-            let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
-
-            for loc_def in defs.iter() {
-                let loc_def = Located {
-                    value: desugar_def(arena, &loc_def.value),
-                    region: loc_def.region,
-                };
-
-                desugared_defs.push(&*arena.alloc(loc_def));
-            }
-
-            let desugared_defs = desugared_defs.into_bump_slice();
-
-            arena.alloc(Located {
-                value: Defs(desugared_defs, desugar_expr(arena, loc_ret)),
-                region: loc_expr.region,
-            })
+            desugar_defs(arena, loc_expr.region, *defs, loc_ret)
         }
         Apply(loc_fn, loc_args, called_via) | Nested(Apply(loc_fn, loc_args, called_via)) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);

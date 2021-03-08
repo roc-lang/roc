@@ -151,7 +151,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut rects_arena = Bump::new();
     let mut ast_arena = Bump::new();
 
-    let config = Config::default();
+    let config: Config = confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
 
     // Render loop

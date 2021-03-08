@@ -492,6 +492,29 @@ mod test_parse {
     }
 
     #[test]
+    fn var_minus_two() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(
+                0,
+                0,
+                0,
+                1,
+                Var {
+                    module_name: "",
+                    ident: "x",
+                },
+            ),
+            Located::new(0, 0, 1, 2, Minus),
+            Located::new(0, 0, 2, 3, Num("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_expr_with(&arena, "x-2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn add_with_spaces() {
         let arena = Bump::new();
         let tuple = arena.alloc((
