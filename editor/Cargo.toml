@@ -16,10 +16,10 @@ roc_module = { path = "../compiler/module" }
 roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_fmt = { path = "../compiler/fmt" }
-
- # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
+roc_reporting = { path = "../compiler/reporting" }
+# TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 ven_graph = { path = "../vendor/pathfinding" }
-im    = "14" # im and im-rc should always have the same version!
+im = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
@@ -43,6 +43,10 @@ ropey = "1.2.0"
 copypasta = "0.7.1"
 indoc = "0.3.3"
 palette = "0.5"
+confy = { git = 'https://github.com/rust-cli/confy', features = [
+  "yaml_conf"
+], default-features = false }
+serde = { version = "1.0.123", features = ["derive"] }
 
 [dependencies.bytemuck]
 version = "1.4"
@@ -63,7 +67,6 @@ harness = false
 [[bench]]
 name = "edit_benchmark"
 harness = false
-
 # uncomment everything below if you have made changes to any shaders and
 # want to compile them to .spv
 # [build-dependencies]

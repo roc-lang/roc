@@ -1,9 +1,12 @@
+use gr_colors::{from_hsb, RgbaTup};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
 use crate::editor::syntax_highlight::{default_highlight_map, HighlightStyle};
 use crate::graphics::colors as gr_colors;
 use crate::ui::theme::UITheme;
-use gr_colors::{from_hsb, RgbaTup};
-use std::collections::HashMap;
 
+#[derive(Serialize, Deserialize)]
 pub struct EdTheme {
     pub background: RgbaTup,
     pub syntax_high_map: HashMap<HighlightStyle, RgbaTup>,

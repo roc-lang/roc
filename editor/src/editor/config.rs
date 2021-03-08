@@ -1,5 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::editor::theme::EdTheme;
 
+#[derive(Serialize, Deserialize)]
 pub struct Config {
     pub code_font_size: f32,
     pub ed_theme: EdTheme,
