@@ -313,25 +313,66 @@ fn expr_in_parens_then_access<'a>(
     }
 }
 
-fn loc_parse_expr_body_without_operators_help<'a>(
+fn in_parens_region_fix<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+    // we get the region of the expression inside the parens, but current tests want us to
+    // include the parentheses in the region
+    map!(
+        loc!(loc_expr_in_parens_etc_help(min_indent)),
+        |loc_loc_expr: Located<Located<Expr<'a>>>| {
+            let value = loc_loc_expr.value.value;
+            let region = loc_loc_expr.region;
+
+            Located::at(region, value)
+        }
+    )
+}
+
+fn parse_loc_term<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        loc_expr_in_parens_etc_help(min_indent),
+        in_parens_region_fix(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, number_literal_help())),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
-        loc!(unary_op_help(min_indent)),
-        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
-        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
-        loc!(ident_etc_help(min_indent)),
-        fail_expr_start_e()
+        loc!(ident_etc_help(min_indent))
     )
     .parse(arena, state)
+}
+
+fn loc_possibly_negative_or_negated_term<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+    one_of![
+        loc!(map_with_arena!(
+            // slight complication; a unary minus must be part of the number literal for overflow
+            // reasons
+            and!(loc!(unary_negate()), |a, s| parse_loc_term(
+                min_indent, a, s
+            )),
+            |arena: &'a Bump, (loc_op, loc_expr): (Located<_>, _)| {
+                Expr::UnaryOp(
+                    arena.alloc(loc_expr),
+                    Located::at(loc_op.region, UnaryOp::Negate),
+                )
+            }
+        )),
+        loc!(map_with_arena!(
+            and!(loc!(word1(b'!', EExpr::Start)), |a, s| parse_loc_term(
+                min_indent, a, s
+            )),
+            |arena: &'a Bump, (loc_op, loc_expr): (Located<_>, _)| {
+                Expr::UnaryOp(
+                    arena.alloc(loc_expr),
+                    Located::at(loc_op.region, UnaryOp::Not),
+                )
+            }
+        )),
+        |arena, state| parse_loc_term(min_indent, arena, state)
+    ]
 }
 
 fn fail_expr_start_e<'a, T>() -> impl Parser<'a, T, EExpr<'a>>
@@ -436,22 +477,23 @@ fn parse_expr_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let expr_parser = crate::parser::map_with_arena(
-        and!(
-            // First parse the body without operators, then try to parse possible operators after.
-            move |arena, state| loc_parse_expr_body_without_operators_help(
-                min_indent, arena, state
-            ),
-            // Parse the operator, with optional spaces before it.
-            //
-            // Since spaces can only wrap an Expr, not an BinOp, we have to first
-            // parse the spaces and then attach them retroactively to the expression
-            // preceding the operator (the one we parsed before considering operators).
-            optional(and!(
-                and!(
-                    space0_e(min_indent, EExpr::Space, EExpr::IndentEnd),
-                    loc!(binop_help())
-                ),
+    let (_, loc_expr1, state) = one_of![
+        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
+        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
+        loc_possibly_negative_or_negated_term(min_indent),
+        // |arena, state| loc_term(min_indent, arena, state),
+        fail_expr_start_e()
+    ]
+    .parse(arena, state)?;
+
+    let initial = state.clone();
+
+    match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
+        Err((_, _, state)) => Ok((MadeProgress, loc_expr1.value, state)),
+        Ok((_, spaces_before_op, state)) => {
+            let parser = and!(
+                loc!(operator()),
                 // The spaces *after* the operator can be attached directly to
                 // the expression following the operator.
                 space0_before_e(
@@ -460,27 +502,27 @@ fn parse_expr_help<'a>(
                     EExpr::Space,
                     EExpr::IndentEnd,
                 )
-            ))
-        ),
-        |arena, (loc_expr1, opt_operator)| match opt_operator {
-            Some(((spaces_before_op, loc_op), loc_expr2)) => {
-                let loc_expr1 = if spaces_before_op.is_empty() {
-                    loc_expr1
-                } else {
-                    // Attach the spaces retroactively to the expression preceding the operator.
-                    arena
-                        .alloc(loc_expr1.value)
-                        .with_spaces_after(spaces_before_op, loc_expr1.region)
-                };
-                let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
+            );
 
-                Expr::BinOp(tuple)
+            match parser.parse(arena, state) {
+                Ok((_, (loc_op, loc_expr2), state)) => {
+                    let loc_expr1 = if spaces_before_op.is_empty() {
+                        loc_expr1
+                    } else {
+                        // Attach the spaces retroactively to the expression preceding the operator.
+                        arena
+                            .alloc(loc_expr1.value)
+                            .with_spaces_after(spaces_before_op, loc_expr1.region)
+                    };
+                    let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
+
+                    Ok((MadeProgress, Expr::BinOp(tuple), state))
+                }
+                Err((NoProgress, _, _)) => Ok((MadeProgress, loc_expr1.value, initial)),
+                Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
             }
-            None => loc_expr1.value,
-        },
-    );
-
-    expr_parser.parse(arena, state)
+        }
+    }
 }
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
@@ -1681,9 +1723,9 @@ fn loc_function_args_help<'a>(
                         EExpr::IndentStart,
                         EExpr::Start
                     )),
-                    one_of!(unary_negate_function_arg_help(min_indent), |a, s| {
+                    one_of![unary_negate_function_arg_help(min_indent), |a, s| {
                         loc_parse_function_arg_help(min_indent, a, s)
-                    })
+                    }]
                 ),
                 |(spaces, loc_expr): (&'a [_], Located<Expr<'a>>)| {
                     if spaces.is_empty() {
@@ -2033,49 +2075,6 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     }
 }
 
-fn binop_help<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
-    macro_rules! binop {
-        ($word1:expr, $op:expr) => {
-            map!(
-                word1($word1, |row, col| EExpr::BinOp($op, row, col)),
-                |_| $op
-            )
-        };
-        ($word1:expr, $word2:expr, $op:expr) => {
-            map!(
-                word2($word1, $word2, |row, col| EExpr::BinOp($op, row, col)),
-                |_| $op
-            )
-        };
-    }
-
-    one_of!(
-        // Sorted from highest to lowest predicted usage in practice,
-        // so that successful matches short-circuit as early as possible.
-        // The only exception to this is that operators which begin
-        // with other valid operators (e.g. "<=" begins with "<") must
-        // come before the shorter ones; otherwise, they will never
-        // be reached because the shorter one will pass and consume!
-        binop!(b'|', b'>', BinOp::Pizza),
-        binop!(b'=', b'=', BinOp::Equals),
-        binop!(b'!', b'=', BinOp::NotEquals),
-        binop!(b'&', b'&', BinOp::And),
-        binop!(b'|', b'|', BinOp::Or),
-        binop!(b'+', BinOp::Plus),
-        binop!(b'*', BinOp::Star),
-        binop!(b'-', BinOp::Minus),
-        binop!(b'/', b'/', BinOp::DoubleSlash),
-        binop!(b'/', BinOp::Slash),
-        binop!(b'<', b'=', BinOp::LessThanOrEq),
-        binop!(b'<', BinOp::LessThan),
-        binop!(b'>', b'=', BinOp::GreaterThanOrEq),
-        binop!(b'>', BinOp::GreaterThan),
-        binop!(b'^', BinOp::Caret),
-        binop!(b'%', b'%', BinOp::DoublePercent),
-        binop!(b'%', BinOp::Percent)
-    )
-}
-
 fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>> {
     move |arena, state| {
         let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
@@ -2364,4 +2363,98 @@ fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
             },
         }
     })
+}
+
+const BINOP_CHAR_SET: &[u8] = b"+-/*=.<>:&|^?%!";
+
+use crate::parser::{Col, Row};
+
+fn operator<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
+    |_, state| operator_help(EExpr::Start, EExpr::BadOperator, state)
+}
+
+#[inline(always)]
+fn operator_help<'a, F, G, E>(
+    to_expectation: F,
+    to_error: G,
+    mut state: State<'a>,
+) -> ParseResult<'a, BinOp, E>
+where
+    F: Fn(Row, Col) -> E,
+    G: Fn(&'a [u8], Row, Col) -> E,
+    E: 'a,
+{
+    let chomped = chomp_ops(state.bytes);
+
+    macro_rules! good {
+        ($op:expr, $width:expr) => {{
+            state.column += $width;
+            state.bytes = &state.bytes[$width..];
+
+            Ok((MadeProgress, $op, state))
+        }};
+    }
+
+    macro_rules! bad_made_progress {
+        ($op:expr) => {{
+            Err((MadeProgress, to_error($op, state.line, state.column), state))
+        }};
+    }
+
+    match chomped {
+        0 => Err((NoProgress, to_expectation(state.line, state.column), state)),
+        1 => {
+            let op = state.bytes[0];
+            match op {
+                b'+' => good!(BinOp::Plus, 1),
+                b'-' => good!(BinOp::Minus, 1),
+                b'*' => good!(BinOp::Star, 1),
+                b'/' => good!(BinOp::Slash, 1),
+                b'%' => good!(BinOp::Percent, 1),
+                b'^' => good!(BinOp::Caret, 1),
+                b'>' => good!(BinOp::GreaterThan, 1),
+                b'<' => good!(BinOp::LessThan, 1),
+                b'.' => {
+                    // a `.` makes no progress, so it does not interfere with `.foo` access(or)
+                    Err((NoProgress, to_error(b".", state.line, state.column), state))
+                }
+                _ => bad_made_progress!(&state.bytes[0..1]),
+            }
+        }
+        2 => {
+            let op0 = state.bytes[0];
+            let op1 = state.bytes[1];
+
+            match (op0, op1) {
+                (b'|', b'>') => good!(BinOp::Pizza, 2),
+                (b'=', b'=') => good!(BinOp::Equals, 2),
+                (b'!', b'=') => good!(BinOp::NotEquals, 2),
+                (b'>', b'=') => good!(BinOp::GreaterThanOrEq, 2),
+                (b'<', b'=') => good!(BinOp::LessThanOrEq, 2),
+                (b'&', b'&') => good!(BinOp::And, 2),
+                (b'|', b'|') => good!(BinOp::Or, 2),
+                (b'/', b'/') => good!(BinOp::DoubleSlash, 2),
+                (b'%', b'%') => good!(BinOp::DoublePercent, 2),
+                (b'-', b'>') => {
+                    // makes no progress, so it does not interfere with `_ if isGood -> ...`
+                    Err((NoProgress, to_error(b"->", state.line, state.column), state))
+                }
+                _ => bad_made_progress!(&state.bytes[0..2]),
+            }
+        }
+        _ => bad_made_progress!(&state.bytes[0..chomped]),
+    }
+}
+
+fn chomp_ops(bytes: &[u8]) -> usize {
+    let mut chomped = 0;
+
+    for c in bytes.iter() {
+        if !BINOP_CHAR_SET.contains(c) {
+            return chomped;
+        }
+        chomped += 1;
+    }
+
+    chomped
 }
