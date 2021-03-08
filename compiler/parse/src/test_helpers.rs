@@ -7,7 +7,6 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_region::all::Located;
 
-#[allow(dead_code)]
 pub fn parse_expr_with<'a>(
     arena: &'a Bump,
     input: &'a str,

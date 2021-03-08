@@ -334,7 +334,25 @@ pub enum SyntaxError<'a> {
     Type(Type<'a>),
     Pattern(EPattern<'a>),
     Expr(EExpr<'a>),
+    Header(EHeader),
     Space(BadInputError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EHeader {
+    Provides(EProvides, Row, Col),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EProvides {
+    Keyword(Row, Col),
+    IndentKeyword(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    Identifier(Row, Col),
+    Space(BadInputError, Row, Col),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1577,6 +1595,46 @@ macro_rules! collection {
                     $crate::parser::sep_by0(
                         $delimiter,
                         $crate::blankspace::space0_around($elem, $min_indent)
+                    ),
+                    $closing_brace
+                )
+            )
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! collection_e {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $space_problem:expr, $indent_problem:expr) => {
+        skip_first!(
+            $opening_brace,
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // roc_collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!($crate::parser::word1(b' ', |row, col| $space_problem(
+                    crate::parser::BadInputError::LineTooLong,
+                    row,
+                    col
+                ))),
+                skip_second!(
+                    $crate::parser::sep_by0(
+                        $delimiter,
+                        $crate::blankspace::space0_around_ee(
+                            $elem,
+                            $min_indent,
+                            $space_problem,
+                            $indent_problem,
+                            $indent_problem
+                        )
                     ),
                     $closing_brace
                 )

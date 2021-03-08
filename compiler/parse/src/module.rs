@@ -1,5 +1,5 @@
 use crate::ast::{Attempting, CommentOrNewline, Def, Module};
-use crate::blankspace::{space0, space0_around, space0_before, space1};
+use crate::blankspace::{space0, space0_around, space0_before, space0_e, space1};
 use crate::expr::def;
 use crate::header::{
     package_entry, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
@@ -10,7 +10,8 @@ use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
-    peek_utf8_char_at, unexpected, unexpected_eof, Either, ParseResult, Parser, State, SyntaxError,
+    peek_utf8_char_at, specialize, unexpected, unexpected_eof, word1, EHeader, EProvides, Either,
+    ParseResult, Parser, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -382,16 +383,47 @@ fn provides_without_to<'a>() -> impl Parser<
     ),
     SyntaxError<'a>,
 > {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Provides(e, r, c)),
+        provides_without_to_help(),
+    )
+}
+
+#[inline(always)]
+fn provides_without_to_help<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+    ),
+    EProvides,
+> {
+    let min_indent = 1;
     and!(
-        and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
-        collection!(
-            ascii_char(b'['),
-            loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
-            ascii_char(b','),
-            ascii_char(b']'),
-            1
+        and!(
+            skip_second!(
+                space0_e(min_indent, EProvides::Space, EProvides::IndentKeyword),
+                crate::parser::keyword_e("provides", EProvides::Keyword)
+            ),
+            space0_e(min_indent, EProvides::Space, EProvides::IndentListStart)
+        ),
+        collection_e!(
+            word1(b'[', EProvides::ListStart),
+            exposes_entry(),
+            word1(b',', EProvides::ListEnd),
+            word1(b']', EProvides::ListEnd),
+            min_indent,
+            EProvides::Space,
+            EProvides::IndentListEnd
         )
     )
+}
+
+fn exposes_entry<'a>() -> impl Parser<'a, Located<ExposesEntry<'a, &'a str>>, EProvides> {
+    loc!(map!(
+        specialize(|_, r, c| EProvides::Identifier(r, c), unqualified_ident()),
+        ExposesEntry::Exposed
+    ))
 }
 
 #[inline(always)]
