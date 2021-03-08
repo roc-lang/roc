@@ -406,7 +406,7 @@ fn provides_without_to_help<'a>() -> impl Parser<
         ),
         collection_e!(
             word1(b'[', EProvides::ListStart),
-            exposes_entry(),
+            exposes_entry(EProvides::Identifier),
             word1(b',', EProvides::ListEnd),
             word1(b']', EProvides::ListEnd),
             min_indent,
@@ -416,9 +416,16 @@ fn provides_without_to_help<'a>() -> impl Parser<
     )
 }
 
-fn exposes_entry<'a>() -> impl Parser<'a, Located<ExposesEntry<'a, &'a str>>, EProvides> {
+fn exposes_entry<'a, F, E>(
+    to_expectation: F,
+) -> impl Parser<'a, Located<ExposesEntry<'a, &'a str>>, E>
+where
+    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Copy,
+    E: 'a,
+{
     loc!(map!(
-        specialize(|_, r, c| EProvides::Identifier(r, c), unqualified_ident()),
+        specialize(|_, r, c| to_expectation(r, c), unqualified_ident()),
         ExposesEntry::Exposed
     ))
 }
