@@ -345,13 +345,17 @@ pub enum EHeader {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EProvides {
-    Keyword(Row, Col),
-    IndentKeyword(Row, Col),
+    Provides(Row, Col),
+    To(Row, Col),
+    IndentProvides(Row, Col),
+    IndentTo(Row, Col),
     IndentListStart(Row, Col),
     IndentListEnd(Row, Col),
+    IndentPackage(Row, Col),
     ListStart(Row, Col),
     ListEnd(Row, Col),
     Identifier(Row, Col),
+    Package(Row, Col),
     Space(BadInputError, Row, Col),
 }
 

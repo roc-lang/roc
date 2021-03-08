@@ -3,14 +3,13 @@ use crate::blankspace::{space0, space0_around, space0_before, space0_e, space1};
 use crate::expr::def;
 use crate::header::{
     package_entry, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
-    InterfaceHeader, ModuleName, PackageEntry, PackageName, PackageOrPath, PlatformHeader, To,
-    TypedIdent,
+    InterfaceHeader, ModuleName, PackageEntry, PackageName, PlatformHeader, To, TypedIdent,
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
-    peek_utf8_char_at, specialize, unexpected, unexpected_eof, word1, EHeader, EProvides, Either,
+    peek_utf8_char_at, specialize, unexpected, unexpected_eof, word1, EHeader, EProvides,
     ParseResult, Parser, State, SyntaxError,
 };
 use crate::string_literal;
@@ -322,46 +321,44 @@ struct ProvidesTo<'a> {
 
 #[inline(always)]
 fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Provides(e, r, c)),
+        provides_to_help(),
+    )
+}
+
+fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, SyntaxError<'a>> {
+    one_of![
+        map!(lowercase_ident(), To::ExistingPackage),
+        map!(package_or_path(), To::NewPackage)
+    ]
+}
+
+#[inline(always)]
+fn provides_to_help<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
+    let min_indent = 1;
+
     map!(
         and!(
+            provides_without_to_help(),
             and!(
-                skip_second!(backtrackable(space1(1)), ascii_string("provides")),
-                space1(1)
-            ),
-            and!(
-                collection!(
-                    ascii_char(b'['),
-                    loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
-                    ascii_char(b','),
-                    ascii_char(b']'),
-                    1
-                ),
-                and!(
-                    space1(1),
-                    skip_first!(
-                        ascii_string("to"),
-                        and!(
-                            space1(1),
-                            loc!(either!(lowercase_ident(), package_or_path()))
-                        )
+                space0_e(min_indent, EProvides::Space, EProvides::IndentTo),
+                skip_first!(
+                    crate::parser::keyword_e("to", EProvides::To),
+                    and!(
+                        space0_e(min_indent, EProvides::Space, EProvides::IndentPackage),
+                        loc!(specialize(
+                            |_, r, c| EProvides::Package(r, c),
+                            provides_to_package()
+                        ))
                     )
                 )
             )
         ),
         |(
-            (before_provides_keyword, after_provides_keyword),
-            (entries, (before_to_keyword, (after_to_keyword, loc_to))),
+            ((before_provides_keyword, after_provides_keyword), entries),
+            (before_to_keyword, (after_to_keyword, to)),
         )| {
-            let loc_to: Located<Either<&'a str, PackageOrPath<'a>>> = loc_to;
-            let to_val = match loc_to.value {
-                Either::First(pkg) => To::ExistingPackage(pkg),
-                Either::Second(pkg) => To::NewPackage(pkg),
-            };
-            let to = Located {
-                value: to_val,
-                region: loc_to.region,
-            };
-
             ProvidesTo {
                 entries,
                 to,
@@ -402,8 +399,8 @@ fn provides_without_to_help<'a>() -> impl Parser<
     and!(
         and!(
             skip_second!(
-                space0_e(min_indent, EProvides::Space, EProvides::IndentKeyword),
-                crate::parser::keyword_e("provides", EProvides::Keyword)
+                space0_e(min_indent, EProvides::Space, EProvides::IndentProvides),
+                crate::parser::keyword_e("provides", EProvides::Provides)
             ),
             space0_e(min_indent, EProvides::Space, EProvides::IndentListStart)
         ),
