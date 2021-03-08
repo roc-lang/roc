@@ -64,7 +64,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 * When refactoring; 
     - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
-    - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed. 
+    - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed.
+    - When updating dependencies with breaking changes; show similar diffs from github projects that have succesfully updated that dependency.
 * Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
     - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
 * When a function is called like `foo(false)`, the name of the boolean argument should be shown automatically; `foo(`*is_active:*`false)`. This should be done for booleans and numbers.

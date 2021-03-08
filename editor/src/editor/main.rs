@@ -88,9 +88,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
+                    label: None,
                     features: wgpu::Features::empty(),
                     limits: wgpu::Limits::default(),
-                    shader_validation: false,
                 },
                 None,
             )
@@ -108,12 +108,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut size = window.inner_size();
 
     let swap_chain_descr = wgpu::SwapChainDescriptor {
-        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
         format: render_format,
         width: size.width,
         height: size.height,
-        //Immediate may cause tearing, change present_mode if this becomes a problem
-        present_mode: wgpu::PresentMode::Immediate,
+        // TODO go back to Immediate
+        present_mode: wgpu::PresentMode::Fifo,
     };
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
@@ -182,12 +182,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 swap_chain = gpu_device.create_swap_chain(
                     &surface,
                     &wgpu::SwapChainDescriptor {
-                        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+                        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
                         format: render_format,
                         width: size.width,
                         height: size.height,
-                        //Immediate may cause tearing, change present_mode if this becomes a problem
-                        present_mode: wgpu::PresentMode::Immediate,
+                        // TODO go back to Immediate
+                        present_mode: wgpu::PresentMode::Fifo,
                     },
                 );
 
@@ -376,7 +376,10 @@ fn draw_all_rects(
         render_pass.set_pipeline(&rect_resources.pipeline);
         render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
         render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+        render_pass.set_index_buffer(
+            rect_buffers.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
         render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
     } else {
         // need to begin render pass to clear screen
@@ -403,25 +406,26 @@ fn begin_render_pass<'a>(
             },
         }],
         depth_stencil_attachment: None,
+        label: None,
     })
 }
 
 fn queue_editor_text(
     size: &PhysicalSize<u32>,
-    _editor_lines: &str,
+    editor_lines: &str,
     caret_pos: TextPos,
     config: &Config,
     glyph_brush: &mut GlyphBrush<()>,
 ) {
     let area_bounds = (size.width as f32, size.height as f32).into();
 
-    // let code_text = Text {
-    //     position: CODE_TXT_XY.into(),
-    //     area_bounds,
-    //     text: editor_lines,
-    //     size: settings.code_font_size,
-    //     ..Default::default()
-    // };
+    let code_text = Text {
+        position: CODE_TXT_XY.into(),
+        area_bounds,
+        text: editor_lines,
+        size: config.code_font_size,
+        ..Default::default()
+    };
 
     let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
     let text = s.as_str();
@@ -438,7 +442,7 @@ fn queue_editor_text(
     queue_text_draw(&caret_pos_label, glyph_brush);
 
     // TODO convert to ast and render with render_ast::render_expr2
-    //queue_code_text_draw(&code_text, &ed_theme.syntax_high_map, settings, glyph_brush);
+    queue_text_draw(&code_text, glyph_brush);
 }
 
 fn _queue_no_file_text(
