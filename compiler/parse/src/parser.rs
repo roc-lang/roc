@@ -1128,31 +1128,27 @@ where
     ToError: Fn(Row, Col) -> E,
     E: 'a,
 {
-    move |arena, state: State<'a>| {
-        let initial_state = state.clone();
-        // first parse the keyword characters
-        let (_, _, after_keyword_state) = ascii_string(keyword)
-            .parse(arena, state)
-            .map_err(|(_, _, state)| (NoProgress, if_error(state.line, state.column), state))?;
+    move |_, mut state: State<'a>| {
+        let width = keyword.len();
 
-        // then we must have at least one space character
-        // TODO this is potentially wasteful if there are a lot of spaces
-        match peek_utf8_char(&after_keyword_state) {
-            Ok((next, _width)) if next == ' ' || next == '#' || next == '\n' => {
-                // give back the state after parsing the keyword, but before the whitespace
-                // that way we can attach the whitespace to whatever follows
-                Ok((MadeProgress, (), after_keyword_state))
+        if !state.bytes.starts_with(keyword.as_bytes()) {
+            return Err((NoProgress, if_error(state.line, state.column), state));
+        }
+
+        // the next character should not be an identifier character
+        // to prevent treating `whence` or `iffy` as keywords
+        match state.bytes.get(width) {
+            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
+                state.column += width as u16;
+                state.bytes = &state.bytes[width..];
+                Ok((MadeProgress, (), state))
             }
-            _ => {
-                // this is not a keyword, maybe it's `whence` or `iffy`
-                // anyway, make no progress and return the initial state
-                // so we can try something else
-                Err((
-                    NoProgress,
-                    if_error(initial_state.line, initial_state.column),
-                    initial_state,
-                ))
+            None => {
+                state.column += width as u16;
+                state.bytes = &state.bytes[width..];
+                Ok((MadeProgress, (), state))
             }
+            Some(_) => Err((NoProgress, if_error(state.line, state.column), state)),
         }
     }
 }
