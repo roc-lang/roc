@@ -21,7 +21,7 @@ impl Region {
         }
     }
 
-    pub fn new(start_line: u32, end_line: u32, start_col: u16, end_col: u16) -> Self {
+    pub const fn new(start_line: u32, end_line: u32, start_col: u16, end_col: u16) -> Self {
         Self {
             start_line,
             start_col,

@@ -118,6 +118,7 @@ pub enum Expr<'a> {
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
     Defs(&'a [&'a Loc<Def<'a>>], &'a Loc<Expr<'a>>),
+    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
