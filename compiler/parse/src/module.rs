@@ -308,7 +308,7 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxErr
     // force that we pare until the end of the input
     skip_second!(zero_or_more!(space0_around(loc(def(0)), 0)), end_of_file())
 }
-
+#[derive(Debug)]
 struct ProvidesTo<'a> {
     entries: Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     to: Located<To<'a>>,

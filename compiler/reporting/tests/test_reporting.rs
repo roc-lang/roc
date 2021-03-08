@@ -5767,19 +5767,22 @@ mod test_reporting {
                 app "test-base64"
                     packages { base: "platform" }
                     imports [base.Task, Base64 ]
-                    provides [ main, ## ] to base
+                    provides [ main, @Foo ] to base
                 "#
             ),
             indoc!(
                 r#"
-                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
-
-                I am partway through parsing a definition, but I got stuck here:
-
-                1│  main = 5 -> 3
-                              ^
-
-                I was expecting to see an expression like 42 or "hello".
+                ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
+                
+                I am in the middle of parsing a provides list, but I got stuck here:
+                
+                3│      imports [base.Task, Base64 ]
+                4│      provides [ main, @Foo ] to base
+                                         ^
+                
+                I was expecting a type name, value name or function name next, like 
+                
+                    provides [ Animal, default, tame ]
             "#
             ),
         )

@@ -153,6 +153,7 @@ fn to_syntax_report<'a>(
             0,
             0,
         ),
+        Header(header) => to_header_report(alloc, filename, &header, 0, 0),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -2466,6 +2467,62 @@ fn to_tapply_report<'a>(
         }
 
         TApply::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+    }
+}
+
+fn to_header_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EHeader,
+    _start_row: Row,
+    _start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EHeader;
+
+    match *parse_problem {
+        EHeader::Provides(provides, row, col) => {
+            to_provides_report(alloc, filename, &provides, row, col)
+        } // _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_provides_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EProvides,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EProvides;
+
+    match *parse_problem {
+        EProvides::Identifier(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I am in the middle of parsing a provides list, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow(
+                    "I was expecting a type name, value name or function name next, like ",
+                )]),
+                alloc
+                    .parser_suggestion("provides [ Animal, default, tame ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PROVIDES".to_string(),
+            }
+        }
+
+        EProvides::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
 
