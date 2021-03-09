@@ -344,9 +344,12 @@ pub enum EHeader<'a> {
     Exposes(EExposes, Row, Col),
     Imports(EImports, Row, Col),
     Requires(ERequires<'a>, Row, Col),
+    Packages(EPackages, Row, Col),
+    Effects(EEffects<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
     ModuleName(Row, Col),
+    AppName(EString<'a>, Row, Col),
     IndentStart(Row, Col),
 }
 
@@ -401,6 +404,33 @@ pub enum ETypedIdent<'a> {
     Identifier(Row, Col),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPackages {
+    Space(BadInputError, Row, Col),
+    Packages(Row, Col),
+    IndentPackages(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    PackageEntry(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EEffects<'a> {
+    Space(BadInputError, Row, Col),
+    Effects(Row, Col),
+    IndentEffects(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    TypedIdent(ETypedIdent<'a>, Row, Col),
+    ShorthandDot(Row, Col),
+    Shorthand(Row, Col),
+    TypeName(Row, Col),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
     Imports(Row, Col),
@@ -412,7 +442,7 @@ pub enum EImports {
     Identifier(Row, Col),
     ExposingDot(Row, Col),
     ShorthandDot(Row, Col),
-    Shortname(Row, Col),
+    Shorthand(Row, Col),
     ModuleName(Row, Col),
     Space(BadInputError, Row, Col),
     IndentSetStart(Row, Col),

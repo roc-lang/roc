@@ -2,20 +2,19 @@ use crate::ast::{Attempting, CommentOrNewline, Def, Module};
 use crate::blankspace::{space0, space0_around, space0_before, space0_before_e, space0_e, space1};
 use crate::expr::def;
 use crate::header::{
-    package_entry, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
-    InterfaceHeader, ModuleName, PackageEntry, PackageName, PlatformHeader, To, TypedIdent,
+    package_entry, package_name, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
+    InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, To, TypedIdent,
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     ascii_char, ascii_string, backtrackable, end_of_file, loc, peek_utf8_char, peek_utf8_char_at,
-    specialize, unexpected, unexpected_eof, word1, Col, EExposes, EHeader, EImports, EProvides,
-    ERequires, ETypedIdent, ParseResult, Parser, Row, State, SyntaxError,
+    specialize, unexpected, word1, Col, EEffects, EExposes, EHeader, EImports, EPackages,
+    EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
 use bumpalo::collections::{String, Vec};
-use bumpalo::Bump;
 use roc_region::all::Located;
 
 pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
@@ -67,51 +66,6 @@ fn interface_header_help<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'
 
         Ok((MadeProgress, header, state))
     }
-}
-
-#[inline(always)]
-pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
-    // e.g. rtfeldman/blah
-    //
-    // Package names and accounts can be capitalized and can contain dashes.
-    // They cannot contain underscores or other special characters.
-    // They must be ASCII.
-
-    map!(
-        and!(
-            parse_package_part,
-            skip_first!(ascii_char(b'/'), parse_package_part)
-        ),
-        |(account, pkg)| { PackageName { account, pkg } }
-    )
-}
-
-fn parse_package_part<'a>(
-    arena: &'a Bump,
-    mut state: State<'a>,
-) -> ParseResult<'a, &'a str, SyntaxError<'a>> {
-    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                if ch == '-' || ch.is_ascii_alphanumeric() {
-                    part_buf.push(ch);
-
-                    state = state.advance_without_indenting(bytes_parsed)?;
-                } else {
-                    let progress = Progress::progress_when(!part_buf.is_empty());
-                    return Ok((progress, part_buf.into_bump_str(), state));
-                }
-            }
-            Err(reason) => {
-                let progress = Progress::progress_when(!part_buf.is_empty());
-                return state.fail(arena, progress, reason);
-            }
-        }
-    }
-
-    Err(unexpected_eof(arena, state, 0))
 }
 
 #[inline(always)]
@@ -184,17 +138,28 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
 
 #[inline(always)]
 fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
+    specialize(|e, _, _| SyntaxError::Header(e), app_header_help())
+}
+
+#[inline(always)]
+fn app_header_help<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
     |arena, state| {
-        let (_, after_app_keyword, state) = space1(1).parse(arena, state)?;
+        let min_indent = 1;
+
+        let (_, after_app_keyword, state) =
+            space0_e(min_indent, EHeader::Space, EHeader::IndentStart).parse(arena, state)?;
         let (_, name, state) = loc!(crate::parser::specialize(
-            |e, r, c| SyntaxError::Expr(crate::parser::EExpr::Str(e, r, c)),
+            EHeader::AppName,
             string_literal::parse()
         ))
         .parse(arena, state)?;
 
-        let (_, opt_pkgs, state) = maybe!(packages()).parse(arena, state)?;
-        let (_, opt_imports, state) = maybe!(imports()).parse(arena, state)?;
-        let (_, provides, state) = provides_to().parse(arena, state)?;
+        let (_, opt_pkgs, state) =
+            maybe!(specialize(EHeader::Packages, packages_help())).parse(arena, state)?;
+        let (_, opt_imports, state) =
+            maybe!(specialize(EHeader::Imports, imports_help())).parse(arena, state)?;
+        let (_, provides, state) =
+            specialize(EHeader::Provides, provides_to()).parse(arena, state)?;
 
         let (before_packages, after_packages, package_entries) = match opt_pkgs {
             Some(pkgs) => {
@@ -304,14 +269,6 @@ struct ProvidesTo<'a> {
     after_to_keyword: &'a [CommentOrNewline<'a>],
 }
 
-#[inline(always)]
-fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Provides(e, r, c)),
-        provides_to_help(),
-    )
-}
-
 fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, SyntaxError<'a>> {
     one_of![
         map!(lowercase_ident(), To::ExistingPackage),
@@ -320,7 +277,7 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, SyntaxError<'a>> {
 }
 
 #[inline(always)]
-fn provides_to_help<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
+fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
     let min_indent = 1;
 
     map!(
@@ -584,6 +541,7 @@ struct Packages<'a> {
     after_packages_keyword: &'a [CommentOrNewline<'a>],
 }
 
+/*
 #[inline(always)]
 fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
     map!(
@@ -598,6 +556,52 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
                 ascii_char(b','),
                 ascii_char(b'}'),
                 1
+            )
+        ),
+        |((before_packages_keyword, after_packages_keyword), entries)| {
+            Packages {
+                entries,
+                before_packages_keyword,
+                after_packages_keyword,
+            }
+        }
+    )
+}
+*/
+
+#[inline(always)]
+fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Packages(e, r, c)),
+        packages_help(),
+    )
+}
+
+#[inline(always)]
+fn packages_help<'a>() -> impl Parser<'a, Packages<'a>, EPackages> {
+    let min_indent = 1;
+
+    map!(
+        and!(
+            spaces_around_keyword(
+                min_indent,
+                "packages",
+                EPackages::Packages,
+                EPackages::Space,
+                EPackages::IndentPackages,
+                EPackages::IndentListStart
+            ),
+            collection_e!(
+                word1(b'{', EPackages::ListStart),
+                specialize(
+                    |_, r, c| EPackages::PackageEntry(r, c),
+                    loc!(package_entry())
+                ),
+                word1(b',', EPackages::ListEnd),
+                word1(b'}', EPackages::ListEnd),
+                min_indent,
+                EPackages::Space,
+                EPackages::IndentListEnd
             )
         ),
         |((before_packages_keyword, after_packages_keyword), entries)| {
@@ -659,23 +663,49 @@ fn imports_help<'a>() -> impl Parser<
 
 #[inline(always)]
 fn effects<'a>() -> impl Parser<'a, Effects<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Effects(e, r, c)),
+        effects_help(),
+    )
+}
+
+#[inline(always)]
+fn effects_help<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
     move |arena, state| {
-        let (_, spaces_before_effects_keyword, state) =
-            skip_second!(space1(0), ascii_string("effects")).parse(arena, state)?;
-        let (_, spaces_after_effects_keyword, state) = space1(0).parse(arena, state)?;
+        let min_indent = 1;
+
+        let (_, (spaces_before_effects_keyword, spaces_after_effects_keyword), state) =
+            spaces_around_keyword(
+                min_indent,
+                "effects",
+                EEffects::Effects,
+                EEffects::Space,
+                EEffects::IndentEffects,
+                EEffects::IndentListStart,
+            )
+            .parse(arena, state)?;
 
         // e.g. `fx.`
-        let (_, type_shortname, state) =
-            skip_second!(lowercase_ident(), ascii_char(b'.')).parse(arena, state)?;
+        let (_, type_shortname, state) = skip_second!(
+            specialize(|_, r, c| EEffects::Shorthand(r, c), lowercase_ident()),
+            word1(b'.', EEffects::ShorthandDot)
+        )
+        .parse(arena, state)?;
 
-        let (_, (type_name, spaces_after_type_name), state) =
-            and!(uppercase_ident(), space1(0)).parse(arena, state)?;
-        let (_, entries, state) = collection!(
-            ascii_char(b'{'),
-            loc!(typed_ident()),
-            ascii_char(b','),
-            ascii_char(b'}'),
-            1
+        // the type name, e.g. Effects
+        let (_, (type_name, spaces_after_type_name), state) = and!(
+            specialize(|_, r, c| EEffects::TypeName(r, c), uppercase_ident()),
+            space0_e(min_indent, EEffects::Space, EEffects::IndentListStart)
+        )
+        .parse(arena, state)?;
+        let (_, entries, state) = collection_e!(
+            word1(b'{', EEffects::ListStart),
+            specialize(EEffects::TypedIdent, loc!(typed_ident_help())),
+            word1(b',', EEffects::ListEnd),
+            word1(b'}', EEffects::ListEnd),
+            min_indent,
+            EEffects::Space,
+            EEffects::IndentListEnd
         )
         .parse(arena, state)?;
 
@@ -760,7 +790,7 @@ fn typed_ident_help<'a>() -> impl Parser<'a, TypedIdent<'a>, ETypedIdent<'a>> {
 }
 
 fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {
-    specialize(|_, r, c| EImports::Shortname(r, c), lowercase_ident())
+    specialize(|_, r, c| EImports::Shorthand(r, c), lowercase_ident())
 }
 
 fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>

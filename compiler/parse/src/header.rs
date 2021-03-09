@@ -1,13 +1,14 @@
+use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0;
 use crate::ident::lowercase_ident;
-use crate::module::package_name;
-use crate::parser::{ascii_char, optional, Either, Parser, Progress::*, State, SyntaxError};
-use crate::string_literal;
-use crate::{
-    ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation},
-    parser::specialize,
+use crate::parser::{
+    ascii_char, optional, peek_utf8_char, specialize, unexpected_eof, Either, ParseResult, Parser,
+    Progress, Progress::*, State, SyntaxError,
 };
+use crate::string_literal;
+use bumpalo::collections::String;
 use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use inlinable_string::InlinableString;
 use roc_region::all::Loc;
 
@@ -295,4 +296,49 @@ pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, SyntaxError<'
 
 fn package_version<'a>() -> impl Parser<'a, Version<'a>, SyntaxError<'a>> {
     move |_, _| todo!("TODO parse package version")
+}
+
+#[inline(always)]
+pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
+    // e.g. rtfeldman/blah
+    //
+    // Package names and accounts can be capitalized and can contain dashes.
+    // They cannot contain underscores or other special characters.
+    // They must be ASCII.
+
+    map!(
+        and!(
+            parse_package_part,
+            skip_first!(ascii_char(b'/'), parse_package_part)
+        ),
+        |(account, pkg)| { PackageName { account, pkg } }
+    )
+}
+
+fn parse_package_part<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+) -> ParseResult<'a, &'a str, SyntaxError<'a>> {
+    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
+
+    while !state.bytes.is_empty() {
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                if ch == '-' || ch.is_ascii_alphanumeric() {
+                    part_buf.push(ch);
+
+                    state = state.advance_without_indenting(bytes_parsed)?;
+                } else {
+                    let progress = Progress::progress_when(!part_buf.is_empty());
+                    return Ok((progress, part_buf.into_bump_str(), state));
+                }
+            }
+            Err(reason) => {
+                let progress = Progress::progress_when(!part_buf.is_empty());
+                return state.fail(arena, progress, reason);
+            }
+        }
+    }
+
+    Err(unexpected_eof(arena, state, 0))
 }

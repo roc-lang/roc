@@ -205,7 +205,7 @@ fn to_expr_report<'a>(
             let region = *region;
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am in the middle of parsing a definition, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("Looks like you are trying to define a function. "),
@@ -381,7 +381,7 @@ fn to_expr_report<'a>(
             let region = Region::from_row_col(*row, *col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am in the middle of parsing a definition, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("Looks like you are trying to define a function. "),
@@ -420,7 +420,7 @@ fn to_lambda_report<'a>(
 
                 let doc = alloc.stack(vec![
                     alloc
-                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                        .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
                     alloc.region_with_subregion(surroundings, region),
                     alloc.concat(vec![
                         alloc.reflow("I was expecting a "),
@@ -441,7 +441,7 @@ fn to_lambda_report<'a>(
 
                 let doc = alloc.stack(vec![
                     alloc
-                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                        .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
                     alloc.region_with_subregion(surroundings, region),
                     alloc.concat(vec![
                         alloc.reflow("I was expecting a "),
@@ -465,7 +465,7 @@ fn to_lambda_report<'a>(
 
                 let doc = alloc.stack(vec![
                     alloc
-                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                        .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
                     alloc.region_with_subregion(surroundings, region),
                     alloc.concat(vec![
                         alloc.reflow("I was expecting a "),
@@ -486,7 +486,7 @@ fn to_lambda_report<'a>(
 
                 let doc = alloc.stack(vec![
                     alloc
-                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                        .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
                     alloc.region_with_subregion(surroundings, region),
                     alloc.concat(vec![
                         alloc.reflow("I was expecting a "),
@@ -510,7 +510,7 @@ fn to_lambda_report<'a>(
 
                 let doc = alloc.stack(vec![
                     alloc
-                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck at this comma:"),
+                        .reflow(r"I am partway through parsing a function argument list, but I got stuck at this comma:"),
                     alloc.region_with_subregion(surroundings, region),
                     alloc.concat(vec![
                         alloc.reflow("I was expecting an argument pattern before this, "),
@@ -530,7 +530,7 @@ fn to_lambda_report<'a>(
 
                 let doc = alloc.stack(vec![
                     alloc
-                        .reflow(r"I am in the middle of parsing a function argument list, but I got stuck here:"),
+                        .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
                     alloc.region_with_subregion(surroundings, region),
                     alloc.concat(vec![
                         alloc.reflow("I was expecting an argument pattern before this, "),
@@ -2496,6 +2496,14 @@ fn to_header_report<'a>(
             to_requires_report(alloc, filename, &requires, *row, *col)
         }
 
+        EHeader::Packages(packages, row, col) => {
+            to_packages_report(alloc, filename, &packages, *row, *col)
+        }
+
+        EHeader::Effects(effects, row, col) => {
+            to_effects_report(alloc, filename, &effects, *row, *col)
+        }
+
         EHeader::IndentStart(row, col) => todo!(),
 
         EHeader::ModuleName(row, col) => {
@@ -2521,6 +2529,29 @@ fn to_header_report<'a>(
             }
         }
 
+        EHeader::AppName(_, row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting an application name next, like "),
+                    alloc.parser_suggestion("app \"main\""),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("app \"editor\""),
+                    alloc.reflow(". App names are surrounded by quotation marks."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD APP NAME".to_string(),
+            }
+        }
+
         EHeader::Space(error, row, col) => to_space_report(alloc, filename, &error, *row, *col),
     }
 }
@@ -2540,9 +2571,8 @@ fn to_provides_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(
-                    r"I am in the middle of parsing a provides list, but I got stuck here:",
-                ),
+                alloc
+                    .reflow(r"I am partway through parsing a provides list, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![alloc.reflow(
                     "I was expecting a type name, value name or function name next, like ",
@@ -2564,7 +2594,7 @@ fn to_provides_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("I am expecting the "),
@@ -2604,8 +2634,7 @@ fn to_exposes_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc
-                    .reflow(r"I am in the middle of parsing a exposes list, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a exposes list, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![alloc.reflow(
                     "I was expecting a type name, value name or function name next, like ",
@@ -2627,7 +2656,7 @@ fn to_exposes_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("I am expecting the "),
@@ -2667,8 +2696,7 @@ fn to_imports_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc
-                    .reflow(r"I am in the middle of parsing a imports list, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a imports list, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![alloc.reflow(
                     "I was expecting a type name, value name or function name next, like ",
@@ -2690,7 +2718,7 @@ fn to_imports_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("I am expecting the "),
@@ -2730,7 +2758,7 @@ fn to_requires_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("I am expecting the "),
@@ -2750,6 +2778,82 @@ fn to_requires_report<'a>(
         }
 
         ERequires::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_packages_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EPackages,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EPackages;
+
+    match *parse_problem {
+        EPackages::Packages(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("packages"),
+                    alloc.reflow(" keyword next, like "),
+                ]),
+                alloc.parser_suggestion("packages {}").indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING PACKAGES".to_string(),
+            }
+        }
+
+        EPackages::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_effects_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EEffects,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EEffects;
+
+    match *parse_problem {
+        EEffects::Effects(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("effects"),
+                    alloc.reflow(" keyword next, like "),
+                ]),
+                alloc.parser_suggestion("effects {}").indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING PACKAGES".to_string(),
+            }
+        }
+
+        EEffects::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }

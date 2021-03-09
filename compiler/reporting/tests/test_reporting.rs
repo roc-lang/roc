@@ -5839,4 +5839,30 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn invalid_app_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app foobar 
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD APP NAME ──────────────────────────────────────────────────────────────
+                
+                I am partway through parsing a header, but got stuck here:
+                
+                1│  app foobar 
+                        ^
+                
+                I am expecting an application name next, like app "main" or
+                app "editor". App names are surrounded by quotation marks.
+            "#
+            ),
+        )
+    }
 }
