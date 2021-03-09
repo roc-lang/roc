@@ -334,15 +334,16 @@ pub enum SyntaxError<'a> {
     Type(Type<'a>),
     Pattern(EPattern<'a>),
     Expr(EExpr<'a>),
-    Header(EHeader),
+    Header(EHeader<'a>),
     Space(BadInputError),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EHeader {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EHeader<'a> {
     Provides(EProvides, Row, Col),
     Exposes(EExposes, Row, Col),
     Imports(EImports, Row, Col),
+    Requires(ERequires<'a>, Row, Col),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +372,29 @@ pub enum EExposes {
     ListEnd(Row, Col),
     Identifier(Row, Col),
     Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ERequires<'a> {
+    Requires(Row, Col),
+    IndentRequires(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    TypedIdent(ETypedIdent<'a>, Row, Col),
+    Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETypedIdent<'a> {
+    Space(BadInputError, Row, Col),
+    HasType(Row, Col),
+    IndentHasType(Row, Col),
+    Name(Row, Col),
+    Type(Type<'a>, Row, Col),
+    IndentType(Row, Col),
+    Identifier(Row, Col),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

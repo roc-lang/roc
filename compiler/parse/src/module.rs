@@ -1,5 +1,5 @@
 use crate::ast::{Attempting, CommentOrNewline, Def, Module};
-use crate::blankspace::{space0, space0_around, space0_before, space0_e, space1};
+use crate::blankspace::{space0, space0_around, space0_before, space0_before_e, space0_e, space1};
 use crate::expr::def;
 use crate::header::{
     package_entry, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
@@ -10,7 +10,7 @@ use crate::parser::Progress::{self, *};
 use crate::parser::{
     self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
     peek_utf8_char_at, specialize, unexpected, unexpected_eof, word1, Col, EExposes, EHeader,
-    EImports, EProvides, ParseResult, Parser, Row, State, SyntaxError,
+    EImports, EProvides, ERequires, ETypedIdent, ParseResult, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -19,55 +19,46 @@ use bumpalo::Bump;
 use roc_region::all::Located;
 
 pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
-    one_of!(interface_module(), app_module(), platform_module())
-}
-
-#[inline(always)]
-fn app_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
-    map!(app_header(), |header| { Module::App { header } })
-}
-
-#[inline(always)]
-fn platform_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
-    map!(platform_header(), |header| { Module::Platform { header } })
-}
-
-#[inline(always)]
-fn interface_module<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
-    map!(interface_header(), |header| {
-        Module::Interface { header }
-    })
-}
-
-#[inline(always)]
-pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError<'a>> {
-    parser::map(
-        and!(
-            skip_first!(
-                ascii_string("interface"),
-                and!(space1(1), loc!(module_name()))
-            ),
-            and!(exposes_values(), imports())
+    one_of![
+        map!(
+            skip_first!(debug!(ascii_string("app")), app_header()),
+            |header| { Module::App { header } }
         ),
-        |(
-            (after_interface_keyword, name),
-            (
-                ((before_exposes, after_exposes), exposes),
-                ((before_imports, after_imports), imports),
-            ),
-        )| {
-            InterfaceHeader {
-                name,
-                exposes,
-                imports,
-                after_interface_keyword,
-                before_exposes,
-                after_exposes,
-                before_imports,
-                after_imports,
-            }
-        },
-    )
+        map!(
+            skip_first!(ascii_string("platform"), platform_header()),
+            |header| { Module::Platform { header } }
+        ),
+        map!(
+            skip_first!(debug!(ascii_string("interface")), interface_header()),
+            |header| { Module::Interface { header } }
+        )
+    ]
+}
+
+#[inline(always)]
+fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError<'a>> {
+    |arena, state| {
+        let (_, after_interface_keyword, state) = space1(1).parse(arena, state)?;
+        let (_, name, state) = loc!(module_name()).parse(arena, state)?;
+
+        let (_, ((before_exposes, after_exposes), exposes), state) =
+            exposes_values().parse(arena, state)?;
+        let (_, ((before_imports, after_imports), imports), state) =
+            imports().parse(arena, state)?;
+
+        let header = InterfaceHeader {
+            name,
+            exposes,
+            imports,
+            after_interface_keyword,
+            before_exposes,
+            after_exposes,
+            before_imports,
+            after_imports,
+        };
+
+        Ok((MadeProgress, header, state))
+    }
 }
 
 #[inline(always)]
@@ -87,10 +78,12 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
     )
 }
 
-pub fn parse_package_part<'a>(
+fn parse_package_part<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, &'a str, SyntaxError<'a>> {
+    use encode_unicode::CharExt;
+
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
 
     while !state.bytes.is_empty() {
@@ -184,123 +177,109 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
 }
 
 #[inline(always)]
-pub fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
-    map_with_arena!(
-        and!(
-            skip_first!(
-                ascii_string("app"),
-                and!(
-                    space1(1),
-                    loc!(crate::parser::specialize(
-                        |e, r, c| SyntaxError::Expr(crate::parser::EExpr::Str(e, r, c)),
-                        string_literal::parse()
-                    ))
+fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
+    |arena, state| {
+        let (_, after_app_keyword, state) = space1(1).parse(arena, state)?;
+        let (_, name, state) = loc!(crate::parser::specialize(
+            |e, r, c| SyntaxError::Expr(crate::parser::EExpr::Str(e, r, c)),
+            string_literal::parse()
+        ))
+        .parse(arena, state)?;
+
+        let (_, opt_pkgs, state) = maybe!(packages()).parse(arena, state)?;
+        let (_, opt_imports, state) = maybe!(imports()).parse(arena, state)?;
+        let (_, provides, state) = provides_to().parse(arena, state)?;
+
+        let (before_packages, after_packages, package_entries) = match opt_pkgs {
+            Some(pkgs) => {
+                let pkgs: Packages<'a> = pkgs; // rustc must be told the type here
+
+                (
+                    pkgs.before_packages_keyword,
+                    pkgs.after_packages_keyword,
+                    pkgs.entries,
                 )
-            ),
-            and!(
-                optional(packages()),
-                and!(optional(imports()), provides_to())
-            )
-        ),
-        |arena, ((after_app_keyword, name), (opt_pkgs, (opt_imports, provides)))| {
-            let (before_packages, after_packages, package_entries) = match opt_pkgs {
-                Some(pkgs) => {
-                    let pkgs: Packages<'a> = pkgs; // rustc must be told the type here
-
-                    (
-                        pkgs.before_packages_keyword,
-                        pkgs.after_packages_keyword,
-                        pkgs.entries,
-                    )
-                }
-                None => (&[] as _, &[] as _, Vec::new_in(arena)),
-            };
-
-            // rustc must be told the type here
-            #[allow(clippy::type_complexity)]
-            let opt_imports: Option<(
-                (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-                Vec<'a, Located<ImportsEntry<'a>>>,
-            )> = opt_imports;
-
-            let ((before_imports, after_imports), imports) =
-                opt_imports.unwrap_or_else(|| ((&[] as _, &[] as _), Vec::new_in(arena)));
-            let provides: ProvidesTo<'a> = provides; // rustc must be told the type here
-
-            AppHeader {
-                name,
-                packages: package_entries,
-                imports,
-                provides: provides.entries,
-                to: provides.to,
-                after_app_keyword,
-                before_packages,
-                after_packages,
-                before_imports,
-                after_imports,
-                before_provides: provides.before_provides_keyword,
-                after_provides: provides.after_provides_keyword,
-                before_to: provides.before_to_keyword,
-                after_to: provides.after_to_keyword,
             }
-        }
-    )
+            None => (&[] as _, &[] as _, Vec::new_in(arena)),
+        };
+
+        // rustc must be told the type here
+        #[allow(clippy::type_complexity)]
+        let opt_imports: Option<(
+            (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+            Vec<'a, Located<ImportsEntry<'a>>>,
+        )> = opt_imports;
+
+        let ((before_imports, after_imports), imports) =
+            opt_imports.unwrap_or_else(|| ((&[] as _, &[] as _), Vec::new_in(arena)));
+        let provides: ProvidesTo<'a> = provides; // rustc must be told the type here
+
+        let header = AppHeader {
+            name,
+            packages: package_entries,
+            imports,
+            provides: provides.entries,
+            to: provides.to,
+            after_app_keyword,
+            before_packages,
+            after_packages,
+            before_imports,
+            after_imports,
+            before_provides: provides.before_provides_keyword,
+            after_provides: provides.after_provides_keyword,
+            before_to: provides.before_to_keyword,
+            after_to: provides.after_to_keyword,
+        };
+
+        Ok((MadeProgress, header, state))
+    }
 }
 
 #[inline(always)]
-pub fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError<'a>> {
-    parser::map(
-        and!(
-            skip_first!(
-                ascii_string("platform"),
-                and!(space1(1), loc!(package_name()))
-            ),
-            and!(
-                and!(
-                    and!(requires(), and!(exposes_modules(), packages())),
-                    and!(imports(), provides_without_to())
-                ),
-                effects()
-            )
-        ),
-        |(
-            (after_platform_keyword, name),
-            (
-                (
-                    (
-                        ((before_requires, after_requires), requires),
-                        (((before_exposes, after_exposes), exposes), packages),
-                    ),
-                    (
-                        ((before_imports, after_imports), imports),
-                        ((before_provides, after_provides), provides),
-                    ),
-                ),
-                effects,
-            ),
-        )| {
-            PlatformHeader {
-                name,
-                requires,
-                exposes,
-                packages: packages.entries,
-                imports,
-                provides,
-                effects,
-                after_platform_keyword,
-                before_requires,
-                after_requires,
-                before_exposes,
-                after_exposes,
-                before_packages: packages.before_packages_keyword,
-                after_packages: packages.after_packages_keyword,
-                before_imports,
-                after_imports,
-                before_provides,
-                after_provides,
-            }
-        },
-    )
+fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError<'a>> {
+    |arena, state| {
+        let (_, after_platform_keyword, state) = space1(1).parse(arena, state)?;
+        let (_, name, state) = loc!(package_name()).parse(arena, state)?;
+
+        let (_, ((before_requires, after_requires), requires), state) =
+            requires().parse(arena, state)?;
+
+        let (_, ((before_exposes, after_exposes), exposes), state) =
+            exposes_modules().parse(arena, state)?;
+
+        let (_, packages, state) = packages().parse(arena, state)?;
+
+        let (_, ((before_imports, after_imports), imports), state) =
+            imports().parse(arena, state)?;
+
+        let (_, ((before_provides, after_provides), provides), state) =
+            provides_without_to().parse(arena, state)?;
+
+        let (_, effects, state) = effects().parse(arena, state)?;
+
+        let header = PlatformHeader {
+            name,
+            requires,
+            exposes,
+            packages: packages.entries,
+            imports,
+            provides,
+            effects,
+            after_platform_keyword,
+            before_requires,
+            after_requires,
+            before_exposes,
+            after_exposes,
+            before_packages: packages.before_packages_keyword,
+            after_packages: packages.after_packages_keyword,
+            before_imports,
+            after_imports,
+            before_provides,
+            after_provides,
+        };
+
+        Ok((MadeProgress, header, state))
+    }
 }
 
 #[inline(always)]
@@ -441,14 +420,39 @@ fn requires<'a>() -> impl Parser<
     ),
     SyntaxError<'a>,
 > {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Requires(e, r, c)),
+        requires_help(),
+    )
+}
+
+#[inline(always)]
+fn requires_help<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<TypedIdent<'a>>>,
+    ),
+    ERequires<'a>,
+> {
+    let min_indent = 1;
     and!(
-        and!(skip_second!(space1(1), ascii_string("requires")), space1(1)),
-        collection!(
-            ascii_char(b'{'),
-            loc!(typed_ident()),
-            ascii_char(b','),
-            ascii_char(b'}'),
-            1
+        spaces_around_keyword(
+            min_indent,
+            "requires",
+            ERequires::Requires,
+            ERequires::Space,
+            ERequires::IndentRequires,
+            ERequires::IndentListStart
+        ),
+        collection_e!(
+            word1(b'{', ERequires::ListStart),
+            specialize(ERequires::TypedIdent, loc!(typed_ident_help())),
+            word1(b',', ERequires::ListEnd),
+            word1(b'}', ERequires::ListEnd),
+            min_indent,
+            ERequires::Space,
+            ERequires::IndentListEnd
         )
     )
 }
@@ -727,6 +731,41 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError<'a>> {
             state,
         ))
     }
+}
+
+fn typed_ident_help<'a>() -> impl Parser<'a, TypedIdent<'a>, ETypedIdent<'a>> {
+    // e.g.
+    //
+    // printLine : Str -> Effect {}
+    let min_indent = 0;
+
+    map!(
+        and!(
+            and!(
+                loc!(specialize(
+                    |_, r, c| ETypedIdent::Identifier(r, c),
+                    lowercase_ident()
+                )),
+                space0_e(min_indent, ETypedIdent::Space, ETypedIdent::IndentHasType)
+            ),
+            skip_first!(
+                word1(b':', ETypedIdent::HasType),
+                space0_before_e(
+                    specialize(ETypedIdent::Type, type_annotation::located_help(min_indent)),
+                    min_indent,
+                    ETypedIdent::Space,
+                    ETypedIdent::IndentType,
+                )
+            )
+        ),
+        |((ident, spaces_before_colon), ann)| {
+            TypedIdent::Entry {
+                ident,
+                spaces_before_colon,
+                ann,
+            }
+        }
+    )
 }
 
 fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {

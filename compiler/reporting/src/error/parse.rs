@@ -2473,23 +2473,27 @@ fn to_tapply_report<'a>(
 fn to_header_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EHeader,
+    parse_problem: &roc_parse::parser::EHeader<'a>,
     _start_row: Row,
     _start_col: Col,
 ) -> Report<'a> {
     use roc_parse::parser::EHeader;
 
-    match *parse_problem {
+    match parse_problem {
         EHeader::Provides(provides, row, col) => {
-            to_provides_report(alloc, filename, &provides, row, col)
+            to_provides_report(alloc, filename, &provides, *row, *col)
         }
 
         EHeader::Exposes(exposes, row, col) => {
-            to_exposes_report(alloc, filename, &exposes, row, col)
+            to_exposes_report(alloc, filename, &exposes, *row, *col)
         }
 
         EHeader::Imports(imports, row, col) => {
-            to_imports_report(alloc, filename, &imports, row, col)
+            to_imports_report(alloc, filename, &imports, *row, *col)
+        }
+
+        EHeader::Requires(requires, row, col) => {
+            to_requires_report(alloc, filename, &requires, *row, *col)
         }
     }
 }
@@ -2679,6 +2683,46 @@ fn to_imports_report<'a>(
         }
 
         EImports::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_requires_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::ERequires<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::ERequires;
+
+    match *parse_problem {
+        ERequires::Requires(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("requires"),
+                    alloc.reflow(" keyword next, like "),
+                ]),
+                alloc
+                    .parser_suggestion("requires { main : Task I64 Str }")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING REQUIRES".to_string(),
+            }
+        }
+
+        ERequires::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
