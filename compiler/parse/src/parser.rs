@@ -350,6 +350,7 @@ pub enum EHeader<'a> {
     Space(BadInputError, Row, Col),
     ModuleName(Row, Col),
     AppName(EString<'a>, Row, Col),
+    PlatformName(Row, Col),
     IndentStart(Row, Col),
 }
 

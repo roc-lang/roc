@@ -208,25 +208,39 @@ fn app_header_help<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 
 #[inline(always)]
 fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError<'a>> {
+    specialize(|e, _, _| SyntaxError::Header(e), platform_header_help())
+}
+
+#[inline(always)]
+fn platform_header_help<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     |arena, state| {
-        let (_, after_platform_keyword, state) = space1(1).parse(arena, state)?;
-        let (_, name, state) = loc!(package_name()).parse(arena, state)?;
+        let min_indent = 1;
+
+        let (_, after_platform_keyword, state) =
+            space0_e(min_indent, EHeader::Space, EHeader::IndentStart).parse(arena, state)?;
+        let (_, name, state) = loc!(specialize(
+            |_, r, c| EHeader::PlatformName(r, c),
+            package_name()
+        ))
+        .parse(arena, state)?;
 
         let (_, ((before_requires, after_requires), requires), state) =
-            requires().parse(arena, state)?;
+            specialize(EHeader::Requires, requires_help()).parse(arena, state)?;
 
         let (_, ((before_exposes, after_exposes), exposes), state) =
-            exposes_modules().parse(arena, state)?;
+            specialize(EHeader::Exposes, exposes_modules_help()).parse(arena, state)?;
 
-        let (_, packages, state) = packages().parse(arena, state)?;
+        let (_, packages, state) =
+            specialize(EHeader::Packages, packages_help()).parse(arena, state)?;
 
         let (_, ((before_imports, after_imports), imports), state) =
-            imports().parse(arena, state)?;
+            specialize(EHeader::Imports, imports_help()).parse(arena, state)?;
 
         let (_, ((before_provides, after_provides), provides), state) =
-            provides_without_to().parse(arena, state)?;
+            specialize(EHeader::Provides, provides_without_to_help()).parse(arena, state)?;
 
-        let (_, effects, state) = effects().parse(arena, state)?;
+        let (_, effects, state) =
+            specialize(EHeader::Effects, effects_help()).parse(arena, state)?;
 
         let header = PlatformHeader {
             name,
