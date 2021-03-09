@@ -16,11 +16,17 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use roc_region::all::Located;
 
-pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Header(e), header_help())
+pub fn parse_header<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+) -> Result<(Module<'a>, State<'a>), EHeader<'a>> {
+    match header().parse(arena, state) {
+        Ok((_, module, state)) => Ok((module, state)),
+        Err((_, fail, _)) => Err(fail),
+    }
 }
 
-fn header_help<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
+fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
     use crate::parser::keyword_e;
 
     one_of![

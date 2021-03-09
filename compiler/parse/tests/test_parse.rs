@@ -2433,9 +2433,8 @@ mod test_parse {
                 app "test-app" packages {} imports [] provides [] to blah
             "#
         );
-        let actual = roc_parse::module::header()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2474,9 +2473,8 @@ mod test_parse {
             "#
         );
 
-        let actual = roc_parse::module::header()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2530,9 +2528,8 @@ mod test_parse {
             "#
         );
 
-        let actual = roc_parse::module::header()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2576,9 +2573,8 @@ mod test_parse {
         let expected = roc_parse::ast::Module::Platform { header };
 
         let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects fx.Blah {}";
-        let actual = roc_parse::module::header()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2646,9 +2642,8 @@ mod test_parse {
                     effects fx.Effect {}
             "#
         );
-        let actual = roc_parse::module::header()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2678,9 +2673,8 @@ mod test_parse {
                 interface Foo exposes [] imports []
             "#
         );
-        let actual = roc_parse::module::header()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2710,9 +2704,8 @@ mod test_parse {
                 interface Foo.Bar.Baz exposes [] imports []
             "#
         );
-        let actual = roc_parse::module::header()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2818,7 +2811,7 @@ mod test_parse {
 
         let actual = module_defs()
             .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+            .map(|tuple| tuple.0);
 
         assert!(actual.is_ok());
     }
@@ -2840,7 +2833,7 @@ mod test_parse {
 
         let actual = module_defs()
             .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+            .map(|tuple| tuple.0);
 
         assert!(actual.is_ok());
     }
@@ -2861,7 +2854,7 @@ mod test_parse {
 
         let actual = module_defs()
             .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.1);
+            .map(|tuple| tuple.0);
 
         dbg!(&actual);
 

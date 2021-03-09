@@ -1,7 +1,7 @@
 use crate::ast;
 use crate::blankspace::space0_before;
 use crate::expr::expr;
-use crate::module::{header, module_defs};
+use crate::module::module_defs;
 use crate::parser::{loc, Parser, State, SyntaxError};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -12,18 +12,6 @@ pub fn parse_expr_with<'a>(
     input: &'a str,
 ) -> Result<ast::Expr<'a>, SyntaxError<'a>> {
     parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
-}
-
-pub fn parse_header_with<'a>(
-    arena: &'a Bump,
-    input: &'a str,
-) -> Result<ast::Module<'a>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes());
-    let answer = header().parse(arena, state);
-
-    answer
-        .map(|(_, loc_expr, _)| loc_expr)
-        .map_err(|(_, fail, _)| fail)
 }
 
 #[allow(dead_code)]
