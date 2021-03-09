@@ -2482,7 +2482,15 @@ fn to_header_report<'a>(
     match *parse_problem {
         EHeader::Provides(provides, row, col) => {
             to_provides_report(alloc, filename, &provides, row, col)
-        } // _ => todo!("unhandled parse error {:?}", parse_problem),
+        }
+
+        EHeader::Exposes(exposes, row, col) => {
+            to_exposes_report(alloc, filename, &exposes, row, col)
+        }
+
+        EHeader::Imports(imports, row, col) => {
+            to_imports_report(alloc, filename, &imports, row, col)
+        }
     }
 }
 
@@ -2520,7 +2528,157 @@ fn to_provides_report<'a>(
             }
         }
 
+        EProvides::Provides(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("provides"),
+                    alloc.reflow(" keyword next, like "),
+                ]),
+                alloc
+                    .parser_suggestion("provides [ Animal, default, tame ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PROVIDES".to_string(),
+            }
+        }
+
         EProvides::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_exposes_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EExposes,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EExposes;
+
+    match *parse_problem {
+        EExposes::Identifier(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc
+                    .reflow(r"I am in the middle of parsing a exposes list, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow(
+                    "I was expecting a type name, value name or function name next, like ",
+                )]),
+                alloc
+                    .parser_suggestion("exposes [ Animal, default, tame ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSES".to_string(),
+            }
+        }
+
+        EExposes::Exposes(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("exposes"),
+                    alloc.reflow(" keyword next, like "),
+                ]),
+                alloc
+                    .parser_suggestion("exposes [ Animal, default, tame ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSES".to_string(),
+            }
+        }
+
+        EExposes::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+
+        _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_imports_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EImports,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::EImports;
+
+    match *parse_problem {
+        EImports::Identifier(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc
+                    .reflow(r"I am in the middle of parsing a imports list, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow(
+                    "I was expecting a type name, value name or function name next, like ",
+                )]),
+                alloc
+                    .parser_suggestion("imports [ Animal, default, tame ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSES".to_string(),
+            }
+        }
+
+        EImports::Imports(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am in the middle of a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("imports"),
+                    alloc.reflow(" keyword next, like "),
+                ]),
+                alloc
+                    .parser_suggestion("imports [ Animal, default, tame ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD IMPORTS".to_string(),
+            }
+        }
+
+        EImports::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }

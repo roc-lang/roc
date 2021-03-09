@@ -341,6 +341,8 @@ pub enum SyntaxError<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EHeader {
     Provides(EProvides, Row, Col),
+    Exposes(EExposes, Row, Col),
+    Imports(EImports, Row, Col),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,6 +359,38 @@ pub enum EProvides {
     Identifier(Row, Col),
     Package(Row, Col),
     Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EExposes {
+    Exposes(Row, Col),
+    IndentExposes(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    Identifier(Row, Col),
+    Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EImports {
+    Imports(Row, Col),
+    IndentImports(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    Identifier(Row, Col),
+    ExposingDot(Row, Col),
+    ShorthandDot(Row, Col),
+    Shortname(Row, Col),
+    ModuleName(Row, Col),
+    Space(BadInputError, Row, Col),
+    IndentSetStart(Row, Col),
+    IndentSetEnd(Row, Col),
+    SetStart(Row, Col),
+    SetEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1774,6 +1808,19 @@ macro_rules! one_of {
     };
     ($p1:expr, $($others:expr),+ $(,)?) => {
         one_of!($p1, $($others),+)
+    };
+}
+
+#[macro_export]
+macro_rules! maybe {
+    ($p1:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| match $p1
+            .parse(arena, state)
+        {
+            Ok((progress, value, state)) => Ok((progress, Some(value), state)),
+            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
+            Err((NoProgress, _, state)) => Ok((NoProgress, None, state)),
+        }
     };
 }
 

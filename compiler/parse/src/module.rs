@@ -9,8 +9,8 @@ use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
-    peek_utf8_char_at, specialize, unexpected, unexpected_eof, word1, EHeader, EProvides,
-    ParseResult, Parser, State, SyntaxError,
+    peek_utf8_char_at, specialize, unexpected, unexpected_eof, word1, Col, EExposes, EHeader,
+    EImports, EProvides, ParseResult, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -342,22 +342,23 @@ fn provides_to_help<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
         and!(
             provides_without_to_help(),
             and!(
-                space0_e(min_indent, EProvides::Space, EProvides::IndentTo),
-                skip_first!(
-                    crate::parser::keyword_e("to", EProvides::To),
-                    and!(
-                        space0_e(min_indent, EProvides::Space, EProvides::IndentPackage),
-                        loc!(specialize(
-                            |_, r, c| EProvides::Package(r, c),
-                            provides_to_package()
-                        ))
-                    )
-                )
+                spaces_around_keyword(
+                    min_indent,
+                    "to",
+                    EProvides::To,
+                    EProvides::Space,
+                    EProvides::IndentTo,
+                    EProvides::IndentListStart
+                ),
+                loc!(specialize(
+                    |_, r, c| EProvides::Package(r, c),
+                    provides_to_package()
+                ))
             )
         ),
         |(
             ((before_provides_keyword, after_provides_keyword), entries),
-            (before_to_keyword, (after_to_keyword, to)),
+            ((before_to_keyword, after_to_keyword), to),
         )| {
             ProvidesTo {
                 entries,
@@ -397,12 +398,13 @@ fn provides_without_to_help<'a>() -> impl Parser<
 > {
     let min_indent = 1;
     and!(
-        and!(
-            skip_second!(
-                space0_e(min_indent, EProvides::Space, EProvides::IndentProvides),
-                crate::parser::keyword_e("provides", EProvides::Provides)
-            ),
-            space0_e(min_indent, EProvides::Space, EProvides::IndentListStart)
+        spaces_around_keyword(
+            min_indent,
+            "provides",
+            EProvides::Provides,
+            EProvides::Space,
+            EProvides::IndentProvides,
+            EProvides::IndentListStart
         ),
         collection_e!(
             word1(b'[', EProvides::ListStart),
@@ -460,14 +462,40 @@ fn exposes_values<'a>() -> impl Parser<
     ),
     SyntaxError<'a>,
 > {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Exposes(e, r, c)),
+        exposes_values_help(),
+    )
+}
+
+#[inline(always)]
+fn exposes_values_help<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+    ),
+    EExposes,
+> {
+    let min_indent = 1;
+
     and!(
-        and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
-        collection!(
-            ascii_char(b'['),
-            loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
-            ascii_char(b','),
-            ascii_char(b']'),
-            1
+        spaces_around_keyword(
+            min_indent,
+            "exposes",
+            EExposes::Exposes,
+            EExposes::Space,
+            EExposes::IndentExposes,
+            EExposes::IndentListStart
+        ),
+        collection_e!(
+            word1(b'[', EExposes::ListStart),
+            exposes_entry(EExposes::Identifier),
+            word1(b',', EExposes::ListEnd),
+            word1(b']', EExposes::ListEnd),
+            min_indent,
+            EExposes::Space,
+            EExposes::IndentListEnd
         )
     )
 }
@@ -481,16 +509,76 @@ fn exposes_modules<'a>() -> impl Parser<
     ),
     SyntaxError<'a>,
 > {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Exposes(e, r, c)),
+        exposes_modules_help(),
+    )
+}
+
+fn spaces_around_keyword<'a, E>(
+    min_indent: u16,
+    keyword: &'static str,
+    expectation: fn(Row, Col) -> E,
+    space_problem: fn(crate::parser::BadInputError, Row, Col) -> E,
+    indent_problem1: fn(Row, Col) -> E,
+    indent_problem2: fn(Row, Col) -> E,
+) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]), E>
+where
+    E: 'a,
+{
     and!(
-        and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
-        collection!(
-            ascii_char(b'['),
-            loc!(map!(module_name(), ExposesEntry::Exposed)),
-            ascii_char(b','),
-            ascii_char(b']'),
-            1
+        skip_second!(
+            space0_e(min_indent, space_problem, indent_problem1),
+            crate::parser::keyword_e(keyword, expectation)
+        ),
+        space0_e(min_indent, space_problem, indent_problem2)
+    )
+}
+
+#[inline(always)]
+fn exposes_modules_help<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
+    ),
+    EExposes,
+> {
+    let min_indent = 1;
+
+    and!(
+        spaces_around_keyword(
+            min_indent,
+            "exposes",
+            EExposes::Exposes,
+            EExposes::Space,
+            EExposes::IndentExposes,
+            EExposes::IndentListStart
+        ),
+        collection_e!(
+            word1(b'[', EExposes::ListStart),
+            exposes_module(EExposes::Identifier),
+            word1(b',', EExposes::ListEnd),
+            word1(b']', EExposes::ListEnd),
+            min_indent,
+            EExposes::Space,
+            EExposes::IndentListEnd
         )
     )
+}
+
+fn exposes_module<'a, F, E>(
+    to_expectation: F,
+) -> impl Parser<'a, Located<ExposesEntry<'a, ModuleName<'a>>>, E>
+where
+    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Copy,
+    E: 'a,
+{
+    loc!(map!(
+        specialize(|_, r, c| to_expectation(r, c), module_name()),
+        ExposesEntry::Exposed
+    ))
 }
 
 #[derive(Debug)]
@@ -529,6 +617,30 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
 
 #[inline(always)]
 fn imports<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<ImportsEntry<'a>>>,
+    ),
+    SyntaxError<'a>,
+> {
+    and!(
+        and!(
+            skip_second!(backtrackable(space1(1)), ascii_string("imports")),
+            space1(1)
+        ),
+        collection!(
+            ascii_char(b'['),
+            loc!(imports_entry()),
+            ascii_char(b','),
+            ascii_char(b']'),
+            1
+        )
+    )
+}
+
+#[inline(always)]
+fn imports_help<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
@@ -621,23 +733,50 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError<'a>> {
 #[inline(always)]
 #[allow(clippy::type_complexity)]
 fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, SyntaxError<'a>> {
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Imports(e, r, c)),
+        imports_entry_help(),
+    )
+}
+
+fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {
+    specialize(|_, r, c| EImports::Shortname(r, c), lowercase_ident())
+}
+
+fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>
+where
+    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    E: 'a,
+    F: 'a,
+{
+    specialize(move |_, r, c| to_expectation(r, c), module_name())
+}
+
+fn imports_entry_help<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
+    let min_indent = 1;
+
     map_with_arena!(
         and!(
             and!(
                 // e.g. `base.`
-                optional(skip_second!(lowercase_ident(), ascii_char(b'.'))),
+                maybe!(skip_second!(
+                    shortname(),
+                    word1(b'.', EImports::ShorthandDot)
+                )),
                 // e.g. `Task`
-                module_name()
+                module_name_help(EImports::ModuleName)
             ),
             // e.g. `.{ Task, after}`
-            optional(skip_first!(
-                ascii_char(b'.'),
-                collection!(
-                    ascii_char(b'{'),
-                    loc!(map!(unqualified_ident(), ExposesEntry::Exposed)),
-                    ascii_char(b','),
-                    ascii_char(b'}'),
-                    1
+            maybe!(skip_first!(
+                word1(b'.', EImports::ExposingDot),
+                collection_e!(
+                    word1(b'{', EImports::SetStart),
+                    exposes_entry(EImports::Identifier),
+                    word1(b',', EImports::SetEnd),
+                    word1(b'}', EImports::SetEnd),
+                    min_indent,
+                    EImports::Space,
+                    EImports::IndentSetEnd
                 )
             ))
         ),

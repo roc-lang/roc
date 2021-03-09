@@ -5758,9 +5758,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn provides_to() {
-        // this is still bad, but changing the order and progress of other parsers should improve it
-        // down the line
+    fn provides_to_identifier() {
         report_header_problem_as(
             indoc!(
                 r#"
@@ -5783,6 +5781,34 @@ mod test_reporting {
                 I was expecting a type name, value name or function name next, like 
                 
                     provides [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_identifier() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface Foobar 
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
+                
+                I am in the middle of parsing a exposes list, but I got stuck here:
+                
+                1│  interface Foobar 
+                2│      exposes [ main, @Foo ]
+                                        ^
+                
+                I was expecting a type name, value name or function name next, like 
+                
+                    exposes [ Animal, default, tame ]
             "#
             ),
         )
