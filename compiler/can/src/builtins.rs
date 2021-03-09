@@ -293,6 +293,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_SHIFT_RIGHT => num_shift_right_by,
         Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         Symbol::NUM_INT_CAST=> num_int_cast,
+        Symbol::NUM_MAX_I128=> num_max_i128,
         Symbol::RESULT_MAP => result_map,
         Symbol::RESULT_MAP_ERR => result_map_err,
         Symbol::RESULT_AFTER => result_after,
@@ -1351,8 +1352,20 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_percision_var = var_store.fresh();
     let body = Int(int_var, int_percision_var, i128::MAX);
 
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
     Def {
-        annotation: None,
+        annotation: Some(annotation),
         expr_var: int_var,
         loc_expr: Located::at_zero(body),
         loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
