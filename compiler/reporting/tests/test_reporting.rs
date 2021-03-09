@@ -5813,4 +5813,30 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn invalid_module_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface foobar 
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE NAME ───────────────────────────────────────────────────────────
+                
+                I am partway through parsing a header, but got stuck here:
+                
+                1│  interface foobar 
+                              ^
+                
+                I am expecting a module name next, like BigNum or Main. Module names
+                must start with an uppercase letter.
+            "#
+            ),
+        )
+    }
 }
