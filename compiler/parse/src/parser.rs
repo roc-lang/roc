@@ -344,6 +344,10 @@ pub enum EHeader<'a> {
     Exposes(EExposes, Row, Col),
     Imports(EImports, Row, Col),
     Requires(ERequires<'a>, Row, Col),
+
+    Space(BadInputError, Row, Col),
+    ModuleName(Row, Col),
+    IndentStart(Row, Col),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

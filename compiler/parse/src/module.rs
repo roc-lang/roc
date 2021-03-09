@@ -37,14 +37,22 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
 
 #[inline(always)]
 fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError<'a>> {
+    specialize(|e, _, _| SyntaxError::Header(e), interface_header_help())
+}
+
+#[inline(always)]
+fn interface_header_help<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
     |arena, state| {
-        let (_, after_interface_keyword, state) = space1(1).parse(arena, state)?;
-        let (_, name, state) = loc!(module_name()).parse(arena, state)?;
+        let min_indent = 1;
+
+        let (_, after_interface_keyword, state) =
+            space0_e(min_indent, EHeader::Space, EHeader::IndentStart).parse(arena, state)?;
+        let (_, name, state) = loc!(module_name_help(EHeader::ModuleName)).parse(arena, state)?;
 
         let (_, ((before_exposes, after_exposes), exposes), state) =
-            exposes_values().parse(arena, state)?;
+            specialize(EHeader::Exposes, exposes_values_help()).parse(arena, state)?;
         let (_, ((before_imports, after_imports), imports), state) =
-            imports().parse(arena, state)?;
+            specialize(EHeader::Imports, imports_help()).parse(arena, state)?;
 
         let header = InterfaceHeader {
             name,
@@ -532,7 +540,7 @@ where
 {
     and!(
         skip_second!(
-            space0_e(min_indent, space_problem, indent_problem1),
+            backtrackable(space0_e(min_indent, space_problem, indent_problem1)),
             crate::parser::keyword_e(keyword, expectation)
         ),
         space0_e(min_indent, space_problem, indent_problem2)
