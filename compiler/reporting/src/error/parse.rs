@@ -2504,7 +2504,47 @@ fn to_header_report<'a>(
             to_effects_report(alloc, filename, &effects, *row, *col)
         }
 
-        EHeader::IndentStart(row, col) => todo!(),
+        EHeader::IndentStart(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow("I may be confused by indentation.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INCOMPLETE HEADER".to_string(),
+            }
+        }
+
+        EHeader::Start(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am expecting a header, but got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting a module keyword next, one of "),
+                    alloc.keyword("interface"),
+                    alloc.reflow(", "),
+                    alloc.keyword("app"),
+                    alloc.reflow(" or "),
+                    alloc.keyword("platform"),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING HEADER".to_string(),
+            }
+        }
 
         EHeader::ModuleName(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);

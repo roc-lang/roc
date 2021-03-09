@@ -25,33 +25,22 @@ fn header_help<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
 
     one_of![
         map!(
-            skip_first!(keyword_e("app", EHeader::Start), app_header_help()),
+            skip_first!(keyword_e("app", EHeader::Start), app_header()),
             |header| { Module::App { header } }
         ),
         map!(
-            skip_first!(
-                keyword_e("platform", EHeader::Start),
-                platform_header_help()
-            ),
+            skip_first!(keyword_e("platform", EHeader::Start), platform_header()),
             |header| { Module::Platform { header } }
         ),
         map!(
-            skip_first!(
-                keyword_e("interface", EHeader::Start),
-                interface_header_help()
-            ),
+            skip_first!(keyword_e("interface", EHeader::Start), interface_header()),
             |header| { Module::Interface { header } }
         )
     ]
 }
 
 #[inline(always)]
-fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Header(e), interface_header_help())
-}
-
-#[inline(always)]
-fn interface_header_help<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
+fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
     |arena, state| {
         let min_indent = 1;
 
@@ -136,12 +125,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
 }
 
 #[inline(always)]
-fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Header(e), app_header_help())
-}
-
-#[inline(always)]
-fn app_header_help<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
+fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
     |arena, state| {
         let min_indent = 1;
 
@@ -206,12 +190,7 @@ fn app_header_help<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 }
 
 #[inline(always)]
-fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Header(e), platform_header_help())
-}
-
-#[inline(always)]
-fn platform_header_help<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
+fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     |arena, state| {
         let min_indent = 1;
 
