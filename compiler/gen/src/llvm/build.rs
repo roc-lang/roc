@@ -2492,9 +2492,6 @@ struct SwitchArgsIr<'a, 'ctx> {
 }
 
 fn const_i128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: i128) -> IntValue<'ctx> {
-    // TODO verify the order [a, b] is correct for larger numbers when we can parse them
-    debug_assert!(value <= i64::MAX as i128);
-
     // truncate the lower 64 bits
     let value = value as u128;
     let a = value as u64;
