@@ -569,6 +569,36 @@ fn list_map_closure() {
 }
 
 #[test]
+fn list_map3_group() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map3 [1,2,3] [3,2,1] [2,1,3] (\a, b, c -> Group a b c)
+            "#
+        ),
+        RocList::from_slice(&[(1, 3, 2), (2, 2, 1), (3, 1, 3)]),
+        RocList<(i64, i64, i64)>
+    );
+}
+
+#[test]
+fn list_map3_different_length() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map3
+                ["a", "b", "d" ]
+                ["b"],
+                ["c"],
+                Str.concat
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from_slice("abc".as_bytes()),]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
 fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
