@@ -8,9 +8,9 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, ascii_char, ascii_string, backtrackable, end_of_file, loc, optional, peek_utf8_char,
-    peek_utf8_char_at, specialize, unexpected, unexpected_eof, word1, Col, EExposes, EHeader,
-    EImports, EProvides, ERequires, ETypedIdent, ParseResult, Parser, Row, State, SyntaxError,
+    ascii_char, ascii_string, backtrackable, end_of_file, loc, peek_utf8_char, peek_utf8_char_at,
+    specialize, unexpected, unexpected_eof, word1, Col, EExposes, EHeader, EImports, EProvides,
+    ERequires, ETypedIdent, ParseResult, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -50,7 +50,7 @@ fn interface_header_help<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'
         let (_, name, state) = loc!(module_name_help(EHeader::ModuleName)).parse(arena, state)?;
 
         let (_, ((before_exposes, after_exposes), exposes), state) =
-            specialize(EHeader::Exposes, exposes_values_help()).parse(arena, state)?;
+            specialize(EHeader::Exposes, exposes_values()).parse(arena, state)?;
         let (_, ((before_imports, after_imports), imports), state) =
             specialize(EHeader::Imports, imports_help()).parse(arena, state)?;
 
@@ -90,8 +90,6 @@ fn parse_package_part<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, &'a str, SyntaxError<'a>> {
-    use encode_unicode::CharExt;
-
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
 
     while !state.bytes.is_empty() {
@@ -467,21 +465,6 @@ fn requires_help<'a>() -> impl Parser<
 
 #[inline(always)]
 fn exposes_values<'a>() -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
-    ),
-    SyntaxError<'a>,
-> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Exposes(e, r, c)),
-        exposes_values_help(),
-    )
-}
-
-#[inline(always)]
-fn exposes_values_help<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
