@@ -8,7 +8,7 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, end_of_file, loc, specialize, word1, Col, EEffects, EExposes, EHeader, EImports,
+    backtrackable, end_of_file, specialize, word1, Col, EEffects, EExposes, EHeader, EImports,
     EPackages, EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
@@ -95,6 +95,10 @@ fn chomp_module_name<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
             if let Ok((first_letter, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
                 if first_letter.is_uppercase() {
                     chomped += width;
+                } else if first_letter == '{' {
+                    // the .{ starting a `Foo.{ bar, baz }` importing clauses
+                    chomped -= width;
+                    break;
                 } else {
                     return Err(Progress::MadeProgress);
                 }
@@ -246,7 +250,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
     // force that we pare until the end of the input
-    skip_second!(zero_or_more!(space0_around(loc(def(0)), 0)), end_of_file())
+    skip_second!(zero_or_more!(space0_around(loc!(def(0)), 0)), end_of_file())
 }
 #[derive(Debug)]
 struct ProvidesTo<'a> {
