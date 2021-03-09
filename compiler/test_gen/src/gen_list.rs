@@ -590,7 +590,7 @@ fn list_map3_different_length() {
                 ["a", "b", "d" ]
                 ["b"]
                 ["c"]
-                Str.concat
+                (\a, b, c -> Str.concat a (Str.concat b c))
             "#
         ),
         RocList::from_slice(&[RocStr::from_slice("abc".as_bytes()),]),
