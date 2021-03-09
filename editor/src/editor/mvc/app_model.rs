@@ -8,12 +8,12 @@ use copypasta::{ClipboardContext, ClipboardProvider};
 use std::fmt;
 
 #[derive(Debug)]
-pub struct AppModel {
-    pub ed_model_opt: Option<EdModel>,
+pub struct AppModel<'a> {
+    pub ed_model_opt: Option<EdModel<'a>>,
     pub clipboard_opt: Option<Clipboard>,
 }
 
-impl AppModel {
+impl<'a> AppModel<'a> {
     pub fn init(ed_model_opt: Option<EdModel>) -> AppModel {
         AppModel {
             ed_model_opt,

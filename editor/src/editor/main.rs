@@ -2,21 +2,21 @@ use super::keyboard_input;
 use crate::editor::{
     config::Config,
     ed_error::{print_err, print_ui_err},
-    mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view},
+    mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel},
     theme::EdTheme,
 };
 use crate::graphics::{
     colors::to_wgpu_color,
-    lowlevel::buffer::create_rect_buffers,
     lowlevel::ortho::update_ortho_buffer,
     lowlevel::pipelines,
     primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
     style::CODE_TXT_XY,
 };
-use crate::ui::{text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};
-//use crate::resources::strings::NOTHING_OPENED;
+use crate::ui::{text::text_pos::TextPos, ui_error::UIResult};
+use crate::editor::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool, scope::Scope};
+use crate::lang::expr::{Env};
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
@@ -41,7 +41,7 @@ use winit::{
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
-pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
+pub fn launch(filepaths: &[&'static Path]) -> io::Result<()> {
     //TODO support using multiple filepaths
     let first_path_opt = if !filepaths.is_empty() {
         match slice_get(0, filepaths) {
@@ -60,7 +60,7 @@ pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
     Ok(())
 }
 
-fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
+fn run_event_loop(file_path_opt: Option<&'static Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
@@ -123,8 +123,30 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
+
+    let mut env_pool = Pool::with_capacity(1024);
+    let env_arena = Bump::new();
+    let ast_arena = Bump::new();
+
+    let mut var_store = VarStore::default();
+    let dep_idents = IdentIds::exposed_builtins(8);
+    let mut module_ids = ModuleIds::default();
+    let exposed_ident_ids = IdentIds::default();
+    let mod_id = module_ids.get_or_insert(&"ModId123".into());
+
+    let mut env = Env::new(
+        mod_id,
+        &env_arena,
+        &mut env_pool,
+        &mut var_store,
+        dep_idents,
+        &module_ids,
+        exposed_ident_ids,
+    );
+    
+
     let ed_model_opt = if let Some(file_path) = file_path_opt {
-        let ed_model_res = ed_model::init_model(file_path);
+        let ed_model_res = ed_model::init_model(file_path, env, &ast_arena);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -133,7 +155,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 Some(ed_model)
             }
             Err(e) => {
-                print_ui_err(&e);
+                print_err(&e);
                 None
             }
         }
@@ -251,16 +273,6 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .output;
 
                 if let Some(ed_model) = &app_model.ed_model_opt {
-                    //TODO don't pass invisible lines
-                    queue_editor_text(
-                        &size,
-                        &ed_model.text.all_lines(&arena),
-                        ed_model.text.caret_w_select.caret_pos,
-                        &config,
-                        &mut glyph_brush,
-                    );
-                } else {
-                    // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
                     ast_arena.reset();
                     let mut pool = Pool::with_capacity(1024);
                     let mut var_store = VarStore::default();
@@ -280,16 +292,10 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         exposed_ident_ids,
                     );
 
-                    let mut scope = Scope::new(home, env.pool, env.var_store);
-
-                    let region = Region::new(0, 0, 0, 0);
-
                     let (expr2, _) = crate::lang::expr::str_to_expr2(
                         &arena,
                         "{ population: 5437, coords: {x: 3.637, y: 4}, style: \"Functional\" }",
                         &mut env,
-                        &mut scope,
-                        region,
                     )
                     .unwrap();
 
@@ -306,6 +312,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     if let Err(e) = ast_render_res {
                         print_err(&e)
                     }
+                } else {
+                    queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &config, &mut glyph_brush);
                 }
 
                 rects_arena.reset();
@@ -366,7 +374,7 @@ fn draw_all_rects(
     rect_resources: &RectResources,
     ed_theme: &EdTheme,
 ) -> UIResult<()> {
-    if let Some(ed_model) = ed_model_opt {
+    /*if let Some(ed_model) = ed_model_opt {
         let all_rects = ed_view::create_ed_rects(ed_model, &ed_theme.ui_theme, arena)?;
 
         let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
@@ -384,7 +392,9 @@ fn draw_all_rects(
     } else {
         // need to begin render pass to clear screen
         begin_render_pass(encoder, texture_view, ed_theme);
-    }
+    }*/
+
+    begin_render_pass(encoder, texture_view, ed_theme);
 
     Ok(())
 }
@@ -445,7 +455,7 @@ fn queue_editor_text(
     queue_text_draw(&code_text, glyph_brush);
 }
 
-fn _queue_no_file_text(
+fn queue_no_file_text(
     size: &PhysicalSize<u32>,
     text: &str,
     text_coords: Vector2<f32>,

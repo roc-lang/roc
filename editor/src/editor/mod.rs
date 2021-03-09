@@ -4,6 +4,7 @@ mod keyboard_input;
 pub mod main;
 mod mvc;
 mod render_ast;
+mod resources;
 mod syntax_highlight;
 mod theme;
 mod util;

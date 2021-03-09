@@ -199,6 +199,12 @@ pub enum Expr2 {
         arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
     },
 
+    Caret {
+        offset_row: usize,      // 8B for 64 bit architecture
+        offset_col: usize,      // 8B for 64 bit architecture
+        inner: NodeId<Expr2>    // 4B
+    },
+
     // Compiles, but will crash if reached
     RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),
 }

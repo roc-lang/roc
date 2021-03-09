@@ -1,4 +1,4 @@
-use super::ed_model::EdModel;
+/*use super::ed_model::EdModel;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::{
     text::{selection::create_selection_rects, text_pos::TextPos},
@@ -36,19 +36,4 @@ pub fn create_ed_rects<'a>(
     all_rects.push(make_caret_rect(caret_pos, &glyph_rect, ui_theme));
 
     Ok(all_rects)
-}
-
-fn make_caret_rect(caret_pos: TextPos, glyph_dim_rect: &Rect, ui_theme: &UITheme) -> Rect {
-    let caret_y =
-        glyph_dim_rect.top_left_coords.y + (caret_pos.line as f32) * glyph_dim_rect.height;
-
-    let caret_x =
-        glyph_dim_rect.top_left_coords.x + glyph_dim_rect.width * (caret_pos.column as f32);
-
-    Rect {
-        top_left_coords: (caret_x, caret_y).into(),
-        height: glyph_dim_rect.height,
-        width: 2.0,
-        color: ui_theme.caret,
-    }
-}
+}*/

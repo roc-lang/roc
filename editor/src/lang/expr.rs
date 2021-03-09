@@ -232,16 +232,17 @@ pub fn str_to_expr2<'a>(
     arena: &'a Bump,
     input: &'a str,
     env: &mut Env<'a>,
-    scope: &mut Scope,
-    region: Region,
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
     let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(expr(0)), 0);
     let parse_res = parser.parse(&arena, state);
 
+    let mut scope = Scope::new(env.home, env.pool, env.var_store);
+    let region = Region::new(0, 0, 0, 0);
+
     parse_res
         .map(|(_, loc_expr, _)| arena.alloc(loc_expr.value))
-        .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
+        .map(|loc_expr_val_ref| to_expr2(env, &mut scope, loc_expr_val_ref, region))
         .map_err(|(_, fail, _)| fail)
 }
 
