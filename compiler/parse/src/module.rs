@@ -1,4 +1,4 @@
-use crate::ast::{Attempting, CommentOrNewline, Def, Module};
+use crate::ast::{CommentOrNewline, Def, Module};
 use crate::blankspace::{space0_around, space0_before_e, space0_e};
 use crate::expr::def;
 use crate::header::{
@@ -8,27 +8,38 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    ascii_string, backtrackable, end_of_file, loc, peek_utf8_char, peek_utf8_char_at, specialize,
-    unexpected, word1, Col, EEffects, EExposes, EHeader, EImports, EPackages, EProvides, ERequires,
-    ETypedIdent, Parser, Row, State, SyntaxError,
+    backtrackable, end_of_file, loc, specialize, word1, Col, EEffects, EExposes, EHeader, EImports,
+    EPackages, EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
-use bumpalo::collections::{String, Vec};
+use bumpalo::collections::Vec;
 use roc_region::all::Located;
 
 pub fn header<'a>() -> impl Parser<'a, Module<'a>, SyntaxError<'a>> {
+    specialize(|e, _, _| SyntaxError::Header(e), header_help())
+}
+
+fn header_help<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
+    use crate::parser::keyword_e;
+
     one_of![
         map!(
-            skip_first!(debug!(ascii_string("app")), app_header()),
+            skip_first!(keyword_e("app", EHeader::Start), app_header_help()),
             |header| { Module::App { header } }
         ),
         map!(
-            skip_first!(ascii_string("platform"), platform_header()),
+            skip_first!(
+                keyword_e("platform", EHeader::Start),
+                platform_header_help()
+            ),
             |header| { Module::Platform { header } }
         ),
         map!(
-            skip_first!(debug!(ascii_string("interface")), interface_header()),
+            skip_first!(
+                keyword_e("interface", EHeader::Start),
+                interface_header_help()
+            ),
             |header| { Module::Interface { header } }
         )
     ]
@@ -68,71 +79,59 @@ fn interface_header_help<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'
     }
 }
 
-#[inline(always)]
-pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, SyntaxError<'a>> {
-    move |arena, mut state: State<'a>| {
-        match peek_utf8_char(&state) {
-            Ok((first_letter, bytes_parsed)) => {
-                if !first_letter.is_uppercase() {
-                    return Err(unexpected(0, Attempting::Module, state));
-                };
+fn chomp_module_name<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
+    use encode_unicode::CharExt;
 
-                let mut buf = String::with_capacity_in(4, arena);
+    let mut chomped = 0;
 
-                buf.push(first_letter);
-
-                state = state.advance_without_indenting(bytes_parsed)?;
-
-                while !state.bytes.is_empty() {
-                    match peek_utf8_char(&state) {
-                        Ok((ch, bytes_parsed)) => {
-                            // After the first character, only these are allowed:
-                            //
-                            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-                            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                            // * A '.' separating module parts
-                            if ch.is_alphabetic() || ch.is_ascii_digit() {
-                                state = state.advance_without_indenting(bytes_parsed)?;
-
-                                buf.push(ch);
-                            } else if ch == '.' {
-                                match peek_utf8_char_at(&state, 1) {
-                                    Ok((next, next_bytes_parsed)) => {
-                                        if next.is_uppercase() {
-                                            // If we hit another uppercase letter, keep going!
-                                            buf.push('.');
-                                            buf.push(next);
-
-                                            state = state.advance_without_indenting(
-                                                bytes_parsed + next_bytes_parsed,
-                                            )?;
-                                        } else {
-                                            // We have finished parsing the module name.
-                                            //
-                                            // There may be an identifier after this '.',
-                                            // e.g. "baz" in `Foo.Bar.baz`
-                                            return Ok((
-                                                MadeProgress,
-                                                ModuleName::new(buf.into_bump_str()),
-                                                state,
-                                            ));
-                                        }
-                                    }
-                                    Err(reason) => return state.fail(arena, MadeProgress, reason),
-                                }
-                            } else {
-                                // This is the end of the module name. We're done!
-                                break;
-                            }
-                        }
-                        Err(reason) => return state.fail(arena, MadeProgress, reason),
-                    }
-                }
-
-                Ok((MadeProgress, ModuleName::new(buf.into_bump_str()), state))
-            }
-            Err(reason) => state.fail(arena, MadeProgress, reason),
+    if let Ok((first_letter, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        if first_letter.is_uppercase() {
+            chomped += width;
+        } else {
+            return Err(Progress::NoProgress);
         }
+    }
+
+    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        // After the first character, only these are allowed:
+        //
+        // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+        // * A '.' separating module parts
+        if ch.is_alphabetic() || ch.is_ascii_digit() {
+            chomped += width;
+        } else if ch == '.' {
+            chomped += width;
+
+            if let Ok((first_letter, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                if first_letter.is_uppercase() {
+                    chomped += width;
+                } else {
+                    return Err(Progress::MadeProgress);
+                }
+            }
+        } else {
+            // we're done
+            break;
+        }
+    }
+
+    let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
+    Ok(name)
+}
+
+#[inline(always)]
+fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
+    |_, mut state: State<'a>| match chomp_module_name(state.bytes) {
+        Ok(name) => {
+            let width = name.len();
+            state.column += width as u16;
+            state.bytes = &state.bytes[width..];
+
+            Ok((MadeProgress, ModuleName::new(name), state))
+        }
+        Err(progress) => Err((progress, (), state)),
     }
 }
 

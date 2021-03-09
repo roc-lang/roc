@@ -348,6 +348,7 @@ pub enum EHeader<'a> {
     Effects(EEffects<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
+    Start(Row, Col),
     ModuleName(Row, Col),
     AppName(EString<'a>, Row, Col),
     PlatformName(Row, Col),
