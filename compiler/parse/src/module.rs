@@ -1,5 +1,5 @@
 use crate::ast::{Attempting, CommentOrNewline, Def, Module};
-use crate::blankspace::{space0, space0_around, space0_before, space0_before_e, space0_e, space1};
+use crate::blankspace::{space0_around, space0_before_e, space0_e};
 use crate::expr::def;
 use crate::header::{
     package_entry, package_name, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
@@ -8,9 +8,9 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    ascii_char, ascii_string, backtrackable, end_of_file, loc, peek_utf8_char, peek_utf8_char_at,
-    specialize, unexpected, word1, Col, EEffects, EExposes, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
+    ascii_string, backtrackable, end_of_file, loc, peek_utf8_char, peek_utf8_char_at, specialize,
+    unexpected, word1, Col, EEffects, EExposes, EHeader, EImports, EPackages, EProvides, ERequires,
+    ETypedIdent, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -51,7 +51,7 @@ fn interface_header_help<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'
         let (_, ((before_exposes, after_exposes), exposes), state) =
             specialize(EHeader::Exposes, exposes_values()).parse(arena, state)?;
         let (_, ((before_imports, after_imports), imports), state) =
-            specialize(EHeader::Imports, imports_help()).parse(arena, state)?;
+            specialize(EHeader::Imports, imports()).parse(arena, state)?;
 
         let header = InterfaceHeader {
             name,
@@ -155,9 +155,9 @@ fn app_header_help<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
         .parse(arena, state)?;
 
         let (_, opt_pkgs, state) =
-            maybe!(specialize(EHeader::Packages, packages_help())).parse(arena, state)?;
+            maybe!(specialize(EHeader::Packages, packages())).parse(arena, state)?;
         let (_, opt_imports, state) =
-            maybe!(specialize(EHeader::Imports, imports_help())).parse(arena, state)?;
+            maybe!(specialize(EHeader::Imports, imports())).parse(arena, state)?;
         let (_, provides, state) =
             specialize(EHeader::Provides, provides_to()).parse(arena, state)?;
 
@@ -225,22 +225,20 @@ fn platform_header_help<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>
         .parse(arena, state)?;
 
         let (_, ((before_requires, after_requires), requires), state) =
-            specialize(EHeader::Requires, requires_help()).parse(arena, state)?;
+            specialize(EHeader::Requires, requires()).parse(arena, state)?;
 
         let (_, ((before_exposes, after_exposes), exposes), state) =
-            specialize(EHeader::Exposes, exposes_modules_help()).parse(arena, state)?;
+            specialize(EHeader::Exposes, exposes_modules()).parse(arena, state)?;
 
-        let (_, packages, state) =
-            specialize(EHeader::Packages, packages_help()).parse(arena, state)?;
+        let (_, packages, state) = specialize(EHeader::Packages, packages()).parse(arena, state)?;
 
         let (_, ((before_imports, after_imports), imports), state) =
-            specialize(EHeader::Imports, imports_help()).parse(arena, state)?;
+            specialize(EHeader::Imports, imports()).parse(arena, state)?;
 
         let (_, ((before_provides, after_provides), provides), state) =
-            specialize(EHeader::Provides, provides_without_to_help()).parse(arena, state)?;
+            specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
 
-        let (_, effects, state) =
-            specialize(EHeader::Effects, effects_help()).parse(arena, state)?;
+        let (_, effects, state) = specialize(EHeader::Effects, effects()).parse(arena, state)?;
 
         let header = PlatformHeader {
             name,
@@ -296,7 +294,7 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
 
     map!(
         and!(
-            provides_without_to_help(),
+            provides_without_to(),
             and!(
                 spaces_around_keyword(
                     min_indent,
@@ -330,21 +328,6 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
 
 #[inline(always)]
 fn provides_without_to<'a>() -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
-    ),
-    SyntaxError<'a>,
-> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Provides(e, r, c)),
-        provides_without_to_help(),
-    )
-}
-
-#[inline(always)]
-fn provides_without_to_help<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
@@ -395,21 +378,6 @@ fn requires<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<TypedIdent<'a>>>,
     ),
-    SyntaxError<'a>,
-> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Requires(e, r, c)),
-        requires_help(),
-    )
-}
-
-#[inline(always)]
-fn requires_help<'a>() -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<TypedIdent<'a>>>,
-    ),
     ERequires<'a>,
 > {
     let min_indent = 1;
@@ -424,7 +392,7 @@ fn requires_help<'a>() -> impl Parser<
         ),
         collection_e!(
             word1(b'{', ERequires::ListStart),
-            specialize(ERequires::TypedIdent, loc!(typed_ident_help())),
+            specialize(ERequires::TypedIdent, loc!(typed_ident())),
             word1(b',', ERequires::ListEnd),
             word1(b'}', ERequires::ListEnd),
             min_indent,
@@ -466,21 +434,6 @@ fn exposes_values<'a>() -> impl Parser<
     )
 }
 
-#[inline(always)]
-fn exposes_modules<'a>() -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
-    ),
-    SyntaxError<'a>,
-> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Exposes(e, r, c)),
-        exposes_modules_help(),
-    )
-}
-
 fn spaces_around_keyword<'a, E>(
     min_indent: u16,
     keyword: &'static str,
@@ -502,7 +455,7 @@ where
 }
 
 #[inline(always)]
-fn exposes_modules_help<'a>() -> impl Parser<
+fn exposes_modules<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
@@ -555,44 +508,8 @@ struct Packages<'a> {
     after_packages_keyword: &'a [CommentOrNewline<'a>],
 }
 
-/*
 #[inline(always)]
-fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
-    map!(
-        and!(
-            and!(
-                skip_second!(backtrackable(space1(1)), ascii_string("packages")),
-                space1(1)
-            ),
-            collection!(
-                ascii_char(b'{'),
-                loc!(package_entry()),
-                ascii_char(b','),
-                ascii_char(b'}'),
-                1
-            )
-        ),
-        |((before_packages_keyword, after_packages_keyword), entries)| {
-            Packages {
-                entries,
-                before_packages_keyword,
-                after_packages_keyword,
-            }
-        }
-    )
-}
-*/
-
-#[inline(always)]
-fn packages<'a>() -> impl Parser<'a, Packages<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Packages(e, r, c)),
-        packages_help(),
-    )
-}
-
-#[inline(always)]
-fn packages_help<'a>() -> impl Parser<'a, Packages<'a>, EPackages> {
+fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages> {
     let min_indent = 1;
 
     map!(
@@ -635,21 +552,6 @@ fn imports<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ImportsEntry<'a>>>,
     ),
-    SyntaxError<'a>,
-> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Imports(e, r, c)),
-        imports_help(),
-    )
-}
-
-#[inline(always)]
-fn imports_help<'a>() -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ImportsEntry<'a>>>,
-    ),
     EImports,
 > {
     let min_indent = 1;
@@ -676,15 +578,7 @@ fn imports_help<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn effects<'a>() -> impl Parser<'a, Effects<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Effects(e, r, c)),
-        effects_help(),
-    )
-}
-
-#[inline(always)]
-fn effects_help<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
+fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
     move |arena, state| {
         let min_indent = 1;
 
@@ -714,7 +608,7 @@ fn effects_help<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
         .parse(arena, state)?;
         let (_, entries, state) = collection_e!(
             word1(b'{', EEffects::ListStart),
-            specialize(EEffects::TypedIdent, loc!(typed_ident_help())),
+            specialize(EEffects::TypedIdent, loc!(typed_ident())),
             word1(b',', EEffects::ListEnd),
             word1(b'}', EEffects::ListEnd),
             min_indent,
@@ -739,36 +633,7 @@ fn effects_help<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
 }
 
 #[inline(always)]
-fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError<'a>> {
-    move |arena, state| {
-        // You must have a field name, e.g. "email"
-        let (_, ident, state) = loc!(lowercase_ident()).parse(arena, state)?;
-
-        let (_, spaces_before_colon, state) = space0(0).parse(arena, state)?;
-
-        let (_, ann, state) = skip_first!(
-            ascii_char(b':'),
-            space0_before(type_annotation::located(0), 0)
-        )
-        .parse(arena, state)?;
-
-        // e.g.
-        //
-        // printLine : Str -> Effect {}
-
-        Ok((
-            MadeProgress,
-            TypedIdent::Entry {
-                ident,
-                spaces_before_colon,
-                ann,
-            },
-            state,
-        ))
-    }
-}
-
-fn typed_ident_help<'a>() -> impl Parser<'a, TypedIdent<'a>, ETypedIdent<'a>> {
+fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, ETypedIdent<'a>> {
     // e.g.
     //
     // printLine : Str -> Effect {}
