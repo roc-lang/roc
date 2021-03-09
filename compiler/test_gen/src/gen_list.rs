@@ -588,8 +588,8 @@ fn list_map3_different_length() {
             r#"
             List.map3
                 ["a", "b", "d" ]
-                ["b"],
-                ["c"],
+                ["b"]
+                ["c"]
                 Str.concat
             "#
         ),
