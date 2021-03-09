@@ -918,7 +918,7 @@ impl ModifyRc {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
-    Int(i64),
+    Int(i128),
     Float(f64),
     Str(&'a str),
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
@@ -2507,13 +2507,13 @@ pub fn with_hole<'a>(
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, false) {
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num)),
+                    Expr::Literal(Literal::Int(num.into())),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num)),
+                    Expr::Literal(Literal::Int(num.into())),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
@@ -2549,13 +2549,13 @@ pub fn with_hole<'a>(
         Num(var, num) => match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
             IntOrFloat::SignedIntType(precision) => Stmt::Let(
                 assigned,
-                Expr::Literal(Literal::Int(num)),
+                Expr::Literal(Literal::Int(num.into())),
                 Layout::Builtin(int_precision_to_builtin(precision)),
                 hole,
             ),
             IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                 assigned,
-                Expr::Literal(Literal::Int(num)),
+                Expr::Literal(Literal::Int(num.into())),
                 Layout::Builtin(int_precision_to_builtin(precision)),
                 hole,
             ),
@@ -3075,7 +3075,7 @@ pub fn with_hole<'a>(
                         // define the tag id
                         stmt = Stmt::Let(
                             tag_id_symbol,
-                            Expr::Literal(Literal::Int(tag_id as i64)),
+                            Expr::Literal(Literal::Int(tag_id as i128)),
                             Layout::Builtin(TAG_SIZE),
                             arena.alloc(stmt),
                         );
@@ -3760,7 +3760,7 @@ pub fn with_hole<'a>(
                             tag_symbols.push(tag_id_symbol);
                             tag_symbols.extend(symbols);
 
-                            let expr1 = Expr::Literal(Literal::Int(tag_id as i64));
+                            let expr1 = Expr::Literal(Literal::Int(tag_id as i128));
                             let expr2 = Expr::Tag {
                                 tag_id,
                                 tag_layout,
@@ -5588,7 +5588,7 @@ fn reuse_function_symbol<'a>(
                             tag_symbols.push(tag_id_symbol);
                             tag_symbols.extend(symbols);
 
-                            let expr1 = Expr::Literal(Literal::Int(tag_id as i64));
+                            let expr1 = Expr::Literal(Literal::Int(tag_id as i128));
                             let expr2 = Expr::Tag {
                                 tag_id,
                                 tag_layout,

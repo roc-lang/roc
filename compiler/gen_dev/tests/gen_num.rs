@@ -229,6 +229,11 @@ mod gen_num {
     }
 
     #[test]
+    fn maxI128() {
+        assert_evals_to!("Num.maxI128", i128::MAX, i128);
+    }
+
+    #[test]
     fn gen_if_fn() {
         assert_evals_to!(
             indoc!(

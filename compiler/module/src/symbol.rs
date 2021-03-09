@@ -855,6 +855,7 @@ define_builtins! {
         94 NUM_NATURAL: "Natural" imported
         95 NUM_NAT: "Nat" imported
         96 NUM_INT_CAST: "intCast"
+        97 NUM_MAX_I128: "maxI128"
 
     }
     2 BOOL: "Bool" => {
