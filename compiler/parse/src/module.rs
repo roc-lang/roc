@@ -624,18 +624,9 @@ fn imports<'a>() -> impl Parser<
     ),
     SyntaxError<'a>,
 > {
-    and!(
-        and!(
-            skip_second!(backtrackable(space1(1)), ascii_string("imports")),
-            space1(1)
-        ),
-        collection!(
-            ascii_char(b'['),
-            loc!(imports_entry()),
-            ascii_char(b','),
-            ascii_char(b']'),
-            1
-        )
+    specialize(
+        |e, r, c| SyntaxError::Header(EHeader::Imports(e, r, c)),
+        imports_help(),
     )
 }
 
@@ -646,19 +637,27 @@ fn imports_help<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ImportsEntry<'a>>>,
     ),
-    SyntaxError<'a>,
+    EImports,
 > {
+    let min_indent = 1;
+
     and!(
-        and!(
-            skip_second!(backtrackable(space1(1)), ascii_string("imports")),
-            space1(1)
+        spaces_around_keyword(
+            min_indent,
+            "imports",
+            EImports::Imports,
+            EImports::Space,
+            EImports::IndentImports,
+            EImports::IndentListStart
         ),
-        collection!(
-            ascii_char(b'['),
+        collection_e!(
+            word1(b'[', EImports::ListStart),
             loc!(imports_entry()),
-            ascii_char(b','),
-            ascii_char(b']'),
-            1
+            word1(b',', EImports::ListEnd),
+            word1(b']', EImports::ListEnd),
+            min_indent,
+            EImports::Space,
+            EImports::IndentListEnd
         )
     )
 }
@@ -730,15 +729,6 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, SyntaxError<'a>> {
     }
 }
 
-#[inline(always)]
-#[allow(clippy::type_complexity)]
-fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Header(EHeader::Imports(e, r, c)),
-        imports_entry_help(),
-    )
-}
-
 fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {
     specialize(|_, r, c| EImports::Shortname(r, c), lowercase_ident())
 }
@@ -752,7 +742,8 @@ where
     specialize(move |_, r, c| to_expectation(r, c), module_name())
 }
 
-fn imports_entry_help<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
+#[inline(always)]
+fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
     let min_indent = 1;
 
     map_with_arena!(
