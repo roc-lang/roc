@@ -253,7 +253,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                 if (list3.len() > output_length) {
                     while (i < list3.len()) : (i += 1) {
                         const element_c = source_c + i * c_width;
-                        dec_b(element_c);
+                        dec_c(element_c);
                     }
                 }
 
