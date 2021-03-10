@@ -377,12 +377,13 @@ fn chomp_private_tag(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent
 
     match chomp_uppercase_part(&buffer[1..]) {
         Ok(name) => {
-            let chomped = 1 + name.len();
+            let width = 1 + name.len();
 
-            if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                Err(BadIdent::BadPrivateTag(row, col + chomped as u16))
+            if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[width..]) {
+                Err(BadIdent::BadPrivateTag(row, col + width as u16))
             } else {
-                Ok(name)
+                let value = unsafe { std::str::from_utf8_unchecked(&buffer[..width]) };
+                Ok(value)
             }
         }
         Err(_) => Err(BadIdent::BadPrivateTag(row, col + 1)),

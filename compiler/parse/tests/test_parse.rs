@@ -1005,7 +1005,7 @@ mod test_parse {
         use roc_parse::ident::BadIdent;
 
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::QualifiedTag(0, 13));
+        let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::BadPrivateTag(0, 4));
         let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
