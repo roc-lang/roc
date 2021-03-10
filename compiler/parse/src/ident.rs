@@ -310,7 +310,6 @@ pub fn parse_ident_help_help<'a>(
     mut state: State<'a>,
 ) -> ParseResult<'a, (Ident<'a>, Option<char>), BadIdent> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
-    let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
     let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
     let mut is_capitalized;
     let is_accessor_fn;
@@ -426,7 +425,6 @@ pub fn parse_ident_help_help<'a>(
                     if is_capitalized {
                         chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
                         cparts += 1;
-                        capitalized_parts.push(part_buf.into_bump_str());
                     } else {
                         noncapitalized_parts.push(part_buf.into_bump_str());
                     }
@@ -486,7 +484,6 @@ pub fn parse_ident_help_help<'a>(
     if is_capitalized {
         chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
         cparts += 1;
-        capitalized_parts.push(part_buf.into_bump_str());
     } else {
         noncapitalized_parts.push(part_buf.into_bump_str());
     }
@@ -507,30 +504,31 @@ pub fn parse_ident_help_help<'a>(
         }
     } else if noncapitalized_parts.is_empty() {
         // We have capitalized parts only, so this must be a tag.
-        match capitalized_parts.first() {
-            Some(value) => {
-                if cparts == 1 {
-                    if is_private_tag {
-                        Ident::PrivateTag(value)
-                    } else {
-                        Ident::GlobalTag(value)
-                    }
-                } else {
-                    // This is a qualified tag, which is not allowed!
-                    return Err((
-                        MadeProgress,
-                        BadIdent::QualifiedTag(state.line, state.column),
-                        state,
-                    ));
-                }
-            }
-            None => {
+        match cparts {
+            0 => {
                 // We had neither capitalized nor noncapitalized parts,
                 // yet we made it this far. The only explanation is that this was
                 // a stray '.' drifting through the cosmos.
                 return Err((
                     MadeProgress,
                     BadIdent::StrayDot(state.line, state.column),
+                    state,
+                ));
+            }
+            1 => {
+                let chomped = chomped_capitalized;
+                let value = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
+                if is_private_tag {
+                    Ident::PrivateTag(value)
+                } else {
+                    Ident::GlobalTag(value)
+                }
+            }
+            _ => {
+                // This is a qualified tag, which is not allowed!
+                return Err((
+                    MadeProgress,
+                    BadIdent::QualifiedTag(state.line, state.column),
                     state,
                 ));
             }
