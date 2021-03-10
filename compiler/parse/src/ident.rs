@@ -179,12 +179,32 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
 /// * A module name
 /// * A type name
 /// * A global tag
-pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    global_tag_or_ident(|first_char| first_char.is_uppercase())
+pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |_, mut state: State<'a>| match chomp_uppercase_part(state.bytes) {
+        Err(progress) => Err((progress, (), state)),
+        Ok(ident) => {
+            let width = ident.len();
+            state.column += width as u16;
+            state.bytes = &state.bytes[width..];
+            Ok((MadeProgress, ident, state))
+        }
+    }
 }
 
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    global_tag_or_ident(|first_char| first_char.is_alphabetic())
+pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |_, mut state: State<'a>| match chomp_part(|c| c.is_alphabetic(), state.bytes) {
+        Err(progress) => Err((progress, (), state)),
+        Ok(ident) => {
+            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+                Err((MadeProgress, (), state))
+            } else {
+                let width = ident.len();
+                state.column += width as u16;
+                state.bytes = &state.bytes[width..];
+                Ok((MadeProgress, ident, state))
+            }
+        }
+    }
 }
 
 pub fn join_module_parts<'a>(arena: &'a Bump, module_parts: &[&str]) -> &'a str {
