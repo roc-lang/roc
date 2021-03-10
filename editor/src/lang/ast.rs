@@ -204,6 +204,7 @@ pub enum Expr2 {
         offset_col: usize,      // 8B for 64 bit architecture
         inner: NodeId<Expr2>    // 4B
     },
+    Hole, // Rendered as empty box in editor 
 
     // Compiles, but will crash if reached
     RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),

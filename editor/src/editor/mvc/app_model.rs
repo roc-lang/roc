@@ -14,7 +14,7 @@ pub struct AppModel<'a> {
 }
 
 impl<'a> AppModel<'a> {
-    pub fn init(ed_model_opt: Option<EdModel>) -> AppModel {
+    pub fn init(ed_model_opt: Option<EdModel<'a>>) -> AppModel {
         AppModel {
             ed_model_opt,
             clipboard_opt: AppModel::init_clipboard_opt(),

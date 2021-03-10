@@ -31,6 +31,7 @@ use winit::{
     event,
     event::{Event, ModifiersState},
     event_loop::ControlFlow,
+    platform::run_return::EventLoopExtRunReturn,
 };
 
 // Inspired by:
@@ -64,7 +65,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
-    let event_loop = winit::event_loop::EventLoop::new();
+    let mut event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
         .with_inner_size(PhysicalSize::new(1200.0, 1000.0))
@@ -130,8 +131,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
-    let mut module_ids = ModuleIds::default();
+    
     let exposed_ident_ids = IdentIds::default();
+    let mut module_ids = ModuleIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
 
     let env = Env::new(
@@ -167,11 +169,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
-    // This arena is never cleared and should only be used for allocations that occur rarely
-    let arena = Bump::new();
+    let render_ast_arena = Bump::new();
 
     let mut rects_arena = Bump::new();
-    let mut ast_arena = Bump::new();
 
     let config: Config = confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
@@ -179,7 +179,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     // Render loop
     window.request_redraw();
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run_return(|event, _, control_flow| {
         // TODO dynamically switch this on/off depending on whether any
         // animations are running. Should conserve CPU usage and battery life!
         if is_animating {
@@ -272,37 +272,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
 
-                if let Some(ed_model) = &app_model.ed_model_opt {
-                    ast_arena.reset();
-                    let mut pool = Pool::with_capacity(1024);
-                    let mut var_store = VarStore::default();
-                    let dep_idents = IdentIds::exposed_builtins(8);
-                    let mut module_ids = ModuleIds::default();
-                    let exposed_ident_ids = IdentIds::default();
-
-                    let home = module_ids.get_or_insert(&"Home".into());
-
-                    let mut env = crate::lang::expr::Env::new(
-                        home,
-                        &arena,
-                        &mut pool,
-                        &mut var_store,
-                        dep_idents,
-                        &module_ids,
-                        exposed_ident_ids,
-                    );
-
-                    let (expr2, _) = crate::lang::expr::str_to_expr2(
-                        &arena,
-                        "{ population: 5437, coords: {x: 3.637, y: 4}, style: \"Functional\" }",
-                        &mut env,
-                    )
-                    .unwrap();
+                if let Some(ref mut ed_model) = app_model.ed_model_opt {
 
                     let ast_render_res = super::render_ast::render_expr2(
-                        &ast_arena,
-                        &mut env,
-                        &expr2,
+                        &render_ast_arena,
+                        &mut ed_model.module.env,
+                        &ed_model.module.ast_root,
                         &size,
                         CODE_TXT_XY.into(),
                         &config,
@@ -362,7 +337,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 *control_flow = winit::event_loop::ControlFlow::Wait;
             }
         }
-    })
+    });
+
+    Ok(())
 }
 
 fn draw_all_rects(

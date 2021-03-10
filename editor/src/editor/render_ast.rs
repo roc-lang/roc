@@ -23,6 +23,7 @@ fn get_bump_str<'a, 'b>(arena: &'a Bump, env: &Env<'b>, pool_str: &PoolStr) -> B
     BumpString::from_str_in(env_str, arena)
 }
 
+// TODO probably want to return markup here
 pub fn highlight_expr2<'a, 'b>(
     arena: &'a Bump,
     env: &Env<'b>,
@@ -97,6 +98,40 @@ pub fn highlight_expr2<'a, 'b>(
             }
 
             highlight_tups.push((bump_str(" }", arena), HighlightStyle::Bracket));
+        }
+        Expr2::Caret { offset_row: _, offset_col, inner} => {
+            // TODO use offset_row
+            let sub_expr2 = env.pool.get(*inner);
+
+            let mut inner_high_tups = highlight_expr2(arena, env, sub_expr2);
+            let mut counter = 0;
+
+            for tup in inner_high_tups.iter_mut() {
+                let curr_str_len = tup.0.len();
+
+                if *offset_col >= counter && *offset_col < counter + curr_str_len {
+                    let mut new_str = BumpString::with_capacity_in(curr_str_len + 1, arena);
+
+                    let mut caret_inserted = false;
+                    for (i, chr) in tup.0.chars().enumerate() {
+                        if *offset_col == i {
+                            new_str.push('|');
+                            caret_inserted = true;
+                        }
+                        new_str.push(chr);
+                    }
+                    if !caret_inserted {
+                        new_str.push('|');
+                    }
+                    *tup = (new_str, tup.1)
+                }
+                counter += curr_str_len;
+            }
+
+            highlight_tups.append(&mut inner_high_tups);
+        }
+        Expr2::Hole => {
+            highlight_tups.push((bump_str("$", arena), HighlightStyle::Operator));
         }
         rest => todo!("implement expr2_to_str for {:?}", rest),
     };
