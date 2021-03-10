@@ -288,18 +288,13 @@ fn malformed_identifier<'a>(
 pub enum BadIdent {
     Start(Row, Col),
     Space(BadInputError, Row, Col),
+
     Underscore(Row, Col),
     QualifiedTag(Row, Col),
-    PrivateTagNotUppercase(Row, Col),
-    PartStartsWithNumber(Row, Col),
     WeirdAccessor(Row, Col),
-    PrivateTagFieldAccess(Row, Col),
-
     WeirdDotAccess(Row, Col),
     WeirdDotQualified(Row, Col),
-    DoubleDot(Row, Col),
     StrayDot(Row, Col),
-    StrayAt(Row, Col),
     BadPrivateTag(Row, Col),
 }
 

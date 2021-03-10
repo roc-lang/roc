@@ -370,22 +370,6 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        PartStartsWithNumber(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            alloc.stack(vec![
-                alloc.reflow("I trying to parse a record field access here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow("So I expect to see a lowercase letter next, like "),
-                    alloc.parser_suggestion(".name"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion(".height"),
-                    alloc.reflow("."),
-                ]),
-            ])
-        }
-
         WeirdAccessor(_row, _col) => alloc.stack(vec![
             alloc.reflow("I am very confused by this field access"),
             alloc.region(surroundings),
@@ -431,37 +415,6 @@ fn to_bad_ident_expr_report<'b>(
                 ]),
             ])
         }
-        PrivateTagNotUppercase(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            alloc.stack(vec![
-                alloc.reflow("I am trying to parse a private tag here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(r"But after the "),
-                    alloc.keyword("@"),
-                    alloc.reflow(r" symbol I found a lowercase letter. "),
-                    alloc.reflow(r"All tag names (global and private)"),
-                    alloc.reflow(r" must start with an uppercase letter, like "),
-                    alloc.parser_suggestion("@UUID"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("@Secrets"),
-                    alloc.reflow("."),
-                ]),
-            ])
-        }
-
-        PrivateTagFieldAccess(row, col) => {
-            let region =
-                Region::from_rows_cols(surroundings.start_line, surroundings.start_col, row, col);
-            alloc.stack(vec![
-                alloc.reflow("I am very confused by this field access:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(r"It looks like a record field access on a private tag.")
-                ]),
-            ])
-        }
 
         Underscore(row, col) => {
             let region =
@@ -472,28 +425,6 @@ fn to_bad_ident_expr_report<'b>(
                 alloc.concat(vec![alloc.reflow(
                     r"I recommend using camelCase, it is the standard in the Roc ecosystem.",
                 )]),
-            ])
-        }
-
-        DoubleDot(row, col) => {
-            let region =
-                Region::from_rows_cols(surroundings.start_line, surroundings.start_col, row, col);
-            alloc.stack(vec![
-                alloc.reflow("I am very confused by these two dots in a row:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(r"There always needs to be a name after a dot.")
-                ]),
-            ])
-        }
-
-        StrayAt(row, col) => {
-            let region =
-                Region::from_rows_cols(surroundings.start_line, surroundings.start_col, row, col);
-            alloc.stack(vec![
-                alloc.reflow("I am very confused by this @ symbol"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![alloc.reflow(r"I expected a private tag.")]),
             ])
         }
 
@@ -579,22 +510,6 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        PartStartsWithNumber(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            alloc.stack(vec![
-                alloc.reflow("I trying to parse a record field access here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow("So I expect to see a lowercase letter next, like "),
-                    alloc.parser_suggestion(".name"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion(".height"),
-                    alloc.reflow("."),
-                ]),
-            ])
-        }
-
         WeirdAccessor(_row, _col) => alloc.stack(vec![
             alloc.reflow("I am very confused by this field access"),
             alloc.region(surroundings),
@@ -640,33 +555,6 @@ fn to_bad_ident_pattern_report<'b>(
                 ]),
             ])
         }
-        PrivateTagNotUppercase(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            alloc.stack(vec![
-                alloc.reflow("I am trying to parse a private tag here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(r"But after the "),
-                    alloc.keyword("@"),
-                    alloc.reflow(r" symbol I found a lowercase letter. "),
-                    alloc.reflow(r"All tag names (global and private)"),
-                    alloc.reflow(r" must start with an uppercase letter, like "),
-                    alloc.parser_suggestion("@UUID"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("@Secrets"),
-                    alloc.reflow("."),
-                ]),
-            ])
-        }
-
-        PrivateTagFieldAccess(_row, _col) => alloc.stack(vec![
-            alloc.reflow("I am very confused by this field access:"),
-            alloc.region(surroundings),
-            alloc.concat(vec![
-                alloc.reflow(r"It looks like a record field access on a private tag.")
-            ]),
-        ]),
 
         Underscore(row, col) => {
             let region = Region::from_row_col(row, col - 1);
