@@ -74,7 +74,7 @@ fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
     }
 }
 
-fn chomp_module_name<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
+fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
     use encode_unicode::CharExt;
 
     let mut chomped = 0;
@@ -667,6 +667,11 @@ where
 fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
     let min_indent = 1;
 
+    type Temp<'a> = (
+        (Option<&'a str>, ModuleName<'a>),
+        Option<Vec<'a, Located<ExposesEntry<'a, &'a str>>>>,
+    );
+
     map_with_arena!(
         and!(
             and!(
@@ -692,11 +697,7 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
                 )
             ))
         ),
-        |arena,
-         ((opt_shortname, module_name), opt_values): (
-            (Option<&'a str>, ModuleName<'a>),
-            Option<Vec<'a, Located<ExposesEntry<'a, &'a str>>>>
-        )| {
+        |arena, ((opt_shortname, module_name), opt_values): Temp<'a>| {
             let exposed_values = opt_values.unwrap_or_else(|| Vec::new_in(arena));
 
             match opt_shortname {

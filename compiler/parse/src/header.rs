@@ -377,7 +377,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
     }
 }
 
-fn chomp_package_part<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
+fn chomp_package_part(buffer: &[u8]) -> Result<&str, Progress> {
     use encode_unicode::CharExt;
 
     let mut chomped = 0;
