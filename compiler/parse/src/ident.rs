@@ -305,7 +305,44 @@ pub enum BadIdent {
 ///
 /// This is separate from the `ident` Parser because string interpolation
 /// wants to use it this way.
-pub fn parse_ident_help_help<'a>(
+
+/// a `.foo` accessor function
+fn chomp_accessor(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
+    // assumes the leading `.` has been chomped already
+    use encode_unicode::CharExt;
+
+    let mut chomped = 0;
+
+    if let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        if ch.is_lowercase() {
+            chomped += width;
+        } else {
+            return Err(BadIdent::StrayDot(row, col + 1));
+        }
+    }
+
+    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        if ch.is_alphabetic() || ch.is_ascii_digit() {
+            chomped += width;
+        } else {
+            // we're done
+            break;
+        }
+    }
+
+    if chomped == 0 {
+        Err(BadIdent::StrayDot(row, col + 1))
+    } else if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        Err(BadIdent::WeirdAccessor(row, col))
+    } else {
+        let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
+        dbg!(name);
+        Ok(name)
+    }
+}
+
+fn parse_ident_help_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, (Ident<'a>, Option<char>), BadIdent> {
@@ -319,22 +356,36 @@ pub fn parse_ident_help_help<'a>(
     let mut chomped_capitalized = 0;
     let mut cparts = 0;
 
+    let mut chomped_part_buf = 0;
+    let mut chomped = 0;
+
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
     match peek_utf8_char(&state) {
         Ok((first_ch, bytes_parsed)) => {
             if first_ch.is_alphabetic() {
                 part_buf.push(first_ch);
+                chomped_part_buf += bytes_parsed;
 
                 is_capitalized = first_ch.is_uppercase();
                 is_accessor_fn = false;
 
                 state = advance_state!(state, bytes_parsed)?;
             } else if first_ch == '.' {
-                is_capitalized = false;
-                is_accessor_fn = true;
+                match chomp_accessor(&state.bytes[1..], state.line, state.column) {
+                    Ok(accessor) => {
+                        let bytes_parsed = 1 + accessor.len();
 
-                state = advance_state!(state, bytes_parsed)?;
+                        state = advance_state!(state, bytes_parsed)?;
+
+                        return Ok((
+                            MadeProgress,
+                            (Ident::AccessorFunction(accessor), None),
+                            state,
+                        ));
+                    }
+                    Err(fail) => return Err((MadeProgress, fail, state)),
+                }
             } else if first_ch == '@' {
                 state = advance_state!(state, bytes_parsed)?;
 
@@ -346,6 +397,7 @@ pub fn parse_ident_help_help<'a>(
 
                             part_buf.push('@');
                             part_buf.push(next_ch);
+                            chomped_part_buf += 1 + next_bytes_parsed;
 
                             is_private_tag = true;
                             is_capitalized = true;
@@ -377,7 +429,7 @@ pub fn parse_ident_help_help<'a>(
 
     while !state.bytes.is_empty() {
         match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
+            Ok((ch, width)) => {
                 // After the first character, only these are allowed:
                 //
                 // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
@@ -390,6 +442,7 @@ pub fn parse_ident_help_help<'a>(
                     }
 
                     part_buf.push(ch);
+                    chomped_part_buf += width;
                 } else if ch.is_ascii_digit() {
                     // Parts may not start with numbers!
                     if part_buf.is_empty() {
@@ -401,6 +454,7 @@ pub fn parse_ident_help_help<'a>(
                     }
 
                     part_buf.push(ch);
+                    chomped_part_buf += width;
                 } else if ch == '.' {
                     // There are two posssible errors here:
                     //
@@ -423,19 +477,27 @@ pub fn parse_ident_help_help<'a>(
                     }
 
                     if is_capitalized {
-                        chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
+                        chomped_capitalized +=
+                            chomped_part_buf + (chomped_capitalized != 0) as usize;
                         cparts += 1;
                     } else {
-                        noncapitalized_parts.push(part_buf.into_bump_str());
+                        let value = unsafe {
+                            std::str::from_utf8_unchecked(
+                                &bytes[chomped..chomped + chomped_part_buf],
+                            )
+                        };
+                        noncapitalized_parts.push(value);
                     }
 
                     // Now that we've recorded the contents of the current buffer, reset it.
                     part_buf = String::new_in(arena);
+                    chomped += chomped_part_buf + 1;
+                    chomped_part_buf = 0;
                 } else if ch == '_' {
                     // we don't allow underscores in the middle of an identifier
                     // but still parse them (and generate a malformed identifier)
                     // to give good error messages for this case
-                    state = advance_state!(state, bytes_parsed)?;
+                    state = advance_state!(state, width)?;
                     return Err((
                         MadeProgress,
                         BadIdent::Underscore(state.line, state.column),
@@ -447,7 +509,7 @@ pub fn parse_ident_help_help<'a>(
                     break;
                 }
 
-                state = advance_state!(state, bytes_parsed)?;
+                state = advance_state!(state, width)?;
             }
             Err(_reason) => {
                 //
@@ -460,7 +522,7 @@ pub fn parse_ident_help_help<'a>(
         }
     }
 
-    if part_buf.is_empty() {
+    if chomped_part_buf == 0 {
         // We probably had a trailing dot, e.g. `Foo.bar.` - this is malformed!
         //
         // This condition might also occur if we encounter a malformed accessor like `.|`
@@ -482,17 +544,22 @@ pub fn parse_ident_help_help<'a>(
 
     // Record the final parts.
     if is_capitalized {
-        chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
+        chomped_capitalized += chomped_part_buf + (chomped_capitalized != 0) as usize;
         cparts += 1;
     } else {
-        noncapitalized_parts.push(part_buf.into_bump_str());
+        let value =
+            unsafe { std::str::from_utf8_unchecked(&bytes[chomped..chomped + chomped_part_buf]) };
+        noncapitalized_parts.push(value);
     }
 
     let answer = if is_accessor_fn {
         // Handle accessor functions first because they have the strictest requirements.
         // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
         if cparts == 0 && noncapitalized_parts.len() == 1 && !is_private_tag {
-            let value = noncapitalized_parts.iter().next().unwrap();
+            // an accessor starts with a `.`, but we drop that from the name
+            let value = unsafe {
+                std::str::from_utf8_unchecked(&bytes[1 + chomped..1 + chomped + chomped_part_buf])
+            };
 
             Ident::AccessorFunction(value)
         } else {
