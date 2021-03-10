@@ -316,6 +316,9 @@ pub fn parse_ident_help_help<'a>(
     let is_accessor_fn;
     let mut is_private_tag = false;
 
+    let bytes = state.bytes;
+    let mut chomped_capitalized = 0;
+
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
     match peek_utf8_char(&state) {
@@ -420,6 +423,7 @@ pub fn parse_ident_help_help<'a>(
                     }
 
                     if is_capitalized {
+                        chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
                         capitalized_parts.push(part_buf.into_bump_str());
                     } else {
                         noncapitalized_parts.push(part_buf.into_bump_str());
@@ -478,6 +482,7 @@ pub fn parse_ident_help_help<'a>(
 
     // Record the final parts.
     if is_capitalized {
+        chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
         capitalized_parts.push(part_buf.into_bump_str());
     } else {
         noncapitalized_parts.push(part_buf.into_bump_str());
@@ -536,8 +541,15 @@ pub fn parse_ident_help_help<'a>(
         ));
     } else {
         // We have multiple noncapitalized parts, so this must be field access.
+        let module_name = if capitalized_parts.len() == 0 {
+            ""
+        } else {
+            let chomped = chomped_capitalized;
+            unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) }
+        };
+
         Ident::Access {
-            module_name: join_module_parts(arena, capitalized_parts.into_bump_slice()),
+            module_name,
             parts: noncapitalized_parts.into_bump_slice(),
         }
     };
