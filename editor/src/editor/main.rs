@@ -60,7 +60,7 @@ pub fn launch(filepaths: &[&'static Path]) -> io::Result<()> {
     Ok(())
 }
 
-fn run_event_loop(file_path_opt: Option<&'static Path>) -> Result<(), Box<dyn Error>> {
+fn run_event_loop<'a>(file_path_opt: Option<&'static Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
@@ -134,7 +134,7 @@ fn run_event_loop(file_path_opt: Option<&'static Path>) -> Result<(), Box<dyn Er
     let exposed_ident_ids = IdentIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
 
-    let mut env = Env::new(
+    let env = Env::new(
         mod_id,
         &env_arena,
         &mut env_pool,

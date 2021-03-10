@@ -22,7 +22,7 @@ pub struct EdModel<'a> {
     pub has_focus: bool,
 }
 
-pub fn init_model<'a>(_file_path: &Path, env: &'a mut Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModel<'a>> {
+pub fn init_model<'a>(_file_path: &Path, env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModel<'a>> {
     Ok(EdModel {
         module: EdModule::new(env, ast_arena)?,
         glyph_dim_rect_opt: None,
@@ -32,13 +32,13 @@ pub fn init_model<'a>(_file_path: &Path, env: &'a mut Env<'a>, ast_arena: &'a Bu
 
 #[derive(Debug)]
 pub struct EdModule<'a> {
-    env: &'a mut Env<'a>,
+    env: Env<'a>,
     ast_root: Expr2,
     carets: HashSet<NodeId<Expr2>>,
 }
 
 impl<'a> EdModule<'a> {
-    pub fn new(env: &'a mut Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
+    pub fn new(mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
 
         let expr2_result = str_to_expr2(
             &ast_arena,
