@@ -182,15 +182,16 @@ mod test_reporting {
         let filename = filename_from_string(r"\code\proj\Main.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
 
-        use roc_parse::parser::Parser;
-        match roc_parse::module::header().parse(arena, state) {
-            Err((_, fail, _)) => {
+        match roc_parse::module::parse_header(arena, state) {
+            Err(fail) => {
                 let interns = Interns::default();
                 let home = crate::helpers::test_home();
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let problem = fail.into_parse_problem(filename.clone(), src.as_bytes());
+                use roc_parse::parser::SyntaxError;
+                let problem =
+                    SyntaxError::Header(fail).into_parse_problem(filename.clone(), src.as_bytes());
                 let doc = parse_problem(&alloc, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
@@ -3214,7 +3215,7 @@ mod test_reporting {
                 r#"
                 ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
 
-                I am in the middle of parsing a definition, but I got stuck here:
+                I am partway through parsing a definition, but I got stuck here:
 
                 1│  f x y = x
                       ^^^
@@ -5037,13 +5038,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-
-                I am in the middle of parsing a function argument list, but I got
-                stuck at this comma:
-
+                
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
+                
                 1│  \a,,b -> 1
                        ^
-
+                
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5062,13 +5063,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-
-                I am in the middle of parsing a function argument list, but I got
-                stuck at this comma:
-
+                
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
+                
                 1│  \,b -> 1
                      ^
-
+                
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5772,7 +5773,7 @@ mod test_reporting {
                 r#"
                 ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
                 
-                I am in the middle of parsing a provides list, but I got stuck here:
+                I am partway through parsing a provides list, but I got stuck here:
                 
                 3│      imports [base.Task, Base64 ]
                 4│      provides [ main, @Foo ] to base
@@ -5800,7 +5801,7 @@ mod test_reporting {
                 r#"
                 ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
                 
-                I am in the middle of parsing a exposes list, but I got stuck here:
+                I am partway through parsing a exposes list, but I got stuck here:
                 
                 1│  interface Foobar 
                 2│      exposes [ main, @Foo ]
