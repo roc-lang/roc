@@ -3,7 +3,7 @@ use crate::blankspace::{
     line_comment, space0_after_e, space0_around_ee, space0_before_e, space0_e, space1_e,
     spaces_exactly_e,
 };
-use crate::ident::{ident, lowercase_ident, Ident};
+use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::keyword;
 use crate::parser::{
     self, allocated, and_then_with_indent_level, ascii_char, backtrackable, map, newline_char,
@@ -1967,11 +1967,11 @@ fn ident_then_args<'a>(
 }
 
 fn ident_without_apply_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
-    specialize_ref(
-        EExpr::Syntax,
-        then(loc!(ident()), move |arena, state, progress, loc_ident| {
+    then(
+        loc!(parse_ident_help),
+        move |arena, state, progress, loc_ident| {
             Ok((progress, ident_to_expr(arena, loc_ident.value), state))
-        }),
+        },
     )
 }
 
@@ -2163,7 +2163,7 @@ fn record_field_help<'a>(
 fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
     specialize(
         |_, r, c| ERecord::Updateable(r, c),
-        map_with_arena!(ident(), ident_to_expr),
+        map_with_arena!(parse_ident_help, ident_to_expr),
     )
 }
 

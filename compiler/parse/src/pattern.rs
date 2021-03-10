@@ -1,6 +1,6 @@
 use crate::ast::Pattern;
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
-use crate::ident::{ident, lowercase_ident, Ident};
+use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
@@ -179,7 +179,8 @@ fn loc_ident_pattern_help<'a>(
         let original_state = state.clone();
 
         let (_, loc_ident, state) =
-            specialize(|_, r, c| EPattern::Start(r, c), loc!(ident())).parse(arena, state)?;
+            specialize(|_, r, c| EPattern::Start(r, c), loc!(parse_ident_help))
+                .parse(arena, state)?;
 
         match loc_ident.value {
             Ident::GlobalTag(tag) => {

@@ -61,11 +61,44 @@ impl<'a> Ident<'a> {
     }
 }
 
-pub fn ident<'a>() -> impl Parser<'a, Ident<'a>, SyntaxError<'a>> {
-    crate::parser::specialize(|e, _, _| SyntaxError::Expr(e), parse_ident_help)
+fn chomp_identifier<'a, F>(pred: F, buffer: &[u8]) -> Result<&str, Progress>
+where
+    F: Fn(char) -> bool,
+{
+    use encode_unicode::CharExt;
+
+    let mut chomped = 0;
+
+    match char::from_utf8_slice_start(&buffer[chomped..]) {
+        Ok((ch, width)) if pred(ch) => {
+            chomped += width;
+        }
+        _ => {
+            // no parse
+            return Err(Progress::NoProgress);
+        }
+    }
+
+    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        // After the first character, only these are allowed:
+        //
+        // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+        // * A ':' indicating the end of the field
+        if ch.is_alphabetic() || ch.is_ascii_digit() {
+            chomped += width;
+        } else {
+            // we're done
+            break;
+        }
+    }
+
+    let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
+    Ok(name)
 }
 
-pub fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str, SyntaxError<'a>>
+fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str, SyntaxError<'a>>
 where
     F: Fn(char) -> bool,
 {
