@@ -4147,15 +4147,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                I am trying to parse a qualified name here:
-
+                
+                I am very confused by this expression:
+                
                 1│  @Foo.Bar
-                            ^
-
-                This looks like a qualified tag name to me, but tags cannot be
-                qualified! Maybe you wanted a qualified name, something like
-                Json.Decode.string?
+                        ^^^^
+                
+                Looks like a private tag is treated like a module name. Maybe you
+                wanted a qualified name, like Json.Decode.string?
             "#
             ),
         )
@@ -5523,7 +5522,7 @@ mod test_reporting {
                 I am very confused by this field access:
 
                 1│  @UUID.bar
-                    ^^^^^^^^^
+                         ^^^^
 
                 It looks like a record field access on a private tag.
             "#

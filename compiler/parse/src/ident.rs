@@ -299,25 +299,33 @@ pub enum BadIdent {
     WeirdDotQualified(Row, Col),
     DoubleDot(Row, Col),
     StrayDot(Row, Col),
+    StrayAt(Row, Col),
+    BadPrivateTag(Row, Col),
 }
 
-/// Parse an identifier into a string.
-///
-/// This is separate from the `ident` Parser because string interpolation
-/// wants to use it this way.
+fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
+    chomp_part(|c: char| c.is_lowercase(), buffer)
+}
 
-/// a `.foo` accessor function
-fn chomp_accessor(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
+fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
+    chomp_part(|c: char| c.is_uppercase(), buffer)
+}
+
+#[inline(always)]
+fn chomp_part<F>(leading_is_good: F, buffer: &[u8]) -> Result<&str, Progress>
+where
+    F: Fn(char) -> bool,
+{
     // assumes the leading `.` has been chomped already
     use encode_unicode::CharExt;
 
     let mut chomped = 0;
 
     if let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if ch.is_lowercase() {
+        if leading_is_good(ch) {
             chomped += width;
         } else {
-            return Err(BadIdent::StrayDot(row, col + 1));
+            return Err(NoProgress);
         }
     }
 
@@ -331,14 +339,53 @@ fn chomp_accessor(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
     }
 
     if chomped == 0 {
-        Err(BadIdent::StrayDot(row, col + 1))
-    } else if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        Err(BadIdent::WeirdAccessor(row, col))
+        Err(NoProgress)
     } else {
         let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
 
-        dbg!(name);
         Ok(name)
+    }
+}
+
+/// a `.foo` accessor function
+fn chomp_accessor(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
+    // assumes the leading `.` has been chomped already
+    use encode_unicode::CharExt;
+
+    match chomp_lowercase_part(buffer) {
+        Ok(name) => {
+            let chomped = name.len();
+
+            if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                Err(BadIdent::WeirdAccessor(row, col))
+            } else {
+                Ok(name)
+            }
+        }
+        Err(_) => {
+            // we've already made progress with the initial `.`
+            Err(BadIdent::StrayDot(row, col + 1))
+        }
+    }
+}
+
+/// a `@Token` private tag
+fn chomp_private_tag(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
+    // assumes the leading `@` has NOT been chomped already
+    debug_assert_eq!(buffer.get(0), Some(&b'@'));
+    use encode_unicode::CharExt;
+
+    match chomp_uppercase_part(&buffer[1..]) {
+        Ok(name) => {
+            let chomped = 1 + name.len();
+
+            if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                Err(BadIdent::BadPrivateTag(row, col + chomped as u16))
+            } else {
+                Ok(name)
+            }
+        }
+        Err(_) => Err(BadIdent::BadPrivateTag(row, col + 1)),
     }
 }
 
@@ -350,7 +397,6 @@ fn parse_ident_help_help<'a>(
     let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
     let mut is_capitalized;
     let is_accessor_fn;
-    let mut is_private_tag = false;
 
     let bytes = state.bytes;
     let mut chomped_capitalized = 0;
@@ -387,35 +433,17 @@ fn parse_ident_help_help<'a>(
                     Err(fail) => return Err((MadeProgress, fail, state)),
                 }
             } else if first_ch == '@' {
-                state = advance_state!(state, bytes_parsed)?;
+                match chomp_private_tag(state.bytes, state.line, state.column) {
+                    Ok(tagname) => {
+                        let bytes_parsed = 1 + tagname.len();
 
-                // '@' must always be followed by a capital letter!
-                match peek_utf8_char(&state) {
-                    Ok((next_ch, next_bytes_parsed)) => {
-                        if next_ch.is_uppercase() {
-                            state = advance_state!(state, next_bytes_parsed)?;
+                        state = advance_state!(state, bytes_parsed)?;
 
-                            part_buf.push('@');
-                            part_buf.push(next_ch);
-                            chomped_part_buf += 1 + next_bytes_parsed;
-
-                            is_private_tag = true;
-                            is_capitalized = true;
-                            is_accessor_fn = false;
-                        } else {
-                            return Err((
-                                MadeProgress,
-                                BadIdent::PrivateTagNotUppercase(state.line, state.column),
-                                state,
-                            ));
-                        }
+                        return Ok((MadeProgress, (Ident::PrivateTag(tagname), None), state));
                     }
-                    Err(_reason) => {
-                        return Err((
-                            MadeProgress,
-                            BadIdent::PrivateTagNotUppercase(state.line, state.column),
-                            state,
-                        ));
+                    Err(fail) => {
+                        state = advance_state!(state, 1)?;
+                        return Err((MadeProgress, fail, state));
                     }
                 }
             } else {
@@ -555,7 +583,7 @@ fn parse_ident_help_help<'a>(
     let answer = if is_accessor_fn {
         // Handle accessor functions first because they have the strictest requirements.
         // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
-        if cparts == 0 && noncapitalized_parts.len() == 1 && !is_private_tag {
+        if cparts == 0 && noncapitalized_parts.len() == 1 {
             // an accessor starts with a `.`, but we drop that from the name
             let value = unsafe {
                 std::str::from_utf8_unchecked(&bytes[1 + chomped..1 + chomped + chomped_part_buf])
@@ -585,11 +613,7 @@ fn parse_ident_help_help<'a>(
             1 => {
                 let chomped = chomped_capitalized;
                 let value = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
-                if is_private_tag {
-                    Ident::PrivateTag(value)
-                } else {
-                    Ident::GlobalTag(value)
-                }
+                Ident::GlobalTag(value)
             }
             _ => {
                 // This is a qualified tag, which is not allowed!
@@ -600,13 +624,6 @@ fn parse_ident_help_help<'a>(
                 ));
             }
         }
-    } else if is_private_tag {
-        // This is qualified field access with an '@' in front, which does not make sense!
-        return Err((
-            MadeProgress,
-            BadIdent::PrivateTagFieldAccess(state.line, state.column),
-            state,
-        ));
     } else {
         // We have multiple noncapitalized parts, so this must be field access.
         let module_name = if cparts == 0 {

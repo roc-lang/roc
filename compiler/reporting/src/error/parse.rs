@@ -3012,7 +3012,7 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a>
     }
 }
 
-fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
+pub fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
     if let Some(stripped) = rest_of_line.strip_prefix(keyword) {
         match stripped.chars().next() {
             None => true,
