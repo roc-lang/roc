@@ -27,8 +27,6 @@ pub struct State<'a> {
     // the first nonspace char on that line.
     pub is_indenting: bool,
 
-    pub context_stack: &'a ContextStack<'a>,
-
     /// The original length of the string, before any bytes were consumed.
     /// This is used internally by the State::bytes_consumed() function.
     ///
@@ -50,7 +48,6 @@ impl<'a> State<'a> {
             column: 0,
             indent_col: 0,
             is_indenting: true,
-            context_stack: arena.alloc(ContextStack::Nil),
             original_len: bytes.len(),
         }
     }
@@ -119,7 +116,6 @@ impl<'a> State<'a> {
                 indent_col: 0,
                 is_indenting: true,
                 original_len: self.original_len,
-                context_stack: arena.alloc(self.context_stack.clone()),
             }),
             None => Err((
                 Progress::NoProgress,
@@ -221,7 +217,6 @@ impl<'a> State<'a> {
                     column: column_usize as u16,
                     indent_col,
                     is_indenting,
-                    context_stack: arena.alloc(self.context_stack.clone()),
                     original_len: self.original_len,
                 })
             }
@@ -269,7 +264,6 @@ impl<'a> fmt::Debug for State<'a> {
         write!(f, "\n\tindent_col: {}", self.indent_col)?;
         write!(f, "\n\tis_indenting: {:?}", self.is_indenting)?;
         write!(f, "\n\toriginal_len: {}", self.original_len)?;
-        write!(f, "\n\tcontext stack: {:?}", self.context_stack)?;
         write!(f, "\n}}")
     }
 }
@@ -2200,39 +2194,6 @@ macro_rules! debug {
 }
 
 #[macro_export]
-macro_rules! attempt {
-    ($attempting:expr, $parser:expr) => {
-        move |arena: &'a Bump, mut state: $crate::parser::State<'a>| {
-            let item = $crate::parser::ContextItem {
-                context: $attempting,
-                line: state.line,
-                column: state.column,
-            };
-
-            state.context_stack = arena.alloc($crate::parser::ContextStack::Cons(
-                item,
-                state.context_stack,
-            ));
-
-            $parser
-                .parse(arena, state)
-                .map(|(progress, answer, mut state)| {
-                    // If the parser suceeded, go back to what we were originally attempting.
-                    // (If it failed, that's exactly where we care what we were attempting!)
-                    match state.context_stack.uncons() {
-                        Some((_item, rest)) => {
-                            state.context_stack = rest;
-                        }
-                        None => unreachable!("context stack contains at least one element"),
-                    }
-
-                    (progress, answer, state)
-                })
-        }
-    };
-}
-
-#[macro_export]
 macro_rules! either {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| match $p1
@@ -2313,16 +2274,6 @@ where
     E: 'a,
 {
     map_with_arena!(parser, transform)
-}
-
-/// For some reason, some usages won't compile unless they use this instead of the macro version
-#[inline(always)]
-pub fn attempt<'a, P, Val, Error>(attempting: Attempting, parser: P) -> impl Parser<'a, Val, Error>
-where
-    P: Parser<'a, Val, Error>,
-    Error: 'a,
-{
-    attempt!(attempting, parser)
 }
 
 pub fn parse_utf8<'a>(bytes: &[u8]) -> Result<&str, SyntaxError<'a>> {
