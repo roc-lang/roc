@@ -2592,7 +2592,7 @@ fn to_header_report<'a>(
             }
         }
 
-        EHeader::PlatformName(row, col) => {
+        EHeader::PlatformName(_, row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
             let region = Region::from_row_col(*row, *col);
 

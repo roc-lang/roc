@@ -206,11 +206,8 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
 
         let (_, after_platform_keyword, state) =
             space0_e(min_indent, EHeader::Space, EHeader::IndentStart).parse(arena, state)?;
-        let (_, name, state) = loc!(specialize(
-            |_, r, c| EHeader::PlatformName(r, c),
-            package_name()
-        ))
-        .parse(arena, state)?;
+        let (_, name, state) =
+            loc!(specialize(EHeader::PlatformName, package_name())).parse(arena, state)?;
 
         let (_, ((before_requires, after_requires), requires), state) =
             specialize(EHeader::Requires, requires()).parse(arena, state)?;
@@ -269,15 +266,18 @@ struct ProvidesTo<'a> {
     after_to_keyword: &'a [CommentOrNewline<'a>],
 }
 
-fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, SyntaxError<'a>> {
+fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
     one_of![
-        map!(lowercase_ident(), To::ExistingPackage),
-        map!(package_or_path(), To::NewPackage)
+        specialize(
+            |_, r, c| EProvides::Identifier(r, c),
+            map!(lowercase_ident(), To::ExistingPackage)
+        ),
+        specialize(EProvides::Package, map!(package_or_path(), To::NewPackage))
     ]
 }
 
 #[inline(always)]
-fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
+fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
     let min_indent = 1;
 
     map!(
@@ -292,10 +292,7 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides> {
                     EProvides::IndentTo,
                     EProvides::IndentListStart
                 ),
-                loc!(specialize(
-                    |_, r, c| EProvides::Package(r, c),
-                    provides_to_package()
-                ))
+                loc!(provides_to_package())
             )
         ),
         |(
@@ -321,7 +318,7 @@ fn provides_without_to<'a>() -> impl Parser<
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
         Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
-    EProvides,
+    EProvides<'a>,
 > {
     let min_indent = 1;
     and!(
@@ -497,7 +494,7 @@ struct Packages<'a> {
 }
 
 #[inline(always)]
-fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages> {
+fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
     let min_indent = 1;
 
     map!(
@@ -512,10 +509,7 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages> {
             ),
             collection_e!(
                 word1(b'{', EPackages::ListStart),
-                specialize(
-                    |_, r, c| EPackages::PackageEntry(r, c),
-                    loc!(package_entry())
-                ),
+                specialize(EPackages::PackageEntry, loc!(package_entry())),
                 word1(b',', EPackages::ListEnd),
                 word1(b'}', EPackages::ListEnd),
                 min_indent,

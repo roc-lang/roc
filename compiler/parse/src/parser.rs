@@ -340,23 +340,23 @@ pub enum SyntaxError<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EHeader<'a> {
-    Provides(EProvides, Row, Col),
+    Provides(EProvides<'a>, Row, Col),
     Exposes(EExposes, Row, Col),
     Imports(EImports, Row, Col),
     Requires(ERequires<'a>, Row, Col),
-    Packages(EPackages, Row, Col),
+    Packages(EPackages<'a>, Row, Col),
     Effects(EEffects<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
     Start(Row, Col),
     ModuleName(Row, Col),
     AppName(EString<'a>, Row, Col),
-    PlatformName(Row, Col),
+    PlatformName(EPackageName, Row, Col),
     IndentStart(Row, Col),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EProvides {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EProvides<'a> {
     Provides(Row, Col),
     To(Row, Col),
     IndentProvides(Row, Col),
@@ -367,7 +367,7 @@ pub enum EProvides {
     ListStart(Row, Col),
     ListEnd(Row, Col),
     Identifier(Row, Col),
-    Package(Row, Col),
+    Package(EPackageOrPath<'a>, Row, Col),
     Space(BadInputError, Row, Col),
 }
 
@@ -407,7 +407,7 @@ pub enum ETypedIdent<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EPackages {
+pub enum EPackages<'a> {
     Space(BadInputError, Row, Col),
     Packages(Row, Col),
     IndentPackages(Row, Col),
@@ -415,7 +415,29 @@ pub enum EPackages {
     ListEnd(Row, Col),
     IndentListStart(Row, Col),
     IndentListEnd(Row, Col),
-    PackageEntry(Row, Col),
+    PackageEntry(EPackageEntry<'a>, Row, Col),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EPackageName {
+    MissingSlash(Row, Col),
+    Account(Row, Col),
+    Pkg(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPackageOrPath<'a> {
+    BadPath(EString<'a>, Row, Col),
+    BadPackage(EPackageName, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPackageEntry<'a> {
+    BadPackageOrPath(EPackageOrPath<'a>, Row, Col),
+    Shorthand(Row, Col),
+    Colon(Row, Col),
+    IndentPackageOrPath(Row, Col),
+    Space(BadInputError, Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,14 +583,6 @@ pub enum EString<'a> {
     UnknownEscape(Row, Col),
     Format(&'a SyntaxError<'a>, Row, Col),
 }
-
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub enum Escape {
-//     EscapeUnknown,
-//     BadUnicodeFormat(u16),
-//     BadUnicodeCode(u16),
-//     BadUnicodeLength(u16, i32, i32),
-// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERecord<'a> {

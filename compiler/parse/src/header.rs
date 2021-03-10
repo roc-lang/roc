@@ -1,8 +1,9 @@
 use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
-use crate::blankspace::space0;
+use crate::blankspace::space0_e;
 use crate::ident::lowercase_ident;
+use crate::parser::Progress::{self, *};
 use crate::parser::{
-    ascii_char, optional, specialize, Either, Parser, Progress, Progress::*, State, SyntaxError,
+    specialize, word1, EPackageEntry, EPackageName, EPackageOrPath, Parser, State,
 };
 use crate::string_literal;
 use bumpalo::collections::Vec;
@@ -240,18 +241,32 @@ impl<'a> Spaceable<'a> for PackageEntry<'a> {
     }
 }
 
-pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, SyntaxError<'a>> {
+pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, EPackageEntry<'a>> {
     move |arena, state| {
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
         // (Indirect dependencies don't have a shorthand.)
-        let (_, opt_shorthand, state) = optional(and!(
-            skip_second!(lowercase_ident(), ascii_char(b':')),
-            space0(1)
+        let min_indent = 1;
+
+        let (_, opt_shorthand, state) = maybe!(and!(
+            skip_second!(
+                specialize(|_, r, c| EPackageEntry::Shorthand(r, c), lowercase_ident()),
+                word1(b':', EPackageEntry::Colon)
+            ),
+            space0_e(
+                min_indent,
+                EPackageEntry::Space,
+                EPackageEntry::IndentPackageOrPath
+            )
         ))
         .parse(arena, state)?;
-        let (_, package_or_path, state) = loc!(package_or_path()).parse(arena, state)?;
+
+        let (_, package_or_path, state) = loc!(specialize(
+            EPackageEntry::BadPackageOrPath,
+            package_or_path()
+        ))
+        .parse(arena, state)?;
 
         let entry = match opt_shorthand {
             Some((shorthand, spaces_after_shorthand)) => PackageEntry::Entry {
@@ -270,31 +285,54 @@ pub fn package_entry<'a>() -> impl Parser<'a, PackageEntry<'a>, SyntaxError<'a>>
     }
 }
 
-pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, SyntaxError<'a>> {
+pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, EPackageOrPath<'a>> {
     one_of![
         map!(
-            specialize(
-                |e, r, c| SyntaxError::Expr(crate::parser::EExpr::Str(e, r, c)),
-                string_literal::parse()
-            ),
+            specialize(EPackageOrPath::BadPath, string_literal::parse()),
             PackageOrPath::Path
         ),
         map!(
             and!(
-                package_name(),
-                skip_first!(one_or_more!(ascii_char(b' ')), package_version())
+                specialize(EPackageOrPath::BadPackage, package_name()),
+                skip_first!(skip_spaces(), package_version())
             ),
             |(name, version)| { PackageOrPath::Package(name, version) }
         )
     ]
 }
 
-fn package_version<'a>() -> impl Parser<'a, Version<'a>, SyntaxError<'a>> {
+fn skip_spaces<'a, T>() -> impl Parser<'a, (), T>
+where
+    T: 'a,
+{
+    |_, mut state: State<'a>| {
+        let mut chomped = 0;
+        let mut it = state.bytes.iter();
+
+        while let Some(b' ') = it.next() {
+            chomped += 1;
+        }
+
+        if chomped == 0 {
+            Ok((NoProgress, (), state))
+        } else {
+            state.column += chomped;
+            state.bytes = it.as_slice();
+
+            Ok((MadeProgress, (), state))
+        }
+    }
+}
+
+fn package_version<'a, T>() -> impl Parser<'a, Version<'a>, T>
+where
+    T: 'a,
+{
     move |_, _| todo!("TODO parse package version")
 }
 
 #[inline(always)]
-pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
+pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
     use encode_unicode::CharExt;
     // e.g. rtfeldman/blah
     //
@@ -303,13 +341,21 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
     // They must be ASCII.
 
     |_, mut state: State<'a>| match chomp_package_part(state.bytes) {
-        Err(progress) => Err((progress, SyntaxError::ConditionFailed, state)),
+        Err(progress) => Err((
+            progress,
+            EPackageName::Account(state.line, state.column),
+            state,
+        )),
         Ok(account) => {
             let mut chomped = account.len();
             if let Ok(('/', width)) = char::from_utf8_slice_start(&state.bytes[chomped..]) {
                 chomped += width;
                 match chomp_package_part(&state.bytes[chomped..]) {
-                    Err(progress) => Err((progress, SyntaxError::ConditionFailed, state)),
+                    Err(progress) => Err((
+                        progress,
+                        EPackageName::Pkg(state.line, state.column + chomped as u16),
+                        state,
+                    )),
                     Ok(pkg) => {
                         chomped += pkg.len();
 
@@ -321,7 +367,11 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, SyntaxError<'a>> {
                     }
                 }
             } else {
-                Err((MadeProgress, SyntaxError::ConditionFailed, state))
+                Err((
+                    MadeProgress,
+                    EPackageName::MissingSlash(state.line, state.column + chomped as u16),
+                    state,
+                ))
             }
         }
     }
