@@ -156,9 +156,9 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, &'a str>, EExpr<'a
 }
 
 fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
-    specialize(
-        |_, r, c| EExpr::Access(r, c),
-        skip_first!(ascii_char(b'.'), lowercase_ident()),
+    skip_first!(
+        word1(b'.', EExpr::Access),
+        specialize(|_, r, c| EExpr::Access(r, c), lowercase_ident())
     )
 }
 
