@@ -4124,13 +4124,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                I trying to parse a record field accessor here:
-
+                
+                I trying to parse a record field access here:
+                
                 1│  foo.bar.
                             ^
-
-                Something like .name or .height that accesses a value from a record.
+                
+                So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
         )
@@ -5470,13 +5470,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                I trying to parse a record field accessor here:
-
+                
+                I trying to parse a record field access here:
+                
                 1│  Num.add . 23
                              ^
-
-                Something like .name or .height that accesses a value from a record.
+                
+                So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
         )

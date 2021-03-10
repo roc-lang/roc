@@ -444,13 +444,10 @@ fn chomp_identifier_chain<'a>(
             match chomp_module_chain(&buffer[chomped..]) {
                 Ok(width) => {
                     chomped += width as usize;
-                    unsafe { std::str::from_utf8_unchecked(&buffer[..chomped + width as usize]) }
+                    unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) }
                 }
                 Err(MadeProgress) => todo!(),
-                Err(NoProgress) => {
-                    chomped += 1;
-                    ""
-                }
+                Err(NoProgress) => unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) },
             }
         } else {
             ""
@@ -474,9 +471,27 @@ fn chomp_identifier_chain<'a>(
 
                 Ok((chomped as u16, ident))
             }
-            Err(MadeProgress) => todo!(),
-            Err(NoProgress) => Err((chomped as u16 + 1, BadIdent::StrayDot(row, col))),
+            Err(0) if !module_name.is_empty() => Err((
+                chomped as u16,
+                BadIdent::QualifiedTag(row, chomped as u16 + col),
+            )),
+            Err(1) if parts.is_empty() => Err((
+                chomped as u16 + 1,
+                BadIdent::WeirdDotQualified(row, chomped as u16 + col + 1),
+            )),
+            Err(width) => Err((
+                chomped as u16 + width,
+                BadIdent::WeirdDotAccess(row, chomped as u16 + col + width),
+            )),
         }
+    } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        // we don't allow underscores in the middle of an identifier
+        // but still parse them (and generate a malformed identifier)
+        // to give good error messages for this case
+        Err((
+            chomped as u16 + 1,
+            BadIdent::Underscore(row, col + chomped as u16 + 1),
+        ))
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a global tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
@@ -494,70 +509,59 @@ fn chomp_identifier_chain<'a>(
 
 fn chomp_module_chain<'a>(buffer: &'a [u8]) -> Result<u16, Progress> {
     let mut chomped = 0;
-    // number of dots (equivalently parts) we've seen
-    let mut i = 1;
 
-    loop {
-        match chomp_uppercase_part(&buffer[chomped + i..]) {
-            Ok(name) => {
-                chomped += name.len();
-                i += 1;
-            }
-            Err(MadeProgress) => return Err(MadeProgress),
-            Err(NoProgress) => break,
+    while let Some(b'.') = buffer.get(chomped) {
+        match &buffer.get(chomped + 1..) {
+            Some(slice) => match chomp_uppercase_part(slice) {
+                Ok(name) => {
+                    chomped += name.len() + 1;
+                }
+                Err(MadeProgress) => return Err(MadeProgress),
+                Err(NoProgress) => break,
+            },
+            None => return Err(MadeProgress),
         }
     }
 
     if chomped == 0 {
         Err(NoProgress)
     } else {
-        Ok((chomped + i) as u16)
+        Ok(chomped as u16)
     }
 }
 
-fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Result<u16, Progress> {
+fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Result<u16, u16> {
     let mut chomped = 0;
-    let mut i = 1;
 
-    loop {
-        match chomp_lowercase_part(&buffer[chomped + i..]) {
-            Ok(name) => {
-                let value = unsafe {
-                    std::str::from_utf8_unchecked(&buffer[chomped + i..chomped + i + name.len()])
-                };
-                parts.push(value);
+    while let Some(b'.') = buffer.get(chomped) {
+        match &buffer.get(chomped + 1..) {
+            Some(slice) => match chomp_lowercase_part(slice) {
+                Ok(name) => {
+                    let value = unsafe {
+                        std::str::from_utf8_unchecked(
+                            &buffer[chomped + 1..chomped + 1 + name.len()],
+                        )
+                    };
+                    parts.push(value);
 
-                chomped += name.len();
-                i += 1;
-            }
-            Err(MadeProgress) => return Err(MadeProgress),
-            Err(NoProgress) => break,
+                    chomped += name.len() + 1;
+                }
+                Err(_) => return Err(chomped as u16 + 1),
+            },
+            None => return Err(chomped as u16 + 1),
         }
     }
+
+    dbg!(&parts);
+
+    let value = unsafe { std::str::from_utf8_unchecked(&buffer[chomped..]) };
+
+    dbg!(value);
 
     if chomped == 0 {
-        Err(NoProgress)
+        Err(0)
     } else {
-        Ok((chomped + i) as u16)
-    }
-}
-
-/// a `Ok` global tag
-fn chomp_global_tag(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
-    debug_assert!(((*buffer.get(0).unwrap()) as char).is_uppercase());
-    use encode_unicode::CharExt;
-
-    match chomp_uppercase_part(&buffer[1..]) {
-        Ok(name) => {
-            let chomped = 1 + name.len();
-
-            if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                Err(BadIdent::BadPrivateTag(row, col + chomped as u16))
-            } else {
-                Ok(name)
-            }
-        }
-        Err(_) => Err(BadIdent::BadPrivateTag(row, col + 1)),
+        Ok(chomped as u16)
     }
 }
 
@@ -565,6 +569,20 @@ fn parse_ident_help_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, BadIdent> {
+    match chomp_identifier_chain(arena, state.bytes, state.line, state.column) {
+        Ok((width, ident)) => {
+            state = advance_state!(state, width as usize)?;
+            return Ok((MadeProgress, ident, state));
+        }
+        Err((0, fail)) => {
+            return Err((NoProgress, fail, state));
+        }
+        Err((width, fail)) => {
+            state = advance_state!(state, width as usize)?;
+            return Err((MadeProgress, fail, state));
+        }
+    }
+
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
     let mut is_capitalized;

@@ -358,14 +358,14 @@ fn to_bad_ident_expr_report<'b>(
             let region = Region::from_row_col(row, col);
 
             alloc.stack(vec![
-                alloc.reflow(r"I trying to parse a record field accessor here:"),
+                alloc.reflow(r"I trying to parse a record field access here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
-                    alloc.reflow("Something like "),
+                    alloc.reflow("So I expect to see a lowercase letter next, like "),
                     alloc.parser_suggestion(".name"),
                     alloc.reflow(" or "),
                     alloc.parser_suggestion(".height"),
-                    alloc.reflow(" that accesses a value from a record."),
+                    alloc.reflow("."),
                 ]),
             ])
         }
