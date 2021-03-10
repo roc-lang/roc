@@ -318,6 +318,7 @@ pub fn parse_ident_help_help<'a>(
 
     let bytes = state.bytes;
     let mut chomped_capitalized = 0;
+    let mut cparts = 0;
 
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
@@ -424,6 +425,7 @@ pub fn parse_ident_help_help<'a>(
 
                     if is_capitalized {
                         chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
+                        cparts += 1;
                         capitalized_parts.push(part_buf.into_bump_str());
                     } else {
                         noncapitalized_parts.push(part_buf.into_bump_str());
@@ -468,7 +470,7 @@ pub fn parse_ident_help_help<'a>(
         // If we made it this far and don't have a next_char, then necessarily
         // we have consumed a '.' char previously.
         let fail = if noncapitalized_parts.is_empty() {
-            if capitalized_parts.is_empty() {
+            if cparts == 0 {
                 BadIdent::StrayDot(state.line, state.column)
             } else {
                 BadIdent::WeirdDotQualified(state.line, state.column)
@@ -483,6 +485,7 @@ pub fn parse_ident_help_help<'a>(
     // Record the final parts.
     if is_capitalized {
         chomped_capitalized += part_buf.len() + (chomped_capitalized != 0) as usize;
+        cparts += 1;
         capitalized_parts.push(part_buf.into_bump_str());
     } else {
         noncapitalized_parts.push(part_buf.into_bump_str());
@@ -491,7 +494,7 @@ pub fn parse_ident_help_help<'a>(
     let answer = if is_accessor_fn {
         // Handle accessor functions first because they have the strictest requirements.
         // Accessor functions may have exactly 1 noncapitalized part, and no capitalzed parts.
-        if capitalized_parts.is_empty() && noncapitalized_parts.len() == 1 && !is_private_tag {
+        if cparts == 0 && noncapitalized_parts.len() == 1 && !is_private_tag {
             let value = noncapitalized_parts.iter().next().unwrap();
 
             Ident::AccessorFunction(value)
@@ -506,7 +509,7 @@ pub fn parse_ident_help_help<'a>(
         // We have capitalized parts only, so this must be a tag.
         match capitalized_parts.first() {
             Some(value) => {
-                if capitalized_parts.len() == 1 {
+                if cparts == 1 {
                     if is_private_tag {
                         Ident::PrivateTag(value)
                     } else {
@@ -541,7 +544,7 @@ pub fn parse_ident_help_help<'a>(
         ));
     } else {
         // We have multiple noncapitalized parts, so this must be field access.
-        let module_name = if capitalized_parts.len() == 0 {
+        let module_name = if cparts == 0 {
             ""
         } else {
             let chomped = chomped_capitalized;
