@@ -61,117 +61,26 @@ impl<'a> Ident<'a> {
     }
 }
 
-fn chomp_identifier<'a, F>(pred: F, buffer: &[u8]) -> Result<&str, Progress>
-where
-    F: Fn(char) -> bool,
-{
-    use encode_unicode::CharExt;
-
-    let mut chomped = 0;
-
-    match char::from_utf8_slice_start(&buffer[chomped..]) {
-        Ok((ch, width)) if pred(ch) => {
-            chomped += width;
-        }
-        _ => {
-            // no parse
-            return Err(Progress::NoProgress);
-        }
-    }
-
-    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        // * A ':' indicating the end of the field
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
-            chomped += width;
-        } else {
-            // we're done
-            break;
-        }
-    }
-
-    let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-
-    Ok(name)
-}
-
-fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str, SyntaxError<'a>>
-where
-    F: Fn(char) -> bool,
-{
-    move |arena, mut state: State<'a>| {
-        // pred will determine if this is a tag or ident (based on capitalization)
-        let (first_letter, bytes_parsed) = match peek_utf8_char(&state) {
-            Ok((first_letter, bytes_parsed)) => {
-                if !pred(first_letter) {
-                    return Err(unexpected(0, Attempting::RecordFieldLabel, state));
-                }
-
-                (first_letter, bytes_parsed)
-            }
-            Err(reason) => return state.fail(arena, NoProgress, reason),
-        };
-
-        let mut buf = String::with_capacity_in(1, arena);
-
-        buf.push(first_letter);
-
-        state = state.advance_without_indenting(bytes_parsed)?;
-
-        while !state.bytes.is_empty() {
-            match peek_utf8_char(&state) {
-                Ok((ch, bytes_parsed)) => {
-                    // After the first character, only these are allowed:
-                    //
-                    // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-                    // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                    // * A ':' indicating the end of the field
-                    if ch.is_alphabetic() || ch.is_ascii_digit() {
-                        buf.push(ch);
-
-                        state = state.advance_without_indenting(bytes_parsed)?;
-                    } else {
-                        // This is the end of the field. We're done!
-                        break;
-                    }
-                }
-                Err(reason) => return state.fail(arena, MadeProgress, reason),
-            };
-        }
-
-        Ok((MadeProgress, buf.into_bump_str(), state))
-    }
-}
-
 /// This could be:
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        let (progress, ident, state) =
-            global_tag_or_ident(|first_char| first_char.is_lowercase()).parse(arena, state)?;
-
-        // to parse a valid ident, progress must be made
-        debug_assert_eq!(progress, MadeProgress);
-
-        if (ident == keyword::IF)
-            || (ident == keyword::THEN)
-            || (ident == keyword::ELSE)
-            || (ident == keyword::WHEN)
-            || (ident == keyword::IS)
-            || (ident == keyword::AS)
-        {
-            // TODO Calculate the correct region based on state
-            let region = Region::zero();
-            Err((MadeProgress, SyntaxError::ReservedKeyword(region), state))
-        } else {
-            Ok((MadeProgress, ident, state))
+pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
+    debug!(
+        move |_, mut state: State<'a>| match chomp_lowercase_part(state.bytes) {
+            Err(progress) => Err((progress, (), state)),
+            Ok(ident) => {
+                if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+                    Err((MadeProgress, (), state))
+                } else {
+                    let width = ident.len();
+                    state.column += width as u16;
+                    state.bytes = &state.bytes[width..];
+                    Ok((MadeProgress, ident, state))
+                }
+            }
         }
-    }
+    )
 }
 
 /// This could be:
