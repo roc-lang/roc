@@ -17,6 +17,6 @@ mod window;
 use std::io;
 use std::path::Path;
 
-pub fn launch(filepaths: &[&'static Path]) -> io::Result<()> {
+pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
     editor::main::launch(filepaths)
 }

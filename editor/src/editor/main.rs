@@ -41,7 +41,7 @@ use winit::{
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
-pub fn launch(filepaths: &[&'static Path]) -> io::Result<()> {
+pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
     //TODO support using multiple filepaths
     let first_path_opt = if !filepaths.is_empty() {
         match slice_get(0, filepaths) {
@@ -60,7 +60,7 @@ pub fn launch(filepaths: &[&'static Path]) -> io::Result<()> {
     Ok(())
 }
 
-fn run_event_loop<'a>(file_path_opt: Option<&'static Path>) -> Result<(), Box<dyn Error>> {
+fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
