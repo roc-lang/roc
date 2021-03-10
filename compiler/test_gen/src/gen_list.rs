@@ -587,8 +587,8 @@ fn list_map3_different_length() {
         indoc!(
             r#"
             List.map3
-                ["a", "b", "d" ]
-                ["b"]
+                ["a", "b", "d"]
+                ["b", "x"]
                 ["c"]
                 (\a, b, c -> Str.concat a (Str.concat b c))
             "#

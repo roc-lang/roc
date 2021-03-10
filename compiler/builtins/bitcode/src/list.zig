@@ -237,6 +237,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                 // if the lists don't have equal length, we must consume the remaining elements
                 // In this case we consume by (recursively) decrementing the elements
                 if (list1.len() > output_length) {
+                    i = output_length;
                     while (i < list1.len()) : (i += 1) {
                         const element_a = source_a + i * a_width;
                         dec_a(element_a);
@@ -244,6 +245,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                 }
 
                 if (list2.len() > output_length) {
+                    i = output_length;
                     while (i < list2.len()) : (i += 1) {
                         const element_b = source_b + i * b_width;
                         dec_b(element_b);
@@ -251,6 +253,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                 }
 
                 if (list3.len() > output_length) {
+                    i = output_length;
                     while (i < list3.len()) : (i += 1) {
                         const element_c = source_c + i * c_width;
                         dec_c(element_c);
