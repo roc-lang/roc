@@ -9,8 +9,7 @@ use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ast;
-use roc_parse::blankspace::space0_before;
-use roc_parse::parser::{loc, Parser, State, SyntaxError};
+use roc_parse::parser::{State, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -31,12 +30,11 @@ pub fn parse_loc_with<'a>(
     input: &'a str,
 ) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
     let state = State::new_in(arena, input.trim().as_bytes());
-    let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
-    let answer = parser.parse(&arena, state);
 
-    answer
-        .map(|(_, loc_expr, _)| loc_expr)
-        .map_err(|(_, fail, _)| fail)
+    match roc_parse::expr::test_parse_expr(0, arena, state) {
+        Ok((loc_expr, _state)) => Ok(loc_expr),
+        Err(fail) => Err(SyntaxError::Expr(fail)),
+    }
 }
 
 #[allow(dead_code)]

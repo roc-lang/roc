@@ -1,7 +1,7 @@
 use crate::ast::CommentOrNewline::{self, *};
-use crate::ast::{Attempting, Spaceable};
+use crate::ast::Spaceable;
 use crate::parser::{
-    self, and, peek_utf8_char, unexpected, unexpected_eof, BadInputError, Col, Parser,
+    self, and, peek_utf8_char, BadInputError, Col, Parser,
     Progress::{self, *},
     Row, State, SyntaxError,
 };
@@ -160,31 +160,6 @@ enum LineState {
     DocComment,
 }
 
-//    then(
-//        and!(ascii_char(b'#'), optional(ascii_string("# "))),
-//        |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
-//            if opt_doc != None {
-//                return Err(unexpected(3, Attempting::LineComment, state));
-//            }
-//            let mut length = 0;
-//
-//            for &byte in state.bytes.iter() {
-//                if byte != b'\n' {
-//                    length += 1;
-//                } else {
-//                    break;
-//                }
-//            }
-//
-//            let comment = &state.bytes[..length];
-//            let state = state.advance_without_indenting(length + 1)?;
-//            match parse_utf8(comment) {
-//                Ok(comment_str) => Ok((MadeProgress, comment_str, state)),
-//                Err(reason) => state.fail(arena, MadeProgress, reason),
-//            }
-//        },
-//    )
-
 pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
     |_, state: State<'a>| match chomp_line_comment(state.bytes) {
         Ok(comment) => {
@@ -226,60 +201,6 @@ fn chomp_line_comment<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
 }
 
 #[inline(always)]
-pub fn spaces_exactly<'a>(spaces_expected: u16) -> impl Parser<'a, (), SyntaxError<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
-        if spaces_expected == 0 {
-            return Ok((NoProgress, (), state));
-        }
-
-        let mut state = state;
-        let mut spaces_seen: u16 = 0;
-
-        while !state.bytes.is_empty() {
-            match peek_utf8_char(&state) {
-                Ok((' ', _)) => {
-                    spaces_seen += 1;
-                    state = state.advance_spaces(arena, 1)?;
-                    if spaces_seen == spaces_expected {
-                        return Ok((MadeProgress, (), state));
-                    }
-                }
-                Ok(_) => {
-                    return Err(unexpected(
-                        spaces_seen.into(),
-                        Attempting::TODO,
-                        state.clone(),
-                    ));
-                }
-
-                Err(SyntaxError::BadUtf8) => {
-                    // If we hit an invalid UTF-8 character, bail out immediately.
-                    let progress = Progress::progress_when(spaces_seen != 0);
-                    return state.fail(arena, progress, SyntaxError::BadUtf8);
-                }
-                Err(_) => {
-                    if spaces_seen == 0 {
-                        return Err(unexpected_eof(arena, state, 0));
-                    } else {
-                        return Err(unexpected(
-                            spaces_seen.into(),
-                            Attempting::TODO,
-                            state.clone(),
-                        ));
-                    }
-                }
-            }
-        }
-
-        if spaces_seen == 0 {
-            Err(unexpected_eof(arena, state, 0))
-        } else {
-            Err(unexpected(spaces_seen.into(), Attempting::TODO, state))
-        }
-    }
-}
-
-#[inline(always)]
 pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser::EExpr<'a>> {
     use parser::EExpr;
 
@@ -288,39 +209,25 @@ pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser:
             return Ok((NoProgress, (), state));
         }
 
-        let mut state = state;
         let mut spaces_seen: u16 = 0;
 
-        while !state.bytes.is_empty() {
-            match peek_utf8_char(&state) {
-                Ok((' ', _)) => {
+        for c in state.bytes {
+            match c {
+                b' ' => {
                     spaces_seen += 1;
-                    state = state.advance_spaces_e(arena, 1, EExpr::IndentStart)?;
                     if spaces_seen == spaces_expected {
+                        let state = state.advance_spaces_e(
+                            arena,
+                            spaces_expected as usize,
+                            EExpr::IndentStart,
+                        )?;
                         return Ok((MadeProgress, (), state));
                     }
                 }
-                Ok(_) => {
+                _ => {
                     return Err((
                         NoProgress,
-                        EExpr::IndentStart(state.line, state.column),
-                        state,
-                    ))
-                }
-
-                Err(SyntaxError::BadUtf8) => {
-                    // If we hit an invalid UTF-8 character, bail out immediately.
-                    let progress = Progress::progress_when(spaces_seen != 0);
-                    return Err((
-                        progress,
-                        EExpr::Space(BadInputError::BadUtf8, state.line, state.column),
-                        state,
-                    ));
-                }
-                Err(_) => {
-                    return Err((
-                        NoProgress,
-                        EExpr::IndentStart(state.line, state.column),
+                        EExpr::IndentStart(state.line, state.column + spaces_seen),
                         state,
                     ))
                 }
@@ -329,14 +236,247 @@ pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser:
 
         Err((
             NoProgress,
-            EExpr::IndentStart(state.line, state.column),
+            EExpr::IndentStart(state.line, state.column + spaces_seen),
             state,
         ))
     }
 }
 
 #[inline(always)]
+fn spaces_help_help<'a, E>(
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
+    use SpaceState::*;
+
+    move |arena, mut state: State<'a>| {
+        let comments_and_newlines = Vec::new_in(arena);
+
+        match eat_spaces(state.bytes, state.line, state.column, comments_and_newlines) {
+            HasTab { row, col } => {
+                // there was a tab character
+                Err((
+                    MadeProgress,
+                    space_problem(BadInputError::HasTab, row, col),
+                    State {
+                        line: row,
+                        column: col,
+                        ..state
+                    },
+                ))
+            }
+            Good {
+                row,
+                col,
+                bytes,
+                comments_and_newlines,
+            } => {
+                if bytes == state.bytes {
+                    Ok((NoProgress, &[] as &[_], state))
+                } else if state.line != row {
+                    // we parsed at least one newline
+
+                    state.is_indenting = true;
+                    state.indent_col = col;
+
+                    if col >= min_indent {
+                        state.line = row;
+                        state.column = col;
+                        state.bytes = bytes;
+
+                        Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
+                    } else {
+                        Err((
+                            MadeProgress,
+                            indent_problem(state.line, state.column),
+                            state,
+                        ))
+                    }
+                } else {
+                    state.column = col;
+                    state.bytes = bytes;
+
+                    Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
+                }
+            }
+        }
+    }
+}
+
+enum SpaceState<'a> {
+    Good {
+        row: Row,
+        col: Col,
+        bytes: &'a [u8],
+        comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
+    },
+    HasTab {
+        row: Row,
+        col: Col,
+    },
+}
+
+fn eat_spaces<'a>(
+    mut bytes: &'a [u8],
+    mut row: Row,
+    mut col: Col,
+    mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
+) -> SpaceState<'a> {
+    use SpaceState::*;
+
+    for c in bytes {
+        match c {
+            b' ' => {
+                bytes = &bytes[1..];
+                col += 1;
+            }
+            b'\n' => {
+                bytes = &bytes[1..];
+                row += 1;
+                col = 0;
+                comments_and_newlines.push(CommentOrNewline::Newline);
+            }
+            b'\r' => {
+                bytes = &bytes[1..];
+            }
+            b'\t' => {
+                return HasTab { row, col };
+            }
+            b'#' => {
+                return eat_line_comment(&bytes[1..], row, col + 1, comments_and_newlines);
+            }
+            _ => break,
+        }
+    }
+
+    return Good {
+        row,
+        col,
+        bytes,
+        comments_and_newlines,
+    };
+}
+
+fn eat_line_comment<'a>(
+    mut bytes: &'a [u8],
+    row: Row,
+    mut col: Col,
+    mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
+) -> SpaceState<'a> {
+    use SpaceState::*;
+
+    let is_doc_comment = if let Some(b'#') = bytes.get(0) {
+        match bytes.get(1) {
+            Some(b' ') => {
+                bytes = &bytes[2..];
+                col += 2;
+
+                true
+            }
+            Some(b'\n') => {
+                // consume the second # and the \n
+                bytes = &bytes[2..];
+
+                comments_and_newlines.push(CommentOrNewline::DocComment(""));
+                return eat_spaces(bytes, row + 1, 0, comments_and_newlines);
+            }
+            None => {
+                // consume the second #
+                col += 1;
+                bytes = &bytes[1..];
+
+                return Good {
+                    row,
+                    col,
+                    bytes,
+                    comments_and_newlines,
+                };
+            }
+
+            _ => false,
+        }
+    } else {
+        false
+    };
+
+    let initial = bytes;
+    let initial_col = col;
+
+    for c in bytes {
+        match c {
+            b'\t' => return HasTab { row, col },
+            b'\n' => {
+                let delta = (col - initial_col) as usize;
+                let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
+
+                if is_doc_comment {
+                    comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+                } else {
+                    comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+                }
+                return eat_spaces(&bytes[1..], row + 1, 0, comments_and_newlines);
+            }
+            _ => {
+                bytes = &bytes[1..];
+                col += 1;
+            }
+        }
+    }
+
+    return Good {
+        row,
+        col,
+        bytes,
+        comments_and_newlines,
+    };
+}
+
+#[inline(always)]
 fn spaces_help<'a, E>(
+    require_at_least_one: bool,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_problem: fn(Row, Col) -> E,
+    missing_space_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a,
+{
+    move |arena, state: State<'a>| {
+        if !require_at_least_one {
+            match spaces_help_help(min_indent, space_problem, indent_problem).parse(arena, state) {
+                Ok((a, b, c)) => Ok((a, b, c)),
+                Err((a, b, c)) => Err((a, b, c)),
+            }
+        } else {
+            match spaces_help_help_help(
+                require_at_least_one,
+                min_indent,
+                space_problem,
+                indent_problem,
+                missing_space_problem,
+            )
+            .parse(arena, state)
+            {
+                Ok((a, b, c)) => {
+                    //dbg!(&c);
+                    Ok((a, b, c))
+                }
+                Err((a, b, c)) => {
+                    //dbg!(&c);
+                    Err((a, b, c))
+                }
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn spaces_help_help_help<'a, E>(
     require_at_least_one: bool,
     min_indent: u16,
     space_problem: fn(BadInputError, Row, Col) -> E,

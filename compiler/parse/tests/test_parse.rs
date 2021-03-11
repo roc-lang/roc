@@ -2840,7 +2840,7 @@ mod test_parse {
 
     #[test]
     fn outdenting_newline_after_else() {
-        let arena = Bump::new();
+        let arena = &Bump::new();
 
         // highlights a problem with the else branch demanding a newline after its expression
         let src = indoc!(
@@ -2852,13 +2852,19 @@ mod test_parse {
             "#
         );
 
-        let actual = module_defs()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        dbg!(&actual);
-
-        assert!(actual.is_ok());
+        let state = State::new_in(arena, src.as_bytes());
+        let parser = module_defs();
+        let parsed = parser.parse(arena, state);
+        match parsed {
+            Ok((_, _, state)) => {
+                dbg!(state);
+                return;
+            }
+            Err((_, _fail, _state)) => {
+                dbg!(_fail, _state);
+                assert!(false);
+            }
+        }
     }
 
     #[test]
