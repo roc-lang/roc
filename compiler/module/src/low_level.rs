@@ -28,6 +28,7 @@ pub enum LowLevel {
     ListJoin,
     ListMap,
     ListMap2,
+    ListMap3,
     ListMapWithIndex,
     ListKeepIf,
     ListWalk,

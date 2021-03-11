@@ -7,8 +7,8 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map_with_index, list_prepend, list_repeat, list_reverse, list_set, list_single,
-    list_sum, list_walk, list_walk_backwards,
+    list_map2, list_map3, list_map_with_index, list_prepend, list_repeat, list_reverse, list_set,
+    list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -3743,6 +3743,38 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ),
                 (Layout::Builtin(Builtin::EmptyList), _)
                 | (_, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMap3 => {
+            debug_assert_eq!(args.len(), 4);
+
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            let (func, func_layout) = load_symbol_and_layout(scope, &args[3]);
+
+            match (list1_layout, list2_layout, list3_layout) {
+                (
+                    Layout::Builtin(Builtin::List(_, element1_layout)),
+                    Layout::Builtin(Builtin::List(_, element2_layout)),
+                    Layout::Builtin(Builtin::List(_, element3_layout)),
+                ) => list_map3(
+                    env,
+                    layout_ids,
+                    func,
+                    func_layout,
+                    list1,
+                    list2,
+                    list3,
+                    element1_layout,
+                    element2_layout,
+                    element3_layout,
+                ),
+                (Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _)
+                | (_, _, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
             }
         }

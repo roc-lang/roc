@@ -8,6 +8,7 @@ const list = @import("list.zig");
 comptime {
     exportListFn(list.listMap, "map");
     exportListFn(list.listMap2, "map2");
+    exportListFn(list.listMap3, "map3");
     exportListFn(list.listMapWithIndex, "map_with_index");
     exportListFn(list.listKeepIf, "keep_if");
     exportListFn(list.listWalk, "walk");
