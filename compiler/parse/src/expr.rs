@@ -20,6 +20,24 @@ use roc_region::all::{Located, Region};
 
 use crate::parser::Progress::{self, *};
 
+pub fn test_parse_expr<'a>(
+    min_indent: u16,
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+) -> Result<(Located<Expr<'a>>, State<'a>), EExpr<'a>> {
+    let parser = space0_before_e(
+        loc!(|a, s| parse_expr_help(min_indent, a, s)),
+        min_indent,
+        EExpr::Space,
+        EExpr::IndentStart,
+    );
+
+    match parser.parse(arena, state) {
+        Ok((_, expression, state)) => Ok((expression, state)),
+        Err((_, fail, _)) => Err(fail),
+    }
+}
+
 // public for testing purposes
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
@@ -718,47 +736,6 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
-/// A def beginning with a parenthetical pattern, for example:
-///
-/// (UserId userId) = ...
-///
-/// Note: Parenthetical patterns are a shorthand convenience, and may not have type annotations.
-/// It would be too weird to parse; imagine `(UserId userId) : ...` above `(UserId userId) = ...`
-/// !!!! THIS IS NOT USED !!!!
-// fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
-//     move |arena, state| {
-//         let (loc_tuple, state) = loc!(and!(
-//             space0_after(
-//                 between!(
-//                     ascii_char(b'('),
-//                     space0_around(loc_pattern(min_indent), min_indent),
-//                     ascii_char(b')')
-//                 ),
-//                 min_indent,
-//             ),
-//             equals_with_indent()
-//         ))
-//         .parse(arena, state)?;
-
-//         let region = loc_tuple.region;
-//         let (loc_first_pattern, equals_sign_indent) = loc_tuple.value;
-
-//         // Continue parsing the expression as a Def.
-//         let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
-//         let (value, state) = parse_def_expr(
-//             region.start_col,
-//             min_indent,
-//             equals_sign_indent,
-//             arena,
-//             state,
-//             loc_first_pattern,
-//             spaces_after_equals,
-//         )?;
-
-//         Ok((Located { value, region }, state))
-//     }
-// }
-
 fn parse_defs_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, EExpr<'a>> {
@@ -795,7 +772,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, SyntaxError<'a>> {
     specialize(|e, _, _| SyntaxError::Expr(e), def_help(min_indent))
 }
 
-fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
+pub fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     let indented_more = min_indent + 1;
 
     enum DefKind {

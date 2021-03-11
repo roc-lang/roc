@@ -15,7 +15,7 @@ use roc_region::all::{Located, Region};
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
 /// SpaceAfter as appropriate.
-pub fn space0_around<'a, P, S>(
+fn space0_around<'a, P, S>(
     parser: P,
     min_indent: u16,
 ) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
@@ -119,7 +119,7 @@ where
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
 /// SpaceAfter as appropriate.
-pub fn space1_around<'a, P, S>(
+fn space1_around<'a, P, S>(
     parser: P,
     min_indent: u16,
 ) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
@@ -160,7 +160,7 @@ where
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-pub fn space0_before<'a, P, S>(
+fn space0_before<'a, P, S>(
     parser: P,
     min_indent: u16,
 ) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
@@ -241,7 +241,7 @@ where
 /// Parses the given expression with 1 or more (spaces/comments/newlines) before it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-pub fn space1_before<'a, P, S>(
+fn space1_before<'a, P, S>(
     parser: P,
     min_indent: u16,
 ) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
@@ -268,7 +268,7 @@ where
 /// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-pub fn space0_after<'a, P, S>(
+fn space0_after<'a, P, S>(
     parser: P,
     min_indent: u16,
 ) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
@@ -295,7 +295,7 @@ where
 /// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-pub fn space1_after<'a, P, S>(
+fn space1_after<'a, P, S>(
     parser: P,
     min_indent: u16,
 ) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
@@ -320,7 +320,7 @@ where
 }
 
 /// Zero or more (spaces/comments/newlines).
-pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
+fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     spaces(false, min_indent)
 }
 
@@ -360,7 +360,7 @@ where
 }
 
 /// One or more (spaces/comments/newlines).
-pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
+fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
     // TODO try benchmarking a short-circuit for the typical case: see if there is
     // exactly one space followed by char that isn't [' ', '\n', or '#'], and
     // if so, return empty slice. The case where there's exactly 1 space should

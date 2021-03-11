@@ -1,5 +1,4 @@
 use crate::ast;
-use crate::blankspace::space0_before;
 use crate::expr::expr;
 use crate::module::module_defs;
 use crate::parser::{loc, Parser, State, SyntaxError};
@@ -32,10 +31,9 @@ pub fn parse_loc_with<'a>(
     input: &'a str,
 ) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
     let state = State::new_in(arena, input.trim().as_bytes());
-    let parser = space0_before(loc(expr(0)), 0);
-    let answer = parser.parse(&arena, state);
 
-    answer
-        .map(|(_, loc_expr, _)| loc_expr)
-        .map_err(|(_, fail, _)| fail)
+    match crate::expr::test_parse_expr(0, arena, state) {
+        Ok((loc_expr, _state)) => Ok(loc_expr),
+        Err(fail) => Err(SyntaxError::Expr(fail)),
+    }
 }
