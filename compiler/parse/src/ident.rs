@@ -1,14 +1,7 @@
-use crate::ast::Attempting;
-use crate::keyword;
 use crate::parser::Progress::{self, *};
-use crate::parser::{
-    peek_utf8_char, unexpected, BadInputError, Col, EExpr, ParseResult, Parser, Row, State,
-    SyntaxError,
-};
-use bumpalo::collections::string::String;
+use crate::parser::{BadInputError, Col, EExpr, ParseResult, Parser, Row, State};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::Region;
 
 /// The parser accepts all of these in any position where any one of them could
 /// appear. This way, canonicalization can give more helpful error messages like
@@ -66,21 +59,20 @@ impl<'a> Ident<'a> {
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    debug!(
-        move |_, mut state: State<'a>| match chomp_lowercase_part(state.bytes) {
-            Err(progress) => Err((progress, (), state)),
-            Ok(ident) => {
-                if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
-                    Err((MadeProgress, (), state))
-                } else {
-                    let width = ident.len();
-                    state.column += width as u16;
-                    state.bytes = &state.bytes[width..];
-                    Ok((MadeProgress, ident, state))
+    move |_, state: State<'a>| match chomp_lowercase_part(state.bytes) {
+        Err(progress) => Err((progress, (), state)),
+        Ok(ident) => {
+            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+                Err((MadeProgress, (), state))
+            } else {
+                let width = ident.len();
+                match state.advance_without_indenting_ee(width, |_, _| ()) {
+                    Ok(state) => Ok((MadeProgress, ident, state)),
+                    Err(bad) => Err(bad),
                 }
             }
         }
-    )
+    }
 }
 
 /// This could be:
@@ -89,49 +81,33 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 /// * A type name
 /// * A global tag
 pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, mut state: State<'a>| match chomp_uppercase_part(state.bytes) {
+    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
-            state.column += width as u16;
-            state.bytes = &state.bytes[width..];
-            Ok((MadeProgress, ident, state))
+            match state.advance_without_indenting_ee(width, |_, _| ()) {
+                Ok(state) => Ok((MadeProgress, ident, state)),
+                Err(bad) => Err(bad),
+            }
         }
     }
 }
 
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, mut state: State<'a>| match chomp_part(|c| c.is_alphabetic(), state.bytes) {
+    move |_, state: State<'a>| match chomp_part(|c| c.is_alphabetic(), state.bytes) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
                 Err((MadeProgress, (), state))
             } else {
                 let width = ident.len();
-                state.column += width as u16;
-                state.bytes = &state.bytes[width..];
-                Ok((MadeProgress, ident, state))
+                match state.advance_without_indenting_ee(width, |_, _| ()) {
+                    Ok(state) => Ok((MadeProgress, ident, state)),
+                    Err(bad) => Err(bad),
+                }
             }
         }
     }
-}
-
-pub fn join_module_parts<'a>(arena: &'a Bump, module_parts: &[&str]) -> &'a str {
-    let capacity = module_parts.len() * 3; // Module parts tend to be 3+ characters.
-    let mut buf = String::with_capacity_in(capacity, arena);
-    let mut any_parts_added = false;
-
-    for part in module_parts {
-        if any_parts_added {
-            buf.push('.');
-        } else {
-            any_parts_added = true;
-        }
-
-        buf.push_str(part);
-    }
-
-    buf.into_bump_str()
 }
 
 macro_rules! advance_state {
@@ -185,30 +161,26 @@ fn malformed_identifier<'a>(
     _arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+    use encode_unicode::CharExt;
     // skip forward to the next non-identifier character
-    while !state.bytes.is_empty() {
-        match peek_utf8_char(&state) {
-            Ok((ch, bytes_parsed)) => {
-                // We can't use ch.is_alphanumeric() here because that passes for
-                // things that are "numeric" but not ASCII digits, like `¾`
-                if ch == '.' || ch == '_' || ch.is_alphabetic() || ch.is_ascii_digit() {
-                    state = state.advance_without_indenting_ee(bytes_parsed, |r, c| {
-                        EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
-                    })?;
-                    continue;
-                } else {
-                    break;
-                }
-            }
-            Err(_reason) => {
-                break;
-            }
+    let mut chomped = 0;
+    while let Ok((ch, width)) = char::from_utf8_slice_start(&state.bytes[chomped..]) {
+        // We can't use ch.is_alphanumeric() here because that passes for
+        // things that are "numeric" but not ASCII digits, like `¾`
+        if ch == '.' || ch == '_' || ch.is_alphabetic() || ch.is_ascii_digit() {
+            chomped += width;
+            continue;
+        } else {
+            break;
         }
     }
 
-    let parsed = &initial_bytes[..(initial_bytes.len() - state.bytes.len())];
+    let delta = initial_bytes.len() - state.bytes.len();
+    let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-    let parsed_str = unsafe { std::str::from_utf8_unchecked(parsed) };
+    state = state.advance_without_indenting_ee(chomped, |r, c| {
+        EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
+    })?;
 
     Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
 }
@@ -240,7 +212,6 @@ fn chomp_part<F>(leading_is_good: F, buffer: &[u8]) -> Result<&str, Progress>
 where
     F: Fn(char) -> bool,
 {
-    // assumes the leading `.` has been chomped already
     use encode_unicode::CharExt;
 
     let mut chomped = 0;
@@ -452,6 +423,47 @@ fn chomp_module_chain<'a>(buffer: &'a [u8]) -> Result<u16, Progress> {
         Err(NoProgress)
     } else {
         Ok(chomped as u16)
+    }
+}
+
+pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
+    move |_, state: State<'a>| match chomp_concrete_type(state.bytes) {
+        Err(progress) => Err((progress, (), state)),
+        Ok((module_name, type_name, width)) => {
+            match state.advance_without_indenting_ee(width, |_, _| ()) {
+                Ok(state) => Ok((MadeProgress, (module_name, type_name), state)),
+                Err(bad) => Err(bad),
+            }
+        }
+    }
+}
+
+// parse a type name like `Result` or `Result.Result`
+fn chomp_concrete_type<'a>(buffer: &'a [u8]) -> Result<(&'a str, &'a str, usize), Progress> {
+    let first = crate::ident::chomp_uppercase_part(buffer)?;
+
+    if let Some(b'.') = buffer.get(first.len()) {
+        match crate::ident::chomp_module_chain(&buffer[first.len()..]) {
+            Err(_) => Err(MadeProgress),
+            Ok(rest) => {
+                let width = first.len() + rest as usize;
+                let slice = &buffer[..width];
+
+                match slice.iter().rev().position(|c| *c == b'.') {
+                    None => Ok(("", first, first.len())),
+                    Some(rev_index) => {
+                        let index = slice.len() - rev_index;
+                        let module_name =
+                            unsafe { std::str::from_utf8_unchecked(&slice[..index - 1]) };
+                        let type_name = unsafe { std::str::from_utf8_unchecked(&slice[index..]) };
+
+                        Ok((module_name, type_name, width))
+                    }
+                }
+            }
+        }
+    } else {
+        Ok(("", first, first.len()))
     }
 }
 

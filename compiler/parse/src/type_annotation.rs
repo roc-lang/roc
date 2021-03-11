@@ -1,6 +1,5 @@
 use crate::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
-use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
     allocated, backtrackable, not_e, optional, peek_utf8_char_e, specialize, specialize_ref, word1,
@@ -517,102 +516,12 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
 
 fn parse_concrete_type<'a>(
     arena: &'a Bump,
-    mut state: State<'a>,
+    state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>, TApply> {
-    let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
-    let mut parts: Vec<&'a str> = Vec::new_in(arena);
-
-    // Qualified types must start with a capitalized letter.
-    match peek_utf8_char_e(&state, TApply::StartNotUppercase, TApply::Space) {
-        Ok((first_letter, bytes_parsed)) => {
-            if first_letter.is_alphabetic() && first_letter.is_uppercase() {
-                part_buf.push(first_letter);
-            } else {
-                let problem = TApply::StartNotUppercase(state.line, state.column + 1);
-                return Err((NoProgress, problem, state));
-            }
-
-            state = state.advance_without_indenting_e(bytes_parsed, TApply::Space)?;
-        }
-        Err(reason) => return Err((NoProgress, reason, state)),
-    }
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char_e(&state, TApply::End, TApply::Space) {
-            Ok((ch, bytes_parsed)) => {
-                // After the first character, only these are allowed:
-                //
-                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                // * A dot ('.')
-                if ch.is_alphabetic() {
-                    if part_buf.is_empty() && !ch.is_uppercase() {
-                        // Each part must begin with a capital letter.
-                        return Err((
-                            MadeProgress,
-                            TApply::StartNotUppercase(state.line, state.column),
-                            state,
-                        ));
-                    }
-
-                    part_buf.push(ch);
-                } else if ch.is_ascii_digit() {
-                    // Parts may not start with numbers!
-                    if part_buf.is_empty() {
-                        return Err((
-                            MadeProgress,
-                            TApply::StartIsNumber(state.line, state.column),
-                            state,
-                        ));
-                    }
-
-                    part_buf.push(ch);
-                } else if ch == '.' {
-                    // Having two consecutive dots is an error.
-                    if part_buf.is_empty() {
-                        return Err((
-                            MadeProgress,
-                            TApply::DoubleDot(state.line, state.column),
-                            state,
-                        ));
-                    }
-
-                    parts.push(part_buf.into_bump_str());
-
-                    // Now that we've recorded the contents of the current buffer, reset it.
-                    part_buf = String::new_in(arena);
-                } else {
-                    // This must be the end of the type. We're done!
-                    break;
-                }
-
-                state = state.advance_without_indenting_e(bytes_parsed, TApply::Space)?;
-            }
-            Err(reason) => {
-                return Err((MadeProgress, reason, state));
-            }
-        }
-    }
-
-    if part_buf.is_empty() {
-        // We probably had a trailing dot, e.g. `Foo.bar.` - this is malformed!
-        //
-        // This condition might also occur if we encounter a malformed accessor like `.|`
-        //
-        // If we made it this far and don't have a next_char, then necessarily
-        // we have consumed a '.' char previously.
-        return Err((
-            MadeProgress,
-            TApply::TrailingDot(state.line, state.column),
-            state,
-        ));
-    }
-
-    let answer = TypeAnnotation::Apply(
-        join_module_parts(arena, parts.into_bump_slice()),
-        part_buf.into_bump_str(),
-        &[],
-    );
+    let (_, (module_name, type_name), state) =
+        specialize(|_, r, c| TApply::End(r, c), crate::ident::concrete_type())
+            .parse(arena, state)?;
+    let answer = TypeAnnotation::Apply(module_name, type_name, &[]);
 
     Ok((MadeProgress, answer, state))
 }
