@@ -4562,21 +4562,21 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo..Bar
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
-
-                I encountered two dots in a row:
-
-                1│  f : Foo..Bar
-                            ^
-
-                Try removing one of them.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
+        //
+        //                I encountered two dots in a row:
+        //
+        //                1│  f : Foo..Bar
+        //                            ^
+        //
+        //                Try removing one of them.
     }
 
     #[test]
@@ -4585,22 +4585,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.Bar.
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── TRAILING DOT ────────────────────────────────────────────────────────────────
-
-                I encountered a dot with nothing after it:
-
-                1│  f : Foo.Bar.
-                                ^
-
-                Dots are used to refer to a type in a qualified way, like
-                Num.I64 or List.List a. Try adding a type name next.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
+        //
+        //                I encountered a dot with nothing after it:
+        //
+        //                1│  f : Foo.Bar.
+        //                                ^
+        //
+        //                Dots are used to refer to a type in a qualified way, like
+        //                Num.I64 or List.List a. Try adding a type name next.
     }
 
     #[test]
@@ -4636,22 +4636,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.1
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-
-                I encountered a number at the start of a qualified name segment:
-
-                1│  f : Foo.1
-                            ^
-
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+        //
+        //                I encountered a number at the start of a qualified name segment:
+        //
+        //                1│  f : Foo.1
+        //                            ^
+        //
+        //                All parts of a qualified type name must start with an uppercase
+        //                letter, like Num.I64 or List.List a.
     }
 
     #[test]
@@ -4660,20 +4660,38 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.foo
+
+                f
+                "#
+            ),
+            indoc!(r#""#),
+        )
+    }
+
+    #[test]
+    fn def_missing_final_expression() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo.foo
                 "#
             ),
             indoc!(
                 r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-
-                I encountered a lowercase letter at the start of a qualified name
-                segment:
-
+                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition, but I got stuck here:
+                
                 1│  f : Foo.foo
-                            ^
-
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
+                               ^
+                
+                This definition is missing a final expression. A nested definition
+                must be followed by either another definition, or an expression
+                
+                    x = 4
+                    y = 2
+                    
+                    x + y
             "#
             ),
         )

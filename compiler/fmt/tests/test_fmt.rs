@@ -4,8 +4,6 @@ extern crate pretty_assertions;
 extern crate indoc;
 extern crate bumpalo;
 extern crate roc_fmt;
-#[macro_use]
-extern crate roc_parse;
 
 #[cfg(test)]
 mod test_fmt {
@@ -15,18 +13,16 @@ mod test_fmt {
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
     use roc_parse::ast::Expr;
-    use roc_parse::blankspace::space0_before;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::{Parser, State, SyntaxError};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
         let state = State::new_in(arena, input.trim().as_bytes());
-        let parser = space0_before(loc!(roc_parse::expr::expr(0)), 0);
-        let answer = parser.parse(&arena, state);
 
-        answer
-            .map(|(_, loc_expr, _)| loc_expr.value)
-            .map_err(|(_, fail, _)| fail)
+        match roc_parse::expr::test_parse_expr(0, arena, state) {
+            Ok((loc_expr, _state)) => Ok(loc_expr.value),
+            Err(fail) => Err(SyntaxError::Expr(fail)),
+        }
     }
 
     fn expr_formats_to(input: &str, expected: &str) {

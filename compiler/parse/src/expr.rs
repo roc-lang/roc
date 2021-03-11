@@ -1171,7 +1171,7 @@ fn parse_def_signature_help<'a>(
     // Indented more beyond the original indent.
     let indented_more = original_indent + 1;
 
-    and!(
+    let parser1 = {
         // Parse the first annotation. It doesn't need any spaces
         // around it parsed, because both the subsquent defs and the
         // final body will have space1_before on them.
@@ -1183,19 +1183,24 @@ fn parse_def_signature_help<'a>(
                 specialize(EExpr::Type, type_annotation::located_help(indented_more)),
                 min_indent,
                 EExpr::Space,
-                EExpr::IndentAnnotation
+                EExpr::IndentAnnotation,
             ),
             // The first annotation may be immediately (spaces_then_comment_or_newline())
             // followed by a body at the exact same indent_level
             // leading to an AnnotatedBody in this case
-            |_progress, type_ann, indent_level| map(
-                optional(and!(
-                    backtrackable(spaces_then_comment_or_newline_help()),
-                    body_at_indent_help(indent_level)
-                )),
-                move |opt_body| (type_ann.clone(), opt_body)
-            )
-        ),
+            |_progress, type_ann, indent_level| {
+                map(
+                    optional(and!(
+                        backtrackable(spaces_then_comment_or_newline_help()),
+                        body_at_indent_help(indent_level)
+                    )),
+                    move |opt_body| (type_ann.clone(), opt_body),
+                )
+            },
+        )
+    };
+
+    let parser2 = {
         and!(
             // Optionally parse additional defs.
             zero_or_more!(backtrackable(allocated(space0_before_e(
@@ -1207,15 +1212,22 @@ fn parse_def_signature_help<'a>(
             // Parse the final expression that will be returned.
             // It should be indented the same amount as the original.
             space0_before_e(
-                loc!(|arena, state| parse_expr_help(original_indent, arena, state)),
+                loc!(one_of![
+                    |arena, state| parse_expr_help(original_indent, arena, state),
+                    |_, state: State<'a>| Err((
+                        MadeProgress,
+                        EExpr::DefMissingFinalExpr(state.line, state.column),
+                        state
+                    )),
+                ]),
                 original_indent,
                 EExpr::Space,
                 EExpr::IndentEnd,
             )
         )
-    )
-    .parse(arena, state)
-    .map(
+    };
+
+    and!(parser1, parser2).parse(arena, state).map(
         move |(progress, ((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
             let loc_first_def: Located<Def<'a>> = match opt_body {
                 None => {

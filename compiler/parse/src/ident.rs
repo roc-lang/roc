@@ -150,7 +150,7 @@ pub fn parse_ident_help<'a>(
         Err((MadeProgress, fail, state)) => match fail {
             BadIdent::Start(r, c) => Err((NoProgress, EExpr::Start(r, c), state)),
             BadIdent::Space(e, r, c) => Err((NoProgress, EExpr::Space(e, r, c), state)),
-            _ => malformed_identifier(initial.bytes, fail, arena, state),
+            _ => malformed_identifier(initial.bytes, fail, state),
         },
     }
 }
@@ -158,13 +158,24 @@ pub fn parse_ident_help<'a>(
 fn malformed_identifier<'a>(
     initial_bytes: &'a [u8],
     problem: BadIdent,
-    _arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+    let chomped = chomp_malformed(state.bytes);
+    let delta = initial_bytes.len() - state.bytes.len();
+    let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
+
+    state = state.advance_without_indenting_ee(chomped, |r, c| {
+        EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
+    })?;
+
+    Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
+}
+
+/// skip forward to the next non-identifier character
+pub fn chomp_malformed<'a>(bytes: &'a [u8]) -> usize {
     use encode_unicode::CharExt;
-    // skip forward to the next non-identifier character
     let mut chomped = 0;
-    while let Ok((ch, width)) = char::from_utf8_slice_start(&state.bytes[chomped..]) {
+    while let Ok((ch, width)) = char::from_utf8_slice_start(&bytes[chomped..]) {
         // We can't use ch.is_alphanumeric() here because that passes for
         // things that are "numeric" but not ASCII digits, like `¾`
         if ch == '.' || ch == '_' || ch.is_alphabetic() || ch.is_ascii_digit() {
@@ -175,14 +186,7 @@ fn malformed_identifier<'a>(
         }
     }
 
-    let delta = initial_bytes.len() - state.bytes.len();
-    let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
-
-    state = state.advance_without_indenting_ee(chomped, |r, c| {
-        EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
-    })?;
-
-    Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
+    chomped
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,6 +451,12 @@ fn chomp_concrete_type<'a>(buffer: &'a [u8]) -> Result<(&'a str, &'a str, usize)
             Err(_) => Err(MadeProgress),
             Ok(rest) => {
                 let width = first.len() + rest as usize;
+
+                // we must explicitly check here for a trailing `.`
+                if let Some(b'.') = buffer.get(width) {
+                    return Err(MadeProgress);
+                }
+
                 let slice = &buffer[..width];
 
                 match slice.iter().rev().position(|c| *c == b'.') {

@@ -1,7 +1,6 @@
 use crate::ast;
-use crate::expr::expr;
 use crate::module::module_defs;
-use crate::parser::{loc, Parser, State, SyntaxError};
+use crate::parser::{Parser, State, SyntaxError};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_region::all::Located;

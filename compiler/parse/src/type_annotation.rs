@@ -518,12 +518,34 @@ fn parse_concrete_type<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>, TApply> {
-    let (_, (module_name, type_name), state) =
-        specialize(|_, r, c| TApply::End(r, c), crate::ident::concrete_type())
-            .parse(arena, state)?;
-    let answer = TypeAnnotation::Apply(module_name, type_name, &[]);
+    let initial_bytes = state.bytes;
 
-    Ok((MadeProgress, answer, state))
+    match crate::ident::concrete_type().parse(arena, state) {
+        Ok((_, (module_name, type_name), state)) => {
+            let answer = TypeAnnotation::Apply(module_name, type_name, &[]);
+
+            Ok((MadeProgress, answer, state))
+        }
+        Err((NoProgress, _, state)) => {
+            Err((NoProgress, TApply::End(state.line, state.column), state))
+        }
+        Err((MadeProgress, _, mut state)) => {
+            // we made some progress, but ultimately failed.
+            // that means a malformed type name
+            let chomped = crate::ident::chomp_malformed(state.bytes);
+            let delta = initial_bytes.len() - state.bytes.len();
+            let parsed_str =
+                unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
+
+            state = state.advance_without_indenting_ee(chomped, |r, c| {
+                TApply::Space(crate::parser::BadInputError::LineTooLong, r, c)
+            })?;
+
+            dbg!(&state);
+
+            Ok((MadeProgress, TypeAnnotation::Malformed(parsed_str), state))
+        }
+    }
 }
 
 fn parse_type_variable<'a>(

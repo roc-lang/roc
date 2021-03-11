@@ -1,8 +1,7 @@
 use crate::ast::CommentOrNewline::{self, *};
 use crate::ast::{Attempting, Spaceable};
 use crate::parser::{
-    self, and, ascii_char, ascii_string, optional, parse_utf8, peek_utf8_char, then, unexpected,
-    unexpected_eof, BadInputError, Col, Parser,
+    self, and, peek_utf8_char, unexpected, unexpected_eof, BadInputError, Col, Parser,
     Progress::{self, *},
     Row, State, SyntaxError,
 };
@@ -161,31 +160,69 @@ enum LineState {
     DocComment,
 }
 
-pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    then(
-        and!(ascii_char(b'#'), optional(ascii_string("# "))),
-        |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
-            if opt_doc != None {
-                return Err(unexpected(3, Attempting::LineComment, state));
-            }
-            let mut length = 0;
+//    then(
+//        and!(ascii_char(b'#'), optional(ascii_string("# "))),
+//        |arena: &'a Bump, state: State<'a>, _, (_, opt_doc)| {
+//            if opt_doc != None {
+//                return Err(unexpected(3, Attempting::LineComment, state));
+//            }
+//            let mut length = 0;
+//
+//            for &byte in state.bytes.iter() {
+//                if byte != b'\n' {
+//                    length += 1;
+//                } else {
+//                    break;
+//                }
+//            }
+//
+//            let comment = &state.bytes[..length];
+//            let state = state.advance_without_indenting(length + 1)?;
+//            match parse_utf8(comment) {
+//                Ok(comment_str) => Ok((MadeProgress, comment_str, state)),
+//                Err(reason) => state.fail(arena, MadeProgress, reason),
+//            }
+//        },
+//    )
 
-            for &byte in state.bytes.iter() {
-                if byte != b'\n' {
-                    length += 1;
-                } else {
+pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
+    |_, state: State<'a>| match chomp_line_comment(state.bytes) {
+        Ok(comment) => {
+            let width = 1 + comment.len();
+            let state = state.advance_without_indenting(width + 1)?;
+
+            Ok((MadeProgress, comment, state))
+        }
+        Err(progress) => Err((progress, SyntaxError::ConditionFailed, state)),
+    }
+}
+
+fn chomp_line_comment<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
+    if let Some(b'#') = buffer.get(0) {
+        if (&buffer[1..]).starts_with(b"# ") {
+            // this is a doc comment, not a line comment
+            Err(NoProgress)
+        } else {
+            use encode_unicode::CharExt;
+
+            let mut chomped = 1;
+
+            while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                if ch == '\n' {
                     break;
+                } else {
+                    chomped += width;
                 }
             }
 
-            let comment = &state.bytes[..length];
-            let state = state.advance_without_indenting(length + 1)?;
-            match parse_utf8(comment) {
-                Ok(comment_str) => Ok((MadeProgress, comment_str, state)),
-                Err(reason) => state.fail(arena, MadeProgress, reason),
-            }
-        },
-    )
+            let comment_bytes = &buffer[1..chomped];
+            let comment = unsafe { std::str::from_utf8_unchecked(comment_bytes) };
+
+            Ok(comment)
+        }
+    } else {
+        Err(NoProgress)
+    }
 }
 
 #[inline(always)]

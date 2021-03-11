@@ -376,6 +376,33 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::DefMissingFinalExpr(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("This definition is missing a final expression."),
+                    alloc.reflow(" A nested definition must be followed by"),
+                    alloc.reflow(" either another definition, or an expression"),
+                ]),
+                alloc.vcat(vec![
+                    alloc.text("x = 4").indent(4),
+                    alloc.text("y = 2").indent(4),
+                    alloc.text("").indent(4),
+                    alloc.text("x + y").indent(4),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING FINAL EXPRESSION".to_string(),
+            }
+        }
+
         EExpr::Colon(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
             let region = Region::from_row_col(*row, *col);
