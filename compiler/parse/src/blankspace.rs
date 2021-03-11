@@ -1,64 +1,15 @@
 use crate::ast::CommentOrNewline::{self, *};
 use crate::ast::{Attempting, Spaceable};
 use crate::parser::{
-    self, and, ascii_char, ascii_string, backtrackable, bad_input_to_syntax_error, optional,
-    parse_utf8, peek_utf8_char, then, unexpected, unexpected_eof, BadInputError, Col, Parser,
+    self, and, ascii_char, ascii_string, optional, parse_utf8, peek_utf8_char, then, unexpected,
+    unexpected_eof, BadInputError, Col, Parser,
     Progress::{self, *},
     Row, State, SyntaxError,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Region};
-
-/// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
-/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
-/// SpaceAfter as appropriate.
-fn space0_around<'a, P, S>(
-    parser: P,
-    min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
-where
-    S: Spaceable<'a>,
-    S: 'a,
-    S: Sized,
-    P: Parser<'a, Located<S>, SyntaxError<'a>>,
-    P: 'a,
-{
-    parser::map_with_arena(
-        and(space0(min_indent), and(parser, space0(min_indent))),
-        move |arena: &'a Bump,
-              tuples: (
-            &'a [CommentOrNewline<'a>],
-            (Located<S>, &'a [CommentOrNewline<'a>]),
-        )| {
-            let (spaces_before, (loc_val, spaces_after)) = tuples;
-
-            if spaces_before.is_empty() {
-                if spaces_after.is_empty() {
-                    loc_val
-                } else {
-                    arena
-                        .alloc(loc_val.value)
-                        .with_spaces_after(spaces_after, loc_val.region)
-                }
-            } else if spaces_after.is_empty() {
-                arena
-                    .alloc(loc_val.value)
-                    .with_spaces_before(spaces_before, loc_val.region)
-            } else {
-                let wrapped_expr = arena
-                    .alloc(loc_val.value)
-                    .with_spaces_after(spaces_after, loc_val.region);
-
-                arena
-                    .alloc(wrapped_expr.value)
-                    .with_spaces_before(spaces_before, wrapped_expr.region)
-            }
-        },
-    )
-}
+use roc_region::all::Located;
 
 pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
@@ -109,76 +60,6 @@ where
                 arena
                     .alloc(wrapped_expr.value)
                     .with_spaces_before(spaces_before, wrapped_expr.region)
-            }
-        },
-    )
-}
-
-/// Parses the given expression with 1 or more (spaces/comments/newlines) before it,
-/// and also 1 or more spaces after it.
-/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
-/// SpaceAfter as appropriate.
-fn space1_around<'a, P, S>(
-    parser: P,
-    min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
-where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError<'a>>,
-    P: 'a,
-{
-    parser::map_with_arena(
-        and(space1(min_indent), and(parser, space1(min_indent))),
-        |arena, (spaces_before, (loc_expr, spaces_after))| {
-            if spaces_before.is_empty() {
-                if spaces_after.is_empty() {
-                    loc_expr
-                } else {
-                    arena
-                        .alloc(loc_expr.value)
-                        .with_spaces_after(spaces_after, loc_expr.region)
-                }
-            } else if spaces_after.is_empty() {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_before(spaces_before, loc_expr.region)
-            } else {
-                let loc_wrapped_expr = arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_after(spaces_after, loc_expr.region);
-
-                arena
-                    .alloc(loc_wrapped_expr.value)
-                    .with_spaces_before(spaces_before, loc_wrapped_expr.region)
-            }
-        },
-    )
-}
-
-/// Parses the given expression with 0 or more (spaces/comments/newlines) before it.
-/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-fn space0_before<'a, P, S>(
-    parser: P,
-    min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
-where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError<'a>>,
-    P: 'a,
-{
-    parser::map_with_arena(
-        and!(space0(min_indent), parser),
-        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Located<S>)| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_before(space_list, loc_expr.region)
             }
         },
     )
@@ -238,92 +119,6 @@ where
     )
 }
 
-/// Parses the given expression with 1 or more (spaces/comments/newlines) before it.
-/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-fn space1_before<'a, P, S>(
-    parser: P,
-    min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
-where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError<'a>>,
-    P: 'a,
-{
-    parser::map_with_arena(
-        and!(backtrackable(space1(min_indent)), parser),
-        |arena, (space_list, loc_expr)| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_before(space_list, loc_expr.region)
-            }
-        },
-    )
-}
-
-/// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
-/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-fn space0_after<'a, P, S>(
-    parser: P,
-    min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
-where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError<'a>>,
-    P: 'a,
-{
-    parser::map_with_arena(
-        and!(parser, space0(min_indent)),
-        |arena, (loc_expr, space_list)| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_after(space_list, loc_expr.region)
-            }
-        },
-    )
-}
-
-/// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
-/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-fn space1_after<'a, P, S>(
-    parser: P,
-    min_indent: u16,
-) -> impl Parser<'a, Located<S>, SyntaxError<'a>>
-where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Located<S>, SyntaxError<'a>>,
-    P: 'a,
-{
-    parser::map_with_arena(
-        and!(parser, space1(min_indent)),
-        |arena, (loc_expr, space_list)| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_after(space_list, loc_expr.region)
-            }
-        },
-    )
-}
-
-/// Zero or more (spaces/comments/newlines).
-fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
-    spaces(false, min_indent)
-}
-
 pub fn space0_e<'a, E>(
     min_indent: u16,
     space_problem: fn(BadInputError, Row, Col) -> E,
@@ -357,15 +152,6 @@ where
         Ok((MadeProgress, spaces, state)) => Ok((MadeProgress, spaces, state)),
         Err(bad) => Err(bad),
     }
-}
-
-/// One or more (spaces/comments/newlines).
-fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
-    // TODO try benchmarking a short-circuit for the typical case: see if there is
-    // exactly one space followed by char that isn't [' ', '\n', or '#'], and
-    // if so, return empty slice. The case where there's exactly 1 space should
-    // be by far the most common.
-    spaces(true, min_indent)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -510,20 +296,6 @@ pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser:
             state,
         ))
     }
-}
-
-#[inline(always)]
-fn spaces<'a>(
-    require_at_least_one: bool,
-    min_indent: u16,
-) -> impl Parser<'a, &'a [CommentOrNewline<'a>], SyntaxError<'a>> {
-    spaces_help(
-        require_at_least_one,
-        min_indent,
-        bad_input_to_syntax_error,
-        |_, _| SyntaxError::OutdentedTooFar,
-        |_, _| SyntaxError::Eof(Region::zero()),
-    )
 }
 
 #[inline(always)]
