@@ -88,9 +88,9 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
+                    label: None,
                     features: wgpu::Features::empty(),
                     limits: wgpu::Limits::default(),
-                    shader_validation: false,
                 },
                 None,
             )
@@ -108,12 +108,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut size = window.inner_size();
 
     let swap_chain_descr = wgpu::SwapChainDescriptor {
-        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
         format: render_format,
         width: size.width,
         height: size.height,
-        //Immediate may cause tearing, change present_mode if this becomes a problem
-        present_mode: wgpu::PresentMode::Immediate,
+        // TODO go back to Immediate
+        present_mode: wgpu::PresentMode::Fifo,
     };
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
@@ -182,12 +182,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 swap_chain = gpu_device.create_swap_chain(
                     &surface,
                     &wgpu::SwapChainDescriptor {
-                        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+                        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
                         format: render_format,
                         width: size.width,
                         height: size.height,
-                        //Immediate may cause tearing, change present_mode if this becomes a problem
-                        present_mode: wgpu::PresentMode::Immediate,
+                        // TODO go back to Immediate
+                        present_mode: wgpu::PresentMode::Fifo,
                     },
                 );
 
@@ -376,7 +376,10 @@ fn draw_all_rects(
         render_pass.set_pipeline(&rect_resources.pipeline);
         render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
         render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(rect_buffers.index_buffer.slice(..));
+        render_pass.set_index_buffer(
+            rect_buffers.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
         render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
     } else {
         // need to begin render pass to clear screen
@@ -403,6 +406,7 @@ fn begin_render_pass<'a>(
             },
         }],
         depth_stencil_attachment: None,
+        label: None,
     })
 }
 
