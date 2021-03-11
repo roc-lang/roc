@@ -22,7 +22,7 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, Attempting, StrLiteral, TypeAnnotation};
+use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
@@ -2304,8 +2304,8 @@ fn load_pkg_config<'a>(
         Ok(bytes_vec) => {
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
-            let parse_state = parser::State::new_in(arena, bytes, Attempting::Module);
-            let parsed = roc_parse::module::header().parse(&arena, parse_state);
+            let parse_state = parser::State::new_in(arena, bytes);
+            let parsed = roc_parse::module::parse_header(&arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
             // Insert the first entries for this module's timings
@@ -2319,19 +2319,19 @@ fn load_pkg_config<'a>(
             effect_module_timing.parse_header = parse_header_duration;
 
             match parsed {
-                Ok((_, ast::Module::Interface { header }, _parse_state)) => {
+                Ok((ast::Module::Interface { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got Interface with header\n{:?}",
                         header
                     )))
                 }
-                Ok((_, ast::Module::App { header }, _parse_state)) => {
+                Ok((ast::Module::App { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got App with header\n{:?}",
                         header
                     )))
                 }
-                Ok((_, ast::Module::Platform { header }, parser_state)) => {
+                Ok((ast::Module::Platform { header }, parser_state)) => {
                     // make a Pkg-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
@@ -2359,8 +2359,8 @@ fn load_pkg_config<'a>(
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
-                Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
-                    fail.into_parse_problem(filename, bytes),
+                Err(fail) => Err(LoadingProblem::ParsingFailed(
+                    SyntaxError::Header(fail).into_parse_problem(filename, bytes),
                 )),
             }
         }
@@ -2474,8 +2474,8 @@ fn parse_header<'a>(
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new_in(arena, src_bytes, Attempting::Module);
-    let parsed = roc_parse::module::header().parse(&arena, parse_state);
+    let parse_state = parser::State::new_in(arena, src_bytes);
+    let parsed = roc_parse::module::parse_header(&arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
@@ -2485,7 +2485,7 @@ fn parse_header<'a>(
     module_timing.parse_header = parse_header_duration;
 
     match parsed {
-        Ok((_, ast::Module::Interface { header }, parse_state)) => {
+        Ok((ast::Module::Interface { header }, parse_state)) => {
             let header_src = unsafe {
                 let chomped = src_bytes.len() - parse_state.bytes.len();
                 std::str::from_utf8_unchecked(&src_bytes[..chomped])
@@ -2514,7 +2514,7 @@ fn parse_header<'a>(
                 module_timing,
             ))
         }
-        Ok((_, ast::Module::App { header }, parse_state)) => {
+        Ok((ast::Module::App { header }, parse_state)) => {
             let mut pkg_config_dir = filename.clone();
             pkg_config_dir.pop();
 
@@ -2623,7 +2623,7 @@ fn parse_header<'a>(
                 },
             }
         }
-        Ok((_, ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
+        Ok((ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
             arena,
             &"",
             module_ids,
@@ -2632,8 +2632,8 @@ fn parse_header<'a>(
             header,
             module_timing,
         )),
-        Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
-            fail.into_parse_problem(filename, src_bytes),
+        Err(fail) => Err(LoadingProblem::ParsingFailed(
+            SyntaxError::Header(fail).into_parse_problem(filename, src_bytes),
         )),
     }
 }

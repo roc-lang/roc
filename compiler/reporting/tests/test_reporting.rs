@@ -169,6 +169,36 @@ mod test_reporting {
         }
     }
 
+    fn list_header_reports<F>(arena: &Bump, src: &str, buf: &mut String, callback: F)
+    where
+        F: FnOnce(RocDocBuilder<'_>, &mut String),
+    {
+        use ven_pretty::DocAllocator;
+
+        use roc_parse::parser::State;
+
+        let state = State::new_in(arena, src.as_bytes());
+
+        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        use roc_parse::parser::Parser;
+        match roc_parse::module::header().parse(arena, state) {
+            Err((_, fail, _)) => {
+                let interns = Interns::default();
+                let home = crate::helpers::test_home();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                let problem = fail.into_parse_problem(filename.clone(), src.as_bytes());
+                let doc = parse_problem(&alloc, filename, 0, problem);
+
+                callback(doc.pretty(&alloc).append(alloc.line()), buf)
+            }
+            Ok(_) => todo!(),
+        }
+    }
+
     fn report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
         let arena = Bump::new();
@@ -180,6 +210,30 @@ mod test_reporting {
         };
 
         list_reports(&arena, src, &mut buf, callback);
+
+        // convenient to copy-paste the generated message
+        if true {
+            if buf != expected_rendering {
+                for line in buf.split("\n") {
+                    println!("                {}", line);
+                }
+            }
+        }
+
+        assert_eq!(buf, expected_rendering);
+    }
+
+    fn report_header_problem_as(src: &str, expected_rendering: &str) {
+        let mut buf: String = String::new();
+        let arena = Bump::new();
+
+        let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
+            doc.1
+                .render_raw(70, &mut roc_reporting::report::CiWrite::new(buf))
+                .expect("list_reports")
+        };
+
+        list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
         if true {
@@ -5698,6 +5752,115 @@ mod test_reporting {
                               ^
 
                 I was expecting to see an expression like 42 or "hello".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn provides_to_identifier() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "test-base64"
+                    packages { base: "platform" }
+                    imports [base.Task, Base64 ]
+                    provides [ main, @Foo ] to base
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
+                
+                I am in the middle of parsing a provides list, but I got stuck here:
+                
+                3│      imports [base.Task, Base64 ]
+                4│      provides [ main, @Foo ] to base
+                                         ^
+                
+                I was expecting a type name, value name or function name next, like 
+                
+                    provides [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_identifier() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface Foobar 
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
+                
+                I am in the middle of parsing a exposes list, but I got stuck here:
+                
+                1│  interface Foobar 
+                2│      exposes [ main, @Foo ]
+                                        ^
+                
+                I was expecting a type name, value name or function name next, like 
+                
+                    exposes [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_module_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface foobar 
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE NAME ───────────────────────────────────────────────────────────
+                
+                I am partway through parsing a header, but got stuck here:
+                
+                1│  interface foobar 
+                              ^
+                
+                I am expecting a module name next, like BigNum or Main. Module names
+                must start with an uppercase letter.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_app_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app foobar 
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD APP NAME ──────────────────────────────────────────────────────────────
+                
+                I am partway through parsing a header, but got stuck here:
+                
+                1│  app foobar 
+                        ^
+                
+                I am expecting an application name next, like app "main" or
+                app "editor". App names are surrounded by quotation marks.
             "#
             ),
         )

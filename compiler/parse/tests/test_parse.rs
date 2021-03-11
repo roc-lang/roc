@@ -23,14 +23,12 @@ mod test_parse {
     use roc_parse::ast::Pattern::{self, *};
     use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
-    use roc_parse::ast::{
-        self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
-    };
+    use roc_parse::ast::{self, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch};
     use roc_parse::header::{
         AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
         PackageName, PackageOrPath, PlatformHeader, To,
     };
-    use roc_parse::module::{app_header, interface_header, module_defs, platform_header};
+    use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, State, SyntaxError};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
@@ -43,10 +41,9 @@ mod test_parse {
         assert_eq!(Ok(expected_expr), actual);
     }
 
-    fn assert_parsing_fails<'a>(input: &'a str, _reason: SyntaxError, _attempting: Attempting) {
+    fn assert_parsing_fails<'a>(input: &'a str, _reason: SyntaxError) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, input);
-        // let expected_fail = Fail { reason, attempting };
 
         assert!(actual.is_err());
     }
@@ -291,7 +288,7 @@ mod test_parse {
 
     #[test]
     fn empty_source_file() {
-        assert_parsing_fails("", SyntaxError::Eof(Region::zero()), Attempting::Module);
+        assert_parsing_fails("", SyntaxError::Eof(Region::zero()));
     }
 
     #[test]
@@ -308,11 +305,7 @@ mod test_parse {
         // Make sure it's longer than our maximum line length
         assert_eq!(too_long_str.len(), max_line_length + 1);
 
-        assert_parsing_fails(
-            &too_long_str,
-            SyntaxError::LineTooLong(0),
-            Attempting::Module,
-        );
+        assert_parsing_fails(&too_long_str, SyntaxError::LineTooLong(0));
     }
 
     // INT LITERALS
@@ -2416,7 +2409,7 @@ mod test_parse {
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
-        let expected = AppHeader {
+        let header = AppHeader {
             name: Located::new(0, 0, 4, 14, module_name),
             packages,
             imports,
@@ -2433,17 +2426,15 @@ mod test_parse {
             after_to: &[],
         };
 
+        let expected = roc_parse::ast::Module::App { header };
+
         let src = indoc!(
             r#"
                 app "test-app" packages {} imports [] provides [] to blah
             "#
         );
-        let actual = app_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2457,7 +2448,7 @@ mod test_parse {
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
-        let expected = AppHeader {
+        let header = AppHeader {
             name: Located::new(0, 0, 4, 14, module_name),
             packages,
             imports,
@@ -2474,17 +2465,16 @@ mod test_parse {
             after_to: &[],
         };
 
+        let expected = roc_parse::ast::Module::App { header };
+
         let src = indoc!(
             r#"
                 app "test-app" provides [] to "./blah"
             "#
         );
-        let actual = app_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2509,7 +2499,8 @@ mod test_parse {
         let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
         let provides = bumpalo::vec![in &arena; provide_entry];
         let module_name = StrLiteral::PlainLine("quicksort");
-        let expected = AppHeader {
+
+        let header = AppHeader {
             name: Located::new(0, 0, 4, 15, module_name),
             packages,
             imports,
@@ -2526,6 +2517,8 @@ mod test_parse {
             after_to: &[],
         };
 
+        let expected = roc_parse::ast::Module::App { header };
+
         let src = indoc!(
             r#"
                 app "quicksort"
@@ -2535,12 +2528,8 @@ mod test_parse {
             "#
         );
 
-        let actual = app_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2560,7 +2549,7 @@ mod test_parse {
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
         };
-        let expected = PlatformHeader {
+        let header = PlatformHeader {
             name: Located::new(0, 0, 9, 23, pkg_name),
             requires: Vec::new_in(&arena),
             exposes: Vec::new_in(&arena),
@@ -2581,13 +2570,11 @@ mod test_parse {
             after_provides: &[],
         };
 
+        let expected = roc_parse::ast::Module::Platform { header };
+
         let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects fx.Blah {}";
-        let actual = platform_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2621,7 +2608,7 @@ mod test_parse {
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
         };
-        let expected = PlatformHeader {
+        let header = PlatformHeader {
             name: Located::new(0, 0, 9, 19, pkg_name),
             requires: Vec::new_in(&arena),
             exposes: Vec::new_in(&arena),
@@ -2642,6 +2629,8 @@ mod test_parse {
             after_provides: &[],
         };
 
+        let expected = roc_parse::ast::Module::Platform { header };
+
         let src = indoc!(
             r#"
                 platform foo/barbaz
@@ -2653,12 +2642,8 @@ mod test_parse {
                     effects fx.Effect {}
             "#
         );
-        let actual = platform_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2669,7 +2654,7 @@ mod test_parse {
         let exposes = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);
         let module_name = ModuleName::new("Foo");
-        let expected = InterfaceHeader {
+        let header = InterfaceHeader {
             name: Located::new(0, 0, 10, 13, module_name),
             exposes,
             imports,
@@ -2680,17 +2665,16 @@ mod test_parse {
             before_imports: &[],
             after_imports: &[],
         };
+
+        let expected = roc_parse::ast::Module::Interface { header };
+
         let src = indoc!(
             r#"
                 interface Foo exposes [] imports []
             "#
         );
-        let actual = interface_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2701,7 +2685,7 @@ mod test_parse {
         let exposes = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);
         let module_name = ModuleName::new("Foo.Bar.Baz");
-        let expected = InterfaceHeader {
+        let header = InterfaceHeader {
             name: Located::new(0, 0, 10, 21, module_name),
             exposes,
             imports,
@@ -2712,17 +2696,16 @@ mod test_parse {
             before_imports: &[],
             after_imports: &[],
         };
+
+        let expected = roc_parse::ast::Module::Interface { header };
+
         let src = indoc!(
             r#"
                 interface Foo.Bar.Baz exposes [] imports []
             "#
         );
-        let actual = interface_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2748,10 +2731,7 @@ mod test_parse {
             "#
         );
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
+            .parse(&arena, State::new_in(&arena, src.as_bytes()))
             .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
@@ -2810,10 +2790,7 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
+            .parse(&arena, State::new_in(&arena, src.as_bytes()))
             .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
@@ -2833,11 +2810,8 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+            .parse(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert!(actual.is_ok());
     }
@@ -2858,11 +2832,8 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+            .parse(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert!(actual.is_ok());
     }
@@ -2882,11 +2853,8 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+            .parse(&arena, State::new_in(&arena, src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         dbg!(&actual);
 

@@ -20,6 +20,7 @@ use roc_region::all::{Located, Region};
 
 use crate::parser::Progress::{self, *};
 
+// public for testing purposes
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
     // as this causes rustc to stack overflow. Thus, parse_expr must be a

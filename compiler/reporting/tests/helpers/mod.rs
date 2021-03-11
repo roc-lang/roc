@@ -11,7 +11,7 @@ use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
-use roc_parse::ast::{self, Attempting};
+use roc_parse::ast;
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::Problem;
@@ -110,7 +110,7 @@ pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
+    let state = State::new_in(arena, input.trim().as_bytes());
     let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
     let answer = parser.parse(&arena, state);
 

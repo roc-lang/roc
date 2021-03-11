@@ -43,7 +43,7 @@ pub enum Either<First, Second> {
 }
 
 impl<'a> State<'a> {
-    pub fn new_in(arena: &'a Bump, bytes: &'a [u8], _attempting: Attempting) -> State<'a> {
+    pub fn new_in(arena: &'a Bump, bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
             line: 0,
@@ -334,7 +334,145 @@ pub enum SyntaxError<'a> {
     Type(Type<'a>),
     Pattern(EPattern<'a>),
     Expr(EExpr<'a>),
+    Header(EHeader<'a>),
     Space(BadInputError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EHeader<'a> {
+    Provides(EProvides<'a>, Row, Col),
+    Exposes(EExposes, Row, Col),
+    Imports(EImports, Row, Col),
+    Requires(ERequires<'a>, Row, Col),
+    Packages(EPackages<'a>, Row, Col),
+    Effects(EEffects<'a>, Row, Col),
+
+    Space(BadInputError, Row, Col),
+    Start(Row, Col),
+    ModuleName(Row, Col),
+    AppName(EString<'a>, Row, Col),
+    PlatformName(EPackageName, Row, Col),
+    IndentStart(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EProvides<'a> {
+    Provides(Row, Col),
+    To(Row, Col),
+    IndentProvides(Row, Col),
+    IndentTo(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    IndentPackage(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    Identifier(Row, Col),
+    Package(EPackageOrPath<'a>, Row, Col),
+    Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EExposes {
+    Exposes(Row, Col),
+    IndentExposes(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    Identifier(Row, Col),
+    Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ERequires<'a> {
+    Requires(Row, Col),
+    IndentRequires(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    TypedIdent(ETypedIdent<'a>, Row, Col),
+    Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETypedIdent<'a> {
+    Space(BadInputError, Row, Col),
+    HasType(Row, Col),
+    IndentHasType(Row, Col),
+    Name(Row, Col),
+    Type(Type<'a>, Row, Col),
+    IndentType(Row, Col),
+    Identifier(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPackages<'a> {
+    Space(BadInputError, Row, Col),
+    Packages(Row, Col),
+    IndentPackages(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    PackageEntry(EPackageEntry<'a>, Row, Col),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EPackageName {
+    MissingSlash(Row, Col),
+    Account(Row, Col),
+    Pkg(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPackageOrPath<'a> {
+    BadPath(EString<'a>, Row, Col),
+    BadPackage(EPackageName, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EPackageEntry<'a> {
+    BadPackageOrPath(EPackageOrPath<'a>, Row, Col),
+    Shorthand(Row, Col),
+    Colon(Row, Col),
+    IndentPackageOrPath(Row, Col),
+    Space(BadInputError, Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EEffects<'a> {
+    Space(BadInputError, Row, Col),
+    Effects(Row, Col),
+    IndentEffects(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    TypedIdent(ETypedIdent<'a>, Row, Col),
+    ShorthandDot(Row, Col),
+    Shorthand(Row, Col),
+    TypeName(Row, Col),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EImports {
+    Imports(Row, Col),
+    IndentImports(Row, Col),
+    IndentListStart(Row, Col),
+    IndentListEnd(Row, Col),
+    ListStart(Row, Col),
+    ListEnd(Row, Col),
+    Identifier(Row, Col),
+    ExposingDot(Row, Col),
+    ShorthandDot(Row, Col),
+    Shorthand(Row, Col),
+    ModuleName(Row, Col),
+    Space(BadInputError, Row, Col),
+    IndentSetStart(Row, Col),
+    IndentSetEnd(Row, Col),
+    SetStart(Row, Col),
+    SetEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,14 +583,6 @@ pub enum EString<'a> {
     UnknownEscape(Row, Col),
     Format(&'a SyntaxError<'a>, Row, Col),
 }
-
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub enum Escape {
-//     EscapeUnknown,
-//     BadUnicodeFormat(u16),
-//     BadUnicodeCode(u16),
-//     BadUnicodeLength(u16, i32, i32),
-// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERecord<'a> {
@@ -1128,31 +1258,27 @@ where
     ToError: Fn(Row, Col) -> E,
     E: 'a,
 {
-    move |arena, state: State<'a>| {
-        let initial_state = state.clone();
-        // first parse the keyword characters
-        let (_, _, after_keyword_state) = ascii_string(keyword)
-            .parse(arena, state)
-            .map_err(|(_, _, state)| (NoProgress, if_error(state.line, state.column), state))?;
+    move |_, mut state: State<'a>| {
+        let width = keyword.len();
 
-        // then we must have at least one space character
-        // TODO this is potentially wasteful if there are a lot of spaces
-        match peek_utf8_char(&after_keyword_state) {
-            Ok((next, _width)) if next == ' ' || next == '#' || next == '\n' => {
-                // give back the state after parsing the keyword, but before the whitespace
-                // that way we can attach the whitespace to whatever follows
-                Ok((MadeProgress, (), after_keyword_state))
+        if !state.bytes.starts_with(keyword.as_bytes()) {
+            return Err((NoProgress, if_error(state.line, state.column), state));
+        }
+
+        // the next character should not be an identifier character
+        // to prevent treating `whence` or `iffy` as keywords
+        match state.bytes.get(width) {
+            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
+                state.column += width as u16;
+                state.bytes = &state.bytes[width..];
+                Ok((MadeProgress, (), state))
             }
-            _ => {
-                // this is not a keyword, maybe it's `whence` or `iffy`
-                // anyway, make no progress and return the initial state
-                // so we can try something else
-                Err((
-                    NoProgress,
-                    if_error(initial_state.line, initial_state.column),
-                    initial_state,
-                ))
+            None => {
+                state.column += width as u16;
+                state.bytes = &state.bytes[width..];
+                Ok((MadeProgress, (), state))
             }
+            Some(_) => Err((NoProgress, if_error(state.line, state.column), state)),
         }
     }
 }
@@ -1589,6 +1715,46 @@ macro_rules! collection {
     };
 }
 
+#[macro_export]
+macro_rules! collection_e {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $space_problem:expr, $indent_problem:expr) => {
+        skip_first!(
+            $opening_brace,
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // roc_collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!($crate::parser::word1(b' ', |row, col| $space_problem(
+                    crate::parser::BadInputError::LineTooLong,
+                    row,
+                    col
+                ))),
+                skip_second!(
+                    $crate::parser::sep_by0(
+                        $delimiter,
+                        $crate::blankspace::space0_around_ee(
+                            $elem,
+                            $min_indent,
+                            $space_problem,
+                            $indent_problem,
+                            $indent_problem
+                        )
+                    ),
+                    $closing_brace
+                )
+            )
+        )
+    };
+}
+
 /// Parse zero or more elements between two braces (e.g. square braces).
 /// Elements can be optionally surrounded by spaces, and are separated by a
 /// delimiter (e.g comma-separated) with optionally a trailing delimiter.
@@ -1716,6 +1882,19 @@ macro_rules! one_of {
     };
     ($p1:expr, $($others:expr),+ $(,)?) => {
         one_of!($p1, $($others),+)
+    };
+}
+
+#[macro_export]
+macro_rules! maybe {
+    ($p1:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| match $p1
+            .parse(arena, state)
+        {
+            Ok((progress, value, state)) => Ok((progress, Some(value), state)),
+            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
+            Err((NoProgress, _, state)) => Ok((NoProgress, None, state)),
+        }
     };
 }
 
