@@ -453,6 +453,16 @@ where
                 Err((a, b, c)) => Err((a, b, c)),
             }
         } else {
+            match spaces_help_help(min_indent, space_problem, indent_problem).parse(arena, state) {
+                Ok((MadeProgress, b, c)) => Ok((MadeProgress, b, c)),
+                Ok((NoProgress, b, state)) => Err((
+                    NoProgress,
+                    missing_space_problem(state.line, state.column),
+                    state,
+                )),
+                Err((a, b, c)) => Err((a, b, c)),
+            }
+            /*
             match spaces_help_help_help(
                 require_at_least_one,
                 min_indent,
@@ -471,6 +481,7 @@ where
                     Err((a, b, c))
                 }
             }
+            */
         }
     }
 }
