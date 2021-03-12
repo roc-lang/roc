@@ -5,7 +5,7 @@ use std::fmt;
 use Progress::*;
 
 /// A position in a source file.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct State<'a> {
     /// The raw input bytes from the file.
     pub bytes: &'a [u8],
@@ -18,10 +18,6 @@ pub struct State<'a> {
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
     pub indent_col: u16,
-
-    // true at the beginning of each line, then false after encountering
-    // the first nonspace char on that line.
-    pub is_indenting: bool,
 
     /// The original length of the string, before any bytes were consumed.
     /// This is used internally by the State::bytes_consumed() function.
@@ -43,7 +39,6 @@ impl<'a> State<'a> {
             line: 0,
             column: 0,
             indent_col: 0,
-            is_indenting: true,
             original_len: bytes.len(),
         }
     }
@@ -84,7 +79,6 @@ impl<'a> State<'a> {
                     bytes: &self.bytes[quantity..],
                     column: column_usize as u16,
                     // Once we hit a nonspace character, we are no longer indenting.
-                    is_indenting: false,
                     ..self
                 })
             }
@@ -130,7 +124,6 @@ impl<'a> fmt::Debug for State<'a> {
 
         write!(f, "\n\t(line, col): ({}, {}),", self.line, self.column)?;
         write!(f, "\n\tindent_col: {}", self.indent_col)?;
-        write!(f, "\n\tis_indenting: {:?}", self.is_indenting)?;
         write!(f, "\n\toriginal_len: {}", self.original_len)?;
         write!(f, "\n}}")
     }

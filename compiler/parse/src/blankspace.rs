@@ -172,7 +172,6 @@ pub fn spaces_till_end_of_line<'a, E: 'a>(
                     state.line = row;
                     state.column = col;
                     state.bytes = bytes;
-                    state.is_indenting = true;
 
                     return Ok((MadeProgress, None, state));
                 }
@@ -201,7 +200,6 @@ pub fn spaces_till_end_of_line<'a, E: 'a>(
                         } else {
                             state.bytes = &bytes[width..];
                         }
-                        state.is_indenting = true;
 
                         dbg!(comment, &state);
 
@@ -260,7 +258,7 @@ fn chomp_line_comment<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
 /// Advance the parser while also indenting as appropriate.
 /// This assumes we are only advancing with spaces, since they can indent.
 fn advance_spaces_e<'a, TE, E>(
-    state: &State<'a>,
+    state: State<'a>,
     spaces: usize,
     to_error: TE,
 ) -> Result<State<'a>, (Progress, E, State<'a>)>
@@ -268,37 +266,12 @@ where
     TE: Fn(Row, Col) -> E,
 {
     match (state.column as usize).checked_add(spaces) {
-        Some(column_usize) if column_usize <= u16::MAX as usize => {
-            // Spaces don't affect is_indenting; if we were previously indneting,
-            // we still are, and if we already finished indenting, we're still done.
-            let is_indenting = state.is_indenting;
-
-            // If we're indenting, spaces indent us further.
-            let indent_col = if is_indenting {
-                // This doesn't need to be checked_add because it's always true that
-                // indent_col <= col, so if this could possibly overflow, we would
-                // already have errored out from the column calculation.
-                //
-                // Leaving debug assertions in case this invariant someday disappers.
-                debug_assert!(u16::MAX - state.indent_col >= spaces as u16);
-                debug_assert!(spaces <= u16::MAX as usize);
-
-                // state.indent_col + spaces as u16
-                state.indent_col
-            } else {
-                state.indent_col
-            };
-
-            Ok(State {
-                bytes: &state.bytes[spaces..],
-                line: state.line,
-                column: column_usize as u16,
-                indent_col,
-                is_indenting,
-                original_len: state.original_len,
-            })
-        }
-        _ => Err(crate::parser::line_too_long_e(state.clone(), to_error)),
+        Some(column_usize) => Ok(State {
+            bytes: &state.bytes[spaces..],
+            column: column_usize as u16,
+            ..state
+        }),
+        _ => Err((NoProgress, to_error(state.line, state.column), state)),
     }
 }
 
@@ -319,7 +292,7 @@ pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser:
                     spaces_seen += 1;
                     if spaces_seen == spaces_expected {
                         let state =
-                            advance_spaces_e(&state, spaces_expected as usize, EExpr::IndentStart)?;
+                            advance_spaces_e(state, spaces_expected as usize, EExpr::IndentStart)?;
                         return Ok((MadeProgress, (), state));
                     }
                 }
@@ -379,7 +352,6 @@ where
                 } else if state.line != row {
                     // we parsed at least one newline
 
-                    state.is_indenting = true;
                     state.indent_col = col;
 
                     if col >= min_indent {
