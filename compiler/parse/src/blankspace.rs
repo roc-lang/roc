@@ -201,8 +201,6 @@ pub fn spaces_till_end_of_line<'a, E: 'a>(
                             state.bytes = &bytes[width..];
                         }
 
-                        dbg!(comment, &state);
-
                         return Ok((MadeProgress, Some(comment), state));
                     }
                     Err(_) => unreachable!("we check the first character is a #"),
@@ -227,7 +225,7 @@ pub fn spaces_till_end_of_line<'a, E: 'a>(
     }
 }
 
-fn chomp_line_comment<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
+fn chomp_line_comment(buffer: &[u8]) -> Result<&str, Progress> {
     if let Some(b'#') = buffer.get(0) {
         if (&buffer[1..]).starts_with(b"# ") {
             // this is a doc comment, not a line comment
@@ -257,11 +255,11 @@ fn chomp_line_comment<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
 
 /// Advance the parser while also indenting as appropriate.
 /// This assumes we are only advancing with spaces, since they can indent.
-fn advance_spaces_e<'a, TE, E>(
-    state: State<'a>,
+fn advance_spaces_e<TE, E>(
+    state: State,
     spaces: usize,
     to_error: TE,
-) -> Result<State<'a>, (Progress, E, State<'a>)>
+) -> Result<State, (Progress, E, State)>
 where
     TE: Fn(Row, Col) -> E,
 {
@@ -424,7 +422,7 @@ fn eat_spaces<'a>(
         }
     }
 
-    return Good {
+    Good {
         row,
         col,
         bytes,
@@ -498,7 +496,7 @@ fn eat_line_comment<'a>(
         }
     }
 
-    return Good {
+    Good {
         row,
         col,
         bytes,
