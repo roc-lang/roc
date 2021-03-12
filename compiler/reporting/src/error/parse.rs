@@ -393,7 +393,7 @@ fn to_expr_report<'a>(
                 alloc.vcat(vec![
                     alloc.text("x = 4").indent(4),
                     alloc.text("y = 2").indent(4),
-                    alloc.text("").indent(4),
+                    alloc.text(""),
                     alloc.text("x + y").indent(4),
                 ]),
             ]);
