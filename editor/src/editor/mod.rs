@@ -8,3 +8,4 @@ mod resources;
 mod syntax_highlight;
 mod theme;
 mod util;
+mod markup;

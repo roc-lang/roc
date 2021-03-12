@@ -2,26 +2,27 @@ use super::keyboard_input;
 use crate::editor::{
     config::Config,
     ed_error::{print_err, print_ui_err},
-    mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel},
+    mvc::{app_model::AppModel, app_update, ed_model},
     theme::EdTheme,
 };
 use crate::graphics::{
     colors::to_wgpu_color,
     lowlevel::ortho::update_ortho_buffer,
     lowlevel::pipelines,
+    lowlevel::buffer::create_rect_buffers,
     primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
+    primitives::rect::Rect,
     style::CODE_TXT_XY,
 };
 use crate::ui::{text::text_pos::TextPos, ui_error::UIResult};
 use crate::editor::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
-use crate::lang::{pool::Pool, scope::Scope};
+use crate::lang::{pool::Pool};
 use crate::lang::expr::{Env};
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
 use roc_module::symbol::{IdentIds, ModuleIds};
-use roc_region::all::Region;
 use roc_types::subs::VarStore;
 use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
@@ -171,8 +172,6 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let render_ast_arena = Bump::new();
 
-    let mut rects_arena = Bump::new();
-
     let config: Config = confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
 
@@ -274,39 +273,40 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
 
-                    let ast_render_res = super::render_ast::render_expr2(
-                        &render_ast_arena,
-                        &mut ed_model.module.env,
-                        &ed_model.module.ast_root,
-                        &size,
-                        CODE_TXT_XY.into(),
-                        &config,
-                        &mut glyph_brush,
-                    );
+                    let text_and_rects_res = 
+                        super::render_ast::expr2_to_wgpu(
+                            &render_ast_arena,
+                            &mut ed_model.module.env,
+                            &ed_model.module.ast_root,
+                            &size,
+                            CODE_TXT_XY.into(),
+                            &config,
+                            ed_model.glyph_dim_rect_opt.unwrap() // TODO remove unwrap()
+                        );
 
-                    if let Err(e) = ast_render_res {
-                        print_err(&e)
+                    match text_and_rects_res {
+                        Ok((text_section, rects)) => {
+                            glyph_brush.queue(text_section);
+
+                            match draw_all_rects(
+                                &rects,
+                                &mut encoder,
+                                &frame.view,
+                                &gpu_device,
+                                &rect_resources,
+                                &ed_theme,
+                            ) {
+                                Ok(()) => (),
+                                Err(e) => {
+                                    print_ui_err(&e);
+                                    begin_render_pass(&mut encoder, &frame.view, &ed_theme);
+                                }
+                            }
+                        },
+                        Err(e) => print_err(&e)
                     }
                 } else {
                     queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &config, &mut glyph_brush);
-                }
-
-                rects_arena.reset();
-
-                match draw_all_rects(
-                    &app_model.ed_model_opt,
-                    &rects_arena,
-                    &mut encoder,
-                    &frame.view,
-                    &gpu_device,
-                    &rect_resources,
-                    &ed_theme,
-                ) {
-                    Ok(()) => (),
-                    Err(e) => {
-                        print_ui_err(&e);
-                        begin_render_pass(&mut encoder, &frame.view, &ed_theme);
-                    }
                 }
 
                 // draw all text
@@ -343,19 +343,17 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 }
 
 fn draw_all_rects(
-    ed_model_opt: &Option<EdModel>,
-    arena: &Bump,
+    all_rects: &Vec<Rect>,
     encoder: &mut CommandEncoder,
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
     ed_theme: &EdTheme,
 ) -> UIResult<()> {
-    /*if let Some(ed_model) = ed_model_opt {
-        let all_rects = ed_view::create_ed_rects(ed_model, &ed_theme.ui_theme, arena)?;
+    let rect_buffers = create_rect_buffers(gpu_device, encoder, all_rects);
 
-        let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
-
+    // block necessary for borrowing encoder
+    {
         let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
 
         render_pass.set_pipeline(&rect_resources.pipeline);
@@ -366,10 +364,7 @@ fn draw_all_rects(
             wgpu::IndexFormat::Uint32,
         );
         render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-    } else {
-        // need to begin render pass to clear screen
-        begin_render_pass(encoder, texture_view, ed_theme);
-    }*/
+    }
 
     begin_render_pass(encoder, texture_view, ed_theme);
 

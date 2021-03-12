@@ -1,7 +1,6 @@
 use gr_colors::{from_hsb, RgbaTup};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
 use crate::graphics::colors as gr_colors;
 
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug, Deserialize, Serialize)]
@@ -40,3 +39,4 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
 
     highlight_map
 }
+

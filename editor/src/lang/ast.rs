@@ -198,12 +198,6 @@ pub enum Expr2 {
         ext_var: Variable,                             // 4B
         arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
     },
-
-    Caret {
-        offset_row: usize,      // 8B for 64 bit architecture
-        offset_col: usize,      // 8B for 64 bit architecture
-        inner: NodeId<Expr2>    // 4B
-    },
     Hole, // Rendered as empty box in editor 
 
     // Compiles, but will crash if reached
