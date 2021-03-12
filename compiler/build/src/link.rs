@@ -351,7 +351,11 @@ fn link_macos(
             // Don't allow LD_ env vars to affect this
             .env_clear()
             .args(&[
-                "--gc-sections",
+                // NOTE: we don't do --gc-sections on macOS because the default
+                // macOS linker doesn't support it, but it's a performance
+                // optimization, so if we ever switch to a different linker,
+                // we'd like to re-enable it on macOS!
+                // "--gc-sections",
                 link_type_arg,
                 "-arch",
                 target.architecture.to_string().as_str(),
