@@ -469,11 +469,44 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     }
 }
 
+fn unary_negate_better<'a>() -> impl Parser<'a, (), EExpr<'a>> {
+    move |_arena: &'a Bump, state: State<'a>| {
+        // a minus is unary iff
+        //
+        // - it is preceded by whitespace (spaces, newlines, comments)
+        // - it is not followed by whitespace
+        let followed_by_whitespace = state
+            .bytes
+            .get(1)
+            .map(
+                |c| c.is_ascii_whitespace() || *c == b'#', /*|| c.is_ascii_digit()*/
+            )
+            .unwrap_or(false);
+
+        if state.bytes.starts_with(b"-") && !followed_by_whitespace {
+            // the negate is only unary if it is not followed by whitespace
+            Ok((
+                MadeProgress,
+                (),
+                State {
+                    bytes: &state.bytes[1..],
+                    column: state.column + 1,
+                    ..state
+                },
+            ))
+        } else {
+            // this is not a negated expression
+            Err((NoProgress, EExpr::UnaryNot(state.line, state.column), state))
+        }
+    }
+}
+
 /// Unary (!) or (-)
 ///
 /// e.g. `!x` or `-x`
 fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     one_of!(
+        specialize(EExpr::Number, number_literal_help()),
         map_with_arena!(
             // must backtrack to distinguish `!x` from `!= y`
             and!(loc!(unary_not()), move |arena, state| parse_expr_help(
@@ -486,7 +519,7 @@ fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
         map_with_arena!(
             and!(
                 // must backtrack to distinguish `x - 1` from `-1`
-                loc!(unary_negate()),
+                loc!(unary_negate_better()),
                 move |arena, state| parse_expr_help(min_indent, arena, state)
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
