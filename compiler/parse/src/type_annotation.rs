@@ -2,10 +2,10 @@ use crate::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
-    allocated, backtrackable, not_e, optional, specialize, specialize_ref, word1, word2,
-    ParseResult, Parser,
+    allocated, backtrackable, optional, specialize, specialize_ref, word1, word2, ParseResult,
+    Parser,
     Progress::{self, *},
-    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
+    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, Type,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -60,7 +60,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Typ
                 loc!(specialize(Type::TRecord, record_type(min_indent))),
                 loc!(specialize(Type::TTagUnion, tag_union_type(min_indent))),
                 loc!(applied_type(min_indent)),
-                loc!(specialize(Type::TVariable, parse_type_variable))
+                loc!(parse_type_variable)
             ),
             // Inline alias notation, e.g. [ Nil, Cons a (List a) ] as List a
             one_of![
@@ -115,21 +115,13 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
     map_with_arena!(
         and!(
             backtrackable(space0_e(min_indent, Type::TSpace, Type::TIndentStart)),
-            skip_first!(
-                // Once we hit an "as", stop parsing args
-                // and roll back parsing of preceding spaces
-                not_e(
-                    crate::parser::keyword_e(keyword::AS, Type::TStart),
-                    Type::TStart
-                ),
-                one_of!(
-                    loc_wildcard(),
-                    specialize(Type::TInParens, loc_type_in_parens(min_indent)),
-                    loc!(specialize(Type::TRecord, record_type(min_indent))),
-                    loc!(specialize(Type::TTagUnion, tag_union_type(min_indent))),
-                    loc!(specialize(Type::TApply, parse_concrete_type)),
-                    loc!(specialize(Type::TVariable, parse_type_variable))
-                )
+            one_of!(
+                loc_wildcard(),
+                specialize(Type::TInParens, loc_type_in_parens(min_indent)),
+                loc!(specialize(Type::TRecord, record_type(min_indent))),
+                loc!(specialize(Type::TTagUnion, tag_union_type(min_indent))),
+                loc!(specialize(Type::TApply, parse_concrete_type)),
+                loc!(parse_type_variable)
             )
         ),
         |arena: &'a Bump, (spaces, argument): (&'a [_], Located<TypeAnnotation<'a>>)| {
@@ -457,7 +449,7 @@ fn parse_concrete_type<'a>(
 fn parse_type_variable<'a>(
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, TypeAnnotation<'a>, TVariable> {
+) -> ParseResult<'a, TypeAnnotation<'a>, Type<'a>> {
     match crate::ident::lowercase_ident().parse(arena, state) {
         Ok((_, name, state)) => {
             let answer = TypeAnnotation::BoundVariable(name);
@@ -466,7 +458,7 @@ fn parse_type_variable<'a>(
         }
         Err((progress, _, state)) => Err((
             progress,
-            TVariable::StartNotLowercase(state.line, state.column),
+            Type::TBadTypeVariable(state.line, state.column),
             state,
         )),
     }

@@ -63,7 +63,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
-                Err((MadeProgress, (), state))
+                Err((NoProgress, (), state))
             } else {
                 let width = ident.len();
                 match state.advance_without_indenting_ee(width, |_, _| ()) {

@@ -592,7 +592,7 @@ pub enum Type<'a> {
     TTagUnion(TTagUnion<'a>, Row, Col),
     TInParens(TInParens<'a>, Row, Col),
     TApply(TApply, Row, Col),
-    TVariable(TVariable, Row, Col),
+    TBadTypeVariable(Row, Col),
     TWildcard(Row, Col),
     ///
     TStart(Row, Col),
@@ -662,14 +662,6 @@ pub enum TApply {
     StartIsNumber(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TVariable {
-    ///
-    StartNotLowercase(Row, Col),
-    End(Row, Col),
-    Space(BadInputError, Row, Col),
-}
-
 #[derive(Debug)]
 pub struct ParseProblem<'a, T> {
     pub line: u32,
@@ -703,26 +695,6 @@ where
         let (progress, answer, state) = parser.parse(arena, state)?;
 
         Ok((progress, &*arena.alloc(answer), state))
-    }
-}
-
-pub fn not_e<'a, P, TE, E, X, Val>(parser: P, to_error: TE) -> impl Parser<'a, (), E>
-where
-    TE: Fn(Row, Col) -> E,
-    P: Parser<'a, Val, X>,
-    E: 'a,
-{
-    move |arena, state: State<'a>| {
-        let original_state = state.clone();
-
-        match parser.parse(arena, state) {
-            Ok((_, _, _)) => Err((
-                NoProgress,
-                to_error(original_state.line, original_state.column),
-                original_state,
-            )),
-            Err((_, _, _)) => Ok((NoProgress, (), original_state)),
-        }
     }
 }
 
