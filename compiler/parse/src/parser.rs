@@ -1,9 +1,7 @@
-use crate::ast::Attempting;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Located, Region};
 use std::fmt;
-use std::str::from_utf8;
 use Progress::*;
 
 /// A position in a source file.
@@ -59,13 +57,6 @@ impl<'a> State<'a> {
     /// This assumes we are *not* advancing with spaces, or at least that
     /// any spaces on the line were preceded by non-spaces - which would mean
     /// they weren't eligible to indent anyway.
-    pub fn advance_without_indenting(
-        self,
-        quantity: usize,
-    ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.advance_without_indenting_ee(quantity, |line, _| SyntaxError::LineTooLong(line))
-    }
-
     pub fn advance_without_indenting_e<TE, E>(
         self,
         quantity: usize,
@@ -132,7 +123,7 @@ impl<'a> fmt::Debug for State<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "State {{")?;
 
-        match from_utf8(self.bytes) {
+        match std::str::from_utf8(self.bytes) {
             Ok(string) => write!(f, "\n\tbytes: [utf8] {:?}", string)?,
             Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
         }
@@ -702,36 +693,6 @@ pub enum TVariable {
     StartNotLowercase(Row, Col),
     End(Row, Col),
     Space(BadInputError, Row, Col),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContextStack<'a> {
-    Cons(ContextItem, &'a ContextStack<'a>),
-    Nil,
-}
-
-impl<'a> ContextStack<'a> {
-    pub fn uncons(&'a self) -> Option<(ContextItem, &'a Self)> {
-        match self {
-            ContextStack::Cons(item, rest) => Some((*item, rest)),
-            ContextStack::Nil => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContextItem {
-    pub line: u32,
-    pub column: u16,
-    pub context: Attempting,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeadEnd<'a, T> {
-    pub line: u32,
-    pub column: u16,
-    pub problem: T,
-    pub context_stack: ContextStack<'a>,
 }
 
 /// use std vec to escape the arena's lifetime bound
@@ -1860,23 +1821,6 @@ where
     E: 'a,
 {
     map_with_arena!(parser, transform)
-}
-
-pub fn parse_utf8<'a>(bytes: &[u8]) -> Result<&str, SyntaxError<'a>> {
-    match from_utf8(bytes) {
-        Ok(string) => Ok(string),
-        Err(_) => Err(SyntaxError::BadUtf8),
-    }
-}
-
-pub fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    |_arena: &'a Bump, state: State<'a>| {
-        if state.has_reached_end() {
-            Ok((NoProgress, (), state))
-        } else {
-            Err((NoProgress, SyntaxError::ConditionFailed, state))
-        }
-    }
 }
 
 pub fn backtrackable<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Val, Error>

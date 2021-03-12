@@ -7,8 +7,8 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, end_of_file, specialize, word1, Col, EEffects, EExposes, EHeader, EImports,
-    EPackages, EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
+    backtrackable, specialize, word1, Col, EEffects, EExposes, EHeader, EImports, EPackages,
+    EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -246,6 +246,16 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
         };
 
         Ok((MadeProgress, header, state))
+    }
+}
+
+fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
+    |_arena, state: State<'a>| {
+        if state.has_reached_end() {
+            Ok((NoProgress, (), state))
+        } else {
+            Err((NoProgress, SyntaxError::ConditionFailed, state))
+        }
     }
 }
 

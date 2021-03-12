@@ -1,9 +1,7 @@
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
-use crate::parser::{
-    allocated, loc, parse_utf8, specialize_ref, word1, BadInputError, EString, Parser, State,
-};
+use crate::parser::{allocated, loc, specialize_ref, word1, BadInputError, EString, Parser, State};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
@@ -101,7 +99,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                     // to exclude that char we just parsed.
                     let string_bytes = &state.bytes[0..(segment_parsed_bytes - 1)];
 
-                    match parse_utf8(string_bytes) {
+                    match std::str::from_utf8(string_bytes) {
                         Ok(string) => {
                             state = advance_state!(state, string.len())?;
 
