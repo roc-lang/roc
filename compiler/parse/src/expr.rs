@@ -1,15 +1,14 @@
 use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
-    line_comment, space0_after_e, space0_around_ee, space0_before_e, space0_e, space1_e,
-    spaces_exactly_e,
+    space0_after_e, space0_around_ee, space0_before_e, space0_e, space1_e, spaces_exactly_e,
 };
 use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, allocated, and_then_with_indent_level, ascii_char, backtrackable, map, newline_char,
-    optional, sep_by1, sep_by1_e, specialize, specialize_ref, then, trailing_sep_by0, word1, word2,
-    EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either, If, List, Number, ParseResult,
-    Parser, State, SyntaxError, Type, When,
+    self, allocated, and_then_with_indent_level, backtrackable, map, optional, sep_by1, sep_by1_e,
+    specialize, specialize_ref, then, trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda,
+    EPattern, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State, SyntaxError,
+    Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -812,7 +811,7 @@ pub fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
                 // see if there is a definition (assuming the preceding characters were a type
                 // annotation
                 let (_, opt_rest, state) = optional(and!(
-                    spaces_then_comment_or_newline_help(),
+                    spaces_till_end_of_line(),
                     body_at_indent_help(min_indent)
                 ))
                 .parse(arena, state)?;
@@ -867,20 +866,10 @@ fn pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EE
     )
 }
 
-fn spaces_then_comment_or_newline_help<'a>() -> impl Parser<'a, Option<&'a str>, EExpr<'a>> {
-    specialize_ref(
-        EExpr::Syntax,
-        skip_first!(
-            zero_or_more!(ascii_char(b' ')),
-            map!(
-                either!(newline_char(), line_comment()),
-                |either_comment_or_newline| match either_comment_or_newline {
-                    Either::First(_) => None,
-                    Either::Second(comment) => Some(comment),
-                }
-            )
-        ),
-    )
+fn spaces_till_end_of_line<'a>() -> impl Parser<'a, Option<&'a str>, EExpr<'a>> {
+    crate::blankspace::spaces_till_end_of_line(|r, c| {
+        EExpr::Space(parser::BadInputError::HasTab, r, c)
+    })
 }
 
 type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
@@ -1191,7 +1180,7 @@ fn parse_def_signature_help<'a>(
             |_progress, type_ann, indent_level| {
                 map(
                     optional(and!(
-                        backtrackable(spaces_then_comment_or_newline_help()),
+                        backtrackable(spaces_till_end_of_line()),
                         body_at_indent_help(indent_level)
                     )),
                     move |opt_body| (type_ann.clone(), opt_body),

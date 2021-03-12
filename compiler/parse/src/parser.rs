@@ -52,77 +52,9 @@ impl<'a> State<'a> {
         }
     }
 
-    pub fn check_indent(
-        self,
-        _arena: &'a Bump,
-        min_indent: u16,
-    ) -> Result<Self, (SyntaxError<'a>, Self)> {
-        if self.indent_col < min_indent {
-            Err((SyntaxError::OutdentedTooFar, self))
-        } else {
-            Ok(self)
-        }
-    }
-
-    pub fn check_indent_e<TE, E>(
-        self,
-        _arena: &'a Bump,
-        min_indent: u16,
-        to_error: TE,
-        row: Row,
-        col: Col,
-    ) -> Result<Self, (E, Self)>
-    where
-        TE: Fn(Row, Col) -> E,
-    {
-        if self.indent_col < min_indent {
-            Err((to_error(row, col), self))
-        } else {
-            Ok(self)
-        }
-    }
-
-    /// Returns the total number of bytes consumed since the parser began parsing.
-    ///
-    /// So if the parser has consumed 8 bytes, this function will return 8.
-    pub fn bytes_consumed(&self) -> usize {
-        self.original_len - self.bytes.len()
-    }
-
     /// Returns whether the parser has reached the end of the input
     pub fn has_reached_end(&self) -> bool {
         self.bytes.is_empty()
-    }
-
-    /// Increments the line, then resets column, indent_col, and is_indenting.
-    /// Advances the input by 1, to consume the newline character.
-    pub fn newline(&self, arena: &'a Bump) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.newline_e(arena, |_, _, _| SyntaxError::TooManyLines)
-    }
-
-    pub fn newline_e<TE, E>(
-        &self,
-        arena: &'a Bump,
-        to_error: TE,
-    ) -> Result<Self, (Progress, E, Self)>
-    where
-        TE: Fn(BadInputError, Row, Col) -> E,
-    {
-        match self.line.checked_add(1) {
-            Some(line) => Ok(State {
-                bytes: &self.bytes[1..],
-                line,
-                column: 0,
-                indent_col: 0,
-                is_indenting: true,
-                original_len: self.original_len,
-            }),
-            None => Err((
-                Progress::NoProgress,
-                to_error(BadInputError::TooManyLines, self.line, self.column),
-                self.clone(),
-            )),
-        }
     }
 
     /// Use advance_spaces to advance with indenting.
@@ -1126,17 +1058,6 @@ pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
             (),
             state.advance_without_indenting(1)?,
         )),
-        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
-        _ => Err(unexpected_eof(arena, state, 0)),
-    }
-}
-
-/// A single '\n' character.
-/// Use this instead of ascii_char('\n') because it properly handles
-/// incrementing the line number.
-pub fn newline_char<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    move |arena, state: State<'a>| match state.bytes.first() {
-        Some(b'\n') => Ok((Progress::MadeProgress, (), state.newline(arena)?)),
         Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
         _ => Err(unexpected_eof(arena, state, 0)),
     }

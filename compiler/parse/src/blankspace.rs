@@ -3,7 +3,7 @@ use crate::ast::Spaceable;
 use crate::parser::{
     self, and, BadInputError, Col, Parser,
     Progress::{self, *},
-    Row, State, SyntaxError,
+    Row, State,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -150,15 +150,74 @@ where
     }
 }
 
-pub fn line_comment<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    |_, state: State<'a>| match chomp_line_comment(state.bytes) {
-        Ok(comment) => {
-            let width = 1 + comment.len();
-            let state = state.advance_without_indenting(width + 1)?;
+pub fn spaces_till_end_of_line<'a, E: 'a>(
+    tab_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, Option<&'a str>, E> {
+    move |arena, mut state: State<'a>| {
+        let mut bytes = state.bytes;
+        let mut row = state.line;
+        let mut col = state.column;
 
-            Ok((MadeProgress, comment, state))
+        for c in bytes {
+            match c {
+                b' ' => {
+                    bytes = &bytes[1..];
+                    col += 1;
+                }
+                b'\n' => {
+                    bytes = &bytes[1..];
+                    row += 1;
+                    col = 0;
+
+                    state.line = row;
+                    state.column = col;
+                    state.bytes = bytes;
+                    state.is_indenting = true;
+
+                    return Ok((MadeProgress, None, state));
+                }
+                b'\r' => {
+                    bytes = &bytes[1..];
+                }
+                b'\t' => {
+                    return Err((
+                        MadeProgress,
+                        tab_problem(row, col),
+                        State {
+                            line: row,
+                            column: col,
+                            ..state
+                        },
+                    ))
+                }
+                b'#' => match chomp_line_comment(bytes) {
+                    Ok(comment) => {
+                        state.line += 1;
+
+                        state.column += col + comment.len() as u16;
+                        state.bytes = &bytes[comment.len()..];
+                        state.is_indenting = true;
+
+                        return Ok((MadeProgress, Some(comment), state));
+                    }
+                    Err(_) => unreachable!("we check the first character is a #"),
+                },
+                _ => break,
+            }
         }
-        Err(progress) => Err((progress, SyntaxError::ConditionFailed, state)),
+
+        if state.column == col {
+            Ok((NoProgress, None, state))
+        } else {
+            Ok((
+                MadeProgress,
+                None,
+                State {
+                    column: col,
+                    ..state
+                },
+            ))
+        }
     }
 }
 
