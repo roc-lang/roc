@@ -301,14 +301,55 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 },
             };
             let loc_fn_var = arena.alloc(Located { region, value });
-            let desugared_args = bumpalo::vec![in arena; desugar_expr(arena, loc_arg)];
 
-            let desugared_args = desugared_args.into_bump_slice();
+            let desugared_arg = desugar_expr(arena, loc_arg);
 
-            arena.alloc(Located {
-                value: Apply(loc_fn_var, desugared_args, CalledVia::UnaryOp(op)),
-                region: loc_expr.region,
-            })
+            let loc_expr = match &desugared_arg.value {
+                Expr::Num {
+                    string,
+                    is_negative,
+                } => Located::at(
+                    desugared_arg.region,
+                    Expr::Num {
+                        string,
+                        is_negative: !is_negative,
+                    },
+                ),
+                Expr::NonBase10Int {
+                    string,
+                    base,
+                    is_negative,
+                } => Located::at(
+                    desugared_arg.region,
+                    Expr::NonBase10Int {
+                        string,
+                        base: *base,
+                        is_negative: !is_negative,
+                    },
+                ),
+                Expr::Float {
+                    string,
+                    is_negative,
+                } => Located::at(
+                    desugared_arg.region,
+                    Expr::Float {
+                        string,
+                        is_negative: !is_negative,
+                    },
+                ),
+                _ => {
+                    let desugared_args = bumpalo::vec![in arena; desugared_arg];
+
+                    let desugared_args = desugared_args.into_bump_slice();
+
+                    Located {
+                        value: Apply(loc_fn_var, desugared_args, CalledVia::UnaryOp(op)),
+                        region: loc_expr.region,
+                    }
+                }
+            };
+
+            arena.alloc(loc_expr)
         }
         SpaceBefore(expr, _)
         | Nested(SpaceBefore(expr, _))

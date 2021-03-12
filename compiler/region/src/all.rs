@@ -3,7 +3,7 @@ use std::fmt;
 /// TODO replace Located with this
 pub type Loc<T> = Located<T>;
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Region {
     pub start_line: u32,
     pub end_line: u32,
@@ -107,6 +107,20 @@ impl Region {
             end_line,
         }
     }
+
+    pub fn start(&self) -> Position {
+        Position {
+            row: self.start_line,
+            col: self.start_col,
+        }
+    }
+
+    pub fn end(&self) -> Position {
+        Position {
+            row: self.end_line,
+            col: self.end_col,
+        }
+    }
 }
 
 #[test]
@@ -130,6 +144,12 @@ impl fmt::Debug for Region {
             )
         }
     }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
+pub struct Position {
+    pub row: u32,
+    pub col: u16,
 }
 
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
