@@ -153,7 +153,7 @@ where
 pub fn spaces_till_end_of_line<'a, E: 'a>(
     tab_problem: fn(Row, Col) -> E,
 ) -> impl Parser<'a, Option<&'a str>, E> {
-    move |arena, mut state: State<'a>| {
+    move |_, mut state: State<'a>| {
         let mut bytes = state.bytes;
         let mut row = state.line;
         let mut col = state.column;
@@ -253,7 +253,7 @@ fn chomp_line_comment<'a>(buffer: &'a [u8]) -> Result<&'a str, Progress> {
 pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser::EExpr<'a>> {
     use parser::EExpr;
 
-    move |arena: &'a Bump, state: State<'a>| {
+    move |_, state: State<'a>| {
         if spaces_expected == 0 {
             return Ok((NoProgress, (), state));
         }
@@ -265,11 +265,8 @@ pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser:
                 b' ' => {
                     spaces_seen += 1;
                     if spaces_seen == spaces_expected {
-                        let state = state.advance_spaces_e(
-                            arena,
-                            spaces_expected as usize,
-                            EExpr::IndentStart,
-                        )?;
+                        let state =
+                            state.advance_spaces_e(spaces_expected as usize, EExpr::IndentStart)?;
                         return Ok((MadeProgress, (), state));
                     }
                 }

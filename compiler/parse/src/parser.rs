@@ -103,19 +103,10 @@ impl<'a> State<'a> {
         }
     }
 
-    pub fn advance_spaces(
-        &self,
-        arena: &'a Bump,
-        spaces: usize,
-    ) -> Result<Self, (Progress, SyntaxError<'a>, Self)> {
-        self.advance_spaces_e(arena, spaces, |line, _| SyntaxError::LineTooLong(line))
-    }
-
     /// Advance the parser while also indenting as appropriate.
     /// This assumes we are only advancing with spaces, since they can indent.
     pub fn advance_spaces_e<TE, E>(
         &self,
-        arena: &'a Bump,
         spaces: usize,
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
