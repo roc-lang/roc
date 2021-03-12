@@ -75,7 +75,7 @@ impl<'a> State<'a> {
                     ..self
                 })
             }
-            _ => Err(line_too_long_e(self.clone(), to_error)),
+            _ => Err((NoProgress, to_error(self.line, self.column), self)),
         }
     }
 
@@ -670,9 +670,6 @@ pub enum TVariable {
     Space(BadInputError, Row, Col),
 }
 
-/// use std vec to escape the arena's lifetime bound
-/// since this is only used when there is in fact an error
-/// I think this is fine
 #[derive(Debug)]
 pub struct ParseProblem<'a, T> {
     pub line: u32,
@@ -680,10 +677,6 @@ pub struct ParseProblem<'a, T> {
     pub problem: T,
     pub filename: std::path::PathBuf,
     pub bytes: &'a [u8],
-}
-
-pub fn fail<'a, T>() -> impl Parser<'a, T, SyntaxError<'a>> {
-    move |_arena, state: State<'a>| Err((NoProgress, SyntaxError::ConditionFailed, state))
 }
 
 pub trait Parser<'a, Output, Error> {
@@ -713,46 +706,6 @@ where
     }
 }
 
-pub fn not_followed_by<'a, P, ByParser, By, Val>(
-    parser: P,
-    by: ByParser,
-) -> impl Parser<'a, Val, SyntaxError<'a>>
-where
-    ByParser: Parser<'a, By, SyntaxError<'a>>,
-    P: Parser<'a, Val, SyntaxError<'a>>,
-{
-    move |arena, state: State<'a>| {
-        let original_state = state.clone();
-
-        parser
-            .parse(arena, state)
-            .and_then(|(progress, answer, state)| {
-                let after_parse = state.clone();
-
-                match by.parse(arena, state) {
-                    Ok((_, _, _state)) => {
-                        Err((NoProgress, SyntaxError::ConditionFailed, original_state))
-                    }
-                    Err(_) => Ok((progress, answer, after_parse)),
-                }
-            })
-    }
-}
-
-pub fn not<'a, P, Val>(parser: P) -> impl Parser<'a, (), SyntaxError<'a>>
-where
-    P: Parser<'a, Val, SyntaxError<'a>>,
-{
-    move |arena, state: State<'a>| {
-        let original_state = state.clone();
-
-        match parser.parse(arena, state) {
-            Ok((_, _, _)) => Err((NoProgress, SyntaxError::ConditionFailed, original_state)),
-            Err((_, _, _)) => Ok((NoProgress, (), original_state)),
-        }
-    }
-}
-
 pub fn not_e<'a, P, TE, E, X, Val>(parser: P, to_error: TE) -> impl Parser<'a, (), E>
 where
     TE: Fn(Row, Col) -> E,
@@ -770,23 +723,6 @@ where
             )),
             Err((_, _, _)) => Ok((NoProgress, (), original_state)),
         }
-    }
-}
-
-pub fn lookahead<'a, Peek, P, PeekVal, Val, Error>(
-    peek: Peek,
-    parser: P,
-) -> impl Parser<'a, Val, Error>
-where
-    Error: 'a,
-    Peek: Parser<'a, PeekVal, Error>,
-    P: Parser<'a, Val, Error>,
-{
-    move |arena, state: State<'a>| {
-        let original_state = state.clone();
-
-        peek.parse(arena, state)
-            .and_then(|_| parser.parse(arena, original_state))
     }
 }
 
@@ -842,32 +778,6 @@ where
                 transform(arena, next_state, progress, output)
             })
     }
-}
-
-// TODO remove
-pub fn line_too_long_e<TE, E>(state: State, to_error: TE) -> (Progress, E, State)
-where
-    TE: Fn(Row, Col) -> E,
-{
-    let problem = to_error(state.line, state.column);
-    // Set column to MAX and advance the parser to end of input.
-    // This way, all future parsers will fail on EOF, and then
-    // unexpected_eof will take them back here - thus propagating
-    // the initial LineTooLong error all the way to the end, even if
-    // (for example) the LineTooLong initially occurs in the middle of
-    // a one_of chain, which would otherwise prevent it from propagating.
-    let column = u16::MAX;
-    let bytes = state.bytes.get(0..state.bytes.len()).unwrap();
-    let state = State {
-        bytes,
-        line: state.line,
-        column,
-        ..state
-    };
-
-    // TODO do we make progress in this case?
-    // isn't this error fatal?
-    (Progress::NoProgress, problem, state)
 }
 
 pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
