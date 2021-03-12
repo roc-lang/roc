@@ -1341,21 +1341,18 @@ mod test_parse {
             },
         ));
         let args = &[&*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
-            arena.alloc(Located::new(
-                0,
-                0,
-                1,
-                5,
-                Var {
-                    module_name: "",
-                    ident: "whee",
-                },
-            )),
-            args,
-            CalledVia::Space,
+        let function = Located::new(
+            0,
+            0,
+            1,
+            5,
+            Var {
+                module_name: "",
+                ident: "whee",
+            },
         );
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
+        let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
         let actual = parse_expr_with(&arena, "-whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
@@ -1377,21 +1374,19 @@ mod test_parse {
             },
         ));
         let args = &[&*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
-            arena.alloc(Located::new(
-                0,
-                0,
-                1,
-                5,
-                Var {
-                    module_name: "",
-                    ident: "whee",
-                },
-            )),
-            args,
-            CalledVia::Space,
+
+        let function = Located::new(
+            0,
+            0,
+            1,
+            5,
+            Var {
+                module_name: "",
+                ident: "whee",
+            },
         );
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
+        let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
         let actual = parse_expr_with(&arena, "!whee  12 foo");
 
         assert_eq!(Ok(expected), actual);

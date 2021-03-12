@@ -5871,14 +5871,64 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD APP NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a header, but got stuck here:
-                
-                1│  app foobar 
+
+                1│  app foobar
                         ^
-                
+
                 I am expecting an application name next, like app "main" or
                 app "editor". App names are surrounded by quotation marks.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_negative() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = 3
+
+                -foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  -foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_not() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = True
+
+                !foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  !foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
             "#
             ),
         )
