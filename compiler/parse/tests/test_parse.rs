@@ -1422,7 +1422,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         )));
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
         let actual = parse_expr_with(&arena, "-(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
@@ -1458,7 +1458,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         )));
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
         let actual = parse_expr_with(&arena, "!(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
