@@ -117,6 +117,22 @@ where
     )
 }
 
+pub fn check_indent<'a, E>(
+    min_indent: u16,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, (), E>
+where
+    E: 'a,
+{
+    move |_, state: State<'a>| {
+        if state.column > state.indent_col {
+            Ok((NoProgress, (), state))
+        } else {
+            Err((NoProgress, indent_problem(state.line, state.column), state))
+        }
+    }
+}
+
 pub fn space0_e<'a, E>(
     min_indent: u16,
     space_problem: fn(BadInputError, Row, Col) -> E,

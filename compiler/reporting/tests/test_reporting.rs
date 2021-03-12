@@ -4199,14 +4199,14 @@ mod test_reporting {
                     x == 5
                     Num.add 1 2
 
-                x y
+                { x,  y }
                 "#
             ),
             indoc!(
                 r#"
                 ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
 
-                The `add` function expects 2 arguments, but it got 4 instead:
+                The `add` function expects 2 arguments, but it got 3 instead:
 
                 4│      Num.add 1 2
                         ^^^^^^^

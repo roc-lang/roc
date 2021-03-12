@@ -368,6 +368,22 @@ fn parse_loc_term<'a>(
     .parse(arena, state)
 }
 
+fn parse_loc_term_better<'a>(
+    min_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+    one_of!(
+        in_parens_region_fix(min_indent),
+        loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::Number, positive_number_literal_help())),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
+        loc!(ident_etc_help(min_indent))
+    )
+    .parse(arena, state)
+}
+
 fn loc_possibly_negative_or_negated_term<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
@@ -555,29 +571,271 @@ fn foobar<'a>(
 
     match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
         Err((_, _, state)) => Ok((MadeProgress, expr.value, state)),
-        Ok((_, spaces_before_op, state)) => parse_expr_end(
-            min_indent,
-            Vec::new_in(arena),
-            Vec::new_in(arena),
-            expr,
-            spaces_before_op,
-            initial,
-            arena,
-            state,
-        ),
+        Ok((_, spaces_before_op, state)) => {
+            let expr_state = ExprState {
+                operators: Vec::new_in(arena),
+                arguments: Vec::new_in(arena),
+                expr,
+                spaces_after: spaces_before_op,
+                initial,
+                end: state.get_position(),
+            };
+
+            parse_expr_end(min_indent, expr_state, arena, state)
+        }
+    }
+}
+
+struct ExprState<'a> {
+    operators: Vec<'a, (Located<Expr<'a>>, Located<BinOp>)>,
+    arguments: Vec<'a, &'a Located<Expr<'a>>>,
+    expr: Located<Expr<'a>>,
+    spaces_after: &'a [CommentOrNewline<'a>],
+    initial: State<'a>,
+    end: Position,
+}
+
+fn parse_expr_final<'a>(
+    min_indent: u16,
+    expr_state: ExprState<'a>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let mut expr = to_call(
+        arena,
+        expr_state.arguments,
+        expr_state.expr,
+        expr_state.spaces_after,
+    );
+
+    for (left_arg, op) in expr_state.operators.into_iter().rev() {
+        let region = Region::span_across(&left_arg.region, &expr.region);
+        let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
+        expr = Located::at(region, new);
+    }
+
+    Ok((MadeProgress, expr.value, state))
+}
+
+fn to_call<'a>(
+    arena: &'a Bump,
+    arguments: Vec<'a, &'a Located<Expr<'a>>>,
+    loc_expr1: Located<Expr<'a>>,
+    _spaces_before: &'a [CommentOrNewline<'a>],
+) -> Located<Expr<'a>> {
+    if arguments.is_empty() {
+        loc_expr1
+    } else {
+        let last = arguments.last().map(|x| x.region).unwrap_or_default();
+        let region = Region::span_across(&loc_expr1.region, &last);
+
+        let apply = Expr::Apply(
+            arena.alloc(loc_expr1),
+            arguments.into_bump_slice(),
+            CalledVia::Space,
+        );
+
+        Located::at(region, apply)
+    }
+}
+
+fn parse_expr_operator<'a>(
+    min_indent: u16,
+    mut expr_state: ExprState<'a>,
+    loc_op: Located<BinOp>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let (space_progress, mut spaces, state) =
+        space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
+
+    // add previous spaces to the expr
+    std::mem::swap(&mut spaces, &mut expr_state.spaces_after);
+
+    expr_state.expr = if spaces.is_empty() {
+        expr_state.expr
+    } else {
+        arena
+            .alloc(expr_state.expr.value)
+            .with_spaces_after(spaces, expr_state.expr.region)
+    };
+
+    // a `-` is unary if it is preceded by a space and not followed by a space
+
+    let op = loc_op.value;
+    let op_start = loc_op.region.start();
+    let op_end = loc_op.region.end();
+    let new_start = state.get_position();
+    if op == BinOp::Minus && expr_state.end != op_start && op_end == new_start {
+        // negative terms
+
+        let (_, arg, state) = parse_loc_term(min_indent, arena, state)?;
+        let new_end = state.get_position();
+        todo!()
+    } else {
+        match loc_possibly_negative_or_negated_term(min_indent).parse(arena, state) {
+            Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
+            Ok((_, new_expr, state)) => {
+                let new_end = state.get_position();
+
+                expr_state.initial = state;
+
+                match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
+                    Err((_, _, state)) => {
+                        let spaces = expr_state.spaces_after;
+
+                        let new_expr = if spaces.is_empty() {
+                            new_expr
+                        } else {
+                            arena
+                                .alloc(new_expr.value)
+                                .with_spaces_before(spaces, new_expr.region)
+                        };
+
+                        let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
+
+                        let call = to_call(arena, args, expr_state.expr, spaces);
+
+                        expr_state.operators.push((call, loc_op));
+                        expr_state.expr = new_expr;
+                        expr_state.end = new_end;
+                        expr_state.spaces_after = &[];
+
+                        parse_expr_final(min_indent, expr_state, arena, state)
+                    }
+                    Ok((_, mut spaces, state)) => {
+                        std::mem::swap(&mut spaces, &mut expr_state.spaces_after);
+
+                        let new_expr = if spaces.is_empty() {
+                            new_expr
+                        } else {
+                            arena
+                                .alloc(new_expr.value)
+                                .with_spaces_before(spaces, new_expr.region)
+                        };
+
+                        let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
+
+                        let call = to_call(arena, args, expr_state.expr, spaces);
+
+                        expr_state.operators.push((call, loc_op));
+                        expr_state.expr = new_expr;
+                        expr_state.end = new_end;
+
+                        parse_expr_end(min_indent, expr_state, arena, state)
+                    }
+                }
+            }
+            Err((NoProgress, _, _)) => {
+                todo!()
+            }
+        }
+    }
+}
+
+fn parse_expr_end2<'a>(
+    min_indent: u16,
+    mut expr_state: ExprState<'a>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let parser = skip_first!(
+        crate::blankspace::check_indent(min_indent, EExpr::IndentEnd),
+        move |a, s| parse_loc_term_better(min_indent, a, s)
+    );
+
+    match parser.parse(arena, state) {
+        Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
+        Ok((_, arg, state)) => {
+            let new_end = state.get_position();
+
+            expr_state.initial = state;
+
+            match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
+                Err((_, _, state)) => {
+                    let spaces = expr_state.spaces_after;
+
+                    let arg = if spaces.is_empty() {
+                        arg
+                    } else {
+                        arena
+                            .alloc(arg.value)
+                            .with_spaces_before(spaces, arg.region)
+                    };
+
+                    expr_state.arguments.push(arena.alloc(arg));
+                    expr_state.end = new_end;
+                    expr_state.spaces_after = &[];
+
+                    parse_expr_final(min_indent, expr_state, arena, state)
+                }
+                Ok((_, mut spaces, state)) => {
+                    std::mem::swap(&mut spaces, &mut expr_state.spaces_after);
+
+                    let arg = if spaces.is_empty() {
+                        arg
+                    } else {
+                        arena
+                            .alloc(arg.value)
+                            .with_spaces_before(spaces, arg.region)
+                    };
+
+                    expr_state.arguments.push(arena.alloc(arg));
+                    expr_state.end = new_end;
+
+                    parse_expr_end(min_indent, expr_state, arena, state)
+                }
+            }
+        }
+        Err((NoProgress, _, _)) => {
+            // try an operator
+            match loc!(operator()).parse(arena, state) {
+                Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
+                Ok((_, loc_op, state)) => {
+                    parse_expr_operator(min_indent, expr_state, loc_op, arena, state)
+                }
+                Err((NoProgress, _, _)) => {
+                    // roll back space parsing
+                    let state = expr_state.initial;
+
+                    if expr_state.operators.is_empty() {
+                        let expr = to_call(
+                            arena,
+                            expr_state.arguments,
+                            expr_state.expr,
+                            expr_state.spaces_after,
+                        );
+
+                        Ok((MadeProgress, expr.value, state))
+                    } else {
+                        let mut expr = to_call(
+                            arena,
+                            expr_state.arguments,
+                            expr_state.expr,
+                            expr_state.spaces_after,
+                        );
+
+                        for (left_arg, op) in expr_state.operators.into_iter().rev() {
+                            let region = Region::span_across(&left_arg.region, &expr.region);
+                            let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
+                            expr = Located::at(region, new);
+                        }
+
+                        Ok((MadeProgress, expr.value, state))
+                    }
+                }
+            }
+        }
     }
 }
 
 fn parse_expr_end<'a>(
     min_indent: u16,
-    operators: Vec<'a, (Located<Expr<'a>>, BinOp)>,
-    arguments: Vec<'a, Located<Expr<'a>>>,
-    loc_expr1: Located<Expr<'a>>,
-    spaces_before: &'a [CommentOrNewline<'a>],
-    initial: State<'a>,
+    mut expr_state: ExprState<'a>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    return parse_expr_end2(min_indent, expr_state, arena, state);
     let parser = and!(
         loc!(operator()),
         // The spaces *after* the operator can be attached directly to
@@ -592,6 +850,12 @@ fn parse_expr_end<'a>(
 
     match parser.parse(arena, state) {
         Ok((_, (loc_op, loc_expr2), state)) => {
+            let ExprState {
+                expr: loc_expr1,
+                spaces_after: spaces_before,
+                ..
+            } = expr_state;
+
             let loc_expr1 = if spaces_before.is_empty() {
                 loc_expr1
             } else {
@@ -604,7 +868,7 @@ fn parse_expr_end<'a>(
 
             Ok((MadeProgress, Expr::BinOp(tuple), state))
         }
-        Err((NoProgress, _, _)) => Ok((MadeProgress, loc_expr1.value, initial)),
+        Err((NoProgress, _, _)) => Ok((MadeProgress, expr_state.expr.value, expr_state.initial)),
         Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
     }
 }
@@ -2387,6 +2651,29 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
 
 fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
     map!(crate::string_literal::parse(), Expr::Str)
+}
+
+fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
+    map!(
+        crate::number_literal::positive_number_literal(),
+        |literal| {
+            use crate::number_literal::NumLiteral::*;
+
+            match literal {
+                Num(s) => Expr::Num(s),
+                Float(s) => Expr::Float(s),
+                NonBase10Int {
+                    string,
+                    base,
+                    is_negative,
+                } => Expr::NonBase10Int {
+                    string,
+                    base,
+                    is_negative,
+                },
+            }
+        }
+    )
 }
 
 fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
