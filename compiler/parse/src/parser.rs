@@ -1735,7 +1735,7 @@ macro_rules! zero_or_more {
 }
 
 #[macro_export]
-macro_rules! one_or_more_e {
+macro_rules! one_or_more {
     ($parser:expr, $to_error:expr) => {
         move |arena, state: State<'a>| {
             use bumpalo::collections::Vec;

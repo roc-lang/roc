@@ -1692,7 +1692,7 @@ fn unary_negate_function_arg_help<'a>(
 fn loc_function_args_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>, EExpr<'a>> {
-    one_or_more_e!(
+    one_or_more!(
         move |arena: &'a Bump, s| {
             map!(
                 and!(

@@ -75,6 +75,26 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
+pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |arena, state: State<'a>| {
+        if state.bytes.starts_with(b"@") {
+            match chomp_private_tag(state.bytes, state.line, state.column) {
+                Err(BadIdent::Start(_, _)) => Err((NoProgress, (), state)),
+                Err(_) => Err((MadeProgress, (), state)),
+                Ok(ident) => {
+                    let width = ident.len();
+                    match state.advance_without_indenting_ee(width, |_, _| ()) {
+                        Ok(state) => Ok((MadeProgress, ident, state)),
+                        Err(bad) => Err(bad),
+                    }
+                }
+            }
+        } else {
+            uppercase_ident().parse(arena, state)
+        }
+    }
+}
+
 /// This could be:
 ///
 /// * A module name

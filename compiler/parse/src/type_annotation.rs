@@ -7,7 +7,6 @@ use crate::parser::{
     Progress::{self, *},
     State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
-use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Located, Region};
@@ -191,102 +190,9 @@ where
     F: Fn(Row, Col) -> E,
     E: 'a,
 {
-    use encode_unicode::CharExt;
-
-    move |arena, mut state: State<'a>| {
-        let mut buf;
-
-        match char::from_utf8_slice_start(state.bytes) {
-            Ok((first_letter, bytes_parsed)) => match first_letter {
-                '@' => {
-                    debug_assert_eq!(bytes_parsed, 1);
-
-                    // parsing a private tag name
-                    match char::from_utf8_slice_start(&state.bytes[1..]) {
-                        Ok((second_letter, bytes_parsed_2)) if second_letter.is_uppercase() => {
-                            let total_parsed = bytes_parsed + bytes_parsed_2;
-
-                            buf = String::with_capacity_in(total_parsed, arena);
-
-                            buf.push('@');
-                            buf.push(second_letter);
-
-                            state = state.advance_without_indenting(total_parsed).map_err(
-                                |(progress, _, state)| {
-                                    (progress, to_problem(state.line, state.column), state)
-                                },
-                            )?;
-                        }
-                        _ => {
-                            // important for error messages
-                            state = state.advance_without_indenting(bytes_parsed).map_err(
-                                |(progress, _, state)| {
-                                    (progress, to_problem(state.line, state.column), state)
-                                },
-                            )?;
-
-                            let row = state.line;
-                            let col = state.column;
-                            return state.fail(arena, MadeProgress, to_problem(row, col));
-                        }
-                    }
-                }
-
-                _ if first_letter.is_uppercase() => {
-                    buf = String::with_capacity_in(1, arena);
-
-                    buf.push(first_letter);
-
-                    state = state.advance_without_indenting(bytes_parsed).map_err(
-                        |(progress, _, state)| {
-                            (progress, to_problem(state.line, state.column), state)
-                        },
-                    )?;
-                }
-
-                _ => {
-                    let row = state.line;
-                    let col = state.column;
-                    return state.fail(arena, NoProgress, to_problem(row, col));
-                }
-            },
-            Err(_) => {
-                let row = state.line;
-                let col = state.column;
-                return state.fail(arena, NoProgress, to_problem(row, col));
-            }
-        };
-
-        while !state.bytes.is_empty() {
-            match char::from_utf8_slice_start(state.bytes) {
-                Ok((ch, bytes_parsed)) => {
-                    // After the first character, only these are allowed:
-                    //
-                    // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-                    // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                    // * A ':' indicating the end of the field
-                    if ch.is_alphabetic() || ch.is_ascii_digit() {
-                        buf.push(ch);
-
-                        state = state.advance_without_indenting(bytes_parsed).map_err(
-                            |(progress, _, state)| {
-                                (progress, to_problem(state.line, state.column), state)
-                            },
-                        )?;
-                    } else {
-                        // This is the end of the field. We're done!
-                        break;
-                    }
-                }
-                Err(_) => {
-                    let row = state.line;
-                    let col = state.column;
-                    return state.fail(arena, MadeProgress, to_problem(row, col));
-                }
-            };
-        }
-
-        Ok((MadeProgress, buf.into_bump_str(), state))
+    move |arena, state: State<'a>| match crate::ident::tag_name().parse(arena, state) {
+        Ok(good) => Ok(good),
+        Err((progress, _, state)) => Err((progress, to_problem(state.line, state.column), state)),
     }
 }
 
