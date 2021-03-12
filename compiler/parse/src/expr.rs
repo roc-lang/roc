@@ -23,7 +23,7 @@ pub fn test_parse_expr<'a>(
     min_indent: u16,
     arena: &'a bumpalo::Bump,
     state: State<'a>,
-) -> Result<(Located<Expr<'a>>, State<'a>), EExpr<'a>> {
+) -> Result<Located<Expr<'a>>, EExpr<'a>> {
     let parser = space0_before_e(
         loc!(|a, s| parse_expr_help(min_indent, a, s)),
         min_indent,
@@ -32,7 +32,7 @@ pub fn test_parse_expr<'a>(
     );
 
     match parser.parse(arena, state) {
-        Ok((_, expression, state)) => Ok((expression, state)),
+        Ok((_, expression, _)) => Ok(expression),
         Err((_, fail, _)) => Err(fail),
     }
 }

@@ -5,17 +5,11 @@ use crate::parser::{
     allocated, backtrackable, optional, specialize, specialize_ref, word1, word2, ParseResult,
     Parser,
     Progress::{self, *},
-    State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, Type,
+    State, TApply, TInParens, TRecord, TTagUnion, Type,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Located, Region};
-
-pub fn located<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<TypeAnnotation<'a>>, SyntaxError<'a>> {
-    specialize(|x, _, _| SyntaxError::Type(x), expression(min_indent))
-}
 
 pub fn located_help<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     expression(min_indent)

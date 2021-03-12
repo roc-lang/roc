@@ -4,7 +4,7 @@ use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
-    ParseResult, Parser, State, SyntaxError,
+    ParseResult, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -290,10 +290,6 @@ fn loc_ident_pattern_help<'a>(
     }
 }
 
-pub fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Pattern(e), underscore_pattern_help())
-}
-
 fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         let (_, _, next_state) = word1(b'_', EPattern::Underscore).parse(arena, state)?;
@@ -316,13 +312,6 @@ fn lowercase_ident_pattern<'a>(
     let col = state.column;
 
     specialize(move |_, _, _| EPattern::End(row, col), lowercase_ident()).parse(arena, state)
-}
-
-pub fn record_pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Pattern(EPattern::Record(e, r, c)),
-        record_pattern_help(min_indent),
-    )
 }
 
 #[inline(always)]

@@ -32,7 +32,7 @@ pub fn parse_loc_with<'a>(
     let state = State::new(input.trim().as_bytes());
 
     match crate::expr::test_parse_expr(0, arena, state) {
-        Ok((loc_expr, _state)) => Ok(loc_expr),
+        Ok(loc_expr) => Ok(loc_expr),
         Err(fail) => Err(SyntaxError::Expr(fail)),
     }
 }

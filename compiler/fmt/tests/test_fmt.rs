@@ -12,25 +12,15 @@ mod test_fmt {
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
-    use roc_parse::ast::Expr;
     use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::{Parser, State, SyntaxError};
-
-    fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
-        let state = State::new(input.trim().as_bytes());
-
-        match roc_parse::expr::test_parse_expr(0, arena, state) {
-            Ok((loc_expr, _state)) => Ok(loc_expr.value),
-            Err(fail) => Err(SyntaxError::Expr(fail)),
-        }
-    }
+    use roc_parse::parser::{Parser, State};
 
     fn expr_formats_to(input: &str, expected: &str) {
         let arena = Bump::new();
         let input = input.trim_end();
         let expected = expected.trim_end();
 
-        match parse_with(&arena, input) {
+        match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
                 let mut buf = String::new_in(&arena);
 

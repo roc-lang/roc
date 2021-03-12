@@ -11,8 +11,6 @@ use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
-use roc_parse::ast;
-use roc_parse::parser::{State, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Located;
 use roc_solve::solve;
@@ -99,27 +97,9 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
-#[allow(dead_code)]
-pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, SyntaxError<'a>> {
-    parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
-}
-
-#[allow(dead_code)]
-pub fn parse_loc_with<'a>(
-    arena: &'a Bump,
-    input: &'a str,
-) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
-    let state = State::new(input.trim().as_bytes());
-
-    match roc_parse::expr::test_parse_expr(0, arena, state) {
-        Ok((loc_expr, _state)) => Ok(loc_expr),
-        Err(fail) => Err(SyntaxError::Expr(fail)),
-    }
-}
-
 #[derive(Debug)]
 pub struct ParseErrOut<'a> {
-    pub fail: SyntaxError<'a>,
+    pub fail: roc_parse::parser::SyntaxError<'a>,
     pub home: ModuleId,
     pub interns: Interns,
 }
@@ -130,7 +110,7 @@ pub fn can_expr_with<'a>(
     home: ModuleId,
     expr_str: &'a str,
 ) -> Result<CanExprOut, ParseErrOut<'a>> {
-    let loc_expr = match parse_loc_with(&arena, expr_str) {
+    let loc_expr = match roc_parse::test_helpers::parse_loc_with(&arena, expr_str) {
         Ok(e) => e,
         Err(fail) => {
             let interns = Interns::default();

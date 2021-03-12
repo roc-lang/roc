@@ -234,11 +234,9 @@ pub fn str_to_expr2<'a>(
     scope: &mut Scope,
     region: Region,
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
-    let state = State::new(input.trim().as_bytes());
-
-    match roc_parse::expr::test_parse_expr(0, arena, state) {
-        Ok((loc_expr, _state)) => Ok(to_expr2(env, scope, arena.alloc(loc_expr.value), region)),
-        Err(fail) => Err(SyntaxError::Expr(fail)),
+    match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
+        Ok(loc_expr) => Ok(to_expr2(env, scope, arena.alloc(loc_expr.value), region)),
+        Err(fail) => Err(fail),
     }
 }
 
