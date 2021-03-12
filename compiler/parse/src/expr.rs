@@ -509,7 +509,7 @@ fn parse_expr_help<'a>(
     ]
     .parse(arena, state)?;
 
-    let initial = state.clone();
+    let initial = state;
 
     match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
         Err((_, _, state)) => Ok((MadeProgress, loc_expr1.value, state)),

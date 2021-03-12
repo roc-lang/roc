@@ -142,7 +142,7 @@ pub fn parse_ident_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
-    let initial = state.clone();
+    let initial = state;
 
     match parse_ident_help_help(arena, state) {
         Ok((progress, ident, state)) => {
@@ -192,7 +192,7 @@ fn malformed_identifier<'a>(
 }
 
 /// skip forward to the next non-identifier character
-pub fn chomp_malformed<'a>(bytes: &'a [u8]) -> usize {
+pub fn chomp_malformed(bytes: &[u8]) -> usize {
     use encode_unicode::CharExt;
     let mut chomped = 0;
     while let Ok((ch, width)) = char::from_utf8_slice_start(&bytes[chomped..]) {
@@ -427,7 +427,7 @@ fn chomp_identifier_chain<'a>(
     }
 }
 
-fn chomp_module_chain<'a>(buffer: &'a [u8]) -> Result<u16, Progress> {
+fn chomp_module_chain(buffer: &[u8]) -> Result<u16, Progress> {
     let mut chomped = 0;
 
     while let Some(b'.') = buffer.get(chomped) {
@@ -463,7 +463,7 @@ pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
 }
 
 // parse a type name like `Result` or `Result.Result`
-fn chomp_concrete_type<'a>(buffer: &'a [u8]) -> Result<(&'a str, &'a str, usize), Progress> {
+fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), Progress> {
     let first = crate::ident::chomp_uppercase_part(buffer)?;
 
     if let Some(b'.') = buffer.get(first.len()) {

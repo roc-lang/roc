@@ -617,13 +617,13 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> BadIdent
     }
 }
 
-fn till_whitespace<I>(mut it: I) -> usize
+fn till_whitespace<I>(it: I) -> usize
 where
     I: Iterator<Item = char>,
 {
     let mut chomped = 0;
 
-    while let Some(c) = it.next() {
+    for c in it {
         if c.is_ascii_whitespace() || c == '#' {
             break;
         } else {

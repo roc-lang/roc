@@ -427,7 +427,7 @@ fn eat_spaces<'a>(
         col,
         bytes,
         comments_and_newlines,
-    };
+    }
 }
 
 fn eat_line_comment<'a>(
@@ -501,5 +501,5 @@ fn eat_line_comment<'a>(
         col,
         bytes,
         comments_and_newlines,
-    };
+    }
 }
