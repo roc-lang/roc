@@ -740,6 +740,26 @@ fn to_str_report<'a>(
                 title: "WEIRD CODE POINT".to_string(),
             }
         }
+        EString::FormatEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this format expression:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("\"The count is \\(count\\)\""),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ENDLESS FORMAT".to_string(),
+            }
+        }
         EString::EndlessSingle(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);

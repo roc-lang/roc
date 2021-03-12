@@ -1,11 +1,9 @@
 use crate::ast::Attempting;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use encode_unicode::CharExt;
 use roc_region::all::{Located, Region};
 use std::fmt;
 use std::str::from_utf8;
-use std::{char, u16};
 use Progress::*;
 
 /// A position in a source file.
@@ -97,50 +95,6 @@ impl<'a> State<'a> {
                     // Once we hit a nonspace character, we are no longer indenting.
                     is_indenting: false,
                     ..self
-                })
-            }
-            _ => Err(line_too_long_e(self.clone(), to_error)),
-        }
-    }
-
-    /// Advance the parser while also indenting as appropriate.
-    /// This assumes we are only advancing with spaces, since they can indent.
-    pub fn advance_spaces_e<TE, E>(
-        &self,
-        spaces: usize,
-        to_error: TE,
-    ) -> Result<Self, (Progress, E, Self)>
-    where
-        TE: Fn(Row, Col) -> E,
-    {
-        match (self.column as usize).checked_add(spaces) {
-            Some(column_usize) if column_usize <= u16::MAX as usize => {
-                // Spaces don't affect is_indenting; if we were previously indneting,
-                // we still are, and if we already finished indenting, we're still done.
-                let is_indenting = self.is_indenting;
-
-                // If we're indenting, spaces indent us further.
-                let indent_col = if is_indenting {
-                    // This doesn't need to be checked_add because it's always true that
-                    // indent_col <= col, so if this could possibly overflow, we would
-                    // already have errored out from the column calculation.
-                    //
-                    // Leaving debug assertions in case this invariant someday disappers.
-                    debug_assert!(u16::MAX - self.indent_col >= spaces as u16);
-                    debug_assert!(spaces <= u16::MAX as usize);
-
-                    self.indent_col + spaces as u16
-                } else {
-                    self.indent_col
-                };
-
-                Ok(State {
-                    bytes: &self.bytes[spaces..],
-                    line: self.line,
-                    column: column_usize as u16,
-                    indent_col,
-                    is_indenting,
-                    original_len: self.original_len,
                 })
             }
             _ => Err(line_too_long_e(self.clone(), to_error)),
@@ -500,6 +454,7 @@ pub enum EString<'a> {
     EndlessMulti(Row, Col),
     UnknownEscape(Row, Col),
     Format(&'a SyntaxError<'a>, Row, Col),
+    FormatEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -953,62 +908,8 @@ where
     }
 }
 
-pub fn unexpected_eof<'a>(
-    _arena: &'a Bump,
-    state: State<'a>,
-    chars_consumed: usize,
-) -> (Progress, SyntaxError<'a>, State<'a>) {
-    checked_unexpected(state, chars_consumed, SyntaxError::Eof)
-}
-
-pub fn unexpected(
-    chars_consumed: usize,
-    _attempting: Attempting,
-    state: State,
-) -> (Progress, SyntaxError, State) {
-    // NOTE state is the last argument because chars_consumed often depends on the state's fields
-    // having state be the final argument prevents borrowing issues
-    checked_unexpected(state, chars_consumed, |region| {
-        SyntaxError::Unexpected(region)
-    })
-}
-
-/// Check for line overflow, then compute a new Region based on chars_consumed
-/// and provide it as a way to construct a Problem.
-/// If maximum line length was exceeded, return a Problem indicating as much.
-#[inline(always)]
-fn checked_unexpected<'a, F>(
-    state: State<'a>,
-    chars_consumed: usize,
-    problem_from_region: F,
-) -> (Progress, SyntaxError<'a>, State<'a>)
-where
-    F: FnOnce(Region) -> SyntaxError<'a>,
-{
-    match (state.column as usize).checked_add(chars_consumed) {
-        // Crucially, this is < u16::MAX and not <= u16::MAX. This means if
-        // column ever gets set to u16::MAX, we will automatically bail out
-        // with LineTooLong - which is exactly what we want! Once a line has
-        // been discovered to be too long, we don't want to parse anything else
-        // until that's fixed.
-        Some(end_col) if end_col < u16::MAX as usize => {
-            let region = Region {
-                start_col: state.column,
-                end_col: end_col as u16,
-                start_line: state.line,
-                end_line: state.line,
-            };
-
-            (Progress::NoProgress, problem_from_region(region), state)
-        }
-        _ => {
-            let (_progress, fail, state) = line_too_long(state);
-            (Progress::NoProgress, fail, state)
-        }
-    }
-}
-
-fn line_too_long_e<TE, E>(state: State, to_error: TE) -> (Progress, E, State)
+// TODO remove
+pub fn line_too_long_e<TE, E>(state: State, to_error: TE) -> (Progress, E, State)
 where
     TE: Fn(Row, Col) -> E,
 {
@@ -1031,133 +932,6 @@ where
     // TODO do we make progress in this case?
     // isn't this error fatal?
     (Progress::NoProgress, problem, state)
-}
-
-fn line_too_long(state: State) -> (Progress, SyntaxError, State) {
-    line_too_long_e(state, |line, _| SyntaxError::LineTooLong(line))
-}
-
-/// A single ASCII char that isn't a newline.
-/// (For newlines, use newline_char(), which handles line numbers)
-pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, (), SyntaxError<'a>> {
-    // Make sure this really is not a newline!
-    debug_assert_ne!(expected, b'\n');
-
-    move |arena, state: State<'a>| match state.bytes.first() {
-        Some(&actual) if expected == actual => Ok((
-            Progress::MadeProgress,
-            (),
-            state.advance_without_indenting(1)?,
-        )),
-        Some(_) => Err(unexpected(0, Attempting::Keyword, state)),
-        _ => Err(unexpected_eof(arena, state, 0)),
-    }
-}
-
-/// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
-/// which must consist entirely of ASCII hex digits.)
-pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        let mut buf = bumpalo::collections::String::new_in(arena);
-
-        for &byte in state.bytes.iter() {
-            if (byte as char).is_ascii_hexdigit() {
-                buf.push(byte as char);
-            } else if buf.is_empty() {
-                // We didn't find any hex digits!
-                return Err(unexpected(0, Attempting::Keyword, state));
-            } else {
-                let state = state.advance_without_indenting(buf.len())?;
-
-                return Ok((Progress::MadeProgress, buf.into_bump_str(), state));
-            }
-        }
-
-        Err(unexpected_eof(arena, state, 0))
-    }
-}
-
-/// A single UTF-8-encoded char. This will both parse *and* validate that the
-/// char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char<'a>(state: &State) -> Result<(char, usize), SyntaxError<'a>> {
-    if !state.bytes.is_empty() {
-        match char::from_utf8_slice_start(state.bytes) {
-            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
-            Err(_) => Err(SyntaxError::BadUtf8),
-        }
-    } else {
-        Err(SyntaxError::Eof(
-            Region::zero(), /* TODO get a better region */
-        ))
-    }
-}
-
-/// A single UTF-8-encoded char. This will both parse *and* validate that the
-/// char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char_e<EOF, TE, E>(
-    state: &State,
-    end_of_file: EOF,
-    to_error: TE,
-) -> Result<(char, usize), E>
-where
-    TE: Fn(BadInputError, Row, Col) -> E,
-    EOF: Fn(Row, Col) -> E,
-{
-    if !state.bytes.is_empty() {
-        match char::from_utf8_slice_start(state.bytes) {
-            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
-            Err(_) => Err(to_error(BadInputError::BadUtf8, state.line, state.column)),
-        }
-    } else {
-        Err(end_of_file(state.line, state.column))
-    }
-}
-
-/// A single UTF-8-encoded char, with an offset. This will both parse *and*
-/// validate that the char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char_at<'a>(
-    state: &State,
-    offset: usize,
-) -> Result<(char, usize), SyntaxError<'a>> {
-    if state.bytes.len() > offset {
-        let bytes = &state.bytes[offset..];
-
-        match char::from_utf8_slice_start(bytes) {
-            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
-            Err(_) => Err(SyntaxError::BadUtf8),
-        }
-    } else {
-        Err(SyntaxError::Eof(
-            Region::zero(), /* TODO get a better region */
-        ))
-    }
-}
-
-pub fn keyword<'a>(
-    keyword: &'static str,
-    _min_indent: u16,
-) -> impl Parser<'a, (), SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        let initial_state = state.clone();
-        // first parse the keyword characters
-        let (_, _, after_keyword_state) = ascii_string(keyword).parse(arena, state)?;
-
-        // then we must have at least one space character
-        // TODO this is potentially wasteful if there are a lot of spaces
-        match peek_utf8_char(&after_keyword_state) {
-            Ok((next, _width)) if next == ' ' || next == '#' || next == '\n' => {
-                // give back the state after parsing the keyword, but before the whitespace
-                // that way we can attach the whitespace to whatever follows
-                Ok((MadeProgress, (), after_keyword_state))
-            }
-            _ => {
-                // this is not a keyword, maybe it's `whence` or `iffy`
-                // anyway, make no progress and return the initial state
-                // so we can try something else
-                Err((NoProgress, SyntaxError::ConditionFailed, initial_state))
-            }
-        }
-    }
 }
 
 pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
@@ -1186,32 +960,6 @@ where
                 Ok((MadeProgress, (), state))
             }
             Some(_) => Err((NoProgress, if_error(state.line, state.column), state)),
-        }
-    }
-}
-
-/// A hardcoded string with no newlines, consisting only of ASCII characters
-pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, (), SyntaxError<'a>> {
-    // Verify that this really is exclusively ASCII characters.
-    // The `unsafe` block in this function relies upon this assumption!
-    //
-    // Also, this can't have newlines because we don't attempt to advance
-    // the row in the state, only the column.
-    debug_assert!(keyword.chars().all(|ch| ch.len_utf8() == 1 && ch != '\n'));
-
-    move |_arena, state: State<'a>| {
-        let len = keyword.len();
-
-        // TODO do this comparison in one SIMD instruction (on supported systems)
-        if state.bytes.starts_with(keyword.as_bytes()) {
-            Ok((
-                Progress::MadeProgress,
-                (),
-                state.advance_without_indenting(len)?,
-            ))
-        } else {
-            let (_, fail, state) = unexpected(len, Attempting::Keyword, state);
-            Err((NoProgress, fail, state))
         }
     }
 }
@@ -1480,21 +1228,6 @@ pub fn fail_when_progress<T, E>(
     match progress {
         MadeProgress => Err((MadeProgress, fail, state)),
         NoProgress => Ok((NoProgress, value, state)),
-    }
-}
-
-pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A, SyntaxError<'a>>
-where
-    P: Parser<'a, A, SyntaxError<'a>>,
-    F: Fn(&A) -> bool,
-{
-    move |arena: &'a Bump, state: State<'a>| match parser.parse(arena, state.clone()) {
-        Ok((progress, output, next_state)) if predicate(&output) => {
-            Ok((progress, output, next_state))
-        }
-        Ok((progress, _, _)) | Err((progress, _, _)) => {
-            Err((progress, SyntaxError::ConditionFailed, state))
-        }
     }
 }
 
@@ -1921,30 +1654,6 @@ macro_rules! word1_check_indent {
     };
 }
 
-#[allow(dead_code)]
-fn in_context<'a, AddContext, P1, P2, Start, A, X, Y>(
-    add_context: AddContext,
-    parser_start: P1,
-    parser_rest: P2,
-) -> impl Parser<'a, A, Y>
-where
-    AddContext: Fn(X, Row, Col) -> Y,
-    P1: Parser<'a, Start, Y>,
-    P2: Parser<'a, A, X>,
-    Y: 'a,
-{
-    move |arena, state| {
-        let (_, _, state) = parser_start.parse(arena, state)?;
-
-        match parser_rest.parse(arena, state) {
-            Ok((progress, value, state)) => Ok((progress, value, state)),
-            Err((progress, fail, state)) => {
-                Err((progress, add_context(fail, state.line, state.column), state))
-            }
-        }
-    }
-}
-
 #[macro_export]
 macro_rules! map {
     ($parser:expr, $transform:expr) => {
@@ -2019,42 +1728,6 @@ macro_rules! zero_or_more {
                             Ok((NoProgress, Vec::new_in(arena), new_state))
                         }
                     }
-                }
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! one_or_more {
-    ($parser:expr) => {
-        move |arena, state: State<'a>| {
-            use bumpalo::collections::Vec;
-
-            match $parser.parse(arena, state) {
-                Ok((_, first_output, next_state)) => {
-                    let mut state = next_state;
-                    let mut buf = Vec::with_capacity_in(1, arena);
-
-                    buf.push(first_output);
-
-                    loop {
-                        match $parser.parse(arena, state) {
-                            Ok((_, next_output, next_state)) => {
-                                state = next_state;
-                                buf.push(next_output);
-                            }
-                            Err((progress, fail, old_state)) => {
-                                return $crate::parser::fail_when_progress(
-                                    progress, fail, buf, old_state,
-                                )
-                            }
-                        }
-                    }
-                }
-                Err((progress, _, new_state)) => {
-                    debug_assert_eq!(progress, NoProgress, "{:?}", &new_state);
-                    Err($crate::parser::unexpected_eof(arena, new_state, 0))
                 }
             }
         }

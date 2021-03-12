@@ -2,8 +2,8 @@ use crate::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
-    allocated, backtrackable, not_e, optional, peek_utf8_char_e, specialize, specialize_ref, word1,
-    word2, ParseResult, Parser,
+    allocated, backtrackable, not_e, optional, specialize, specialize_ref, word1, word2,
+    ParseResult, Parser,
     Progress::{self, *},
     State, SyntaxError, TApply, TInParens, TRecord, TTagUnion, TVariable, Type,
 };
@@ -120,7 +120,7 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
                 // Once we hit an "as", stop parsing args
                 // and roll back parsing of preceding spaces
                 not_e(
-                    crate::parser::keyword(keyword::AS, min_indent),
+                    crate::parser::keyword_e(keyword::AS, Type::TStart),
                     Type::TStart
                 ),
                 one_of!(
@@ -550,54 +550,18 @@ fn parse_concrete_type<'a>(
 
 fn parse_type_variable<'a>(
     arena: &'a Bump,
-    mut state: State<'a>,
+    state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>, TVariable> {
-    let mut buf = String::new_in(arena);
+    match crate::ident::lowercase_ident().parse(arena, state) {
+        Ok((_, name, state)) => {
+            let answer = TypeAnnotation::BoundVariable(name);
 
-    let start_bytes_len = state.bytes.len();
-
-    match peek_utf8_char_e(&state, TVariable::StartNotLowercase, TVariable::Space) {
-        Ok((first_letter, bytes_parsed)) => {
-            // Type variables must start with a lowercase letter.
-            if first_letter.is_alphabetic() && first_letter.is_lowercase() {
-                buf.push(first_letter);
-            } else {
-                return Err((
-                    NoProgress,
-                    TVariable::StartNotLowercase(state.line, state.column),
-                    state,
-                ));
-            }
-
-            state = state.advance_without_indenting_e(bytes_parsed, TVariable::Space)?;
+            Ok((MadeProgress, answer, state))
         }
-        Err(reason) => return Err((NoProgress, reason, state)),
+        Err((progress, _, state)) => Err((
+            progress,
+            TVariable::StartNotLowercase(state.line, state.column),
+            state,
+        )),
     }
-
-    while !state.bytes.is_empty() {
-        match peek_utf8_char_e(&state, TVariable::End, TVariable::Space) {
-            Ok((ch, bytes_parsed)) => {
-                // After the first character, only these are allowed:
-                //
-                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-                if ch.is_alphabetic() || ch.is_ascii_digit() {
-                    buf.push(ch);
-                } else {
-                    // This must be the end of the type. We're done!
-                    break;
-                }
-
-                state = state.advance_without_indenting_e(bytes_parsed, TVariable::Space)?;
-            }
-            Err(reason) => {
-                return state.fail(arena, MadeProgress, reason);
-            }
-        }
-    }
-
-    let answer = TypeAnnotation::BoundVariable(buf.into_bump_str());
-
-    let progress = Progress::from_lengths(start_bytes_len, state.bytes.len());
-    Ok((progress, answer, state))
 }
