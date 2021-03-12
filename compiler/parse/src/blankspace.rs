@@ -283,8 +283,8 @@ where
                 debug_assert!(u16::MAX - state.indent_col >= spaces as u16);
                 debug_assert!(spaces <= u16::MAX as usize);
 
-                state.indent_col + spaces as u16
-                // state.indent_col
+                // state.indent_col + spaces as u16
+                state.indent_col
             } else {
                 state.indent_col
             };
