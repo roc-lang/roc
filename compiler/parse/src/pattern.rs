@@ -1,10 +1,10 @@
 use crate::ast::Pattern;
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
-use crate::ident::{ident, lowercase_ident, Ident};
+use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
-    ParseResult, Parser, State, SyntaxError,
+    ParseResult, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
@@ -49,13 +49,6 @@ fn parse_closure_param<'a>(
         specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent))
     )
     .parse(arena, state)
-}
-
-pub fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Pattern(e),
-        loc_pattern_help(min_indent),
-    )
 }
 
 pub fn loc_pattern_help<'a>(
@@ -130,7 +123,7 @@ fn loc_pattern_in_parens_help<'a>(
     between!(
         word1(b'(', PInParens::Open),
         space0_around_ee(
-            move |arena, state| specialize_ref(PInParens::Syntax, loc_pattern(min_indent))
+            move |arena, state| specialize_ref(PInParens::Pattern, loc_pattern_help(min_indent))
                 .parse(arena, state),
             min_indent,
             PInParens::Space,
@@ -176,10 +169,11 @@ fn loc_ident_pattern_help<'a>(
     can_have_arguments: bool,
 ) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let original_state = state.clone();
+        let original_state = state;
 
         let (_, loc_ident, state) =
-            specialize(|_, r, c| EPattern::Start(r, c), loc!(ident())).parse(arena, state)?;
+            specialize(|_, r, c| EPattern::Start(r, c), loc!(parse_ident_help))
+                .parse(arena, state)?;
 
         match loc_ident.value {
             Ident::GlobalTag(tag) => {
@@ -296,10 +290,6 @@ fn loc_ident_pattern_help<'a>(
     }
 }
 
-pub fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    specialize(|e, _, _| SyntaxError::Pattern(e), underscore_pattern_help())
-}
-
 fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         let (_, _, next_state) = word1(b'_', EPattern::Underscore).parse(arena, state)?;
@@ -322,13 +312,6 @@ fn lowercase_ident_pattern<'a>(
     let col = state.column;
 
     specialize(move |_, _, _| EPattern::End(row, col), lowercase_ident()).parse(arena, state)
-}
-
-pub fn record_pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, SyntaxError<'a>> {
-    specialize(
-        |e, r, c| SyntaxError::Pattern(EPattern::Record(e, r, c)),
-        record_pattern_help(min_indent),
-    )
 }
 
 #[inline(always)]
@@ -385,7 +368,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
 
         match opt_loc_val {
             Some(First(_)) => {
-                let val_parser = specialize_ref(PRecord::Syntax, loc_pattern(min_indent));
+                let val_parser = specialize_ref(PRecord::Pattern, loc_pattern_help(min_indent));
                 let (_, loc_val, state) =
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
                         .parse(arena, state)?;
@@ -413,7 +396,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
             }
             Some(Second(_)) => {
                 let val_parser =
-                    specialize_ref(PRecord::Syntax, loc!(crate::expr::expr(min_indent)));
+                    specialize_ref(PRecord::Expr, loc!(crate::expr::expr_help(min_indent)));
 
                 let (_, loc_val, state) =
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)

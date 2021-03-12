@@ -18,7 +18,6 @@ use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::ast::StrLiteral;
-use roc_parse::blankspace::space0_before;
 use roc_parse::expr::expr;
 use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::{Problem, RuntimeError};
@@ -235,14 +234,10 @@ pub fn str_to_expr2<'a>(
     scope: &mut Scope,
     region: Region,
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes());
-    let parser = space0_before(loc(expr(0)), 0);
-    let parse_res = parser.parse(&arena, state);
-
-    parse_res
-        .map(|(_, loc_expr, _)| arena.alloc(loc_expr.value))
-        .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
-        .map_err(|(_, fail, _)| fail)
+    match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
+        Ok(loc_expr) => Ok(to_expr2(env, scope, arena.alloc(loc_expr.value), region)),
+        Err(fail) => Err(fail),
+    }
 }
 
 pub fn to_expr2<'a>(

@@ -1,6 +1,5 @@
 use crate::ast::{CommentOrNewline, Def, Module};
-use crate::blankspace::{space0_around, space0_before_e, space0_e};
-use crate::expr::def;
+use crate::blankspace::{space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
     InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, To, TypedIdent,
@@ -8,8 +7,8 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, end_of_file, specialize, word1, Col, EEffects, EExposes, EHeader, EImports,
-    EPackages, EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
+    backtrackable, specialize, word1, Col, EEffects, EExposes, EHeader, EImports, EPackages,
+    EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
 use crate::type_annotation;
@@ -250,10 +249,34 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     }
 }
 
+fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
+    |_arena, state: State<'a>| {
+        if state.has_reached_end() {
+            Ok((NoProgress, (), state))
+        } else {
+            Err((NoProgress, SyntaxError::ConditionFailed, state))
+        }
+    }
+}
+
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
+    use crate::parser::EExpr;
     // force that we pare until the end of the input
-    skip_second!(zero_or_more!(space0_around(loc!(def(0)), 0)), end_of_file())
+    let min_indent = 0;
+    skip_second!(
+        specialize(
+            |e, _, _| SyntaxError::Expr(e),
+            zero_or_more!(crate::blankspace::space0_around_ee(
+                loc!(crate::expr::def_help(min_indent)),
+                min_indent,
+                EExpr::Space,
+                EExpr::IndentStart,
+                EExpr::IndentEnd,
+            ))
+        ),
+        end_of_file()
+    )
 }
 #[derive(Debug)]
 struct ProvidesTo<'a> {

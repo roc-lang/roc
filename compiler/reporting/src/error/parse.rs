@@ -172,6 +172,8 @@ enum Node {
     IfElseBranch,
     ListElement,
     InsideParens,
+    RecordConditionalDefault,
+    StringFormat,
 }
 
 fn to_expr_report<'a>(
@@ -198,8 +200,6 @@ fn to_expr_report<'a>(
             to_expr_in_parens_report(alloc, filename, context, &expr, *row, *col)
         }
         EExpr::Type(tipe, row, col) => to_type_report(alloc, filename, &tipe, *row, *col),
-        EExpr::Def(syntax, row, col) => to_syntax_report(alloc, filename, syntax, *row, *col),
-
         EExpr::ElmStyleFunction(region, row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
             let region = *region;
@@ -345,6 +345,8 @@ fn to_expr_report<'a>(
                         ]),
                     ),
                     Node::ListElement => (r, c, alloc.text("a list")),
+                    Node::RecordConditionalDefault => (r, c, alloc.text("record field default")),
+                    Node::StringFormat => (r, c, alloc.text("a string format")),
                     Node::InsideParens => (r, c, alloc.text("some parentheses")),
                 },
                 Context::InDef(r, c) => (r, c, alloc.text("a definition")),
@@ -373,6 +375,33 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "MISSING EXPRESSION".to_string(),
+            }
+        }
+
+        EExpr::DefMissingFinalExpr(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("This definition is missing a final expression."),
+                    alloc.reflow(" A nested definition must be followed by"),
+                    alloc.reflow(" either another definition, or an expression"),
+                ]),
+                alloc.vcat(vec![
+                    alloc.text("x = 4").indent(4),
+                    alloc.text("y = 2").indent(4),
+                    alloc.text("").indent(4),
+                    alloc.text("x + y").indent(4),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING FINAL EXPRESSION".to_string(),
             }
         }
 
@@ -637,7 +666,7 @@ fn to_unfinished_lambda_report<'a>(
 fn to_str_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    _context: Context,
+    context: Context,
     parse_problem: &roc_parse::parser::EString<'a>,
     start_row: Row,
     start_col: Col,
@@ -646,7 +675,14 @@ fn to_str_report<'a>(
 
     match *parse_problem {
         EString::Open(_row, _col) => unreachable!("another branch would be taken"),
-        EString::Format(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+        EString::Format(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(Node::StringFormat, start_row, start_col, Box::new(context)),
+            expr,
+            row,
+            col,
+        ),
         EString::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
         EString::UnknownEscape(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
@@ -711,6 +747,26 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD CODE POINT".to_string(),
+            }
+        }
+        EString::FormatEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I cannot find the end of this format expression:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("\"The count is \\(count\\)\""),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ENDLESS FORMAT".to_string(),
             }
         }
         EString::EndlessSingle(row, col) => {
@@ -840,7 +896,6 @@ fn to_list_report<'a>(
     use roc_parse::parser::List;
 
     match *parse_problem {
-        List::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
         List::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         List::Expr(expr, row, col) => to_expr_report(
@@ -949,7 +1004,6 @@ fn to_if_report<'a>(
     use roc_parse::parser::If;
 
     match *parse_problem {
-        If::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
         If::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         If::Condition(expr, row, col) => to_expr_report(
@@ -1120,7 +1174,6 @@ fn to_when_report<'a>(
             }
         }
 
-        When::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
         When::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         When::Branch(expr, row, col) => to_expr_report(
@@ -1513,7 +1566,20 @@ fn to_precord_report<'a>(
         PRecord::Pattern(pattern, row, col) => {
             to_pattern_report(alloc, filename, pattern, row, col)
         }
-        PRecord::Syntax(syntax, row, col) => to_syntax_report(alloc, filename, syntax, row, col),
+
+        PRecord::Expr(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InNode(
+                Node::RecordConditionalDefault,
+                start_row,
+                start_col,
+                Box::new(Context::InDef(row, col)),
+            ),
+            expr,
+            row,
+            col,
+        ),
 
         PRecord::IndentOpen(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
@@ -3012,7 +3078,7 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a>
     }
 }
 
-fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
+pub fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
     if let Some(stripped) = rest_of_line.strip_prefix(keyword) {
         match stripped.chars().next() {
             None => true,

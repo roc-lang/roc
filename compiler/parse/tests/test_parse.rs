@@ -1005,7 +1005,7 @@ mod test_parse {
         use roc_parse::ident::BadIdent;
 
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::QualifiedTag(0, 13));
+        let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::BadPrivateTag(0, 4));
         let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
@@ -2433,7 +2433,7 @@ mod test_parse {
                 app "test-app" packages {} imports [] provides [] to blah
             "#
         );
-        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2473,7 +2473,7 @@ mod test_parse {
             "#
         );
 
-        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2528,7 +2528,7 @@ mod test_parse {
             "#
         );
 
-        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2573,7 +2573,7 @@ mod test_parse {
         let expected = roc_parse::ast::Module::Platform { header };
 
         let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects fx.Blah {}";
-        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2642,7 +2642,7 @@ mod test_parse {
                     effects fx.Effect {}
             "#
         );
-        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2673,7 +2673,7 @@ mod test_parse {
                 interface Foo exposes [] imports []
             "#
         );
-        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2704,7 +2704,7 @@ mod test_parse {
                 interface Foo.Bar.Baz exposes [] imports []
             "#
         );
-        let actual = roc_parse::module::parse_header(&arena, State::new_in(&arena, src.as_bytes()))
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2731,7 +2731,7 @@ mod test_parse {
             "#
         );
         let actual = module_defs()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
@@ -2790,7 +2790,7 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
@@ -2810,7 +2810,7 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert!(actual.is_ok());
@@ -2832,7 +2832,7 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
         assert!(actual.is_ok());
@@ -2840,7 +2840,7 @@ mod test_parse {
 
     #[test]
     fn outdenting_newline_after_else() {
-        let arena = Bump::new();
+        let arena = &Bump::new();
 
         // highlights a problem with the else branch demanding a newline after its expression
         let src = indoc!(
@@ -2852,13 +2852,19 @@ mod test_parse {
             "#
         );
 
-        let actual = module_defs()
-            .parse(&arena, State::new_in(&arena, src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        dbg!(&actual);
-
-        assert!(actual.is_ok());
+        let state = State::new(src.as_bytes());
+        let parser = module_defs();
+        let parsed = parser.parse(arena, state);
+        match parsed {
+            Ok((_, _, state)) => {
+                dbg!(state);
+                return;
+            }
+            Err((_, _fail, _state)) => {
+                dbg!(_fail, _state);
+                assert!(false);
+            }
+        }
     }
 
     #[test]

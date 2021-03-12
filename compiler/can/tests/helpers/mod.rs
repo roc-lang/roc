@@ -8,9 +8,6 @@ use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
-use roc_parse::ast::{self, Attempting};
-use roc_parse::blankspace::space0_before;
-use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -18,25 +15,6 @@ use std::hash::Hash;
 
 pub fn test_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"Test".into())
-}
-
-#[allow(dead_code)]
-pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, SyntaxError<'a>> {
-    parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
-}
-
-#[allow(dead_code)]
-pub fn parse_loc_with<'a>(
-    arena: &'a Bump,
-    input: &'a str,
-) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
-    let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
-    let answer = parser.parse(&arena, state);
-
-    answer
-        .map(|(_, loc_expr, _)| loc_expr)
-        .map_err(|(_, fail, _)| fail)
 }
 
 #[allow(dead_code)]
@@ -56,7 +34,7 @@ pub struct CanExprOut {
 
 #[allow(dead_code)]
 pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
-    let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
+    let loc_expr = roc_parse::test_helpers::parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
             expr_str, e

@@ -1,8 +1,6 @@
 use crate::ast;
-use crate::blankspace::space0_before;
-use crate::expr::expr;
 use crate::module::module_defs;
-use crate::parser::{loc, Parser, State, SyntaxError};
+use crate::parser::{Parser, State, SyntaxError};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_region::all::Located;
@@ -19,7 +17,7 @@ pub fn parse_defs_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<Vec<'a, Located<ast::Def<'a>>>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes());
+    let state = State::new(input.trim().as_bytes());
     let answer = module_defs().parse(arena, state);
     answer
         .map(|(_, loc_expr, _)| loc_expr)
@@ -31,11 +29,10 @@ pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes());
-    let parser = space0_before(loc(expr(0)), 0);
-    let answer = parser.parse(&arena, state);
+    let state = State::new(input.trim().as_bytes());
 
-    answer
-        .map(|(_, loc_expr, _)| loc_expr)
-        .map_err(|(_, fail, _)| fail)
+    match crate::expr::test_parse_expr(0, arena, state) {
+        Ok(loc_expr) => Ok(loc_expr),
+        Err(fail) => Err(SyntaxError::Expr(fail)),
+    }
 }

@@ -177,20 +177,21 @@ mod test_reporting {
 
         use roc_parse::parser::State;
 
-        let state = State::new_in(arena, src.as_bytes());
+        let state = State::new(src.as_bytes());
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
 
-        use roc_parse::parser::Parser;
-        match roc_parse::module::header().parse(arena, state) {
-            Err((_, fail, _)) => {
+        match roc_parse::module::parse_header(arena, state) {
+            Err(fail) => {
                 let interns = Interns::default();
                 let home = crate::helpers::test_home();
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let problem = fail.into_parse_problem(filename.clone(), src.as_bytes());
+                use roc_parse::parser::SyntaxError;
+                let problem =
+                    SyntaxError::Header(fail).into_parse_problem(filename.clone(), src.as_bytes());
                 let doc = parse_problem(&alloc, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
@@ -3214,7 +3215,7 @@ mod test_reporting {
                 r#"
                 ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
 
-                I am in the middle of parsing a definition, but I got stuck here:
+                I am partway through parsing a definition, but I got stuck here:
 
                 1│  f x y = x
                       ^^^
@@ -4123,13 +4124,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                I trying to parse a record field accessor here:
-
+                
+                I trying to parse a record field access here:
+                
                 1│  foo.bar.
                             ^
-
-                Something like .name or .height that accesses a value from a record.
+                
+                So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
         )
@@ -4146,15 +4147,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                I am trying to parse a qualified name here:
-
+                
+                I am very confused by this expression:
+                
                 1│  @Foo.Bar
-                            ^
-
-                This looks like a qualified tag name to me, but tags cannot be
-                qualified! Maybe you wanted a qualified name, something like
-                Json.Decode.string?
+                        ^^^^
+                
+                Looks like a private tag is treated like a module name. Maybe you
+                wanted a qualified name, like Json.Decode.string?
             "#
             ),
         )
@@ -4562,21 +4562,21 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo..Bar
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
-
-                I encountered two dots in a row:
-
-                1│  f : Foo..Bar
-                            ^
-
-                Try removing one of them.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
+        //
+        //                I encountered two dots in a row:
+        //
+        //                1│  f : Foo..Bar
+        //                            ^
+        //
+        //                Try removing one of them.
     }
 
     #[test]
@@ -4585,22 +4585,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.Bar.
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── TRAILING DOT ────────────────────────────────────────────────────────────────
-
-                I encountered a dot with nothing after it:
-
-                1│  f : Foo.Bar.
-                                ^
-
-                Dots are used to refer to a type in a qualified way, like
-                Num.I64 or List.List a. Try adding a type name next.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
+        //
+        //                I encountered a dot with nothing after it:
+        //
+        //                1│  f : Foo.Bar.
+        //                                ^
+        //
+        //                Dots are used to refer to a type in a qualified way, like
+        //                Num.I64 or List.List a. Try adding a type name next.
     }
 
     #[test]
@@ -4636,22 +4636,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.1
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-
-                I encountered a number at the start of a qualified name segment:
-
-                1│  f : Foo.1
-                            ^
-
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+        //
+        //                I encountered a number at the start of a qualified name segment:
+        //
+        //                1│  f : Foo.1
+        //                            ^
+        //
+        //                All parts of a qualified type name must start with an uppercase
+        //                letter, like Num.I64 or List.List a.
     }
 
     #[test]
@@ -4660,20 +4660,38 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.foo
+
+                f
+                "#
+            ),
+            indoc!(r#""#),
+        )
+    }
+
+    #[test]
+    fn def_missing_final_expression() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo.foo
                 "#
             ),
             indoc!(
                 r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-
-                I encountered a lowercase letter at the start of a qualified name
-                segment:
-
+                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition, but I got stuck here:
+                
                 1│  f : Foo.foo
-                            ^
-
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
+                               ^
+                
+                This definition is missing a final expression. A nested definition
+                must be followed by either another definition, or an expression
+                
+                    x = 4
+                    y = 2
+                    
+                    x + y
             "#
             ),
         )
@@ -5037,13 +5055,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-
-                I am in the middle of parsing a function argument list, but I got
-                stuck at this comma:
-
+                
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
+                
                 1│  \a,,b -> 1
                        ^
-
+                
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5062,13 +5080,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-
-                I am in the middle of parsing a function argument list, but I got
-                stuck at this comma:
-
+                
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
+                
                 1│  \,b -> 1
                      ^
-
+                
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5470,13 +5488,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                I trying to parse a record field accessor here:
-
+                
+                I trying to parse a record field access here:
+                
                 1│  Num.add . 23
                              ^
-
-                Something like .name or .height that accesses a value from a record.
+                
+                So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
         )
@@ -5522,7 +5540,7 @@ mod test_reporting {
                 I am very confused by this field access:
 
                 1│  @UUID.bar
-                    ^^^^^^^^^
+                         ^^^^
 
                 It looks like a record field access on a private tag.
             "#
@@ -5772,7 +5790,7 @@ mod test_reporting {
                 r#"
                 ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
                 
-                I am in the middle of parsing a provides list, but I got stuck here:
+                I am partway through parsing a provides list, but I got stuck here:
                 
                 3│      imports [base.Task, Base64 ]
                 4│      provides [ main, @Foo ] to base
@@ -5800,7 +5818,7 @@ mod test_reporting {
                 r#"
                 ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
                 
-                I am in the middle of parsing a exposes list, but I got stuck here:
+                I am partway through parsing a exposes list, but I got stuck here:
                 
                 1│  interface Foobar 
                 2│      exposes [ main, @Foo ]

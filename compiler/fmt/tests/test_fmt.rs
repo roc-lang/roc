@@ -4,8 +4,6 @@ extern crate pretty_assertions;
 extern crate indoc;
 extern crate bumpalo;
 extern crate roc_fmt;
-#[macro_use]
-extern crate roc_parse;
 
 #[cfg(test)]
 mod test_fmt {
@@ -14,27 +12,15 @@ mod test_fmt {
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
-    use roc_parse::ast::{Attempting, Expr};
-    use roc_parse::blankspace::space0_before;
     use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::{Parser, State, SyntaxError};
-
-    fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
-        let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
-        let parser = space0_before(loc!(roc_parse::expr::expr(0)), 0);
-        let answer = parser.parse(&arena, state);
-
-        answer
-            .map(|(_, loc_expr, _)| loc_expr.value)
-            .map_err(|(_, fail, _)| fail)
-    }
+    use roc_parse::parser::{Parser, State};
 
     fn expr_formats_to(input: &str, expected: &str) {
         let arena = Bump::new();
         let input = input.trim_end();
         let expected = expected.trim_end();
 
-        match parse_with(&arena, input) {
+        match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
                 let mut buf = String::new_in(&arena);
 
@@ -55,8 +41,8 @@ mod test_fmt {
         let src = src.trim_end();
         let expected = expected.trim_end();
 
-        match module::header().parse(&arena, State::new_in(&arena, src.as_bytes(), Attempting::Module)) {
-            Ok((_, actual, state)) => {
+        match module::parse_header(&arena, State::new(src.as_bytes())) {
+            Ok((actual, state)) => {
                 let mut buf = String::new_in(&arena);
 
                 fmt_module(&mut buf, &actual);
