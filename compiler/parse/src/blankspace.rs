@@ -193,10 +193,17 @@ pub fn spaces_till_end_of_line<'a, E: 'a>(
                 b'#' => match chomp_line_comment(bytes) {
                     Ok(comment) => {
                         state.line += 1;
+                        state.column = 0;
 
-                        state.column += col + comment.len() as u16;
-                        state.bytes = &bytes[comment.len()..];
+                        let width = 1 + comment.len();
+                        if let Some(b'\n') = bytes.get(width) {
+                            state.bytes = &bytes[width + 1..];
+                        } else {
+                            state.bytes = &bytes[width..];
+                        }
                         state.is_indenting = true;
+
+                        dbg!(comment, &state);
 
                         return Ok((MadeProgress, Some(comment), state));
                     }
@@ -214,6 +221,7 @@ pub fn spaces_till_end_of_line<'a, E: 'a>(
                 None,
                 State {
                     column: col,
+                    bytes,
                     ..state
                 },
             ))
@@ -275,8 +283,8 @@ where
                 debug_assert!(u16::MAX - state.indent_col >= spaces as u16);
                 debug_assert!(spaces <= u16::MAX as usize);
 
-                // state.indent_col + spaces as u16
-                state.indent_col
+                state.indent_col + spaces as u16
+                // state.indent_col
             } else {
                 state.indent_col
             };
