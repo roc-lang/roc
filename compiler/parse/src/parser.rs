@@ -27,7 +27,7 @@ pub enum Either<First, Second> {
 }
 
 impl<'a> State<'a> {
-    pub fn new_in(arena: &'a Bump, bytes: &'a [u8]) -> State<'a> {
+    pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
             line: 0,

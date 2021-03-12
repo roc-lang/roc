@@ -177,7 +177,7 @@ mod test_reporting {
 
         use roc_parse::parser::State;
 
-        let state = State::new_in(arena, src.as_bytes());
+        let state = State::new(src.as_bytes());
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();

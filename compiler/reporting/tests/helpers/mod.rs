@@ -109,7 +109,7 @@ pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<Located<ast::Expr<'a>>, SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes());
+    let state = State::new(input.trim().as_bytes());
 
     match roc_parse::expr::test_parse_expr(0, arena, state) {
         Ok((loc_expr, _state)) => Ok(loc_expr),

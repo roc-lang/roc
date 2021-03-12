@@ -2304,7 +2304,7 @@ fn load_pkg_config<'a>(
         Ok(bytes_vec) => {
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
-            let parse_state = parser::State::new_in(arena, bytes);
+            let parse_state = parser::State::new(bytes);
             let parsed = roc_parse::module::parse_header(&arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2474,7 +2474,7 @@ fn parse_header<'a>(
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new_in(arena, src_bytes);
+    let parse_state = parser::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(&arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 

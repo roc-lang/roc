@@ -17,7 +17,7 @@ mod test_fmt {
     use roc_parse::parser::{Parser, State, SyntaxError};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
-        let state = State::new_in(arena, input.trim().as_bytes());
+        let state = State::new(input.trim().as_bytes());
 
         match roc_parse::expr::test_parse_expr(0, arena, state) {
             Ok((loc_expr, _state)) => Ok(loc_expr.value),
@@ -51,7 +51,7 @@ mod test_fmt {
         let src = src.trim_end();
         let expected = expected.trim_end();
 
-        match module::parse_header(&arena, State::new_in(&arena, src.as_bytes())) {
+        match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
                 let mut buf = String::new_in(&arena);
 
