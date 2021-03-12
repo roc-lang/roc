@@ -4124,12 +4124,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I trying to parse a record field access here:
-                
+
                 1│  foo.bar.
                             ^
-                
+
                 So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
@@ -4147,12 +4147,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I am very confused by this expression:
-                
+
                 1│  @Foo.Bar
                         ^^^^
-                
+
                 Looks like a private tag is treated like a module name. Maybe you
                 wanted a qualified name, like Json.Decode.string?
             "#
@@ -4679,18 +4679,18 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a definition, but I got stuck here:
-                
+
                 1│  f : Foo.foo
                                ^
-                
+
                 This definition is missing a final expression. A nested definition
                 must be followed by either another definition, or an expression
-                
+
                     x = 4
                     y = 2
-                    
+
                     x + y
             "#
             ),
@@ -5055,13 +5055,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a function argument list, but I got stuck
                 at this comma:
-                
+
                 1│  \a,,b -> 1
                        ^
-                
+
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5080,13 +5080,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a function argument list, but I got stuck
                 at this comma:
-                
+
                 1│  \,b -> 1
                      ^
-                
+
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5488,12 +5488,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I trying to parse a record field access here:
-                
+
                 1│  Num.add . 23
                              ^
-                
+
                 So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
@@ -5789,15 +5789,15 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a provides list, but I got stuck here:
-                
+
                 3│      imports [base.Task, Base64 ]
                 4│      provides [ main, @Foo ] to base
                                          ^
-                
-                I was expecting a type name, value name or function name next, like 
-                
+
+                I was expecting a type name, value name or function name next, like
+
                     provides [ Animal, default, tame ]
             "#
             ),
@@ -5809,7 +5809,7 @@ mod test_reporting {
         report_header_problem_as(
             indoc!(
                 r#"
-                interface Foobar 
+                interface Foobar
                     exposes [ main, @Foo ]
                     imports [base.Task, Base64 ]
                 "#
@@ -5817,15 +5817,15 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a exposes list, but I got stuck here:
-                
-                1│  interface Foobar 
+
+                1│  interface Foobar
                 2│      exposes [ main, @Foo ]
                                         ^
-                
-                I was expecting a type name, value name or function name next, like 
-                
+
+                I was expecting a type name, value name or function name next, like
+
                     exposes [ Animal, default, tame ]
             "#
             ),
@@ -5837,7 +5837,7 @@ mod test_reporting {
         report_header_problem_as(
             indoc!(
                 r#"
-                interface foobar 
+                interface foobar
                     exposes [ main, @Foo ]
                     imports [base.Task, Base64 ]
                 "#
@@ -5845,12 +5845,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD MODULE NAME ───────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a header, but got stuck here:
-                
-                1│  interface foobar 
+
+                1│  interface foobar
                               ^
-                
+
                 I am expecting a module name next, like BigNum or Main. Module names
                 must start with an uppercase letter.
             "#
@@ -5863,7 +5863,7 @@ mod test_reporting {
         report_header_problem_as(
             indoc!(
                 r#"
-                app foobar 
+                app foobar
                     exposes [ main, @Foo ]
                     imports [base.Task, Base64 ]
                 "#
