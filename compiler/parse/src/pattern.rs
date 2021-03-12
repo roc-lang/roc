@@ -141,14 +141,8 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
             use crate::number_literal::NumLiteral::*;
 
             match literal {
-                Num(s) => Pattern::NumLiteral {
-                    string: s,
-                    is_negative: false,
-                },
-                Float(s) => Pattern::FloatLiteral {
-                    string: s,
-                    is_negative: false,
-                },
+                Num(s) => Pattern::NumLiteral(s),
+                Float(s) => Pattern::FloatLiteral(s),
                 NonBase10Int {
                     string,
                     base,

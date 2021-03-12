@@ -33,9 +33,9 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             | Pattern::GlobalTag(_)
             | Pattern::PrivateTag(_)
             | Pattern::Apply(_, _)
-            | Pattern::NumLiteral { .. }
+            | Pattern::NumLiteral(_)
             | Pattern::NonBase10Literal { .. }
-            | Pattern::FloatLiteral { .. }
+            | Pattern::FloatLiteral(_)
             | Pattern::StrLiteral(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
@@ -106,7 +106,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 loc_pattern.format(buf, indent);
             }
 
-            NumLiteral { string, .. } => buf.push_str(string),
+            NumLiteral(string) => buf.push_str(string),
             NonBase10Literal {
                 base,
                 string,
@@ -125,7 +125,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
 
                 buf.push_str(string);
             }
-            FloatLiteral { string, .. } => buf.push_str(string),
+            FloatLiteral(string) => buf.push_str(string),
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
             }

@@ -646,20 +646,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             Ok(Pattern::RecordDestructure(loc_patterns.into_bump_slice()))
         }
 
-        Expr::Float {
-            string,
-            is_negative,
-        } => Ok(Pattern::FloatLiteral {
-            string,
-            is_negative: *is_negative,
-        }),
-        Expr::Num {
-            string,
-            is_negative,
-        } => Ok(Pattern::NumLiteral {
-            string,
-            is_negative: *is_negative,
-        }),
+        Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
+        Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
         Expr::NonBase10Int {
             string,
             base,
@@ -997,7 +985,7 @@ fn annotation_or_alias<'a>(
         QualifiedIdentifier { .. } => {
             Def::NotYetImplemented("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`")
         }
-        NumLiteral { ..}  | NonBase10Literal { .. } | FloatLiteral { .. }  | StrLiteral(_) => {
+        NumLiteral(_) | NonBase10Literal { .. } | FloatLiteral(_) | StrLiteral(_) => {
             Def::NotYetImplemented("TODO gracefully handle trying to annotate a litera")
         }
         Underscore(_) => {
@@ -2373,14 +2361,8 @@ fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
         use crate::number_literal::NumLiteral::*;
 
         match literal {
-            Num(s) => Expr::Num {
-                string: s,
-                is_negative: false,
-            },
-            Float(s) => Expr::Float {
-                string: s,
-                is_negative: false,
-            },
+            Num(s) => Expr::Num(s),
+            Float(s) => Expr::Float(s),
             NonBase10Int {
                 string,
                 base,

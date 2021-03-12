@@ -843,28 +843,19 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn nat_to_ast(arena: &Bump, num: usize) -> Expr<'_> {
-    Expr::Num {
-        string: arena.alloc(format!("{}", num)),
-        is_negative: false,
-    }
+    Expr::Num(arena.alloc(format!("{}", num)))
 }
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
-    Expr::Num {
-        string: arena.alloc(format!("{}", num)),
-        is_negative: false,
-    }
+    Expr::Num(arena.alloc(format!("{}", num)))
 }
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn f64_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
-    Expr::Num {
-        string: arena.alloc(format!("{}", num)),
-        is_negative: false,
-    }
+    Expr::Num(arena.alloc(format!("{}", num)))
 }
 
 #[cfg(target_endian = "little")]

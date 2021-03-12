@@ -194,29 +194,14 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Num {
-            string,
-            is_negative,
-        } => {
-            let answer = num_expr_from_result(
-                var_store,
-                finish_parsing_int(*string, *is_negative),
-                region,
-                env,
-            );
+        ast::Expr::Num(string) => {
+            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), region, env);
 
             (answer, Output::default())
         }
-        ast::Expr::Float {
-            string,
-            is_negative,
-        } => {
-            let answer = float_expr_from_result(
-                var_store,
-                finish_parsing_float(string, *is_negative),
-                region,
-                env,
-            );
+        ast::Expr::Float(string) => {
+            let answer =
+                float_expr_from_result(var_store, finish_parsing_float(string), region, env);
 
             (answer, Output::default())
         }
