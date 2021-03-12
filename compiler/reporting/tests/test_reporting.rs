@@ -173,9 +173,8 @@ mod test_reporting {
     where
         F: FnOnce(RocDocBuilder<'_>, &mut String),
     {
+        use roc_parse::parser::{State, SyntaxError};
         use ven_pretty::DocAllocator;
-
-        use roc_parse::parser::State;
 
         let state = State::new_in(arena, src.as_bytes());
 
@@ -190,7 +189,8 @@ mod test_reporting {
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let problem = fail.into_parse_problem(filename.clone(), src.as_bytes());
+                let problem =
+                    SyntaxError::Header(fail).into_parse_problem(filename.clone(), src.as_bytes());
                 let doc = parse_problem(&alloc, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)

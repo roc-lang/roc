@@ -14,13 +14,13 @@ mod test_fmt {
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
-    use roc_parse::ast::{Attempting, Expr};
+    use roc_parse::ast::Expr;
     use roc_parse::blankspace::space0_before;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::{Parser, State, SyntaxError};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
-        let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
+        let state = State::new_in(arena, input.trim().as_bytes());
         let parser = space0_before(loc!(roc_parse::expr::expr(0)), 0);
         let answer = parser.parse(&arena, state);
 
@@ -55,7 +55,7 @@ mod test_fmt {
         let src = src.trim_end();
         let expected = expected.trim_end();
 
-        match module::header().parse(&arena, State::new_in(&arena, src.as_bytes(), Attempting::Module)) {
+        match module::header().parse(&arena, State::new_in(&arena, src.as_bytes())) {
             Ok((_, actual, state)) => {
                 let mut buf = String::new_in(&arena);
 
