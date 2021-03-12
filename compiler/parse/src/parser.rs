@@ -1,6 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Located, Position, Region};
 use std::fmt;
 use Progress::*;
 
@@ -37,7 +37,15 @@ impl<'a> State<'a> {
     }
 
     /// Returns whether the parser has reached the end of the input
-    pub fn has_reached_end(&self) -> bool {
+    pub const fn get_position(&self) -> Position {
+        Position {
+            row: self.line,
+            col: self.column,
+        }
+    }
+
+    /// Returns whether the parser has reached the end of the input
+    pub const fn has_reached_end(&self) -> bool {
         self.bytes.is_empty()
     }
 

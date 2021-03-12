@@ -15,7 +15,7 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Located, Position, Region};
 
 use crate::parser::Progress::{self, *};
 
