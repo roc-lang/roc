@@ -386,7 +386,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // maxI128 : I128
     add_type(Symbol::NUM_MAX_I128, i128_type());
-    //add_type(Symbol::NUM_MAX_I128, int_type(flex(TVAR1)));
 
     // Float module
 
