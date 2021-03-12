@@ -1,15 +1,14 @@
 use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
-    line_comment, space0_after_e, space0_around_ee, space0_before_e, space0_e, space1_e,
-    spaces_exactly_e,
+    space0_after_e, space0_around_ee, space0_before_e, space0_e, space1_e, spaces_exactly_e,
 };
-use crate::ident::{ident, lowercase_ident, Ident};
+use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, allocated, and_then_with_indent_level, ascii_char, backtrackable, map, newline_char,
-    optional, sep_by1, sep_by1_e, specialize, specialize_ref, then, trailing_sep_by0, word1, word2,
-    EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either, If, List, Number, ParseResult,
-    Parser, State, SyntaxError, Type, When,
+    self, allocated, and_then_with_indent_level, backtrackable, map, optional, sep_by1, sep_by1_e,
+    specialize, specialize_ref, then, trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda,
+    EPattern, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State, SyntaxError,
+    Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -20,6 +19,25 @@ use roc_region::all::{Located, Region};
 
 use crate::parser::Progress::{self, *};
 
+pub fn test_parse_expr<'a>(
+    min_indent: u16,
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+) -> Result<Located<Expr<'a>>, EExpr<'a>> {
+    let parser = space0_before_e(
+        loc!(|a, s| parse_expr_help(min_indent, a, s)),
+        min_indent,
+        EExpr::Space,
+        EExpr::IndentStart,
+    );
+
+    match parser.parse(arena, state) {
+        Ok((_, expression, _)) => Ok(expression),
+        Err((_, fail, _)) => Err(fail),
+    }
+}
+
+// public for testing purposes
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
     // as this causes rustc to stack overflow. Thus, parse_expr must be a
@@ -28,6 +46,10 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
         |e, _, _| SyntaxError::Expr(e),
         move |arena, state: State<'a>| parse_expr_help(min_indent, arena, state),
     )
+}
+
+pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    move |arena, state: State<'a>| parse_expr_help(min_indent, arena, state)
 }
 
 fn loc_expr_in_parens_help<'a>(
@@ -155,9 +177,9 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, &'a str>, EExpr<'a
 }
 
 fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
-    specialize(
-        |_, r, c| EExpr::Access(r, c),
-        skip_first!(ascii_char(b'.'), lowercase_ident()),
+    skip_first!(
+        word1(b'.', EExpr::Access),
+        specialize(|_, r, c| EExpr::Access(r, c), lowercase_ident())
     )
 }
 
@@ -487,7 +509,7 @@ fn parse_expr_help<'a>(
     ]
     .parse(arena, state)?;
 
-    let initial = state.clone();
+    let initial = state;
 
     match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
         Err((_, _, state)) => Ok((MadeProgress, loc_expr1.value, state)),
@@ -717,47 +739,6 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
-/// A def beginning with a parenthetical pattern, for example:
-///
-/// (UserId userId) = ...
-///
-/// Note: Parenthetical patterns are a shorthand convenience, and may not have type annotations.
-/// It would be too weird to parse; imagine `(UserId userId) : ...` above `(UserId userId) = ...`
-/// !!!! THIS IS NOT USED !!!!
-// fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
-//     move |arena, state| {
-//         let (loc_tuple, state) = loc!(and!(
-//             space0_after(
-//                 between!(
-//                     ascii_char(b'('),
-//                     space0_around(loc_pattern(min_indent), min_indent),
-//                     ascii_char(b')')
-//                 ),
-//                 min_indent,
-//             ),
-//             equals_with_indent()
-//         ))
-//         .parse(arena, state)?;
-
-//         let region = loc_tuple.region;
-//         let (loc_first_pattern, equals_sign_indent) = loc_tuple.value;
-
-//         // Continue parsing the expression as a Def.
-//         let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
-//         let (value, state) = parse_def_expr(
-//             region.start_col,
-//             min_indent,
-//             equals_sign_indent,
-//             arena,
-//             state,
-//             loc_first_pattern,
-//             spaces_after_equals,
-//         )?;
-
-//         Ok((Located { value, region }, state))
-//     }
-// }
-
 fn parse_defs_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, &'a Located<Def<'a>>>, EExpr<'a>> {
@@ -794,7 +775,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, SyntaxError<'a>> {
     specialize(|e, _, _| SyntaxError::Expr(e), def_help(min_indent))
 }
 
-fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
+pub fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     let indented_more = min_indent + 1;
 
     enum DefKind {
@@ -834,7 +815,7 @@ fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
                 // see if there is a definition (assuming the preceding characters were a type
                 // annotation
                 let (_, opt_rest, state) = optional(and!(
-                    spaces_then_comment_or_newline_help(),
+                    spaces_till_end_of_line(),
                     body_at_indent_help(min_indent)
                 ))
                 .parse(arena, state)?;
@@ -889,20 +870,10 @@ fn pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EE
     )
 }
 
-fn spaces_then_comment_or_newline_help<'a>() -> impl Parser<'a, Option<&'a str>, EExpr<'a>> {
-    specialize_ref(
-        EExpr::Syntax,
-        skip_first!(
-            zero_or_more!(ascii_char(b' ')),
-            map!(
-                either!(newline_char(), line_comment()),
-                |either_comment_or_newline| match either_comment_or_newline {
-                    Either::First(_) => None,
-                    Either::Second(comment) => Some(comment),
-                }
-            )
-        ),
-    )
+fn spaces_till_end_of_line<'a>() -> impl Parser<'a, Option<&'a str>, EExpr<'a>> {
+    crate::blankspace::spaces_till_end_of_line(|r, c| {
+        EExpr::Space(parser::BadInputError::HasTab, r, c)
+    })
 }
 
 type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
@@ -1193,7 +1164,7 @@ fn parse_def_signature_help<'a>(
     // Indented more beyond the original indent.
     let indented_more = original_indent + 1;
 
-    and!(
+    let parser1 = {
         // Parse the first annotation. It doesn't need any spaces
         // around it parsed, because both the subsquent defs and the
         // final body will have space1_before on them.
@@ -1205,23 +1176,28 @@ fn parse_def_signature_help<'a>(
                 specialize(EExpr::Type, type_annotation::located_help(indented_more)),
                 min_indent,
                 EExpr::Space,
-                EExpr::IndentAnnotation
+                EExpr::IndentAnnotation,
             ),
             // The first annotation may be immediately (spaces_then_comment_or_newline())
             // followed by a body at the exact same indent_level
             // leading to an AnnotatedBody in this case
-            |_progress, type_ann, indent_level| map(
-                optional(and!(
-                    backtrackable(spaces_then_comment_or_newline_help()),
-                    body_at_indent_help(indent_level)
-                )),
-                move |opt_body| (type_ann.clone(), opt_body)
-            )
-        ),
+            |_progress, type_ann, indent_level| {
+                map(
+                    optional(and!(
+                        backtrackable(spaces_till_end_of_line()),
+                        body_at_indent_help(indent_level)
+                    )),
+                    move |opt_body| (type_ann.clone(), opt_body),
+                )
+            },
+        )
+    };
+
+    let parser2 = {
         and!(
             // Optionally parse additional defs.
             zero_or_more!(backtrackable(allocated(space0_before_e(
-                loc!(specialize_ref(EExpr::Syntax, def(original_indent))),
+                loc!(def_help(original_indent)),
                 original_indent,
                 EExpr::Space,
                 EExpr::IndentStart,
@@ -1229,15 +1205,22 @@ fn parse_def_signature_help<'a>(
             // Parse the final expression that will be returned.
             // It should be indented the same amount as the original.
             space0_before_e(
-                loc!(|arena, state| parse_expr_help(original_indent, arena, state)),
+                loc!(one_of![
+                    |arena, state| parse_expr_help(original_indent, arena, state),
+                    |_, state: State<'a>| Err((
+                        MadeProgress,
+                        EExpr::DefMissingFinalExpr(state.line, state.column),
+                        state
+                    )),
+                ]),
                 original_indent,
                 EExpr::Space,
                 EExpr::IndentEnd,
             )
         )
-    )
-    .parse(arena, state)
-    .map(
+    };
+
+    and!(parser1, parser2).parse(arena, state).map(
         move |(progress, ((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
             let loc_first_def: Located<Def<'a>> = match opt_body {
                 None => {
@@ -1713,7 +1696,7 @@ fn unary_negate_function_arg_help<'a>(
 fn loc_function_args_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>, EExpr<'a>> {
-    one_or_more_e!(
+    one_or_more!(
         move |arena: &'a Bump, s| {
             map!(
                 and!(
@@ -1966,11 +1949,11 @@ fn ident_then_args<'a>(
 }
 
 fn ident_without_apply_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
-    specialize_ref(
-        EExpr::Syntax,
-        then(loc!(ident()), move |arena, state, progress, loc_ident| {
+    then(
+        loc!(parse_ident_help),
+        move |arena, state, progress, loc_ident| {
             Ok((progress, ident_to_expr(arena, loc_ident.value), state))
-        }),
+        },
     )
 }
 
@@ -2079,7 +2062,7 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>>
     move |arena, state| {
         let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
             word1(b'[', List::Open),
-            specialize_ref(List::Syntax, loc!(expr(min_indent))),
+            specialize_ref(List::Expr, loc!(expr_help(min_indent))),
             word1(b',', List::End),
             word1(b']', List::End),
             min_indent,
@@ -2127,7 +2110,7 @@ fn record_field_help<'a>(
                 word1(b'?', ERecord::QuestionMark)
             ),
             space0_before_e(
-                specialize_ref(ERecord::Syntax, loc!(expr(min_indent))),
+                specialize_ref(ERecord::Expr, loc!(expr_help(min_indent))),
                 min_indent,
                 ERecord::Space,
                 ERecord::IndentEnd,
@@ -2162,7 +2145,7 @@ fn record_field_help<'a>(
 fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
     specialize(
         |_, r, c| ERecord::Updateable(r, c),
-        map_with_arena!(ident(), ident_to_expr),
+        map_with_arena!(parse_ident_help, ident_to_expr),
     )
 }
 

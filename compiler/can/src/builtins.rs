@@ -81,6 +81,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_JOIN => list_join,
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
+        LIST_MAP3 => list_map3,
         LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_KEEP_IF => list_keep_if,
         LIST_KEEP_OKS => list_keep_oks,
@@ -219,6 +220,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
         Symbol::LIST_MAP2 => list_map2,
+        Symbol::LIST_MAP3 => list_map3,
         Symbol::LIST_MAP_WITH_INDEX => list_map_with_index,
         Symbol::LIST_KEEP_IF => list_keep_if,
         Symbol::LIST_KEEP_OKS => list_keep_oks,
@@ -365,6 +367,38 @@ fn lowlevel_3(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
             (arg1_var, Symbol::ARG_1),
             (arg2_var, Symbol::ARG_2),
             (arg3_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let arg1_var = var_store.fresh();
+    let arg2_var = var_store.fresh();
+    let arg3_var = var_store.fresh();
+    let arg4_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (arg1_var, Var(Symbol::ARG_1)),
+            (arg2_var, Var(Symbol::ARG_2)),
+            (arg3_var, Var(Symbol::ARG_3)),
+            (arg4_var, Var(Symbol::ARG_4)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (arg1_var, Symbol::ARG_1),
+            (arg2_var, Symbol::ARG_2),
+            (arg3_var, Symbol::ARG_3),
+            (arg4_var, Symbol::ARG_4),
         ],
         var_store,
         body,
@@ -2149,6 +2183,11 @@ fn list_map_with_index(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.map2 : List a, List b, (a, b -> c) -> List c
 fn list_map2(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListMap2, var_store)
+}
+
+/// List.map3 : List a, List b, (a, b -> c) -> List c
+fn list_map3(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_4(symbol, LowLevel::ListMap3, var_store)
 }
 
 /// Dict.hashTestOnly : k, v -> Nat

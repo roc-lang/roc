@@ -1,10 +1,7 @@
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
-use crate::parser::{
-    allocated, ascii_char, loc, parse_utf8, specialize_ref, word1, BadInputError, EString, Parser,
-    State,
-};
+use crate::parser::{allocated, loc, specialize_ref, word1, BadInputError, EString, Parser, State};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
@@ -102,7 +99,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                     // to exclude that char we just parsed.
                     let string_bytes = &state.bytes[0..(segment_parsed_bytes - 1)];
 
-                    match parse_utf8(string_bytes) {
+                    match std::str::from_utf8(string_bytes) {
                         Ok(string) => {
                             state = advance_state!(state, string.len())?;
 
@@ -233,9 +230,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // Parse an arbitrary expression, then give a
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
-                            let (_progress, loc_expr, new_state) = specialize_ref(
-                                EString::Format,
-                                skip_second!(loc(allocated(expr::expr(0))), ascii_char(b')')),
+                            let (_progress, loc_expr, new_state) = skip_second!(
+                                specialize_ref(EString::Format, loc(allocated(expr::expr_help(0)))),
+                                word1(b')', EString::FormatEnd)
                             )
                             .parse(arena, state)?;
 

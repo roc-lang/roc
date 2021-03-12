@@ -91,8 +91,9 @@ pub fn init_ortho(
         entries: &[BindGroupLayoutEntry {
             binding: 0,
             visibility: ShaderStage::VERTEX,
-            ty: wgpu::BindingType::UniformBuffer {
-                dynamic: false,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
                 min_binding_size: None,
             },
             count: None,
@@ -104,7 +105,7 @@ pub fn init_ortho(
         layout: &ortho_bind_group_layout,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
-            resource: wgpu::BindingResource::Buffer(ortho_buffer.slice(..)),
+            resource: ortho_buffer.as_entire_binding(),
         }],
         label: Some("Ortho bind group"),
     });
