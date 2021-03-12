@@ -15,7 +15,7 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Located, Position, Region};
+use roc_region::all::{Located, Region};
 
 use crate::parser::Progress::{self, *};
 
@@ -372,7 +372,6 @@ fn loc_possibly_negative_or_negated_term<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of![
-        loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
             // slight complication; a unary minus must be part of the number literal for overflow
             // reasons
@@ -449,9 +448,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
         let followed_by_whitespace = state
             .bytes
             .get(1)
-            .map(
-                |c| c.is_ascii_whitespace() || *c == b'#', /*|| c.is_ascii_digit()*/
-            )
+            .map(|c| c.is_ascii_whitespace() || *c == b'#' || c.is_ascii_digit())
             .unwrap_or(false);
 
         if state.bytes.starts_with(b"-") && !followed_by_whitespace {
@@ -525,119 +522,26 @@ fn foobar<'a>(
 
     match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
         Err((_, _, state)) => Ok((MadeProgress, expr.value, state)),
-        Ok((_, spaces_before_op, state)) => {
-            let expr_state = ExprState {
-                operators: Vec::new_in(arena),
-                arguments: Vec::new_in(arena),
-                expr,
-                spaces_after: spaces_before_op,
-                initial,
-                end: state.get_position(),
-            };
-
-            parse_expr_end(min_indent, expr_state, arena, state)
-        }
-    }
-}
-
-struct ExprState<'a> {
-    operators: Vec<'a, (Located<Expr<'a>>, BinOp)>,
-    arguments: Vec<'a, &'a Located<Expr<'a>>>,
-    expr: Located<Expr<'a>>,
-    spaces_after: &'a [CommentOrNewline<'a>],
-    initial: State<'a>,
-    end: Position,
-}
-
-fn parse_expr_final<'a>(
-    min_indent: u16,
-    expr_state: ExprState<'a>,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    Ok((
-        MadeProgress,
-        to_call(
+        Ok((_, spaces_before_op, state)) => parse_expr_end(
+            min_indent,
+            Vec::new_in(arena),
+            Vec::new_in(arena),
+            expr,
+            spaces_before_op,
+            initial,
             arena,
-            expr_state.arguments,
-            expr_state.expr,
-            expr_state.spaces_after,
-        )
-        .value,
-        state,
-    ))
-}
-
-fn to_call<'a>(
-    arena: &'a Bump,
-    arguments: Vec<'a, &'a Located<Expr<'a>>>,
-    loc_expr1: Located<Expr<'a>>,
-    _spaces_before: &'a [CommentOrNewline<'a>],
-) -> Located<Expr<'a>> {
-    if arguments.is_empty() {
-        loc_expr1
-    } else {
-        let last = arguments.last().map(|x| x.region).unwrap_or_default();
-        let region = Region::span_across(&loc_expr1.region, &last);
-
-        let apply = Expr::Apply(
-            arena.alloc(loc_expr1),
-            arguments.into_bump_slice(),
-            CalledVia::Space,
-        );
-
-        Located::at(region, apply)
-    }
-}
-
-fn parse_expr_argument<'a>(
-    min_indent: u16,
-    mut expr_state: ExprState<'a>,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    // TODO check indent?
-    let (_, arg, state) = parse_loc_term(min_indent, arena, state)?;
-
-    expr_state.arguments.push(arena.alloc(arg));
-    expr_state.initial = state;
-
-    match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
-        Err((_, _, state)) => parse_expr_final(min_indent, expr_state, arena, state),
-        Ok((_, mut spaces, state)) => {
-            let spaces_before = std::mem::swap(&mut spaces, &mut expr_state.spaces_after);
-            parse_expr_end(min_indent, expr_state, arena, state)
-        }
-    }
-}
-
-fn parse_expr_operator<'a>(
-    min_indent: u16,
-    mut expr_state: ExprState<'a>,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let (_, loc_op, state) = loc!(operator()).parse(arena, state)?;
-    let (space_progress, spaces, state) =
-        space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
-
-    // a `-` is unary if it is preceded by a space and not followed by a space
-
-    let op = loc_op.value;
-    let op_start = loc_op.region.start();
-    let op_end = loc_op.region.end();
-    let new_start = state.get_position();
-    if op == BinOp::Minus && expr_state.end != op_start && op_end == new_start {
-        // negative terms
-        todo!()
-    } else {
-        todo!()
+            state,
+        ),
     }
 }
 
 fn parse_expr_end<'a>(
     min_indent: u16,
-    mut expr_state: ExprState<'a>,
+    operators: Vec<'a, (Located<Expr<'a>>, BinOp)>,
+    arguments: Vec<'a, Located<Expr<'a>>>,
+    loc_expr1: Located<Expr<'a>>,
+    spaces_before: &'a [CommentOrNewline<'a>],
+    initial: State<'a>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -655,12 +559,6 @@ fn parse_expr_end<'a>(
 
     match parser.parse(arena, state) {
         Ok((_, (loc_op, loc_expr2), state)) => {
-            let ExprState {
-                expr: loc_expr1,
-                spaces_after: spaces_before,
-                ..
-            } = expr_state;
-
             let loc_expr1 = if spaces_before.is_empty() {
                 loc_expr1
             } else {
@@ -673,7 +571,7 @@ fn parse_expr_end<'a>(
 
             Ok((MadeProgress, Expr::BinOp(tuple), state))
         }
-        Err((NoProgress, _, _)) => Ok((MadeProgress, expr_state.expr.value, expr_state.initial)),
+        Err((NoProgress, _, _)) => Ok((MadeProgress, loc_expr1.value, initial)),
         Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
     }
 }

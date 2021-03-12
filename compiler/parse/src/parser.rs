@@ -1,6 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Position, Region};
+use roc_region::all::{Located, Region};
 use std::fmt;
 use Progress::*;
 
@@ -33,13 +33,6 @@ impl<'a> State<'a> {
             line: 0,
             column: 0,
             indent_col: 0,
-        }
-    }
-
-    pub fn get_position(&self) -> Position {
-        Position {
-            row: self.line,
-            col: self.column,
         }
     }
 
