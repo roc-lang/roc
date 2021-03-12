@@ -156,8 +156,11 @@ pub fn to_pattern2<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        FloatLiteral(ref string) => match pattern_type {
-            WhenBranch => match finish_parsing_float(string) {
+        FloatLiteral {
+            ref string,
+            is_negative,
+        } => match pattern_type {
+            WhenBranch => match finish_parsing_float(string, *is_negative) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
@@ -167,8 +170,11 @@ pub fn to_pattern2<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        NumLiteral(string) => match pattern_type {
-            WhenBranch => match finish_parsing_int(string) {
+        NumLiteral {
+            string,
+            is_negative,
+        } => match pattern_type {
+            WhenBranch => match finish_parsing_int(string, *is_negative) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)

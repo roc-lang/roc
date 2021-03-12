@@ -77,7 +77,7 @@ pub fn float_expr_from_result(
 }
 
 #[inline(always)]
-pub fn finish_parsing_int(raw: &str) -> Result<i64, (&str, IntErrorKind)> {
+pub fn finish_parsing_int(raw: &str, is_negative: bool) -> Result<i64, (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
     from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))
@@ -106,7 +106,7 @@ pub fn finish_parsing_base(
 }
 
 #[inline(always)]
-pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, FloatErrorKind)> {
+pub fn finish_parsing_float(raw: &str, is_negative: bool) -> Result<f64, (&str, FloatErrorKind)> {
     // Ignore underscores.
     match raw.replace("_", "").parse::<f64>() {
         Ok(float) if float.is_finite() => Ok(float),

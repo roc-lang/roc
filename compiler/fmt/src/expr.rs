@@ -24,8 +24,8 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
 
             // These expressions never have newlines
-            Float(_)
-            | Num(_)
+            Float { .. }
+            | Num { .. }
             | NonBase10Int { .. }
             | Access(_, _)
             | AccessorFunction(_)
@@ -218,7 +218,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                     buf.push(')');
                 }
             }
-            Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
+            Num { string, .. } | Float { string, .. } | GlobalTag(string) | PrivateTag(string) => {
                 buf.push_str(string)
             }
             NonBase10Int {

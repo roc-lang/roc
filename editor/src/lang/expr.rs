@@ -248,8 +248,11 @@ pub fn to_expr2<'a>(
 ) -> (Expr2, self::Output) {
     use roc_parse::ast::Expr::*;
     match parse_expr {
-        Float(string) => {
-            match finish_parsing_float(string) {
+        Float {
+            string,
+            is_negative,
+        } => {
+            match finish_parsing_float(string, *is_negative) {
                 Ok(float) => {
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
@@ -270,8 +273,11 @@ pub fn to_expr2<'a>(
                 }
             }
         }
-        Num(string) => {
-            match finish_parsing_int(string) {
+        Num {
+            string,
+            is_negative,
+        } => {
+            match finish_parsing_int(string, *is_negative) {
                 Ok(int) => {
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(int),

@@ -77,8 +77,14 @@ pub enum StrLiteral<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     // Number Literals
-    Float(&'a str),
-    Num(&'a str),
+    Float {
+        string: &'a str,
+        is_negative: bool,
+    },
+    Num {
+        string: &'a str,
+        is_negative: bool,
+    },
     NonBase10Int {
         string: &'a str,
         base: Base,
@@ -341,13 +347,19 @@ pub enum Pattern<'a> {
     Nested(&'a Pattern<'a>),
 
     // Literal
-    NumLiteral(&'a str),
+    NumLiteral {
+        string: &'a str,
+        is_negative: bool,
+    },
     NonBase10Literal {
         string: &'a str,
         base: Base,
         is_negative: bool,
     },
-    FloatLiteral(&'a str),
+    FloatLiteral {
+        string: &'a str,
+        is_negative: bool,
+    },
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
 
@@ -452,7 +464,16 @@ impl<'a> Pattern<'a> {
             (Nested(x), Nested(y)) => x.equivalent(y),
 
             // Literal
-            (NumLiteral(x), NumLiteral(y)) => x == y,
+            (
+                NumLiteral {
+                    string: string_x,
+                    is_negative: is_negative_x,
+                },
+                NumLiteral {
+                    string: string_y,
+                    is_negative: is_negative_y,
+                },
+            ) => string_x == string_y && is_negative_x == is_negative_y,
             (
                 NonBase10Literal {
                     string: string_x,
@@ -465,7 +486,16 @@ impl<'a> Pattern<'a> {
                     is_negative: is_negative_y,
                 },
             ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
-            (FloatLiteral(x), FloatLiteral(y)) => x == y,
+            (
+                FloatLiteral {
+                    string: string_x,
+                    is_negative: is_negative_x,
+                },
+                FloatLiteral {
+                    string: string_y,
+                    is_negative: is_negative_y,
+                },
+            ) => string_x == string_y && is_negative_x == is_negative_y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
             (Underscore(x), Underscore(y)) => x == y,
 
