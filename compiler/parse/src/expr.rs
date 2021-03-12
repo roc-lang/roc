@@ -1193,7 +1193,7 @@ fn parse_def_signature_help<'a>(
         and!(
             // Optionally parse additional defs.
             zero_or_more!(backtrackable(allocated(space0_before_e(
-                loc!(specialize_ref(EExpr::Syntax, def(original_indent))),
+                loc!(def_help(original_indent)),
                 original_indent,
                 EExpr::Space,
                 EExpr::IndentStart,

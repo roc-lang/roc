@@ -198,8 +198,6 @@ fn to_expr_report<'a>(
             to_expr_in_parens_report(alloc, filename, context, &expr, *row, *col)
         }
         EExpr::Type(tipe, row, col) => to_type_report(alloc, filename, &tipe, *row, *col),
-        EExpr::Def(syntax, row, col) => to_syntax_report(alloc, filename, syntax, *row, *col),
-
         EExpr::ElmStyleFunction(region, row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
             let region = *region;

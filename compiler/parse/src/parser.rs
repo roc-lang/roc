@@ -378,7 +378,6 @@ pub enum EExpr<'a> {
     UnaryNegate(Row, Col),
     BadOperator(&'a [u8], Row, Col),
 
-    Def(&'a SyntaxError<'a>, Row, Col),
     DefMissingFinalExpr(Row, Col),
     Type(Type<'a>, Row, Col),
     Pattern(&'a EPattern<'a>, Row, Col),
@@ -394,8 +393,6 @@ pub enum EExpr<'a> {
     QualifiedTag(Row, Col),
     BackpassComma(Row, Col),
     BackpassArrow(Row, Col),
-
-    Syntax(&'a SyntaxError<'a>, Row, Col),
 
     When(When<'a>, Row, Col),
     If(If<'a>, Row, Col),
