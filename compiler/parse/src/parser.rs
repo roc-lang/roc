@@ -426,7 +426,7 @@ pub enum EString<'a> {
     EndlessSingle(Row, Col),
     EndlessMulti(Row, Col),
     UnknownEscape(Row, Col),
-    Format(&'a SyntaxError<'a>, Row, Col),
+    Format(&'a EExpr<'a>, Row, Col),
     FormatEnd(Row, Col),
 }
 
@@ -489,7 +489,6 @@ pub enum List<'a> {
     End(Row, Col),
     Space(BadInputError, Row, Col),
 
-    Syntax(&'a SyntaxError<'a>, Row, Col),
     Expr(&'a EExpr<'a>, Row, Col),
 
     IndentOpen(Row, Col),
@@ -510,7 +509,6 @@ pub enum When<'a> {
 
     Condition(&'a EExpr<'a>, Row, Col),
     Branch(&'a EExpr<'a>, Row, Col),
-    Syntax(&'a SyntaxError<'a>, Row, Col),
 
     IndentIs(Row, Col),
     IndentCondition(Row, Col),
@@ -531,7 +529,6 @@ pub enum If<'a> {
     Condition(&'a EExpr<'a>, Row, Col),
     ThenBranch(&'a EExpr<'a>, Row, Col),
     ElseBranch(&'a EExpr<'a>, Row, Col),
-    Syntax(&'a SyntaxError<'a>, Row, Col),
 
     IndentCondition(Row, Col),
     IndentIf(Row, Col),
@@ -566,9 +563,9 @@ pub enum PRecord<'a> {
     Field(Row, Col),
     Colon(Row, Col),
     Optional(Row, Col),
+
     Pattern(&'a EPattern<'a>, Row, Col),
-    // TODO remove
-    Syntax(&'a SyntaxError<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
 
@@ -582,13 +579,9 @@ pub enum PRecord<'a> {
 pub enum PInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
-    ///
-    // TODO remove
-    Syntax(&'a SyntaxError<'a>, Row, Col),
+    Pattern(&'a EPattern<'a>, Row, Col),
 
-    ///
     Space(BadInputError, Row, Col),
-    ///
     IndentOpen(Row, Col),
     IndentEnd(Row, Col),
 }

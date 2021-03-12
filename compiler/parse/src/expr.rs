@@ -48,7 +48,7 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     )
 }
 
-fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena, state: State<'a>| parse_expr_help(min_indent, arena, state)
 }
 
@@ -2062,7 +2062,7 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>>
     move |arena, state| {
         let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
             word1(b'[', List::Open),
-            specialize_ref(List::Syntax, loc!(expr(min_indent))),
+            specialize_ref(List::Expr, loc!(expr_help(min_indent))),
             word1(b',', List::End),
             word1(b']', List::End),
             min_indent,

@@ -51,13 +51,6 @@ fn parse_closure_param<'a>(
     .parse(arena, state)
 }
 
-pub fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, SyntaxError<'a>> {
-    specialize(
-        |e, _, _| SyntaxError::Pattern(e),
-        loc_pattern_help(min_indent),
-    )
-}
-
 pub fn loc_pattern_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
@@ -130,7 +123,7 @@ fn loc_pattern_in_parens_help<'a>(
     between!(
         word1(b'(', PInParens::Open),
         space0_around_ee(
-            move |arena, state| specialize_ref(PInParens::Syntax, loc_pattern(min_indent))
+            move |arena, state| specialize_ref(PInParens::Pattern, loc_pattern_help(min_indent))
                 .parse(arena, state),
             min_indent,
             PInParens::Space,
@@ -386,7 +379,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
 
         match opt_loc_val {
             Some(First(_)) => {
-                let val_parser = specialize_ref(PRecord::Syntax, loc_pattern(min_indent));
+                let val_parser = specialize_ref(PRecord::Pattern, loc_pattern_help(min_indent));
                 let (_, loc_val, state) =
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
                         .parse(arena, state)?;
@@ -414,7 +407,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
             }
             Some(Second(_)) => {
                 let val_parser =
-                    specialize_ref(PRecord::Syntax, loc!(crate::expr::expr(min_indent)));
+                    specialize_ref(PRecord::Expr, loc!(crate::expr::expr_help(min_indent)));
 
                 let (_, loc_val, state) =
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)

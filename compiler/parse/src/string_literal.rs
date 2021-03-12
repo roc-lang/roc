@@ -231,7 +231,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
                             let (_progress, loc_expr, new_state) = skip_second!(
-                                specialize_ref(EString::Format, loc(allocated(expr::expr(0)))),
+                                specialize_ref(EString::Format, loc(allocated(expr::expr_help(0)))),
                                 word1(b')', EString::FormatEnd)
                             )
                             .parse(arena, state)?;
