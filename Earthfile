@@ -8,7 +8,7 @@ install-other-libs:
     FROM +prep-debian
     RUN apt -y install wget git
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
-    RUN apt -y install libc++-dev libc++abi-dev libunwind-dev pkg-config libx11-dev zlib1g-dev
+    RUN apt -y install libc++-dev libc++abi-dev g++ libunwind-dev pkg-config libx11-dev zlib1g-dev
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
@@ -30,10 +30,10 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
     RUN tar -xf valgrind-3.16.1.tar.bz2
     # need to cd every time, every command starts at WORKDIR
-    RUN cd valgrind-3.16.1; ./autogen.sh
-    RUN cd valgrind-3.16.1; ./configure --disable-dependency-tracking
-    RUN cd valgrind-3.16.1; make -j`nproc`
-    RUN cd valgrind-3.16.1; make install
+    RUN cd valgrind-3.16.1 && ./autogen.sh
+    RUN cd valgrind-3.16.1 && ./configure --disable-dependency-tracking
+    RUN cd valgrind-3.16.1 && make -j`nproc`
+    RUN cd valgrind-3.16.1 && make install
     # clippy
     RUN rustup component add clippy
     # rustfmt
@@ -75,16 +75,16 @@ save-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY +prepare-cache/recipe.json ./
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo chef cook; sccache --show-stats # for clippy
+        cargo chef cook && sccache --show-stats # for clippy
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo chef cook --release --tests; sccache --show-stats
+        cargo chef cook --release --tests && sccache --show-stats
     SAVE ARTIFACT target
     SAVE ARTIFACT $CARGO_HOME cargo_home
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir compiler/builtins/bitcode ./
-    RUN cd bitcode; ./run-tests.sh;
+    RUN cd bitcode && ./run-tests.sh
 
 check-clippy:
     FROM +copy-dirs-and-cache
@@ -101,7 +101,7 @@ test-rust:
     FROM +copy-dirs-and-cache
     ENV RUST_BACKTRACE=1
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release; sccache --show-stats
+        cargo test --release && sccache --show-stats
 
 test-all:
     BUILD +test-zig
