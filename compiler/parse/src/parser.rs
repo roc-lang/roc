@@ -18,12 +18,6 @@ pub struct State<'a> {
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
     pub indent_col: u16,
-
-    /// The original length of the string, before any bytes were consumed.
-    /// This is used internally by the State::bytes_consumed() function.
-    ///
-    /// TODO make this private, in a way that doesn't break macros!
-    pub original_len: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -39,7 +33,6 @@ impl<'a> State<'a> {
             line: 0,
             column: 0,
             indent_col: 0,
-            original_len: bytes.len(),
         }
     }
 
@@ -124,7 +117,6 @@ impl<'a> fmt::Debug for State<'a> {
 
         write!(f, "\n\t(line, col): ({}, {}),", self.line, self.column)?;
         write!(f, "\n\tindent_col: {}", self.indent_col)?;
-        write!(f, "\n\toriginal_len: {}", self.original_len)?;
         write!(f, "\n}}")
     }
 }
