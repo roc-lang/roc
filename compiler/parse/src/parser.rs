@@ -443,7 +443,7 @@ pub enum ERecord<'a> {
     Ampersand(Row, Col),
 
     // TODO remove
-    Syntax(&'a SyntaxError<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
 

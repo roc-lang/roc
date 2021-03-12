@@ -48,6 +48,10 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
     )
 }
 
+fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    move |arena, state: State<'a>| parse_expr_help(min_indent, arena, state)
+}
+
 fn loc_expr_in_parens_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EInParens<'a>> {
@@ -2106,7 +2110,7 @@ fn record_field_help<'a>(
                 word1(b'?', ERecord::QuestionMark)
             ),
             space0_before_e(
-                specialize_ref(ERecord::Syntax, loc!(expr(min_indent))),
+                specialize_ref(ERecord::Expr, loc!(expr_help(min_indent))),
                 min_indent,
                 ERecord::Space,
                 ERecord::IndentEnd,
