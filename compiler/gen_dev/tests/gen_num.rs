@@ -229,19 +229,6 @@ mod gen_num {
     }
 
     #[test]
-    fn max_i128() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                Num.maxI128
-                "#
-            ),
-            i128::MAX,
-            i128
-        );
-    }
-
-    #[test]
     fn gen_if_fn() {
         assert_evals_to!(
             indoc!(
@@ -867,6 +854,19 @@ mod gen_num {
     //             f64
     //         );
     //     }
+
+    #[test]
+    fn max_i128() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.maxI128
+                "#
+            ),
+            i128::MAX,
+            i128
+        );
+    }
 
     #[test]
     fn num_max_int() {
