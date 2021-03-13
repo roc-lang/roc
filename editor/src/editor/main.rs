@@ -1,7 +1,7 @@
 use super::keyboard_input;
 use crate::editor::{
     config::Config,
-    ed_error::{print_err, print_ui_err},
+    ed_error::{print_err},
     mvc::{app_model::AppModel, app_update, ed_model},
     theme::EdTheme,
 };
@@ -14,7 +14,6 @@ use crate::graphics::{
     primitives::rect::Rect,
     style::CODE_TXT_XY,
 };
-use crate::ui::{text::text_pos::TextPos, ui_error::UIResult};
 use crate::editor::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool};
@@ -275,35 +274,26 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     let text_and_rects_res = 
                         super::render_ast::expr2_to_wgpu(
-                            &mut ed_model.markup_root,
+                            ed_model,
                             &render_ast_arena,
-                            &mut ed_model.module.env,
-                            &ed_model.module.ast_root,
                             &size,
                             CODE_TXT_XY.into(),
                             &config,
-                            ed_model.glyph_dim_rect_opt.unwrap() // TODO remove unwrap()
                         );
 
                     match text_and_rects_res {
                         Ok((text_section, rects)) => {
-
+                            
                             glyph_brush.queue(text_section);
 
-                            match draw_all_rects(
+                            draw_all_rects(
                                 &rects,
                                 &mut encoder,
                                 &frame.view,
                                 &gpu_device,
                                 &rect_resources,
                                 &ed_theme,
-                            ) {
-                                Ok(()) => (),
-                                Err(e) => {
-                                    print_ui_err(&e);
-                                    begin_render_pass(&mut encoder, &frame.view, &ed_theme);
-                                }
-                            }
+                            )
                         },
                         Err(e) => print_err(&e)
                     }
@@ -345,13 +335,13 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 }
 
 fn draw_all_rects(
-    all_rects: &Vec<Rect>,
+    all_rects: &[Rect],
     encoder: &mut CommandEncoder,
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
     ed_theme: &EdTheme,
-) -> UIResult<()> {
+) {
     let rect_buffers = create_rect_buffers(gpu_device, encoder, all_rects);
 
     // block necessary for borrowing encoder
@@ -369,8 +359,6 @@ fn draw_all_rects(
     }
 
     begin_render_pass(encoder, texture_view, ed_theme);
-
-    Ok(())
 }
 
 fn begin_render_pass<'a>(
@@ -394,40 +382,40 @@ fn begin_render_pass<'a>(
     })
 }
 
-fn queue_editor_text(
-    size: &PhysicalSize<u32>,
-    editor_lines: &str,
-    caret_pos: TextPos,
-    config: &Config,
-    glyph_brush: &mut GlyphBrush<()>,
-) {
-    let area_bounds = (size.width as f32, size.height as f32).into();
+// fn queue_editor_text(
+//     size: &PhysicalSize<u32>,
+//     editor_lines: &str,
+//     caret_pos: TextPos,
+//     config: &Config,
+//     glyph_brush: &mut GlyphBrush<()>,
+// ) {
+//     let area_bounds = (size.width as f32, size.height as f32).into();
 
-    let code_text = Text {
-        position: CODE_TXT_XY.into(),
-        area_bounds,
-        text: editor_lines,
-        size: config.code_font_size,
-        ..Default::default()
-    };
+//     let code_text = Text {
+//         position: CODE_TXT_XY.into(),
+//         area_bounds,
+//         text: editor_lines,
+//         size: config.code_font_size,
+//         ..Default::default()
+//     };
 
-    let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
-    let text = s.as_str();
+//     let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
+//     let text = s.as_str();
 
-    let caret_pos_label = Text {
-        position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
-        area_bounds,
-        color: config.ed_theme.ui_theme.text,
-        text,
-        size: 25.0,
-        ..Default::default()
-    };
+//     let caret_pos_label = Text {
+//         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
+//         area_bounds,
+//         color: config.ed_theme.ui_theme.text,
+//         text,
+//         size: 25.0,
+//         ..Default::default()
+//     };
 
-    queue_text_draw(&caret_pos_label, glyph_brush);
+//     queue_text_draw(&caret_pos_label, glyph_brush);
 
-    // TODO convert to ast and render with render_ast::render_expr2
-    queue_text_draw(&code_text, glyph_brush);
-}
+//     // TODO convert to ast and render with render_ast::render_expr2
+//     queue_text_draw(&code_text, glyph_brush);
+// }
 
 fn queue_no_file_text(
     size: &PhysicalSize<u32>,

@@ -4,6 +4,7 @@ use crate::editor::{
     util::map_get,
 };
 use super::markup::{MarkupNode, expr2_to_markup};
+use super::mvc::ed_model::EdModel;
 use crate::graphics::colors::RgbaTup;
 use crate::graphics::primitives::text as gr_text;
 use crate::graphics::primitives::rect::Rect;
@@ -11,26 +12,26 @@ use bumpalo::Bump;
 use cgmath::Vector2;
 use std::collections::HashMap;
 use winit::dpi::PhysicalSize;
+use snafu::OptionExt;
+use crate::ui::ui_error::{MissingGlyphDims};
 
 use crate::{
     editor::config::Config,
     graphics::colors,
-    lang::{ast::Expr2, expr::Env},
 };
 
 pub fn expr2_to_wgpu<'a>(
-    markup_root: &'a mut MarkupNode,
+    ed_model: &'a mut EdModel,
     arena: &'a Bump,
-    env: &mut Env<'a>,
-    expr2: &Expr2,
     size: &PhysicalSize<u32>,
     position: Vector2<f32>,
     config: &Config,
-    glyph_dim_rect: Rect,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
-    *markup_root = expr2_to_markup(arena, env, expr2);
+    ed_model.markup_root =  expr2_to_markup(arena, &mut ed_model.module.env, &ed_model.module.ast_root);
+    
+    let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
-    build_code_graphics(markup_root, size, position, config, glyph_dim_rect)
+    build_code_graphics(&ed_model.markup_root, size, position, config, glyph_dim_rect)
 }
 
 pub fn build_code_graphics<'a>(
@@ -109,8 +110,8 @@ fn markup_to_wgpu_helper<'a>(
 
                 let hole_rect = Rect {
                     top_left_coords: ((*text_row as f32) * glyph_dim_rect.height, (*text_col as f32) * glyph_dim_rect.width).into(),
-                    width: glyph_dim_rect.width,
-                    height: glyph_dim_rect.height,
+                    width: glyph_dim_rect.width * 10.0,
+                    height: glyph_dim_rect.height * 10.0,
                     color: colors::WHITE,
                 };
                 rects.push(hole_rect);

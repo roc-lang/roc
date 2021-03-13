@@ -1,3 +1,6 @@
+
+#![allow(dead_code)]
+
 use super::lines::Lines;
 use super::text_pos::TextPos;
 use crate::ui::theme::UITheme;

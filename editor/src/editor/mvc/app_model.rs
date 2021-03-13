@@ -1,3 +1,6 @@
+
+#![allow(dead_code)]
+
 use super::ed_model::EdModel;
 use crate::editor::ed_error::{
     print_err,

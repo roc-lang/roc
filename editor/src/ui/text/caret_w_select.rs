@@ -1,3 +1,6 @@
+
+#![allow(dead_code)]
+
 use super::selection::validate_selection;
 use super::selection::Selection;
 use super::text_pos::TextPos;

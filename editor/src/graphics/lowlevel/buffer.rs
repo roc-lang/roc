@@ -95,7 +95,7 @@ pub struct RectBuffers {
 pub fn create_rect_buffers(
     gpu_device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
-    rects: &Vec<Rect>,
+    rects: &[Rect],
 ) -> RectBuffers {
     let nr_of_rects = rects.len() as u64;
 

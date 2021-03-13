@@ -1,4 +1,4 @@
-
+#![allow(dead_code)]
 
 use super::syntax_highlight::HighlightStyle;
 use bumpalo::Bump;
@@ -24,6 +24,7 @@ pub enum MarkupNode {
         attributes: Vec<Attribute>,
     }
 }
+
 
 #[derive(Debug)]
 pub enum Attribute {
